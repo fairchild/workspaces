@@ -176,11 +176,25 @@ def closes_fence(line: str, run: str) -> bool:
     return re.fullmatch(rf" {{0,3}}{re.escape(run[0])}{{{len(run)},}}[ \t]*", line) is not None
 
 
+# What ends a section for the written view: a heading of level 1 or 2 at column
+# 0. An h1 below an h2 opens a new top-level section, so the lines under it are
+# outside the section on the page -- `rendered_status_lines` stops there
+# already, and one boundary serves both views (#1674, #1729). Level 3 and below
+# is a sub-heading inside the section, and its lines are the section's. A run of
+# hashes with no text is a heading too: CommonMark ends the run on a space, a
+# tab or the line's end, which is what the trailing group asks for.
+# Column 0 only, though a heading may sit up to three spaces in: indented, it is
+# a list item's continuation as often as it is a top-level heading, and which
+# one is the parser's answer rather than a line's. Reading past it runs the
+# section long, which can add a refusal and cannot drop one.
+SECTION_BOUNDARY_HEADING_RE = re.compile(r"^#{1,2}(?:\s|$)")
+
+
 def extract_section(body: str, heading: str, *, strip: bool = True) -> str:
-    # A section runs to the next `## ` heading or `---` rule, and one inside a
-    # fence is the fence's content. Stripping takes the first line's indent along
-    # with the blank lines around the section, so a reader that cares about
-    # indentation asks for it unstripped.
+    # A section runs to the next heading of level 1 or 2 or to a `---` rule, and
+    # one inside a fence is the fence's content. Stripping takes the first line's
+    # indent along with the blank lines around the section, so a reader that
+    # cares about indentation asks for it unstripped.
     start = re.search(rf"(?mi)^## {re.escape(heading)}\n", body)
     if not start:
         return ""
@@ -191,7 +205,9 @@ def extract_section(body: str, heading: str, *, strip: bool = True) -> str:
         if run:
             if closes_fence(line, run):
                 run = ""
-        elif line.startswith("## ") or (line == "---" and 0 < index < len(lines) - 1):
+        elif SECTION_BOUNDARY_HEADING_RE.match(line) or (
+            line == "---" and 0 < index < len(lines) - 1
+        ):
             break
         else:
             run = fence_opener(line)
@@ -278,8 +294,7 @@ def rendered_status_lines(body: str) -> list[str]:
     The section is the one the written view reads, found by what renders rather
     than by what was typed: it opens at a top-level h2 whose rendered text is
     `Evidence Status`, in any letter case, and closes at the next top-level h1
-    or h2 or dash rule -- the `## ` and `---` boundaries `extract_section`
-    reads. A rule of asterisks or underscores is not one of them, so the
+    or h2 or dash rule -- the same boundaries `extract_section` reads (#1674). A rule of asterisks or underscores is not one of them, so the
     section runs past it here as it does there, and a line below it stays
     readable rather than falling into a gap between the two views. Every
     matching heading is read, since a body with two of them is already

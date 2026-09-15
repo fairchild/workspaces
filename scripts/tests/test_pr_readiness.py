@@ -722,7 +722,7 @@ class PendingLineShapeTests(unittest.TestCase):
     def test_a_heading_or_rule_inside_a_closed_fence_stays_in_the_section(self) -> None:
         for opener, closer in (("```markdown", "```"), ("~~~", "~~~")):
             with self.subTest(opener=opener):
-                fence = f"\n{opener}\n## Example\n---\n- [pending-ci] example\n{closer}\n"
+                fence = f"\n{opener}\n# Example\n## Example\n---\n- [pending-ci] example\n{closer}\n"
                 status = GOOD_BODY + f"\n## Evidence Status\n{fence}"
                 self.assertEqual(self.failures(status + "- [complete] swift test -- 1992 tests passed\n"), [])
                 self.assertEqual(self.failures(status + "- [pending-ci] swift build -- waiting\n"), [self.PENDING])
@@ -744,6 +744,50 @@ class PendingLineShapeTests(unittest.TestCase):
             "\n---\n\n- [pending-ci] below the rule -- not a status line\n"
         )
         self.assertEqual(self.failures(body), [])
+
+    def test_a_heading_of_level_one_ends_the_section_for_both_views(self) -> None:
+        # An h1 below the h2 opens a new top-level section, so a status under it
+        # is outside this section on the page. The rendered view stopped there
+        # before this and the written view read on, which put a line in one view
+        # and not the other; both stop there now (#1674).
+        body = GOOD_BODY + (
+            "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+            "\n# Notes\n\n- [blocked] a later section -- not a status line\n"
+        )
+        self.assertEqual(self.failures(body), [])
+        self.assertEqual(
+            pr_readiness.rendered_status_lines(body),
+            ["[complete] swift test -- 1992 tests passed"],
+        )
+        self.assertEqual(
+            pr_readiness.extract_section(body, "Evidence Status"),
+            "- [complete] swift test -- 1992 tests passed",
+        )
+
+    def test_a_heading_with_no_text_ends_the_section_too(self) -> None:
+        # `#` or `##` alone is a heading whose text is empty, and the page shows
+        # a heading there, so what follows it is the next section whether or not
+        # the author named it.
+        for heading in ("#", "##"):
+            with self.subTest(heading=heading):
+                body = GOOD_BODY + (
+                    "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+                    f"\n{heading}\n\n- [blocked] a later section -- not a status line\n"
+                )
+                self.assertEqual(self.failures(body), [])
+                self.assertEqual(pr_readiness.rendered_status_lines(body), ["[complete] swift test -- 1992 tests passed"])
+
+    def test_a_sub_heading_stays_inside_the_section(self) -> None:
+        # Level 3 and below is a heading within the section rather than after
+        # it, so its lines are read by both views and a status under one is
+        # still a status.
+        body = GOOD_BODY + (
+            "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+            "\n### Detail\n\n- [blocked] the UI lane -- still a status line\n"
+        )
+        self.assertEqual(self.failures(body), [self.PENDING])
+        self.assertIn("### Detail", pr_readiness.extract_section(body, "Evidence Status"))
+        self.assertIn("[blocked] the UI lane -- still a status line", pr_readiness.rendered_status_lines(body))
 
 
 class RenderedStatusLineTests(unittest.TestCase):
@@ -848,7 +892,7 @@ class RenderedStatusLineTests(unittest.TestCase):
         # closes at the next h1 or h2 or at a rule, so an item below either one
         # is not a status line.
         below = "- \\[pending-ci] a later section -- not a status line\n"
-        for tail in (f"\n## Next\n\n{below}", f"\n---\n\n{below}"):
+        for tail in (f"\n# Next\n\n{below}", f"\n## Next\n\n{below}", f"\n---\n\n{below}"):
             with self.subTest(tail=tail.splitlines()[1]):
                 body = self.body("- [complete] swift test -- 1992 tests passed\n" + tail)
                 self.assertEqual(pr_readiness.rendered_status_lines(body), ["[complete] swift test -- 1992 tests passed"])
