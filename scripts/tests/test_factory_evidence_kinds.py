@@ -3383,6 +3383,46 @@ class SplitKindCompletionRouteTests(unittest.TestCase):
         self.assertIsNotNone(error)
 
 
+class ScreenshotRequestNeedsAPersonTests(unittest.TestCase):
+    """An item that reads as a screenshot request only once rendered is one a person has to look at.
+
+    `_needs_a_person_to_look` decides the screenshot kind the way #1707's three
+    sites decide theirs, through `_hand_completion_kind`. A strictness tie
+    keeps the written reading and `screenshot` outranks `other`, so this can
+    gain a screenshot request and never lose one: inline HTML the render drops
+    no longer hides one from the reader.
+
+    The second test is the bar the decided kind must not be asked to carry.
+    `_hand_completion_kind` ranks by which completion form is stricter, where
+    `other` is the least strict; `_detail_proves_nothing(owner=...)` asks
+    whether a runner stands behind the item, where `other` is the answer that
+    turns the status-word rule on. The same word means opposite things to the
+    two readers, so `unproven_items` keeps reading the written wording. An
+    item whose two readings disagree, recorded complete with nothing but a
+    status word for a detail, is what the inversion would let through.
+    """
+
+    SCREENSHOT_ITEM = "Screen<span></span>shots of the new sidebar"
+    SPLIT_ITEM = "**swift test** owner confirms"
+
+    def test_an_item_that_renders_as_a_screenshot_request_needs_a_person(self) -> None:
+        self.assertTrue(run_contributor._needs_a_person_to_look(self.SCREENSHOT_ITEM))
+        self.assertTrue(run_contributor._needs_a_person_to_look("Screenshots of the new sidebar"))
+        self.assertFalse(run_contributor._needs_a_person_to_look("The launch state is captured"))
+
+    def test_a_status_word_does_not_prove_a_split_item_recorded_complete(self) -> None:
+        # Written `other`, rendered `test`. `green` is a status word, not a
+        # report of a run, and no lane stands behind a hand-written line.
+        self.assertEqual(run_contributor._evidence_item_kind(self.SPLIT_ITEM), "other")
+        self.assertEqual(sys.modules["evidence"]._hand_completion_kind(self.SPLIT_ITEM), ("test", True))
+        entry = {"index": 1, "item": self.SPLIT_ITEM, "status": "complete", "detail": "green", "kind": "other"}
+        body = ("<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
+                "## Evidence Status\n- [complete] swift test owner confirms -- green\n")
+        accounting, errors = run_contributor.validate_evidence_accounting(body, [self.SPLIT_ITEM], review_ci=[])
+        self.assertEqual(accounting["unproven_items"], [self.SPLIT_ITEM])
+        self.assertIsNotNone(run_contributor.review_evidence_gate_error("approve", accounting, errors))
+
+
 class DocumentedTestFormTests(unittest.TestCase):
     """The `test` form the docs teach has to survive the parser.
 

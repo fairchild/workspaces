@@ -1975,9 +1975,14 @@ def _needs_a_person_to_look(item: str) -> bool:
     someone has to follow, a call someone has to make. `screenshot` kind
     catches the first; the other three arrive as `other`, and the phrasings
     that put them there are exactly what says a person is required.
+
+    The kind is the decided one (`_hand_completion_kind`), so an item that
+    reads as a screenshot request only once rendered still counts as one. A
+    strictness tie keeps the written reading, so this can gain a screenshot
+    and never lose one.
     """
     return (
-        _evidence_item_kind(item) == "screenshot"
+        _hand_completion_kind(item)[0] == "screenshot"
         or VISUAL_EVIDENCE_RE.search(item) is not None
         or OWNER_ATTESTED_RE.search(item) is not None
         or MANUAL_JUDGEMENT_RE.search(item) is not None
