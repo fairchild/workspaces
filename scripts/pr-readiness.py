@@ -130,12 +130,84 @@ def load_json(path: str | None, default: Any) -> Any:
         return json.load(file)
 
 
-def extract_section(body: str, heading: str) -> str:
-    pattern = re.compile(
-        rf"(?msi)^## {re.escape(heading)}\n(?P<section>.*?)(?=^## |\n---\n|\Z)"
-    )
-    match = pattern.search(body)
-    return match.group("section").strip() if match else ""
+# A body reads the way GitHub renders it. A CR or CRLF ends a line the way LF
+# does. A heading may sit up to three spaces in, and four is a code block. A
+# list item opens on `-`, `*`, `+`, or one to nine digits and `.` or `)`.
+HEADING_INDENT = r" {0,3}"
+LIST_MARKER = r"(?:[-*+]|[0-9]{1,9}[.)])"
+LINE_ENDING_RE = re.compile(r"\r\n?")
+# A status token is read however a reader sees it written: in code, bold or
+# italics, or behind a task box (`- [ ] [pending-ci]`).
+PENDING_STATUS_RE = re.compile(
+    rf"(?im)^\s*{LIST_MARKER}\s*(?:\[[ x]\]\s*)?[`*_]*\[(?:blocked|pending-ci)\][`*_]*(?:\s|$)"
+)
+FENCE_OPENER_RE = re.compile(r" {0,3}(?P<run>`{3,}|~{3,})(?P<info>.*)")
+
+
+def fence_opener(line: str) -> str:
+    """The run of backticks or tildes a line opens a fence with, or "" when it opens none.
+
+    Fences follow CommonMark: an opener sits at most three spaces in, since four
+    is an indented code block, and a backtick opener's info string holds no
+    backtick, so a line that opens on a code span opens nothing.
+    """
+    opener = FENCE_OPENER_RE.fullmatch(line)
+    if not opener or (opener["run"].startswith("`") and "`" in opener["info"]):
+        return ""
+    return opener["run"]
+
+
+def closes_fence(line: str, run: str) -> bool:
+    """Whether a line closes the fence `run` opened: the same character, at least as long, at most three spaces in."""
+    return re.fullmatch(rf" {{0,3}}{re.escape(run[0])}{{{len(run)},}}[ \t]*", line) is not None
+
+
+def extract_section(body: str, heading: str, *, strip: bool = True) -> str:
+    # A section runs to the next `## ` heading or `---` rule, and one inside a
+    # fence is the fence's content. Stripping takes the first line's indent along
+    # with the blank lines around the section, so a reader that cares about
+    # indentation asks for it unstripped.
+    start = re.search(rf"(?mi)^## {re.escape(heading)}\n", body)
+    if not start:
+        return ""
+    lines = body[start.end():].split("\n")
+    kept: list[str] = []
+    run = ""
+    for index, line in enumerate(lines):
+        if run:
+            if closes_fence(line, run):
+                run = ""
+        elif line.startswith("## ") or (line == "---" and 0 < index < len(lines) - 1):
+            break
+        else:
+            run = fence_opener(line)
+        kept.append(line)
+    section = "\n".join(kept)
+    return section.strip() if strip else section
+
+
+def split_fenced_blocks(text: str) -> tuple[str, str | None]:
+    """The text without its fenced code blocks, and the opening line of a fence left unclosed.
+
+    A reader sees a fenced line as an example, not as status. An unclosed fence
+    keeps its lines, so nothing after it goes unread.
+    """
+    kept: list[str] = []
+    fenced: list[str] = []
+    run = ""
+    for line in text.split("\n"):
+        if run:
+            fenced.append(line)
+            if closes_fence(line, run):
+                fenced.clear()
+                run = ""
+        elif run := fence_opener(line):
+            fenced.append(line)
+        else:
+            kept.append(line)
+    if run:
+        return "\n".join(kept + fenced), fenced[0].strip()
+    return "\n".join(kept), None
 
 
 def template_body(path: Path | None = None) -> str:
@@ -199,8 +271,12 @@ def leading_paragraph_failure(body: str) -> str | None:
 
 
 def evidence_status_heading_failure(body: str) -> str | None:
+    # Exact is `## Evidence Status` at column 0, in any letter case: the only
+    # heading `extract_section` reads and the factory's writer can replace. One
+    # indented up to three spaces renders the same and counts as a variant, so a
+    # status line under it fails the gate instead of going unread.
     headings = re.findall(
-        r"(?im)^#+[ \t]+Evidence[ \t]+Status(?:[ \t]+#+)?[ \t]*$",
+        rf"(?im)^{HEADING_INDENT}#+[ \t]+Evidence[ \t]+Status(?:[ \t]+#+)?[ \t]*$",
         body,
     )
     exact_count = sum(
@@ -244,8 +320,12 @@ def label_names(pr: dict[str, Any]) -> list[str]:
     return [item.get("name", "") for item in pr.get("labels", []) if isinstance(item, dict)]
 
 
-def has_checked_box(body: str, label: str) -> bool:
-    return bool(re.search(rf"(?im)^\s*[-*]\s*\[x\]\s*{re.escape(label)}\b", body))
+def has_checked_box(body: str, label: str, *, rendered_only: bool = False) -> bool:
+    # A box that holds a PR back is read as leniently as a pending line. A box
+    # that excuses one from evidence counts only as GitHub renders it, with a
+    # space or tab on each side of `[x]`.
+    gap = r"[ \t]+" if rendered_only else r"\s*"
+    return bool(re.search(rf"(?im)^\s*{LIST_MARKER}{gap}\[x\]{gap}{re.escape(label)}\b", body))
 
 
 # A command someone can re-run, and what it printed. Either half alone is not
@@ -436,7 +516,7 @@ def has_any_evidence(body: str, files: list[str] | None = None) -> bool:
             bool(EVIDENCE_STORE_LOG_RE.search(body)),
             has_image_evidence(body) and visual,
             bool(EVIDENCE_STORE_RE.search(body)) and visual,
-            has_checked_box(body, "Not a testable change"),
+            has_checked_box(body, "Not a testable change", rendered_only=True),
         )
     )
 
@@ -454,7 +534,8 @@ def is_docs_only(files: list[str]) -> bool:
 
 
 def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
-    body = pr.get("body") or ""
+    # Every `^`, `$` and `\n` below reads a bare LF.
+    body = LINE_ENDING_RE.sub("\n", pr.get("body") or "")
     title = pr.get("title") or ""
     labels = label_names(pr)
     failures: list[str] = []
@@ -491,8 +572,14 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
 
     if heading_failure := evidence_status_heading_failure(body):
         failures.append(heading_failure)
-    evidence_status = extract_section(body, "Evidence Status")
-    if re.search(r"(?im)^\s*-\s*\[(?:blocked|pending-ci)\]\s+", evidence_status):
+    status_section = extract_section(body, "Evidence Status", strip=False)
+    evidence_status, unclosed_fence = split_fenced_blocks(status_section)
+    if unclosed_fence:
+        failures.append(
+            f'Evidence Status opens a code fence that never closes: "{unclosed_fence}". '
+            "Close it so the status lines after it are read."
+        )
+    if PENDING_STATUS_RE.search(evidence_status):
         failures.append("Requested evidence is blocked or still pending CI.")
 
     if re.search(r"(?i)\bdo not merge(?:\s+this\s+pr|\s+until|\b)", f"{title}\n{body}"):

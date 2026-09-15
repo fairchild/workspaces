@@ -524,6 +524,210 @@ class SectionHeadingCaseTests(unittest.TestCase):
                 self.assertIn(self.AMBIGUOUS, pr_readiness.evaluate(pr(body), self.FILES).failures)
 
 
+class PendingLineShapeTests(unittest.TestCase):
+    """A pending line is pending in every shape GitHub renders as one (#1625).
+
+    A CR or CRLF line ending, a heading up to three spaces in, and a list item
+    opened by `*`, `+` or a number all render the way `- [pending-ci]` under
+    `## Evidence Status` does, so each fails the gate as pending.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+    PENDING = "Requested evidence is blocked or still pending CI."
+    AMBIGUOUS = SectionHeadingCaseTests.AMBIGUOUS
+
+    def failures(self, body: str) -> list[str]:
+        return pr_readiness.evaluate(pr(body), self.FILES).failures
+
+    def test_a_crlf_status_section_in_an_lf_body_is_pending(self) -> None:
+        for ending in ("\r\n", "\r"):
+            with self.subTest(ending=repr(ending)):
+                body = GOOD_BODY + f"\n## Evidence Status{ending}- [pending-ci] swift test -- waiting{ending}"
+                self.assertEqual(self.failures(body), [self.PENDING])
+
+    def test_a_crlf_body_fails_for_its_pending_line_not_a_missing_section(self) -> None:
+        body = GOOD_BODY + "\n## Evidence Status\n- [pending-ci] swift test -- waiting\n"
+        self.assertEqual(self.failures(body.replace("\n", "\r\n")), [self.PENDING])
+
+    def test_a_status_heading_up_to_three_spaces_in_is_a_variant(self) -> None:
+        # It renders as the heading, but the factory's writer cannot find it and
+        # would add a second section beside it, so it fails whatever it holds.
+        for indent in (" ", "  ", "   "):
+            for line in ("- [pending-ci] swift test -- waiting", "- [complete] swift test -- 1992 tests passed"):
+                with self.subTest(indent=len(indent), line=line):
+                    body = GOOD_BODY + f"\n{indent}## Evidence Status\n{line}\n"
+                    self.assertEqual(self.failures(body), [self.AMBIGUOUS])
+
+    def test_an_indented_heading_neither_opens_nor_ends_a_section(self) -> None:
+        # A regex cannot tell a heading nested in a list item from a top-level
+        # one, so a section opens and closes at a column-0 heading only.
+        indented = GOOD_BODY.replace("## Mergeability", "   ## Mergeability")
+        self.assertIn("Missing ## Mergeability section from the PR body.", self.failures(indented))
+        nested = "- Supporting context:\n\n   ## Nested detail\n\n   Inside the list item.\n\n"
+        body = GOOD_BODY.replace("## Mergeability\n\n", "## Mergeability\n\n" + nested, 1)
+        self.assertEqual(self.failures(body), [])
+
+    def test_four_spaces_in_is_a_code_block_not_a_heading(self) -> None:
+        body = GOOD_BODY + "\n    ## Evidence Status\n    - [pending-ci] swift test -- quoted example\n"
+        self.assertEqual(pr_readiness.extract_section(body, "Evidence Status"), "")
+        self.assertEqual(self.failures(body), [])
+
+    def test_a_pending_line_opened_by_any_list_marker_is_pending(self) -> None:
+        for heading in ("## Evidence Status", "## evidence status"):
+            for marker in ("*", "+", "1.", "1)"):
+                with self.subTest(heading=heading, marker=marker):
+                    body = GOOD_BODY + f"\n{heading}\n{marker} [pending-ci] swift build -- waiting\n"
+                    self.assertEqual(self.failures(body), [self.PENDING])
+
+    def test_a_status_marker_with_nothing_after_it_is_pending(self) -> None:
+        for line in ("- [pending-ci]", "+ [blocked]\n"):
+            with self.subTest(line=line):
+                self.assertEqual(self.failures(GOOD_BODY + f"\n## Evidence Status\n{line}"), [self.PENDING])
+
+    def test_a_blocked_on_evidence_box_under_any_list_marker_is_checked(self) -> None:
+        # A box that holds a PR back is read as leniently as a pending line.
+        for box in ("* [x]", "+ [x]", "1. [x]", "123456789. [x]", "-[x]"):
+            with self.subTest(box=box):
+                body = GOOD_BODY.replace("- [ ] Blocked on evidence", f"{box} Blocked on evidence")
+                self.assertIn("PR is checked as blocked on evidence.", self.failures(body))
+
+    def test_only_a_checkbox_github_renders_excuses_evidence(self) -> None:
+        evidence = "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed"
+        untested = GOOD_BODY.replace(evidence, "-")
+        for line in (
+            "1234567890. [x] Not a testable change",
+            "123456789.[x] Not a testable change",
+            "-[x] Not a testable change",
+        ):
+            with self.subTest(line=line):
+                self.assertIn("No test/evidence signal found in PR body.", self.failures(untested + f"\n{line}\n"))
+        self.assertEqual(self.failures(untested + "\n123456789. [x] Not a testable change\n"), [])
+        blocked = GOOD_BODY + "\n## Notes\n\n1234567890. [x] Blocked on evidence\n"
+        self.assertNotIn("PR is checked as blocked on evidence.", self.failures(blocked))
+
+    def test_a_status_token_in_inline_code_is_pending(self) -> None:
+        for line in ("- `[pending-ci]` swift test -- waiting", "* ``[blocked]`` swift build -- waiting"):
+            with self.subTest(line=line):
+                self.assertEqual(self.failures(GOOD_BODY + f"\n## Evidence Status\n{line}\n"), [self.PENDING])
+        complete = GOOD_BODY + "\n## Evidence Status\n- `[complete]` swift test -- 1992 tests passed\n"
+        self.assertEqual(self.failures(complete), [])
+
+    def test_a_status_token_in_bold_or_italics_is_pending(self) -> None:
+        for line in ("- **[pending-ci]** swift test -- waiting", "- _[blocked]_ swift build -- waiting"):
+            with self.subTest(line=line):
+                self.assertEqual(self.failures(GOOD_BODY + f"\n## Evidence Status\n{line}\n"), [self.PENDING])
+
+    def test_a_status_token_on_a_task_item_is_pending(self) -> None:
+        for line in ("- [ ] [pending-ci] swift test -- waiting", "1. [x] [blocked] swift build -- waiting"):
+            with self.subTest(line=line):
+                self.assertEqual(self.failures(GOOD_BODY + f"\n## Evidence Status\n{line}\n"), [self.PENDING])
+
+    def test_an_excusing_box_needs_a_space_after_it_too(self) -> None:
+        evidence = "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed"
+        untested = GOOD_BODY.replace(evidence, "-")
+        self.assertIn(
+            "No test/evidence signal found in PR body.",
+            self.failures(untested + "\n1. [x]Not a testable change\n"),
+        )
+        self.assertIn(
+            "PR is checked as blocked on evidence.",
+            self.failures(GOOD_BODY + "\n- [x]Blocked on evidence\n"),
+        )
+
+    def test_a_pending_example_inside_a_fence_is_not_a_status_line(self) -> None:
+        complete = GOOD_BODY + "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+        for fence in ("```", "~~~"):
+            for line in ("* [pending-ci] example", "1. [pending-ci] example", "- [blocked] example"):
+                with self.subTest(fence=fence, line=line):
+                    self.assertEqual(self.failures(complete + f"\n{fence}markdown\n{line}\n{fence}\n"), [])
+                    self.assertEqual(self.failures(complete + f"\n{line}\n"), [self.PENDING])
+
+    def unclosed(self, opener: str) -> str:
+        return f'Evidence Status opens a code fence that never closes: "{opener}". Close it so the status lines after it are read.'
+
+    def test_a_fence_line_four_spaces_in_is_not_a_fence(self) -> None:
+        complete = GOOD_BODY + "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+        for opener in ("    ```", "    ~~~"):
+            with self.subTest(opener=opener):
+                body = complete + f"\n{opener}\n- [pending-ci] swift build -- waiting\n"
+                self.assertEqual(self.failures(body), [self.PENDING])
+
+    def test_a_line_that_opens_on_a_code_span_is_not_a_fence(self) -> None:
+        complete = GOOD_BODY + "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+        body = complete + "```swift test``` ran clean\n- [pending-ci] swift build -- waiting\n"
+        self.assertEqual(self.failures(body), [self.PENDING])
+        # Only a backtick fence refuses a backtick in its info string.
+        self.assertEqual(self.failures(complete + "\n~~~ a`b\n- [pending-ci] example\n~~~\n"), [])
+
+    def test_a_fence_up_to_three_spaces_in_holds_its_example(self) -> None:
+        complete = GOOD_BODY + "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+        for indent in ("", "   "):
+            with self.subTest(indent=len(indent)):
+                body = complete + f"\n{indent}````markdown\n- [pending-ci] example\n```\n{indent}````\n"
+                self.assertEqual(self.failures(body), [])
+
+    def test_an_unclosed_fence_fails_with_its_own_message(self) -> None:
+        complete = GOOD_BODY + "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+        self.assertEqual(self.failures(complete + "\n```\n"), [self.unclosed("```")])
+        self.assertEqual(
+            self.failures(complete + "\n```markdown\n- [pending-ci] example\n"),
+            [self.unclosed("```markdown"), self.PENDING],
+        )
+        # A closer four spaces in does not close the fence.
+        self.assertEqual(
+            self.failures(complete + "\n```\n- [complete] example -- ok\n    ```\n"),
+            [self.unclosed("```")],
+        )
+
+    def test_a_fence_line_four_spaces_in_is_not_a_fence_wherever_it_sits_in_the_section(self) -> None:
+        # Stripping the section takes its first line's indent, so the fence
+        # reader sees the section as the body wrote it.
+        pending = "- [pending-ci] real one -- waiting"
+        complete = "- [complete] swift test -- 1992 tests passed"
+        for position, section in (
+            ("first", f"\n    ```\n{pending}\n"),
+            ("after a status line", f"{complete}\n\n    ```\n{pending}\n"),
+        ):
+            with self.subTest(position=position):
+                self.assertEqual(self.failures(GOOD_BODY + f"\n## Evidence Status\n{section}"), [self.PENDING])
+
+    def test_an_indented_code_example_opening_the_section_passes(self) -> None:
+        complete = "- [complete] swift test -- 1992 tests passed"
+        for section in (f"\n    ```\n{complete}\n", f"\n    ```swift\n    swift test\n    ```\n{complete}\n"):
+            with self.subTest(section=section):
+                self.assertEqual(self.failures(GOOD_BODY + f"\n## Evidence Status\n{section}"), [])
+
+    def test_a_fence_line_four_spaces_in_inside_a_real_fence_is_content(self) -> None:
+        body = GOOD_BODY + "\n## Evidence Status\n\n```markdown\n    ```\n- [pending-ci] example\n```\n"
+        self.assertEqual(self.failures(body), [])
+
+    def test_a_heading_or_rule_inside_a_closed_fence_stays_in_the_section(self) -> None:
+        for opener, closer in (("```markdown", "```"), ("~~~", "~~~")):
+            with self.subTest(opener=opener):
+                fence = f"\n{opener}\n## Example\n---\n- [pending-ci] example\n{closer}\n"
+                status = GOOD_BODY + f"\n## Evidence Status\n{fence}"
+                self.assertEqual(self.failures(status + "- [complete] swift test -- 1992 tests passed\n"), [])
+                self.assertEqual(self.failures(status + "- [pending-ci] swift build -- waiting\n"), [self.PENDING])
+
+    def test_an_unclosed_fence_holding_a_heading_still_fails(self) -> None:
+        body = GOOD_BODY + "\n## Evidence Status\n\n```markdown\n## Example\n- [complete] swift test -- 1992 tests passed\n"
+        self.assertEqual(self.failures(body), [self.unclosed("```markdown")])
+
+    def test_a_heading_after_a_closed_fence_still_ends_the_section(self) -> None:
+        body = GOOD_BODY + (
+            "\n## Evidence Status\n\n```\n## Example\n```\n- [complete] swift test -- 1992 tests passed\n"
+            "\n## Next\n\n- [pending-ci] a later section -- not a status line\n"
+        )
+        self.assertEqual(self.failures(body), [])
+
+    def test_a_rule_outside_a_fence_still_ends_the_section(self) -> None:
+        body = GOOD_BODY + (
+            "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+            "\n---\n\n- [pending-ci] below the rule -- not a status line\n"
+        )
+        self.assertEqual(self.failures(body), [])
+
+
 class ReadinessCommentTests(unittest.TestCase):
     def test_failure_comment_names_failures_and_pastes_template(self) -> None:
         body = GOOD_BODY.replace("- Residual risk or follow-up: none", "")
