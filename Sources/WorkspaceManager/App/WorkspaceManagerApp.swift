@@ -118,6 +118,12 @@ struct WorkspaceManagerApp: App {
             // spawns nothing, so the standing cost is a few milliseconds every 30 s.
             RuntimeProcessWatchdog.shared.start()
         }
+
+        // Outside the CI guard on purpose. This surface binds no socket and
+        // touches nothing outside its own poll, and it has to claim the
+        // notification delegate here — before launch finishes — or a tap that
+        // launches the app arrives with nobody listening.
+        DecisionNotificationLifecycle.shared.start()
     }
 
     var body: some Scene {
