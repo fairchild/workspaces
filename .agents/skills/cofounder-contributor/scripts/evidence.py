@@ -817,7 +817,11 @@ def _latest_evidence_metadata_match(body: str) -> re.Match[str] | None:
 
 
 def _extract_evidence_metadata(body: str) -> dict[str, object] | None:
-    match = _latest_evidence_metadata_match(body)
+    # Every caller passes a PR body as GitHub saved it, and the pattern matches
+    # `\n` endings only, so a body saved with CRLF or CR would read here as one
+    # carrying no metadata at all -- and the live CI gate takes the checks it
+    # re-verifies from these entries.
+    match = _latest_evidence_metadata_match(MARKDOWN_LINE_ENDING_RE.sub("\n", body))
     if not match:
         return None
     try:
@@ -1360,24 +1364,28 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
                     "detail": f"the Evidence Status section cannot be read as the owner's: {unreadable}",
                 }
 
-    # An item the metadata records as the owner's whose wording decides a kind a
-    # proof form completes has no other route left: its line is not read as the
-    # owner's, and no lane owns a kind the contributor never recorded. The
-    # body's own statement or Performance numbers complete it, through the same
-    # call the hand-written read makes. A completion already recorded stands, a
-    # lane or a factory turn having written it.
+    # An item the metadata records as the owner's whose wording decides another
+    # kind is read at that kind here too. Its line is not read as the owner's,
+    # and no lane records an item as `other`, so a `complete` recorded against
+    # one came from the owner path the decided kind refuses -- it does not
+    # stand. What can complete it is what completes that kind: the body's own
+    # statement or Performance numbers, through the same call the hand-written
+    # read makes, and nothing at all for a kind a lane, a check or a review
+    # owns. Items the metadata records at a lane's own kind never reach here,
+    # so a lane still completes its own work.
     for item in requested_evidence:
         if kinds.get(item) != "other" or item in owner_items:
             continue
         decided, split = _hand_completion_kind(item)
-        if decided not in PROOF_FORM_KINDS or entries.get(item, {}).get("status") == "complete":
-            continue
         proof = _proof_form_completion(body, item, decided)
         if proof:
             entries[item] = {"status": "complete", "detail": proof}
-        else:
-            refusal = HAND_COMPLETION_REFUSALS[decided]
-            entries[item] = {"status": "blocked", "detail": refusal + SPLIT_KIND_NOTE if split else refusal}
+            continue
+        refusal = HAND_COMPLETION_REFUSALS.get(decided, "a hand-written line does not complete this kind of item")
+        entries[item] = {
+            "status": "blocked" if decided in PROOF_FORM_KINDS else "pending-ci",
+            "detail": refusal + SPLIT_KIND_NOTE if split else refusal,
+        }
 
     matched: dict[str, str]
     contested_items: list[str] = []
@@ -1452,7 +1460,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
         if _detail_proves_nothing(
             item,
             str(entries[matched[item]].get("detail", "")),
-            owner=item in owner_items or _evidence_item_kind(item) == "other",
+            owner=item in owner_items or _hand_completion_kind(item)[0] == "other",
         )
     ]
     return {
@@ -1975,13 +1983,21 @@ def _needs_a_person_to_look(item: str) -> bool:
     someone has to follow, a call someone has to make. `screenshot` kind
     catches the first; the other three arrive as `other`, and the phrasings
     that put them there are exactly what says a person is required.
+
+    The kind is the decided one, so an item that reads as a screenshot request
+    only once rendered still counts as one, and the phrasings are read in the
+    item as written and as it renders: inline HTML dropped by the render must
+    not hide a request for a person either way.
     """
+    texts = (item, _rendered_inline(item))
     return (
-        _evidence_item_kind(item) == "screenshot"
+        _hand_completion_kind(item)[0] == "screenshot"
         or VISUAL_EVIDENCE_RE.search(item) is not None
-        or OWNER_ATTESTED_RE.search(item) is not None
-        or MANUAL_JUDGEMENT_RE.search(item) is not None
-        or EXTERNAL_VERIFICATION_RE.search(item) is not None
+        or any(
+            pattern.search(text) is not None
+            for text in texts
+            for pattern in (OWNER_ATTESTED_RE, MANUAL_JUDGEMENT_RE, EXTERNAL_VERIFICATION_RE)
+        )
     )
 
 
