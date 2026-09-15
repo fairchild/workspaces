@@ -408,11 +408,16 @@ form a body without metadata completes it by. An item with no recorded kind is
 never read this way. The section is read as CommonMark, by a parser rather than by matching lines,
 and wherever reading it would mean guessing at how GitHub renders something,
 the read refuses instead. Where a section ends is read the same way, and by
-the same call for every reader of the body: at the next `##` heading or `---`
-rule the page shows. A run of dashes written directly under a line of text is
-that line's underline rather than a rule, so the lines above it stay in the
-section they were written in -- which is why a Performance section closed off
-with a rule and no blank line above it still reads. A status line is a list
+the same call for every reader and every writer of the body: at the next `##`
+heading or `---` rule the page shows. A run of dashes written directly under a
+line of text is that line's underline rather than a rule, so the lines around
+it stay in the section they were written in, and a rewrite of that section
+replaces exactly what the read counted. What the page then shows is a heading,
+not a measurement: a Performance section whose last measurement line is
+followed immediately by `---` still reads as carrying no numbers and still
+refuses. The refusal says so -- it names the underline and asks for a blank
+line between the last measurement and the rule -- rather than asking for
+measurements you already wrote. A status line is a list
 item under the one
 `## Evidence Status` heading a reader sees, on a single line, whose text reads
 `[status] item -- proof`, one per requested item. The section is unreadable,

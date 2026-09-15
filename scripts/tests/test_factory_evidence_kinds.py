@@ -4359,7 +4359,7 @@ class OneSectionBoundaryForBothViewsTests(unittest.TestCase):
             return False
         if token.type == "hr":
             return token.markup.startswith("-")
-        return token.type == "heading_open" and token.tag == "h2" and token.markup.startswith("#")
+        return token.type == "heading_open" and token.tag == "h2"
 
     def views(self, body: str, heading: str = "Performance") -> tuple[list[str], list[str]]:
         """The written lines and the rendered lines of one section."""
@@ -4372,19 +4372,62 @@ class OneSectionBoundaryForBothViewsTests(unittest.TestCase):
         "After Summary: p50 launch latency 410 ms\n"
     )
 
-    def test_a_dash_rule_written_against_the_measurements_still_reads(self) -> None:
+    UNDERLINES = ("---", "-----", "  ---", "===")
+
+    def test_a_dash_rule_written_against_the_measurements_still_refuses(self) -> None:
         # The #1723 shape and every underline that makes it: three dashes, more
         # than three, an indented run, and the equals sign that underlines an
-        # h1. `- - -` is a rule rather than an underline -- dashes with spaces
-        # between them cannot underline anything -- and it reads because both
-        # views end the section at it, above the measurements it is not.
-        for underline in ("---", "-----", "  ---", "===", "- - -"):
+        # h1. The page shows a heading where the author wrote measurements, so
+        # no reading of the section finds a `Before:` line -- and both views
+        # now stop in the same place, which is the part that was wrong.
+        evidence = self.evidence()
+        for underline in self.UNDERLINES:
             body = f"## Performance\n\n{self.PARAGRAPH_FIELDS}{underline}\n\n## Risks\n\nNone.\n"
             with self.subTest(underline=underline):
-                self.assertIsNotNone(run_contributor._perf_numbers(body, self.PERF_ITEM))
-                written, rendered = self.views(body)
-                self.assertEqual([line for line in written if line.strip() != underline.strip()], rendered)
-                self.assertIn("After Summary: p50 launch latency 410 ms", rendered)
+                self.assertIsNone(run_contributor._perf_numbers(body, self.PERF_ITEM))
+                _, rendered = self.views(body)
+                self.assertEqual([line for line in rendered if evidence.PERF_FIELD_RE.match(line)], [])
+                self.assertEqual(
+                    evidence.markdown_section(body, "Performance"),
+                    self.rendered_boundary_section(body, "Performance"),
+                )
+
+    def test_the_refusal_names_the_underline_rather_than_asking_for_the_numbers(self) -> None:
+        # What #1723 gets: not a section that reads, but a refusal that says
+        # what the page is doing with the lines and what to change. Asking for
+        # measurements the author already wrote is the misleading part.
+        evidence = self.evidence()
+        for underline in self.UNDERLINES:
+            body = f"## Performance\n\n{self.PARAGRAPH_FIELDS}{underline}\n\n## Risks\n\nNone.\n"
+            with self.subTest(underline=underline):
+                self.assertTrue(evidence._perf_underlined_measurement(body))
+                refusal = evidence._hand_completion_refusal(body, self.PERF_ITEM, self.PERF_ITEM)
+                self.assertIn("read as a heading", refusal)
+                self.assertIn("blank line", refusal)
+
+    def test_an_unfilled_section_is_refused_without_the_underline_note(self) -> None:
+        # The note is about one shape, so a section that really carries no
+        # measurements must not be told to move a rule it does not have --
+        # including one whose underlined heading is a heading the author meant.
+        evidence = self.evidence()
+        for body in (
+            "## Performance\n\nNot measured on this head yet.\n",
+            "## Performance\n\nBefore Summary: p50 launch latency 900 ms\n\n---\n",
+            "## Performance\n\nNotes on the method\n---\n\nNot measured yet.\n",
+        ):
+            with self.subTest(body=body[:48]):
+                self.assertFalse(evidence._perf_underlined_measurement(body))
+                refusal = evidence._hand_completion_refusal(body, self.PERF_ITEM, self.PERF_ITEM)
+                self.assertNotIn("read as a heading", refusal)
+
+    def test_a_rule_that_cannot_underline_anything_still_leaves_the_numbers_readable(self) -> None:
+        # `- - -` is a thematic break and nothing else -- dashes with spaces
+        # between them underline no line -- so it ends the section below the
+        # measurements and both views still read them.
+        body = f"## Performance\n\n{self.PARAGRAPH_FIELDS}- - -\n\n## Risks\n\nNone.\n"
+        self.assertIsNotNone(run_contributor._perf_numbers(body, self.PERF_ITEM))
+        written, rendered = self.views(body)
+        self.assertEqual(written, rendered)
 
     def test_a_dash_rule_a_blank_line_below_the_measurements_still_ends_the_section(self) -> None:
         # The other half of the same rule: with a blank line above it the run of
@@ -4421,20 +4464,27 @@ class OneSectionBoundaryForBothViewsTests(unittest.TestCase):
                 written, _ = self.views(body)
                 self.assertIn("- After Summary: p50 launch latency 410 ms", written)
 
-    def test_a_setext_heading_reads_as_the_lines_it_was_written_as(self) -> None:
-        # A heading written with hashes keeps them, so a statement still ends
-        # at the next heading. An underlined one has none to keep, and giving
-        # it any is the read putting characters on the page that no reader
-        # sees.
+    def test_a_setext_heading_keeps_hashes_it_was_never_written_with(self) -> None:
+        # Emitting it as the author's own lines reads as more faithful and
+        # loosens two gates (#1723, round 2): the split pushes a disclaimer out
+        # of the window that binds a count to a run, and a `Before:` line under
+        # an underline becomes a measurement. A heading is one line with
+        # hashes, whatever made it one, so a statement still ends there.
+        #
+        # An `===` underline makes an h1, which ends no section, so it is the
+        # one that stays inside a section to be read at all.
         body = (
-            "## Performance\n\nUnderlined heading\n---\n\n"
-            "Two lines\nunder one rule\n===\n\n## Aside\n\n### Hashed\n"
+            "## Performance\n\nTwo lines\nunder one rule\n===\n\nplain text\n\n"
+            "## Aside\n\n### Hashed\n"
         )
         self.assertEqual(
             self.evidence()._rendered_lines(body, "Performance"),
-            ["Underlined heading", "", "Two lines", "under one rule"],
+            ["# Two lines under one rule", "", "plain text"],
         )
         self.assertEqual(self.evidence()._rendered_lines(body, "Aside"), ["### Hashed"])
+        # And an `---` underline makes an h2, which does end the section.
+        underlined = "## Performance\n\nUnderlined heading\n---\n\nbelow\n"
+        self.assertEqual(self.evidence()._rendered_lines(underlined, "Performance"), [])
 
     # The shapes above, written out, because the properties below read this
     # file's string literals and an f-string built at run time is not one.
@@ -4546,6 +4596,181 @@ class OneSectionBoundaryForBothViewsTests(unittest.TestCase):
             ],
             ["_helpers"],
         )
+
+
+class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
+    """What a wider section may and may not do to a reader (#1723, round 2).
+
+    Asking one predicate where a section ends closes the disagreement that
+    filed #1723, and it widens some sections: a setext underline is part of
+    the heading it underlines, so the lines around it stay in the section they
+    were written in. A wider section must not let a reader accept something it
+    refused before -- the confirmation pass found two readers doing exactly
+    that, both through the rendered read emitting an underlined heading as the
+    author's own plain lines, which is why that emission is gone.
+
+    These are those four findings, each as the body it was found on.
+    """
+
+    TEST_ITEM = "`swift test` passes"
+    # `p50` is what makes the item a `perf` kind rather than an owner's note,
+    # which is the classification the refusal path below turns on.
+    PERF_ITEM = "p50 launch latency before and after"
+
+    NOT_RUN_BODY = (
+        "## Validation\n\n"
+        "Ran `swift test` and it printed 214 tests passed.\n"
+        "padding one\n"
+        "padding two\n"
+        "padding three\n"
+        "These results were not run on this branch.\n"
+        "---\n\n"
+        "## Risks\n\nNone.\n"
+    )
+
+    def test_a_disclaimer_the_page_still_shows_still_refuses_the_statement(self) -> None:
+        # Finding 1. The guard reads four lines past the run for a disclaimer.
+        # Splitting an underlined heading into the lines it was written as put
+        # the disclaimer on the fifth, and the statement completed against a
+        # page that says the results are not from this branch.
+        evidence = sys.modules["evidence"]
+        self.assertIsNone(run_contributor._attested_test_statement(self.NOT_RUN_BODY, self.TEST_ITEM))
+        # The underline made the whole paragraph a heading, so the section is
+        # empty -- and empty to both views, which is the difference from the
+        # revision that accepted here.
+        self.assertEqual(evidence.markdown_section(self.NOT_RUN_BODY, "Validation"), "")
+        self.assertEqual(evidence._rendered_lines(self.NOT_RUN_BODY, "Validation"), [])
+
+    UNDERLINED_FIELD_BODY = (
+        "## Performance\n\nMeasured on this head.\n\n"
+        "Before: p50 launch 2.4s\n---\nAfter: p50 launch 1.2s\n"
+    )
+
+    def test_a_field_serving_as_its_own_boundary_does_not_complete(self) -> None:
+        # Finding 2. The underline made `Before: launch 2.4s` a heading, so it
+        # was the start of a new section to a reader; read as the line it was
+        # written as it was also a `Before:` field to the gate, and being both
+        # at once is what completed the item.
+        evidence = sys.modules["evidence"]
+        self.assertIsNone(run_contributor._perf_numbers(self.UNDERLINED_FIELD_BODY, self.PERF_ITEM))
+        self.assertEqual(
+            evidence._rendered_lines(self.UNDERLINED_FIELD_BODY, "Performance"),
+            ["Measured on this head."],
+        )
+        self.assertEqual(
+            evidence.markdown_section(self.UNDERLINED_FIELD_BODY, "Performance"),
+            "Measured on this head.",
+        )
+        # And the refusal says which line the page took, rather than asking for
+        # measurements that are sitting right there.
+        self.assertIn(
+            "read as a heading",
+            evidence._hand_completion_refusal(self.UNDERLINED_FIELD_BODY, self.PERF_ITEM, self.PERF_ITEM),
+        )
+
+    BLOCKED_BY_BODY = "## Blocked By\n\n- #101\n\nsomething\n---\n\n- #202\n"
+    # Bodies where a literal three-dash match and the page part company over a
+    # number, so a second copy of the reader cannot agree with the first by
+    # accident. Without these the pair test passed with the copy restored.
+    BLOCKED_BY_DIVERGENT = (
+        "## Blocked By\n\n- #101\n\n#202 blocks this too\n---\n\n- #303\n",
+        "## Blocked By\n\n- #101\n\n-----\n\n- #202\n",
+        "## Blocked By\n\n```\n---\n```\n\n- #202\n",
+    )
+
+    def test_both_readers_of_blocked_by_answer_alike_on_every_fixture(self) -> None:
+        # Finding 3. The two carried character-identical copies, which agree
+        # until one of them changes. They are one function now, and the
+        # property is over every body this file holds rather than over the one
+        # shape that caught them.
+        bodies = [
+            self.BLOCKED_BY_BODY,
+            *self.BLOCKED_BY_DIVERGENT,
+            *OneSectionBoundaryForBothViewsTests().source_bodies(),
+        ]
+        self.assertGreater(len(bodies), 100)
+        for body in bodies:
+            with self.subTest(body=body[:50]):
+                self.assertEqual(
+                    run_contributor.extract_blocked_by(body),
+                    sync_execution_state.extract_blocked_by(body),
+                )
+        # The underline makes `something` a heading, so the section stops there
+        # and #202 is in the section below it -- the answer the merge base gave
+        # through its literal match, now the answer both readers give.
+        self.assertEqual(run_contributor.extract_blocked_by(self.BLOCKED_BY_BODY), [101])
+
+    ORPHAN_BODY = "## Evidence Status\n\n- [x] one - done\n\nnote\n---\n- [x] two - done\n"
+
+    def test_the_read_and_the_rewrite_stop_in_the_same_place(self) -> None:
+        # Finding 4. The read counted `- [x] two - done` and the rewrite cut
+        # above it, so a completion the gate had counted survived outside every
+        # section. They stop in one place now: the read does not count that
+        # line, and the rewrite leaves it where its author put it.
+        helpers = sys.modules["_helpers"]
+        section = helpers.markdown_section(self.ORPHAN_BODY, "Evidence Status")
+        self.assertEqual(section, "- [x] one - done")
+        rewritten = helpers.insert_markdown_section(
+            self.ORPHAN_BODY, "Evidence Status", "- [x] three - done"
+        )
+        self.assertNotIn("- [x] one - done", rewritten)
+        self.assertIn("- [x] two - done", rewritten)
+        self.assertEqual(
+            helpers.markdown_section(rewritten, "Evidence Status"), "- [x] three - done"
+        )
+
+    def test_a_rewrite_round_trips_and_orphans_nothing_over_every_fixture(self) -> None:
+        # The property behind finding 4: whatever the read counts, the write
+        # replaces. A line left behind is a line the next read cannot find.
+        helpers = sys.modules["_helpers"]
+        content = "- [x] the written line - done"
+        checked = 0
+        for body in OneSectionBoundaryForBothViewsTests().source_bodies():
+            for heading in OneSectionBoundaryForBothViewsTests.READER_HEADINGS:
+                section = helpers.markdown_section(body, heading)
+                if not section:
+                    continue
+                checked += 1
+                remainder = helpers.strip_markdown_section(body, heading)
+                rewritten = helpers.insert_markdown_section(body, heading, content)
+                with self.subTest(body=body[:50], heading=heading):
+                    self.assertEqual(helpers.markdown_section(rewritten, heading), content)
+                    for line in section.splitlines():
+                        # Only lines that occur once, so a line the body
+                        # repeats elsewhere is not read as a leftover.
+                        if line.strip() and body.count(line) == 1:
+                            self.assertNotIn(line, remainder)
+        self.assertGreater(checked, 100)
+
+    FENCED_BOUNDARY_BODY = (
+        "## Performance\n\n"
+        "```\nquoted report\n## Risks\n```\n\n"
+        "Before Summary: p50 launch latency 900 ms\n"
+        "After Summary: p50 launch latency 410 ms\n"
+    )
+
+    def test_a_heading_inside_a_fence_stops_ending_the_section(self) -> None:
+        # The one acceptance this change adds, on the record rather than by
+        # accident. A `##` heading or a `---` rule inside a code fence is code
+        # to the page and was the end of the section to a literal match, so
+        # measurements written below a quoted report went unread. The reverse
+        # of the same blindness is worse: a fenced rule truncated the section a
+        # reader of record saw while a person saw the section whole.
+        self.assertIsNotNone(run_contributor._perf_numbers(self.FENCED_BOUNDARY_BODY, self.PERF_ITEM))
+        self.assertIn(
+            "After Summary: p50 launch latency 410 ms",
+            sys.modules["evidence"]._rendered_lines(self.FENCED_BOUNDARY_BODY, "Performance"),
+        )
+
+    def test_the_section_a_second_heading_would_shadow_goes_too(self) -> None:
+        # A rewrite removes every occurrence, not the first. `markdown_section`
+        # reads the first, so a later copy left behind is the stale one the
+        # next read finds.
+        helpers = sys.modules["_helpers"]
+        body = "## Evidence Status\n- [x] first\n\n## Risks\n\nNone.\n\n## Evidence Status\n- [x] second\n"
+        rewritten = helpers.insert_markdown_section(body, "Evidence Status", "- [x] written")
+        self.assertEqual(rewritten.count("## Evidence Status"), 1)
+        self.assertNotIn("- [x] second", rewritten)
 
 
 if __name__ == "__main__":

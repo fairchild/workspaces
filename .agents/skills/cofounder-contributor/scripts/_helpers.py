@@ -162,46 +162,66 @@ def issue_label_presence(issue: dict[str, object]) -> set[str]:
 def is_section_boundary(token: Token) -> bool:
     """Whether a parsed token starts something other than the section above it.
 
-    A section ends where its author began another one: an `##` heading, or a
-    `---` rule. Both at the top level, since one nested in a list or a quote is
-    inside the section rather than after it. A setext underline is part of the
-    heading it underlines rather than a rule of its own, so neither it nor the
-    heading it makes ends anything: the author wrote lines of text with a rule
-    under them, and that is one block, not a new section.
+    A section ends at a top-level h2 or a top-level `---` rule -- one nested in
+    a list or a quote is inside the section rather than after it. The h2 counts
+    however the author made it one, hashes or an underline: an underline is
+    what turns the line above it into a heading, and the page then shows a
+    heading there whatever the author meant.
 
-    Both views of a body ask this, so neither can place a boundary the other
-    does not (#1723). Its answers for `***`, `___`, an h1 and an h3 are the
-    answers the readers already gave: none of those ends a section, and
-    narrowing a section drops a measurement the other view still sees.
+    This is the rule the rendered read always applied; what changed is that the
+    written read asks it too, on the same tokens, so neither can place a
+    boundary the other does not (#1723). Both directions of that matter. A
+    literal three-dash match does not stop at `-----` or at a setext underline,
+    which the page stops at; and it does stop at a `##` heading or a `---` rule
+    inside a code fence, which the page shows as code -- so a fenced rule could
+    truncate a section for the reader while a person saw it whole.
+
+    Its answers for `***`, `___`, an h1 and an h3 are the answers the readers
+    already gave: none of those ends a section.
     """
     if token.level != 0:
         return False
     if token.type == "hr":
         return token.markup.startswith("-")
-    return token.type == "heading_open" and token.tag == "h2" and token.markup.startswith("#")
+    return token.type == "heading_open" and token.tag == "h2"
 
 
-def markdown_section(body: str, heading: str) -> str:
-    """The body text under `## <heading>`, up to where the parser ends the section.
+def _section_bounds(body: str, heading: str) -> tuple[int, int, int] | None:
+    """Where `## <heading>` begins, where its text begins, and where the section ends.
 
-    The text comes back as written -- the parser reports which line the
-    section stops at and the original is sliced there, so a caller still reads
-    the author's characters rather than a re-render.
+    One answer for the reader and the writer. `markdown_section` returns the
+    middle slice and `strip_markdown_section` cuts the outer one, so the text
+    a caller reads is exactly the text a rewrite replaces -- a line counted as
+    a completion cannot be left outside every section by the rewrite that
+    follows it (#1723, round 2).
 
     The boundary is asked of the parser because matching a three-dash line is
     not the rule the page applies: three dashes directly under a line of text
     are that line's setext underline, and a section read as ending there is
-    empty on the page and whole here (#1723).
+    empty on the page and whole here.
     """
     match = re.search(rf"(?mi)^## {re.escape(heading)}\n", body)
     if match is None:
-        return ""
+        return None
     line_starts = [0] + [end.end() for end in MARKDOWN_LINE_ENDING_RE.finditer(body)]
     heading_line = bisect.bisect_right(line_starts, match.start()) - 1
     for token in MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", body)):
         if token.map and token.map[0] > heading_line and is_section_boundary(token):
-            return body[match.end() : line_starts[token.map[0]]].strip()
-    return body[match.end() :].strip()
+            return match.start(), match.end(), line_starts[token.map[0]]
+    return match.start(), match.end(), len(body)
+
+
+def markdown_section(body: str, heading: str) -> str:
+    """The body text under `## <heading>`, as written, up to where the section ends.
+
+    The parser reports which line the section stops at and the original is
+    sliced there, so a caller reads the author's characters rather than a
+    re-render.
+    """
+    bounds = _section_bounds(body, heading)
+    if bounds is None:
+        return ""
+    return body[bounds[1] : bounds[2]].strip()
 
 
 def has_markdown_section(body: str, heading: str) -> bool:
@@ -209,9 +229,29 @@ def has_markdown_section(body: str, heading: str) -> bool:
 
 
 def strip_markdown_section(body: str, heading: str) -> str:
-    pattern = rf"(?msi)^## {re.escape(heading)}\n.*?(?=^## |\n---\n|\Z)"
-    stripped = re.sub(pattern, "", body).strip()
-    return re.sub(r"\n{3,}", "\n\n", stripped)
+    """The body without the section under `## <heading>`, heading included.
+
+    Every occurrence goes, not only the first: `markdown_section` reads the
+    first, so leaving a later one behind puts the stale copy where the next
+    read will find it. The loop re-parses because each cut shortens the body,
+    and it terminates because each cut takes at least the heading line.
+    """
+    stripped = body
+    while (bounds := _section_bounds(stripped, heading)) is not None:
+        stripped = stripped[: bounds[0]] + stripped[bounds[2] :]
+    return re.sub(r"\n{3,}", "\n\n", stripped.strip())
+
+
+def extract_blocked_by(body: str) -> list[int]:
+    """The issue numbers a `## Blocked By` section names, in the order written.
+
+    The reader of record for both paths that ask: the contributor runtime
+    through `github_state` and the lifecycle sync through its own entry point.
+    They held character-identical copies and drifted the moment one of them
+    read a boundary the other did not, so there is one copy (#1723, round 2).
+    """
+    numbers = [int(number) for number in re.findall(r"#(\d+)", markdown_section(body, "Blocked By"))]
+    return list(dict.fromkeys(numbers))
 
 
 def insert_markdown_section(

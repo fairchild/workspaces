@@ -928,18 +928,20 @@ def _rendered_lines(body: str, heading: str | None = None) -> list[str]:
         elif kind == "list_item_close":
             marker = None
         elif kind == "heading_open":
-            # A heading the author wrote with hashes keeps them, so a statement
-            # still ends at the next heading. A setext heading has none to
-            # keep: the author wrote lines of text and a rule under them, and
-            # the rule is what makes the block a heading. Giving those lines
-            # hashes they were never written with is the one place this read
-            # would put characters on the page that no reader sees, and it
-            # emptied a Performance section the written read still had whole
-            # (#1723). They come back as the lines they are.
-            atx = token.markup.startswith("#")
-            text = _inline_text(tokens[index + 1].children, break_text=" " if atx else "\n")
-            prefix = f"{'#' * int(token.tag[1:])} " if atx else ""
-            emit(token, [f"{prefix}{part}".rstrip() for part in text.split("\n")])
+            # Every heading comes back with hashes, including one the author
+            # underlined rather than wrote with them, and its lines come back
+            # as the one line a heading is.
+            #
+            # Emitting an underlined heading as the author's own plain lines
+            # was tried and reverted (#1723, round 2). It reads as more
+            # faithful and it loosens two gates: splitting the lines pushed a
+            # NOT_RUN disclaimer out of the window that binds a count to the
+            # run above it, and a `Before:` line under an underline became a
+            # measurement while the heading it formed still ended the section.
+            # Hashes on a heading nobody hashed are the smaller wrong: no
+            # reader is shown them, and a statement still ends there.
+            text = _inline_text(tokens[index + 1].children)
+            emit(token, [f"{'#' * int(token.tag[1:])} {text}".rstrip()])
             index += 3
             continue
         elif kind == "paragraph_open":
@@ -1261,6 +1263,14 @@ HAND_COMPLETION_REFUSALS = {
     "test-attested": "state the command and the line it printed in the PR body; the status line alone does not complete it",
     "perf": "fill the Performance section with before and after measurements; the status line alone does not complete it",
 }
+# What to add when the measurements are there and the page does not show them
+# in the section. Nothing is wrong with the numbers, so a refusal that only
+# says the section is unfilled sends the author to the wrong place (#1723).
+PERF_UNDERLINED_MEASUREMENT_NOTE = (
+    "; the line before the `---` is read as a heading, because a rule directly "
+    "under a line of text underlines it -- put a blank line between the last "
+    "measurement and the rule"
+)
 # How hard each kind is to complete by hand: an `other` item completes from its
 # own line, a `test-attested` or a `perf` item from a proof form elsewhere in
 # the body, and every other kind only from a lane, a check or a review.
@@ -1339,6 +1349,8 @@ def _hand_completion_refusal(body: str, item: str, line_item: str) -> str | None
     if _proof_form_completion(body, item, kind):
         return None
     refusal = HAND_COMPLETION_REFUSALS.get(kind, "a hand-written line does not complete this kind of item")
+    if kind == "perf" and _perf_underlined_measurement(body):
+        refusal += PERF_UNDERLINED_MEASUREMENT_NOTE
     return refusal + SPLIT_KIND_NOTE if split else refusal
 
 
@@ -2630,6 +2642,35 @@ def _perf_numbers_in(lines: list[str], wanted: set[str], scenarios: set[str]) ->
         if answer is not None:
             return answer
     return None
+
+
+def _perf_underlined_measurement(body: str) -> bool:
+    """Whether a measurement in the Performance section ran into the rule below it.
+
+    A run of dashes written directly under a line of text underlines that line
+    into a heading, so the page shows a measurement styled as a heading and the
+    read sees a heading rather than a `Before:` line. The numbers are there and
+    correct, which is what makes the plain refusal misleading: it asks for
+    measurements the author already wrote (#1723).
+
+    The underlined heading is the section's own boundary, so it is the token at
+    the end of the span rather than one inside it: the rule the author wrote to
+    close the section off took the line above it along.
+
+    Only the shape is reported, not a repair. Reading the heading back as the
+    lines it was written as is the repair, it was tried, and it loosened two
+    other readers -- see `_rendered_lines`.
+    """
+    tokens = MARKDOWN.parse(_lf(body))
+    span = _rendered_section_span(tokens, "Performance")
+    if span is None:
+        return False
+    return any(
+        tokens[index].type == "heading_open"
+        and not tokens[index].markup.startswith("#")
+        and PERF_FIELD_RE.match(_inline_text(tokens[index + 1].children).strip())
+        for index in range(span[0], min(span[1] + 1, len(tokens) - 1))
+    )
 
 
 def _perf_numbers(body: str, item: str = "") -> str | None:

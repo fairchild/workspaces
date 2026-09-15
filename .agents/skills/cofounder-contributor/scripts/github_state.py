@@ -15,6 +15,7 @@ from _helpers import (
     REPO_ROOT,
     _normalize_login,
     _parse_timestamp,
+    extract_blocked_by,
     issue_label_presence,
     markdown_section,
     persona_slug,
@@ -438,10 +439,8 @@ def extract_execution_priority(body: str) -> int | None:
     return int(match.group("priority"))
 
 
-def extract_blocked_by(body: str) -> list[int]:
-    blocked_section = markdown_section(body, "Blocked By")
-    blocked = [int(number) for number in re.findall(r"#(\d+)", blocked_section)]
-    return list(dict.fromkeys(blocked))
+# `extract_blocked_by` is re-exported from `_helpers`, which is the one copy
+# both readers of a `## Blocked By` section go through.
 
 
 def extract_pr_issue_reference(body: str) -> tuple[int | None, str | None]:

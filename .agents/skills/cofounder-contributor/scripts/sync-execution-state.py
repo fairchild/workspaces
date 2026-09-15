@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["markdown-it-py==4.2.0"]
 # ///
 """Synchronize execution-state labels for planned contributor issues."""
 
@@ -17,6 +17,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+_scripts_dir = str(Path(__file__).resolve().parent)
+if _scripts_dir not in sys.path:
+    sys.path.insert(0, _scripts_dir)
+
+# The one reader of a `## Blocked By` section. This script held a
+# character-identical copy of it and of the section match under it, and a copy
+# agrees until one of them changes: the moment the shared one read a boundary
+# this one did not, the two disagreed about whether an issue was blocked
+# (#1723, round 2).
+from _helpers import extract_blocked_by  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 GH_DISCUSS_SCRIPT = REPO_ROOT / ".agents" / "skills" / "gh-discuss" / "scripts" / "gh-discuss.py"
@@ -277,25 +287,11 @@ def trusted_comment_author(
     return bool(login and login in trusted_logins)
 
 
-def markdown_section(body: str, heading: str) -> str:
-    pattern = rf"(?msi)^## {re.escape(heading)}\n(.*?)(?=^## |\n---\n|\Z)"
-    match = re.search(pattern, body)
-    if not match:
-        return ""
-    return match.group(1).strip()
-
-
 def extract_issue_discussion_number(body: str) -> int | None:
     match = TASK_ISSUE_MARKER_RE.search(body)
     if not match:
         return None
     return int(match.group("number"))
-
-
-def extract_blocked_by(body: str) -> list[int]:
-    blocked_section = markdown_section(body, "Blocked By")
-    blocked = [int(number) for number in re.findall(r"#(\d+)", blocked_section)]
-    return list(dict.fromkeys(blocked))
 
 
 def latest_issue_claim(
