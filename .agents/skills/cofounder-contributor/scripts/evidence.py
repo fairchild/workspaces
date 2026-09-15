@@ -43,6 +43,9 @@ EVIDENCE_SEPARATOR_RE = re.compile(r"(?<=\s)(?:--|—|–)(?=\s)")
 # this length the line is unreadable rather than slow, which puts it in
 # `invalid_lines` where the gate reports it.
 EVIDENCE_STATUS_LINE_LIMIT = 4_000
+# What GitHub stores for a pull request body. A writer that goes past it does
+# not write a longer body, it writes none.
+PR_BODY_LIMIT = 65_536
 # What `_normalize_evidence_key` can take off an item's ends, and so the only
 # characters a candidate's key may be shorter by than the text it came from.
 EVIDENCE_STRIPPABLE_CHARS = frozenset("`.,;:)")
@@ -1473,6 +1476,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
             "invalid_lines": [],
             "duplicate_items": [],
             "source": "none",
+            "matched": {},
             "missing_items": [],
             "contested_items": [],
             "duplicate_requested_items": [],
@@ -1635,6 +1639,10 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
     ]
     return {
         **parsed,
+        # Which entry proves each requested item. The lists below say what each
+        # item's verdict is; this says where it came from, which is what a
+        # writer needs to record an item as the body already reads it.
+        "matched": matched,
         "unproven_items": unproven_items,
         "owner_section_unreadable": unreadable if owner_items else fallback_unreadable,
         "live_ci_satisfied": sorted(live_satisfied),
@@ -3331,6 +3339,136 @@ def _macos_lane_resolves(line: str, item: str, requested_evidence: list[str] | N
     )
 
 
+def _gate_verdict(
+    accounting: dict[str, object],
+    requested_evidence: list[str],
+    *,
+    skip: set[str],
+) -> tuple[object, ...]:
+    """What the gate reports off a body, for the items not named in `skip`.
+
+    Two readings of one body compare equal here when a reader would say the
+    same things about it: the same verdict for each item, and the same
+    complaints -- a section it cannot read, a line it cannot parse, two
+    entries for one requirement, an item outbid for its entry. An entry
+    answering nothing is left out: the gate reports it nowhere, and the line
+    it came from stays visible in the body either way.
+    """
+    def listed(key: str) -> list[str]:
+        return [str(item) for item in list(accounting[key])]  # type: ignore[arg-type]
+
+    bucket: dict[str, str] = {}
+    for name in ("complete_items", "blocked_items", "pending_ci_items", "missing_items"):
+        for item in listed(name):
+            bucket[item] = name
+    return (
+        tuple(bucket.get(item, "unread") for item in requested_evidence if item not in skip),
+        accounting["section_present"],
+        accounting["owner_section_unreadable"] is None,
+        len(listed("invalid_lines")),
+        tuple(sorted(listed("duplicate_items"))),
+        tuple(sorted(listed("indistinguishable_entries"))),
+        tuple(sorted(listed("contested_items"))),
+        tuple(sorted(item for item in listed("unproven_items") if item not in skip)),
+    )
+
+
+def _lane_written_entries(
+    accounting: dict[str, object],
+    requested_evidence: list[str],
+    lane_resolved: dict[str, tuple[str, str]],
+) -> list[dict[str, object]]:
+    """The entries a metadata comment on this body would carry.
+
+    Every requested item the body answers is recorded, not only the lane's
+    own: the metadata is read INSTEAD of the section once it exists, so an
+    item left out is one the gate reports missing, and an owner's attested
+    line would be the first to go. The shape is the one
+    `render_execution_summary_body` writes, `kind` included and read from the
+    item the issue asks for, so an owner's `other` item keeps being read from
+    its visible line here too.
+
+    What each item is recorded as is `accounting` -- the gate's own reading of
+    this body, kind rule and all -- except for the entries this run resolved,
+    which are the lane's own and are recorded as the lane found them.
+    """
+    entries = accounting["entries"]
+    matched = accounting["matched"]
+    if not isinstance(entries, dict) or not isinstance(matched, dict):
+        return []
+    written: list[dict[str, object]] = []
+    recorded: set[str] = set()
+    for index, item in enumerate(requested_evidence, start=1):
+        if item in recorded:
+            # Two indexes for one text are one entry to the reader, and a
+            # second would be read as a duplicate rather than as an answer.
+            continue
+        if item in lane_resolved:
+            status, detail = lane_resolved[item]
+        else:
+            key = matched.get(item)
+            entry = entries.get(key) if isinstance(key, str) else None
+            if not isinstance(entry, dict):
+                continue
+            status = str(entry.get("status", "")).strip()
+            detail = str(entry.get("detail", "")).strip()
+        if status not in {"complete", "blocked", "pending-ci"} or not detail:
+            continue
+        recorded.add(item)
+        written.append(
+            {
+                "index": index,
+                "item": item,
+                "status": status,
+                "detail": detail,
+                "kind": _evidence_item_kind(item),
+            }
+        )
+    return written
+
+
+def _write_lane_evidence_metadata(
+    reconciled: str,
+    requested_evidence: list[str],
+    lane_resolved: dict[str, tuple[str, str]],
+) -> str:
+    """`reconciled` with a metadata comment recording this run, or `reconciled` unchanged.
+
+    A hand-written body carries no metadata, so every `[complete]` line in it
+    is read as hand-written, and a lane item stays pending even where the lane
+    ran the command and rewrote the line itself (#1693, #1708). Recording the
+    run's own entries is what makes them the lane's; the accounting then reads
+    them the way it reads a factory body's.
+
+    Written only where it changes nothing else. The gate's verdict for every
+    item the lane did not touch, and every complaint the gate makes about the
+    section, are compared read off the section against read through the
+    metadata, and where they differ the body keeps today's reading. A section
+    with a bullet that is not an entry is the case that reaches this: the
+    metadata would hand its owner items to a rule that refuses an unreadable
+    section, and the lane's work staying invisible there is the state this
+    found rather than one it made.
+    """
+    read_off_the_section = evaluate_evidence_accounting(reconciled, requested_evidence)
+    entries = _lane_written_entries(read_off_the_section, requested_evidence, lane_resolved)
+    if not entries:
+        return reconciled
+    written = _insert_evidence_metadata(reconciled, {"entries": entries})
+    if reconciled.endswith("\n"):
+        written += "\n"
+    if len(written) > PR_BODY_LIMIT:
+        # The whole body is written back in one edit, and GitHub refuses one
+        # this long. Refusing here costs the provenance; letting it through
+        # costs the line rewrites as well, since nothing of the edit lands.
+        return reconciled
+    skip = set(lane_resolved)
+    before = _gate_verdict(read_off_the_section, requested_evidence, skip=skip)
+    after = _gate_verdict(
+        evaluate_evidence_accounting(written, requested_evidence), requested_evidence, skip=skip
+    )
+    return written if before == after else reconciled
+
+
 def reconcile_pending_ci_evidence(
     body: str,
     *,
@@ -3355,10 +3493,22 @@ def reconcile_pending_ci_evidence(
     IS a requested item, that reading is the item and its kind alone decides
     the lane. `_evidence.yml` reads it from the issue the PR closes. Absent it
     the boundary is a guess -- see `_macos_lane_resolves` for what is refused.
+
+    A body with no metadata comment gains one recording what this run
+    resolved, so the completions it just wrote are read as the lane's rather
+    than as hand-written (`_write_lane_evidence_metadata`). An entry has an
+    index only against the contract, so with no contract in hand the body
+    keeps today's reading.
     """
     metadata = _extract_evidence_metadata(body)
     if isinstance(metadata, dict) and isinstance(metadata.get("entries"), list):
         updated_entries: list[object] = []
+        # A run that resolves nothing leaves the body alone. Re-rendering the
+        # section from unchanged entries rewrites bytes to say what they
+        # already say, and on a body the lane did not write -- one it gave
+        # metadata to on an earlier run -- that rewrite moves the section and
+        # drops whatever else was in it.
+        resolved_any = False
         for raw_entry in metadata["entries"]:
             if not isinstance(raw_entry, dict):
                 updated_entries.append(raw_entry)
@@ -3383,12 +3533,22 @@ def reconcile_pending_ci_evidence(
                 )
                 entry["status"] = status
                 entry["detail"] = detail
+                resolved_any = True
             updated_entries.append(entry)
+        if not resolved_any:
+            return body
         return _render_structured_entries(body, updated_entries)
 
     lines = body.splitlines()
     updated: list[str] = []
     in_evidence_status = False
+    # What this run resolved, against the contract's own spelling of the item:
+    # a metadata entry's index and item are positions in the contract, and a
+    # line's wording is not.
+    requested_by_key: dict[str, str] = {}
+    for contract_item in requested_evidence or []:
+        requested_by_key.setdefault(_normalize_evidence_key(contract_item), contract_item)
+    lane_resolved: dict[str, tuple[str, str]] = {}
 
     for line in lines:
         if line.startswith("## "):
@@ -3416,13 +3576,21 @@ def reconcile_pending_ci_evidence(
                     text_urls=text_urls,
                 )
                 updated.append(f"- [{status}] {item} -- {detail}")
+                requested = requested_by_key.get(_normalize_evidence_key(item))
+                if requested is not None:
+                    lane_resolved.setdefault(requested, (status, detail))
                 continue
         updated.append(line)
 
     reconciled = "\n".join(updated)
     if body.endswith("\n"):
         reconciled += "\n"
-    return reconciled
+    # Only a body with no comment at all. One that carries a malformed or
+    # future-versioned comment carries metadata a reader reports on, and
+    # replacing it would answer that report by deleting it.
+    if not lane_resolved or _latest_evidence_metadata_match(body) is not None:
+        return reconciled
+    return _write_lane_evidence_metadata(reconciled, list(requested_evidence or []), lane_resolved)
 
 
 def summarize_requested_evidence(requested_evidence: list[str]) -> str:

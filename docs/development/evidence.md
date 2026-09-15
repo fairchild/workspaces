@@ -444,6 +444,14 @@ section's before and after numbers. A `ci`, `diff`, `test`, `build` or
 `screenshot` item never completes from a hand-written line: its named check, the
 approving review or the evidence lane completes it.
 
+The lane makes its own work count on such a body: when it reconciles one that
+carries no metadata comment it writes one, recording what that run gathered
+alongside what the body already said, so the lines it just rewrote read as the
+lane's rather than as hand-written. It needs the contract to do that -- an
+entry is an index into the requested evidence -- and it writes nothing where
+the metadata would change how any other item reads, a section carrying a line
+the reader cannot place included.
+
 The classifier lives in `_evidence_item_kind` (`.agents/skills/cofounder-contributor/scripts/evidence.py`);
 `scripts/tests/test_factory_evidence_kinds.py` is the readable corpus of what
 does and does not classify.
