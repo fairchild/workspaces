@@ -1739,7 +1739,7 @@ class RunContributorTests(unittest.TestCase):
             "## Summary\n"
             "- Updated the status severity mapping\n\n"
             "## Evidence Status\n"
-            "- [complete] swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests -- `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests`\n"
+            "- [complete] The status severity mapping is named in the PR body -- the Summary names it\n"
             "- [blocked] Screenshot of NewWorkspaceSheet from the exact commit under review -- Linux runner cannot launch the macOS app\n\n"
             "## Validation\n"
             "- `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests`\n"
@@ -1748,14 +1748,14 @@ class RunContributorTests(unittest.TestCase):
         accounting, errors = run_contributor.validate_evidence_accounting(
             body,
             [
-                "swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests",
+                "The status severity mapping is named in the PR body",
                 "Screenshot of NewWorkspaceSheet from the exact commit under review",
             ],
         )
         self.assertEqual(errors, [])
         self.assertEqual(
             accounting["complete_items"],
-            ["swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests"],
+            ["The status severity mapping is named in the PR body"],
         )
         self.assertEqual(
             accounting["blocked_items"],
@@ -1767,19 +1767,19 @@ class RunContributorTests(unittest.TestCase):
             "## Summary\n"
             "- Updated the status severity mapping\n\n"
             "## Evidence Status\n"
-            "- [complete] swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests — `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests`\n\n"
+            "- [complete] The status severity mapping is named in the PR body — the Summary names it\n\n"
             "## Validation\n"
             "- `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests`\n"
         )
         accounting, errors = run_contributor.validate_evidence_accounting(
             body,
-            ["swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests"],
+            ["The status severity mapping is named in the PR body"],
         )
         self.assertEqual(errors, [])
         self.assertEqual(accounting["source"], "markdown")
         self.assertEqual(
             accounting["complete_items"],
-            ["swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests"],
+            ["The status severity mapping is named in the PR body"],
         )
 
     def test_extract_requested_evidence_ignores_fallback_sentence_case_insensitively(self) -> None:
@@ -1824,14 +1824,14 @@ class RunContributorTests(unittest.TestCase):
             "## Summary\n"
             "- Updated the status severity mapping\n\n"
             "## Evidence Status\n"
-            "- [complete] swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests -- `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests`\n\n"
+            "- [complete] The status severity mapping is named in the PR body -- the Summary names it\n\n"
             "## Validation\n"
             "- `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests`\n"
         )
         _, errors = run_contributor.validate_evidence_accounting(
             body,
             [
-                "swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests",
+                "The status severity mapping is named in the PR body",
                 "Screenshot of NewWorkspaceSheet from the exact commit under review",
             ],
         )
@@ -2207,11 +2207,20 @@ class RunContributorTests(unittest.TestCase):
                 "Screenshot of NewWorkspaceSheet from the exact commit under review",
             ],
         )
+        # The lane rewrites each line as complete. With no metadata a line has no
+        # provenance, so the accounting reads lane items as pending for their
+        # lane (#1693); the metadata path is where a lane's completion counts.
+        for item in (
+            "swift build",
+            "swift test --filter WorkspaceManagerTests.WorkspaceProviderTests",
+            "Screenshot of NewWorkspaceSheet from the exact commit under review",
+        ):
+            self.assertIn(f"- [complete] {item} -- ", reconciled)
         self.assertEqual(errors, [])
-        self.assertEqual(accounting["pending_ci_items"], [])
+        self.assertEqual(accounting["complete_items"], [])
         self.assertEqual(accounting["blocked_items"], [])
         self.assertEqual(
-            accounting["complete_items"],
+            accounting["pending_ci_items"],
             [
                 "swift build",
                 "swift test --filter WorkspaceManagerTests.WorkspaceProviderTests",
@@ -2369,7 +2378,7 @@ class RunContributorTests(unittest.TestCase):
             priority=1,
             blocked_by=[],
             requested_evidence=[
-                "swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests",
+                "The status severity mapping is named in the PR body",
                 "Screenshot of NewWorkspaceSheet from the exact commit under review",
             ],
         )
@@ -2378,7 +2387,7 @@ class RunContributorTests(unittest.TestCase):
             "## Summary\n"
             "- Updated the status severity mapping\n\n"
             "## Evidence Status\n"
-            "- [complete] swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests -- `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests`\n"
+            "- [complete] The status severity mapping is named in the PR body -- the Summary names it\n"
             "- [blocked] Screenshot of NewWorkspaceSheet from the exact commit under review -- Linux runner cannot launch the macOS app\n\n"
             "## Validation\n"
             "- `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests`\n"
@@ -2808,11 +2817,15 @@ class RunContributorTests(unittest.TestCase):
             reconciled,
             ["swift build", "swift test --filter RunPlannerTests"],
         )
+        # The lane rewrites both lines as complete; with no metadata the
+        # accounting reads lane items as pending for their lane (#1693).
+        self.assertIn("- [complete] swift build -- ", reconciled)
+        self.assertIn("- [complete] swift test --filter RunPlannerTests -- ", reconciled)
         self.assertEqual(errors, [])
-        self.assertEqual(accounting["pending_ci_items"], [])
+        self.assertEqual(accounting["complete_items"], [])
         self.assertEqual(accounting["blocked_items"], [])
         self.assertEqual(
-            accounting["complete_items"],
+            accounting["pending_ci_items"],
             ["swift build", "swift test --filter RunPlannerTests"],
         )
 

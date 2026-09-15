@@ -604,8 +604,8 @@ class SectionHeadingCaseTests(unittest.TestCase):
                 )
 
     def test_a_lower_case_evidence_status_heading_is_the_status_section(self) -> None:
-        requested = ["`swift test` passes"]
-        body = "## evidence status\n- [complete] `swift test` passes -- 214 tests passed\n"
+        requested = ["The launch state is captured"]
+        body = "## evidence status\n- [complete] The launch state is captured -- the shot, attached above\n"
         self.assertTrue(run_contributor.has_markdown_section(body, "Evidence Status"))
         accounting = run_contributor.evaluate_evidence_accounting(body, requested)
         self.assertEqual(accounting["missing_items"], [])
@@ -1178,21 +1178,24 @@ class EvidenceEntryExclusivityTests(unittest.TestCase):
         # An author writes the item back in their own hand: a code span the
         # issue did not have, a sentence-final period, a different case, a
         # trailing word. Each of these is one requirement with one entry, and
-        # each still matches.
+        # each still matches. Only a line naming the item as written completes
+        # it: the trailing word changes what the line claims to a reader, so
+        # that one matches and reads as blocked (`_hand_completion_refusal`).
         requested = ["The launch state is captured"]
-        for entry in (
-            "The launch state is captured",
-            "the launch state is captured.",
-            "`The launch state is captured`",
-            "THE LAUNCH STATE IS CAPTURED",
-            "The launch state is captured on macOS",
+        for entry, completes in (
+            ("The launch state is captured", True),
+            ("the launch state is captured.", True),
+            ("`The launch state is captured`", True),
+            ("THE LAUNCH STATE IS CAPTURED", True),
+            ("The launch state is captured on macOS", False),
         ):
             body = f"## Evidence Status\n\n- [complete] {entry} -- the shot\n"
             with self.subTest(entry=entry):
                 accounting = run_contributor.evaluate_evidence_accounting(body, requested)
-                self.assertEqual(accounting["complete_items"], requested)
+                self.assertEqual(accounting["missing_items"], [])
                 self.assertEqual(accounting["contested_items"], [])
                 self.assertEqual(accounting["unexpected_items"], [])
+                self.assertEqual(accounting["complete_items"], requested if completes else [])
 
     def test_two_items_with_their_own_entries_are_both_proved(self) -> None:
         # Exclusivity is about one entry answering two requirements, not about
@@ -1239,7 +1242,9 @@ class EvidenceEntryExclusivityTests(unittest.TestCase):
         for requested in ([broad, narrow], [narrow, broad]):
             with self.subTest(order=requested[0][-16:]):
                 accounting = run_contributor.evaluate_evidence_accounting(body, requested)
-                self.assertCountEqual(accounting["complete_items"], requested)
+                # Neither line names its item as written, so both read as blocked;
+                # which line each item is assigned is what this test is about.
+                self.assertCountEqual(accounting["blocked_items"], requested)
                 self.assertEqual(accounting["missing_items"], [])
                 self.assertEqual(accounting["contested_items"], [])
 
@@ -2167,7 +2172,13 @@ class CompleteDetailTests(unittest.TestCase):
     SCREENSHOT = "Screenshots of the new sidebar"
 
     def errors_for(self, item: str, detail: str) -> list[str]:
-        body = f"## Evidence Status\n- [complete] {item} -- {detail}\n"
+        # The completion is the metadata's, where a lane writes one: a body with
+        # no metadata never reads a lane item as complete, which would leave the
+        # proof rule nothing to judge.
+        payload = json.dumps(
+            {"entries": [{"index": 1, "item": item, "status": "complete", "detail": detail, "kind": run_contributor._evidence_item_kind(item)}]}
+        )
+        body = f"<!-- evidence-status:v1\n{payload}\n-->\n\n## Evidence Status\n- [complete] {item} -- {detail}\n"
         _, errors = run_contributor.validate_evidence_accounting(body, [item])
         return errors
 
@@ -3122,6 +3133,100 @@ class HtmlBeforeAndInTheHeadingTests(unittest.TestCase):
     def test_a_comment_only_block_after_the_section_still_leaves_it_unread(self) -> None:
         body = self.blocked_meta() + "\n" + self.section() + "\n<!-- a note below the list -->\n\n## Validation\n- ok\n"
         self.assert_unread_because(body, "HTML block")
+
+
+class NoMetadataFallbackTests(unittest.TestCase):
+    """A body with no evidence metadata is read as GitHub renders it, and by kind (#1693).
+
+    Every refusal the owner read gained was skipped when the metadata comment
+    was missing or indented: the fallback read the section line by line, never
+    looked above the heading, and let a `[complete]` there finish any item, a
+    `swift test` one included. It now reads through the same CommonMark reader,
+    and a hand-written line completes only what the item's kind allows.
+    """
+
+    OWNER_ITEM = OwnerKindHandEditTests.OWNER_ITEM
+    PROOF = OwnerReadFailsClosedTests.PROOF
+    INDENTED_META = ' <!-- evidence-status:v1\n{"entries": []}\n-->\n\n'
+
+    def section(self, item: str, detail: str | None = None) -> str:
+        return f"## Evidence Status\n- [complete] {item} -- {detail or self.PROOF}\n"
+
+    def gate(self, body: str, item: str) -> tuple[dict[str, object], list[str], str | None]:
+        accounting, errors = run_contributor.validate_evidence_accounting(body, [item], review_ci=[])
+        return accounting, errors, run_contributor.review_evidence_gate_error("approve", accounting, errors)
+
+    def assert_unread(self, body: str, item: str, reason: str) -> None:
+        accounting, errors, error = self.gate(body, item)
+        self.assertEqual(accounting["source"], "markdown")
+        self.assertNotIn(item, accounting["complete_items"])
+        self.assertIsNotNone(error)
+        self.assertIn(reason, accounting["owner_section_unreadable"] or "")
+        self.assertTrue(any(e.startswith("the Evidence Status section cannot be read") for e in errors), errors)
+
+    def test_the_confirmation_case_refuses_with_or_without_metadata(self) -> None:
+        # GitHub renders this heading and list inside a closed `<details>`.
+        item = "Owner check"
+        section = self.section(item, "checked manually")
+        for shape, body in (
+            ("metadata comment indented one space", "<details/>\n\n" + self.INDENTED_META + section),
+            ("no metadata comment", "<details/>\n\n" + section),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_unread(body, item, "HTML")
+
+    def test_an_indented_metadata_comment_is_html_before_the_heading(self) -> None:
+        self.assert_unread(self.INDENTED_META + self.section(self.OWNER_ITEM), self.OWNER_ITEM, "before the heading")
+
+    def test_a_hand_written_complete_does_not_complete_an_item_something_else_completes(self) -> None:
+        for item in (
+            "`swift test --filter FooTests` passes",
+            "CI: `Web CI` green on the PR head",
+            "Diff: the README links the overview page",
+            "Screenshots of the new sidebar",
+        ):
+            with self.subTest(kind=run_contributor._evidence_item_kind(item)):
+                accounting, _, error = self.gate(self.section(item, "Ran 214 tests, all passed"), item)
+                self.assertNotIn(item, accounting["complete_items"])
+                self.assertIn(item, accounting["pending_ci_items"])
+                self.assertIsNotNone(error)
+
+    def test_an_attested_test_completes_from_the_statement_of_what_ran(self) -> None:
+        item = "`pnpm test` in `web-next` passes"
+        body = f"## Evidence Status\n- [complete] {item} -- `pnpm test` in `web-next`: 214 tests passed\n"
+        accounting, _, _ = self.gate(body, item)
+        self.assertEqual(accounting["complete_items"], [item])
+
+    def test_an_owner_item_still_completes_from_its_line(self) -> None:
+        accounting, errors, error = self.gate(self.section(self.OWNER_ITEM), self.OWNER_ITEM)
+        self.assertEqual(accounting["source"], "markdown")
+        self.assertEqual(accounting["complete_items"], [self.OWNER_ITEM])
+        self.assertEqual(errors, [])
+        self.assertIsNone(error)
+
+    def test_a_line_that_does_not_name_the_item_does_not_complete_it(self) -> None:
+        accounting, _, error = self.gate(self.section(self.OWNER_ITEM + " on macOS"), self.OWNER_ITEM)
+        self.assertNotIn(self.OWNER_ITEM, accounting["complete_items"])
+        self.assertIn(self.OWNER_ITEM, accounting["blocked_items"])
+        self.assertIsNotNone(error)
+
+    def test_the_1701_shapes_refuse_without_metadata(self) -> None:
+        item = self.OWNER_ITEM
+        for shape, body in (
+            ("an indented code block", f"## Evidence Status\n\n    - [complete] {item} -- {self.PROOF}\n"),
+            ("comment delimiters in a code span", f"## Evidence Status\n- [complete] `<!-- -->{item}` -- {self.PROOF}\n"),
+            ("** item ** that is not emphasis", f"## Evidence Status\n- [complete] ** {item} ** -- {self.PROOF}\n"),
+            ("**item * that is not emphasis", f"## Evidence Status\n- [complete] **{item} * -- {self.PROOF}\n"),
+        ):
+            with self.subTest(shape=shape):
+                accounting, _, error = self.gate(body, item)
+                self.assertNotIn(item, accounting["complete_items"])
+                self.assertIsNotNone(error)
+
+    def test_the_1704_shapes_refuse_without_metadata(self) -> None:
+        item = self.OWNER_ITEM
+        self.assert_unread("Intro <s/>\n\n" + self.section(item), item, "before the heading")
+        self.assert_unread("<!--\n## Evidence Status\n-->\n\n" + self.section(item).replace("## Evidence Status", "## Evidence Status <s>", 1), item, "HTML")
 
 
 class DocumentedTestFormTests(unittest.TestCase):

@@ -406,7 +406,18 @@ any HTML before the heading other than the factory's own metadata comment: a
 `<details>`, a centred `<p>`, an `<img>` or a comment above `## Evidence Status`
 leaves the owner's section unread, with the reason named, until the HTML moves
 below the section or into a code block. The read never interprets HTML, since
-working out which elements are still open is a second renderer. A comment delimiter
+working out which elements are still open is a second renderer.
+
+A body with no evidence metadata -- a PR written by hand, or one whose metadata
+comment is missing or indented -- is read the same way, so every one of those
+refusals applies to it too. What a hand-written body can complete depends on
+the item's kind, classified as the contributor classifies it: an `other` item
+completes from a `[complete]` line that names it as the issue writes it; a
+`test-attested` item completes from the statement of the command and the line
+it printed, and a `perf` item from the Performance section's before and after
+numbers. A `ci`, `diff`, `test`, `build` or `screenshot` item never completes
+from a hand-written line: its named check, the approving review or the evidence
+lane completes it. A comment delimiter
 inside a code span is text, and emphasis is only what the parser reads as
 emphasis: `**item**` is the item, while `** item **` keeps its asterisks. When the section is not readable, no line is read
 as yours and no owner item counts as complete from the metadata either, since
