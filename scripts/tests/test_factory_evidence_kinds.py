@@ -2160,6 +2160,444 @@ class PerfEvidenceKindTests(unittest.TestCase):
         )
 
 
+class RenderedStatementTests(unittest.TestCase):
+    """A statement of what ran, and a measurement, count only where a reader can see them.
+
+    `_attested_test_statement` and `_perf_numbers` read the raw body, so a
+    command and its count written inside an HTML comment completed an item
+    while GitHub showed nothing, and the writer -- which calls the same two
+    functions -- recorded that invisible completion as the PR's answer (#1709).
+    Both read rendered text now (`_rendered_lines`), and the pair is tested
+    together: a body the reader refuses is one the writer records nothing for.
+
+    Code renders, so a fenced block still counts. That is not a concession:
+    `pr-evidence.sh` writes `perf-compare.py`'s comparison lines inside a
+    fence, and those lines are the numbers.
+    """
+
+    TEST_ITEM = "`pnpm test` in `web-next` passes"
+    PERF_ITEM = "p50 launch latency before and after on the same workload"
+
+    VISIBLE_TEST = "## Validation\n\n- `cd web-next && pnpm test` -> 214 tests passed\n"
+    HIDDEN_TEST = "## Validation\n\n<!-- `cd web-next && pnpm test` -> 214 tests passed -->\n"
+    INLINE_HIDDEN_TEST = "## Validation\n\n- `cd web-next && pnpm test` <!-- 214 tests passed -->\n"
+    FENCED_TEST = "## Validation\n\n```\ncd web-next && pnpm test -> 214 tests passed\n```\n"
+    VISIBLE_PERF = (
+        "## Performance\n\n"
+        "- Before Summary: p50 launch 1.31s\n"
+        "- After Summary: p50 launch 1.02s\n"
+    )
+    HIDDEN_PERF = (
+        "## Performance\n\n<!--\n"
+        "- Before Summary: p50 launch 1.31s\n"
+        "- After Summary: p50 launch 1.02s\n-->\n"
+    )
+    FENCED_PERF = (
+        "## Performance\n\n"
+        "- Scenario ID: `debug_no_activate`\n\n"
+        "Every metric:\n\n"
+        "```\n- p50_launch_ms: 1310.00 -> 1020.00; -290.00 ms (-22.1%)\n```\n"
+    )
+
+    def test_a_statement_only_in_a_comment_is_not_a_statement(self) -> None:
+        self.assertIsNone(
+            run_contributor._attested_test_statement(self.HIDDEN_TEST, self.TEST_ITEM)
+        )
+        # Also with no item, the reading that took the comment's own text as
+        # the quoted proof.
+        self.assertIsNone(run_contributor._attested_test_statement(self.HIDDEN_TEST))
+
+    def test_a_count_inside_an_inline_comment_is_not_a_result(self) -> None:
+        # The command renders and the count does not, which is a plan.
+        self.assertIsNone(
+            run_contributor._attested_test_statement(
+                self.INLINE_HIDDEN_TEST, self.TEST_ITEM
+            )
+        )
+
+    def test_numbers_only_in_a_comment_measure_nothing(self) -> None:
+        self.assertIsNone(
+            run_contributor._perf_numbers(self.HIDDEN_PERF, self.PERF_ITEM)
+        )
+        self.assertIsNone(run_contributor._perf_numbers(self.HIDDEN_PERF))
+
+    def test_the_visible_forms_still_complete(self) -> None:
+        self.assertIsNotNone(
+            run_contributor._attested_test_statement(self.VISIBLE_TEST, self.TEST_ITEM)
+        )
+        self.assertIsNotNone(
+            run_contributor._perf_numbers(self.VISIBLE_PERF, self.PERF_ITEM)
+        )
+
+    def test_the_producers_own_fenced_output_still_completes(self) -> None:
+        # `pr-evidence.sh` pastes the comparison block into the section; the
+        # bullet the parser matches is inside the fence.
+        self.assertIsNotNone(
+            run_contributor._perf_numbers(self.FENCED_PERF, self.PERF_ITEM)
+        )
+        self.assertIsNotNone(
+            run_contributor._attested_test_statement(self.FENCED_TEST, self.TEST_ITEM)
+        )
+
+    def test_the_rendered_read_keeps_the_structure_the_readers_read(self) -> None:
+        # A heading ends a statement, a comparison line starts with a bullet,
+        # and a block sits a blank line from its neighbour -- so the read has
+        # to give those back, not one flattened string.
+        self.assertEqual(
+            sys.modules["evidence"]._rendered_lines(
+                "Intro <!-- hidden -->\n\n## Validation\n\n"
+                "- `pnpm test` -> 12 tests passed\n- second\n\n"
+                "```\nraw line\n```\n\n<!-- a block comment -->\n\n"
+                "## Performance\n\n1. one\n2. two\n"
+            ),
+            [
+                "Intro",
+                "",
+                "## Validation",
+                "",
+                "- `pnpm test` -> 12 tests passed",
+                "- second",
+                "",
+                "raw line",
+                "",
+                "## Performance",
+                "",
+                "1. one",
+                "2. two",
+            ],
+        )
+
+    def test_one_section_is_read_where_a_section_is_asked_for(self) -> None:
+        self.assertEqual(
+            sys.modules["evidence"]._rendered_lines(self.VISIBLE_PERF, "Performance"),
+            ["- Before Summary: p50 launch 1.31s", "- After Summary: p50 launch 1.02s"],
+        )
+        self.assertEqual(
+            sys.modules["evidence"]._rendered_lines(self.VISIBLE_PERF, "Validation"), []
+        )
+
+    def test_bullets_written_one_under_the_next_stay_one_under_the_next(self) -> None:
+        # A blank line anywhere in a list makes the whole list loose, and
+        # CommonMark says nothing about where the source put its blank lines.
+        # Rebuilding the gaps from a looseness rule pushed three adjacent
+        # bullets apart, and the window that carries a result up to the run
+        # above it then stopped one line short of the result. The gaps come
+        # from the source map instead.
+        body = (
+            "## Validation\n\n"
+            "- `uv run --script scripts/tests/test_foo.py` -> OK (exit 0)\n"
+            "- `python3 scripts/check.py` -> OK\n"
+            "- Scripts loop: Ran 55 tests, OK\n\n"
+            "- a later bullet, after a blank line, is what makes this list loose\n"
+        )
+        self.assertEqual(
+            sys.modules["evidence"]._rendered_lines(body),
+            [
+                "## Validation",
+                "",
+                "- `uv run --script scripts/tests/test_foo.py` -> OK (exit 0)",
+                "- `python3 scripts/check.py` -> OK",
+                "- Scripts loop: Ran 55 tests, OK",
+                "",
+                "- a later bullet, after a blank line, is what makes this list loose",
+            ],
+        )
+        self.assertIsNotNone(
+            run_contributor._attested_test_statement(
+                body, "`pytest` over `scripts/tests/test_foo.py` passes"
+            )
+        )
+
+    def test_a_result_only_the_rendered_view_can_read_is_refused_on_purpose(self) -> None:
+        # `**1017 / 1017** passed` is a passing run to a reader, and the
+        # rendered view reads it: the markup that sat between the count and the
+        # word is gone. The written view does not, and the rule is that both
+        # have to accept -- so this refuses. Buying it would mean accepting
+        # every other reading the rendered view has on its own, and those are
+        # the window overreaches `MonotoneStatementReadTests` covers. One real
+        # body in the repository has this shape, and it lists no requested
+        # evidence at all, so nothing of its was ever decided here.
+        body = "## Validation\n\n- `swift test` — **1017 / 1017** passed, 161 suites\n"
+        self.assertIsNotNone(
+            sys.modules["evidence"]._attested_statement_in(
+                sys.modules["evidence"]._rendered_lines(body), ["swift test"]
+            )
+        )
+        self.assertIsNone(
+            run_contributor._attested_test_statement(body, "`swift test` passes")
+        )
+
+    def test_the_reader_and_the_writer_agree(self) -> None:
+        # One table over both, because the bug was that they agreed with each
+        # other and disagreed with the page. Each item is written plainly, so
+        # the kind the writer reads from the item and the kind the reader
+        # decides from it are the same kind; where they are not, the two
+        # callers are asking different questions (`_hand_completion_kind`).
+        cases = (
+            ("a visible statement", self.TEST_ITEM, self.VISIBLE_TEST, True),
+            ("a statement in a comment", self.TEST_ITEM, self.HIDDEN_TEST, False),
+            ("a count in an inline comment", self.TEST_ITEM, self.INLINE_HIDDEN_TEST, False),
+            ("a statement in a fence", self.TEST_ITEM, self.FENCED_TEST, True),
+            ("visible measurements", self.PERF_ITEM, self.VISIBLE_PERF, True),
+            ("measurements in a comment", self.PERF_ITEM, self.HIDDEN_PERF, False),
+            ("the producer's fenced block", self.PERF_ITEM, self.FENCED_PERF, True),
+            ("nothing at all", self.TEST_ITEM, "", False),
+            ("nothing at all", self.PERF_ITEM, "", False),
+        )
+        for name, item, body, completes in cases:
+            with self.subTest(case=name, item=item):
+                kind, _ = sys.modules["evidence"]._hand_completion_kind(item)
+                read = sys.modules["evidence"]._proof_form_completion(body, item, kind)
+                written, _, pending = run_contributor.synthesize_initial_execution_evidence(
+                    [item], body=body
+                )
+                self.assertEqual(bool(read), completes)
+                self.assertEqual(bool(written), completes)
+                self.assertEqual(bool(pending), not completes)
+
+    def test_the_gate_refuses_a_completion_nobody_can_see(self) -> None:
+        # Through `evaluate_evidence_accounting`, whose own first statement
+        # only normalises line endings -- so the CRLF copy reaches the same
+        # read rather than being turned aside before it.
+        for item, body in (
+            (self.TEST_ITEM, self.HIDDEN_TEST),
+            (self.PERF_ITEM, self.HIDDEN_PERF),
+        ):
+            section = f"## Evidence Status\n\n- [complete] {item} -- stated in this body\n\n"
+            for endings, rewrite in (("lf", str), ("crlf", lambda text: text.replace("\n", "\r\n"))):
+                with self.subTest(item=item, endings=endings):
+                    accounting = run_contributor.evaluate_evidence_accounting(
+                        rewrite(section + body), [item]
+                    )
+                    self.assertEqual(accounting["complete_items"], [])
+                    self.assertEqual(accounting["pending_ci_items"], [item])
+
+    def test_the_gate_still_completes_the_visible_statement(self) -> None:
+        for item, body in (
+            (self.TEST_ITEM, self.VISIBLE_TEST),
+            (self.PERF_ITEM, self.VISIBLE_PERF),
+        ):
+            with self.subTest(item=item):
+                accounting = run_contributor.evaluate_evidence_accounting(
+                    f"## Evidence Status\n\n- [complete] {item} -- stated in this body\n\n{body}",
+                    [item],
+                )
+                self.assertEqual(accounting["complete_items"], [item])
+
+
+class MonotoneStatementReadTests(unittest.TestCase):
+    """Rendering the body gives a block fewer lines than it occupies, and the scan counts lines.
+
+    `_attested_test_statement` scans forward a fixed number of lines from a
+    runner mention to bind a result to the run named above it. An HTML block
+    collapses to nothing, a fence loses its markers, and a run of blank lines
+    collapses to one -- so on the rendered view alone the window reaches across
+    material it could not cross before and lands on a result the statement does
+    not own. `_perf_numbers` has the matching problem from the other side:
+    `PERF_FIELD_RE` and `PERF_COMPARISON_RE` were shaped against written lines,
+    and stripping markup hands them lines they were never shaped to see.
+
+    Both readers now accept only where the written view and the rendered view
+    both accept, and quote the rendered one. That makes this change able to
+    tighten and unable to loosen, whatever the next such shape turns out to be,
+    instead of asking anyone to enumerate them.
+    """
+
+    ITEM = "`pnpm test` in `web-next` passes"
+    PERF_ITEM = "p50 launch latency before and after"
+
+    def _raw_read(self, body: str, item: str = "") -> str | None:
+        """The written-view read, which is the read this file had before the rendered one."""
+        evidence = sys.modules["evidence"]
+        runners, paths = evidence._item_evidence_tokens(item) if item else ([], [])
+        return evidence._attested_statement_in(
+            evidence.MARKDOWN_LINE_ENDING_RE.split(body), paths or runners
+        )
+
+    def test_a_gap_in_the_source_is_not_a_line_the_window_may_cross(self) -> None:
+        # No HTML and no fence: three blank lines between a command and a
+        # count. The rendered view collapses them to one, and the window then
+        # binds a count written four lines away from the run.
+        body = (
+            "## Validation\n\n"
+            "- `cd web-next && pnpm test` at this head.\n\n\n\n"
+            "- 12 tests passed\n"
+        )
+        self.assertIsNone(self._raw_read(body, self.ITEM))
+        self.assertIsNone(run_contributor._attested_test_statement(body, self.ITEM))
+
+    def test_a_count_the_body_attributes_to_main_does_not_complete_the_item(self) -> None:
+        # The factory's own metadata comment sat between the command and the
+        # sentence about `main`. It renders as nothing, so the window closed
+        # the gap and credited this head with main's count.
+        body = (
+            "## Validation\n\n"
+            "- `cd web-next && pnpm test` at this head.\n\n"
+            '<!-- evidence-status:v1\n{"entries": {}}\n-->\n\n'
+            "For context, `main` currently reports 2004 tests passed.\n"
+        )
+        self.assertIsNone(self._raw_read(body, self.ITEM))
+        complete, _, pending = run_contributor.synthesize_initial_execution_evidence(
+            [self.ITEM], body=body
+        )
+        self.assertEqual(complete, [])
+        self.assertEqual(len(pending), 1)
+
+    def test_a_fence_holding_another_commands_output_does_not_complete_this_one(self) -> None:
+        body = (
+            "## Validation\n\n"
+            "`cd web-next && pnpm test` covers the new parser.\n\n"
+            "```\n$ bash scripts/other.sh\n14 tests passed\n```\n"
+        )
+        self.assertIsNone(self._raw_read(body, self.ITEM))
+        self.assertIsNone(run_contributor._attested_test_statement(body, self.ITEM))
+
+    def test_a_grammar_the_written_lines_never_carried_is_not_a_measurement(self) -> None:
+        # Each of these measures nothing to the reader that has always read
+        # this section, and became a completed comparison once markup was
+        # stripped from the line before the pattern saw it.
+        for name, body in (
+            (
+                "bold labels",
+                "## Performance\n\n**Before**: p50 launch latency 120 ms\n\n"
+                "**After**: p50 launch latency 100 ms\n",
+            ),
+            (
+                "table cells",
+                "## Performance\n\n| Measurement |\n| --- |\n"
+                "| Before Summary: p50 launch latency 120 ms |\n"
+                "| After Summary: p50 launch latency 100 ms |\n",
+            ),
+            (
+                "a plus bullet",
+                "## Performance\n\n+ p50 launch latency: 120 ms -> 100 ms; -20 ms\n",
+            ),
+            (
+                "another PR's numbers, quoted",
+                "## Performance\n\nNot measured on this head yet.\n\n"
+                "> Quoting an older PR for context:\n>\n"
+                "> - Before Summary: p50 launch latency 900 ms\n"
+                "> - After Summary: p50 launch latency 410 ms\n",
+            ),
+        ):
+            with self.subTest(case=name):
+                self.assertIsNone(run_contributor._perf_numbers(body, self.PERF_ITEM))
+
+    def test_the_section_ends_where_the_written_read_ends_it(self) -> None:
+        # `markdown_section`'s lookahead is `(?=^## |\n---\n|\Z)`. Ending the
+        # rendered section at an h1 or at a `***` rule truncated it where the
+        # written read did not, and the item stopped completing.
+        fields = (
+            "- Before Summary: p50 launch latency 900 ms\n\n{divider}\n\n"
+            "- After Summary: p50 launch latency 410 ms\n"
+        )
+        for divider, still_reads in (("# Aside", True), ("***", True), ("___", True), ("---", False)):
+            body = "## Performance\n\n" + fields.format(divider=divider)
+            with self.subTest(divider=divider):
+                read = run_contributor._perf_numbers(body, self.PERF_ITEM)
+                self.assertEqual(read is not None, still_reads)
+                self.assertEqual(read is not None, self._perf_raw_reads(body))
+
+    def _perf_raw_reads(self, body: str) -> bool:
+        evidence = sys.modules["evidence"]
+        wanted = {m.group(0).casefold() for m in evidence.PERF_METRIC_RE.finditer(self.PERF_ITEM)}
+        written = evidence.MARKDOWN_LINE_ENDING_RE.split(
+            evidence.markdown_section(body, "Performance")
+        )
+        return evidence._perf_numbers_in(written, wanted, set()) is not None
+
+    def test_no_statement_case_in_this_file_reads_where_the_written_view_does_not(self) -> None:
+        # The property, over the file's own fixtures: every string literal here
+        # that names a test runner is a body someone wrote to exercise this
+        # reader, and none of them may complete on the rendered view alone.
+        source = Path(__file__).read_text(encoding="utf-8")
+        bodies = {
+            node.value
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and sys.modules["evidence"].TEST_RUNNER_MENTION_RE.search(node.value)
+        }
+        self.assertGreater(len(bodies), 20)
+        for body in sorted(bodies):
+            for item in ("", self.ITEM, "`swift test` passes"):
+                if run_contributor._attested_test_statement(body, item) is None:
+                    continue
+                with self.subTest(body=body[:60], item=item):
+                    self.assertIsNotNone(self._raw_read(body, item))
+
+
+class RenderedViewIsWrongAboutThePageTests(unittest.TestCase):
+    """Two places the rendered view showed less than the page does.
+
+    Both refuse where the page reads, so the monotone rule cannot reach them:
+    it only stops the rendered view from accepting more than the written one.
+    """
+
+    ITEM = "`pnpm test` in `web-next` passes"
+
+    def test_a_break_tag_is_a_break_and_not_an_erasure(self) -> None:
+        # `<br>` arrives as inline HTML and was dropped with the rest, gluing
+        # the words on either side: `1<br>2 tests passed` became `12 tests
+        # passed`, a count nobody wrote, quoted into a line a reviewer reads as
+        # the author's own attestation.
+        body = (
+            "## Validation\n\n"
+            "- `cd web-next && pnpm test` ran. Shards: 1<br>2 tests passed\n"
+        )
+        self.assertEqual(
+            sys.modules["evidence"]._rendered_lines(body),
+            [
+                "## Validation",
+                "",
+                "- `cd web-next && pnpm test` ran. Shards: 1",
+                "  2 tests passed",
+            ],
+        )
+        read = run_contributor._attested_test_statement(body, self.ITEM)
+        self.assertIsNotNone(read)
+        self.assertNotIn("12", read)
+
+    def test_every_other_inline_tag_still_contributes_nothing(self) -> None:
+        self.assertEqual(
+            sys.modules["evidence"]._rendered_lines("<span>a</span>b<em>c</em>\n"),
+            ["abc"],
+        )
+
+    def test_text_beside_a_closed_comment_is_text_a_reader_sees(self) -> None:
+        # An HTML block runs to a blank line and carries whatever shares its
+        # lines. GitHub hides the comment and prints the rest; the read
+        # returned no lines at all and the statement vanished.
+        body = "## Validation\n\n<!-- note --> ran `cd web-next && pnpm test`: 12 tests passed\n"
+        self.assertEqual(
+            sys.modules["evidence"]._rendered_lines(body),
+            ["## Validation", "", "ran `cd web-next && pnpm test`: 12 tests passed"],
+        )
+        self.assertIsNotNone(run_contributor._attested_test_statement(body, self.ITEM))
+
+    def test_a_block_that_is_not_a_closed_comment_stays_nothing(self) -> None:
+        # Which elements are still open is a second renderer, and the one this
+        # file had disagreed with GitHub.
+        for name, block in (
+            ("an unclosed comment", "<!-- open ran `cd web-next && pnpm test`: 12 tests passed"),
+            ("a wrapper element", "<div>ran `cd web-next && pnpm test`: 12 tests passed</div>"),
+        ):
+            with self.subTest(case=name):
+                body = f"## Validation\n\n{block}\n"
+                self.assertEqual(
+                    sys.modules["evidence"]._rendered_lines(body), ["## Validation"]
+                )
+                self.assertIsNone(
+                    run_contributor._attested_test_statement(body, self.ITEM)
+                )
+
+    def test_the_factorys_own_metadata_comment_still_shows_nothing(self) -> None:
+        body = '## Validation\n\n<!-- evidence-status:v1\n{"entries": {}}\n-->\n'
+        self.assertEqual(
+            sys.modules["evidence"]._rendered_lines(body), ["## Validation"]
+        )
+
+
 class CompleteDetailTests(unittest.TestCase):
     """The accounting layer read the status word and never the words after it.
 
