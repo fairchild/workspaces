@@ -69,6 +69,19 @@ you took and what the spread was. `--app <path>` measures a bundle other than th
 one in `/Applications`, which is how you benchmark a tagged commit without
 installing it over the app you are using.
 
+A capture of a tag older than `v0.28.0` is a fleet event, not a build step. The
+operator credential the automation CLI reads lives at one path keyed by the
+bundle identifier, which every copy of the app shares, so the runner's isolated
+data directory does not reach it, and a build from before #1654 (main
+`90255bfe`) retires that credential when it quits. The `v0.27.0` captures on
+2026-09-15 did exactly that: every `workspaces automation` call on the machine
+failed with "Operator credential not found" until the installed app was quit and
+reopened, and every session dispatching tiles through it lost that plane for the
+day. Before measuring such a tag, either cherry-pick #1654 onto the measurement
+build and say so in the row's `notes`, or warn every session on the machine and
+queue the installed app's quit-and-reopen as a known cost of the run. Tags from
+`v0.28.0` on carry the fix, so this applies only when re-measuring history.
+
 Append them to the launch-lane history and read the medians back out:
 
 ```bash
