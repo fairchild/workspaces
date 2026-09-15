@@ -73,7 +73,7 @@ MARKDOWN_FENCE_RE = re.compile(r"(?P<run>`{3,}|~{3,})(?P<info>.*)$")
 # as ordinary characters -- and a fence pushed onto its own line that way is
 # read as unindented, opening a block that hides every bullet below it.
 MARKDOWN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
-EVIDENCE_METADATA_RE = re.compile(
+_EVIDENCE_METADATA_RE = re.compile(
     r"^<!-- evidence-status:v(?P<version>[^\n]+)\n(?P<payload>.*?)\n-->[ \t]*(?:\n|$)",
     re.MULTILINE | re.DOTALL,
 )
@@ -654,7 +654,7 @@ def _is_machine_metadata_comment(content: str) -> bool:
     Recognised by its shape, not by parsing HTML: it opens with
     `<!-- evidence-status:v1`, ends at its only `-->`, and carries no `--!>`,
     which a browser also reads as the end of a comment. It starts in the first
-    column, where the factory writes it and where `EVIDENCE_METADATA_RE` reads
+    column, where the factory writes it and where `_EVIDENCE_METADATA_RE` reads
     it, so an indented copy is not the metadata. A block that starts or ends
     anywhere else, or has anything after its end, is HTML like any other.
     """
@@ -805,7 +805,7 @@ def extract_requested_evidence(body: str) -> list[str]:
 
 
 def _lf(body: str) -> str:
-    """The body with one kind of line ending, which is the only kind `EVIDENCE_METADATA_RE` matches.
+    """The body with one kind of line ending, which is the only kind `_EVIDENCE_METADATA_RE` matches.
 
     GitHub stores a PR body with whatever endings the client sent, and the
     metadata pattern is anchored on `\n`. Every function that reads or
@@ -819,28 +819,21 @@ def _lf(body: str) -> str:
 
 
 def _strip_evidence_metadata(body: str) -> str:
-    stripped = EVIDENCE_METADATA_RE.sub("", _lf(body)).strip()
+    stripped = _EVIDENCE_METADATA_RE.sub("", _lf(body)).strip()
     return re.sub(r"\n{3,}", "\n\n", stripped)
 
 
-def _evidence_metadata_payloads(body: str) -> list[dict[str, object]]:
-    """Every metadata block in this body that parses, in the order written."""
-    payloads: list[dict[str, object]] = []
-    for match in EVIDENCE_METADATA_RE.finditer(_lf(body)):
-        payload = _parsed_evidence_payload(match)
-        if payload is not None:
-            payloads.append(payload)
-    return payloads
-
-
 def _latest_evidence_metadata_match(body: str) -> re.Match[str] | None:
-    matches = list(EVIDENCE_METADATA_RE.finditer(_lf(body)))
+    matches = list(_EVIDENCE_METADATA_RE.finditer(_lf(body)))
     if not matches:
         return None
     return matches[-1]
 
 
-def _parsed_evidence_payload(match: re.Match[str]) -> dict[str, object] | None:
+def _extract_evidence_metadata(body: str) -> dict[str, object] | None:
+    match = _latest_evidence_metadata_match(body)
+    if not match:
+        return None
     try:
         version = int(match.group("version"))
     except (TypeError, ValueError):
@@ -858,13 +851,6 @@ def _parsed_evidence_payload(match: re.Match[str]) -> dict[str, object] | None:
     if not isinstance(payload, dict):
         return None
     return payload
-
-
-def _extract_evidence_metadata(body: str) -> dict[str, object] | None:
-    match = _latest_evidence_metadata_match(body)
-    if not match:
-        return None
-    return _parsed_evidence_payload(match)
 
 
 def _insert_evidence_metadata(body: str, payload: dict[str, object]) -> str:

@@ -3424,12 +3424,18 @@ class ScreenshotRequestNeedsAPersonTests(unittest.TestCase):
 class MetadataLineEndingsTests(unittest.TestCase):
     """Every function that reads or rewrites the metadata sees the same blocks, whatever the body's line endings (#1710).
 
-    `EVIDENCE_METADATA_RE` is anchored on `\n`, and GitHub stores a body with
+    `_EVIDENCE_METADATA_RE` is anchored on `\n`, and GitHub stores a body with
     whatever endings the client sent. Normalising in one reader is worse than
     normalising in none: a reader that sees a CRLF block beside a writer that
     cannot strip it leaves two blocks behind, and which one is authoritative
     then decides whether a named check is re-verified. So each of these
     normalises, and these are the guards on that.
+
+    What none of them changes is which block decides. A body carrying several
+    is read at its last, as it is on main, and the writer below is why that
+    stays safe: a rewrite now strips what it read, so no new two-block body is
+    made. One already stored that way is a migration question, not a reason to
+    widen a read.
     """
 
     ITEM = "CI: `Web CI` green on the PR head"
@@ -3462,15 +3468,17 @@ class MetadataLineEndingsTests(unittest.TestCase):
         entries = run_contributor._extract_evidence_metadata(once)["entries"]
         self.assertEqual([(e["status"], e["detail"]) for e in entries], [("blocked", "the lane refused it")])
 
-    def test_every_block_is_listed_in_the_order_written(self) -> None:
-        # The accounting reads the last block; the live CI gate reads them all,
-        # so an item named in an earlier one is still binding.
-        evidence = sys.modules["evidence"]
+    def test_a_body_with_several_blocks_is_read_at_its_last(self) -> None:
+        # Last-block-wins is unchanged; which blocks are visible is not. Main
+        # could not see a trailing CRLF block and so read the LF block ahead
+        # of it. Both are visible now, and the last decides -- the rule main
+        # already applies when both blocks are LF. So this shape reads
+        # differently than it did, and that is the migration question: the
+        # writer below no longer makes such a body, and repairing one already
+        # stored is not something a read should do quietly.
         second = ("<!-- evidence-status:v1\n" + json.dumps({"entries": []}) + "\n-->\n").replace("\n", "\r\n")
-        payloads = evidence._evidence_metadata_payloads(self.body("\n") + "\n" + second)
-        self.assertEqual(len(payloads), 2)
-        self.assertEqual([entry["item"] for entry in payloads[0]["entries"]], [self.ITEM])
-        self.assertEqual(payloads[1]["entries"], [])
+        metadata = run_contributor._extract_evidence_metadata(self.body("\n") + "\n" + second)
+        self.assertEqual(metadata["entries"], [])
 
 
 class DocumentedTestFormTests(unittest.TestCase):
