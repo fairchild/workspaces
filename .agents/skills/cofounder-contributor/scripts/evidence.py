@@ -1110,6 +1110,23 @@ def _hand_completion_kind(item: str) -> tuple[str, bool]:
     return max(raw, rendered, key=lambda kind: HAND_COMPLETION_STRICTNESS.get(kind, 2)), True
 
 
+def _decided_kind_overrides(item: str) -> str | None:
+    """The kind that overrides an item's recorded `other`, or None when the recorded kind stands.
+
+    The kind in the metadata is written as the classifier read the item at the
+    time, so a body merged before the classifier moved can carry a kind today's
+    reading disagrees with, and rewording cannot reach it: the metadata is
+    already written. A body written before a change has to read afterwards as
+    it read before, so the recorded kind stands on its own.
+
+    What no recorded kind resolves is an item whose own wording classifies two
+    ways at once. There the reader takes the stricter reading and says so in
+    its refusal, since rewording the item is the fix.
+    """
+    decided, split = _hand_completion_kind(item)
+    return decided if split and decided != "other" else None
+
+
 def _proof_form_completion(body: str, item: str, kind: str) -> str | None:
     """The proof in the body that completes an item of this kind, or None.
 
@@ -1346,11 +1363,13 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
     # because the unreadable line may be the owner's `[blocked]`.
     #
     # The recorded kind is read from the item as the issue writes it, and this
-    # section is read as it renders. An item whose two readings disagree is
-    # taken at its stricter one, so a lane item recorded `other` is not the
-    # owner's to complete from a line.
+    # section is read as it renders. An item whose own wording classifies two
+    # ways at once is taken at its stricter reading, so a lane item recorded
+    # `other` is not the owner's to complete from a line. An item that reads
+    # one way keeps the kind the metadata records, whatever the classifier has
+    # learned since it was written (`_decided_kind_overrides`).
     kinds = parsed.get("kinds") or {}
-    owner_items = [item for item in requested_evidence if kinds.get(item) == "other" and _hand_completion_kind(item)[0] == "other"]
+    owner_items = [item for item in requested_evidence if kinds.get(item) == "other" and _decided_kind_overrides(item) is None]
     written, unreadable = _read_owner_section(body, requested_evidence)
     for entry in written.values():
         item = str(entry["item"])
@@ -1364,28 +1383,28 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
                     "detail": f"the Evidence Status section cannot be read as the owner's: {unreadable}",
                 }
 
-    # An item the metadata records as the owner's whose wording decides another
-    # kind is read at that kind here too. Its line is not read as the owner's,
-    # and no lane records an item as `other`, so a `complete` recorded against
-    # one came from the owner path the decided kind refuses -- it does not
+    # An item recorded as the owner's whose wording classifies two ways at once
+    # is read at its stricter kind here too. Its line is not read as the
+    # owner's, and no lane records an item as `other`, so a `complete` recorded
+    # against one came from the owner path that kind refuses -- it does not
     # stand. What can complete it is what completes that kind: the body's own
     # statement or Performance numbers, through the same call the hand-written
     # read makes, and nothing at all for a kind a lane, a check or a review
-    # owns. Items the metadata records at a lane's own kind never reach here,
-    # so a lane still completes its own work.
+    # owns. An item that reads one way is not touched here at all, so a body
+    # written before the classifier moved reads as it read then.
     for item in requested_evidence:
         if kinds.get(item) != "other" or item in owner_items:
             continue
-        decided, split = _hand_completion_kind(item)
+        decided = _decided_kind_overrides(item)
+        if decided is None:
+            continue
         proof = _proof_form_completion(body, item, decided)
         if proof:
             entries[item] = {"status": "complete", "detail": proof}
             continue
         refusal = HAND_COMPLETION_REFUSALS.get(decided, "a hand-written line does not complete this kind of item")
-        entries[item] = {
-            "status": "blocked" if decided in PROOF_FORM_KINDS else "pending-ci",
-            "detail": refusal + SPLIT_KIND_NOTE if split else refusal,
-        }
+        entries[item] = {"status": "blocked" if decided in PROOF_FORM_KINDS else "pending-ci",
+                         "detail": refusal + SPLIT_KIND_NOTE}
 
     matched: dict[str, str]
     contested_items: list[str] = []
@@ -1985,19 +2004,16 @@ def _needs_a_person_to_look(item: str) -> bool:
     that put them there are exactly what says a person is required.
 
     The kind is the decided one, so an item that reads as a screenshot request
-    only once rendered still counts as one, and the phrasings are read in the
-    item as written and as it renders: inline HTML dropped by the render must
-    not hide a request for a person either way.
+    only once rendered still counts as one. The phrasings are read in the item
+    as written, as they are everywhere else, so an item that classifies one way
+    reads here exactly as it did before the decided kind existed.
     """
-    texts = (item, _rendered_inline(item))
     return (
         _hand_completion_kind(item)[0] == "screenshot"
         or VISUAL_EVIDENCE_RE.search(item) is not None
-        or any(
-            pattern.search(text) is not None
-            for text in texts
-            for pattern in (OWNER_ATTESTED_RE, MANUAL_JUDGEMENT_RE, EXTERNAL_VERIFICATION_RE)
-        )
+        or OWNER_ATTESTED_RE.search(item) is not None
+        or MANUAL_JUDGEMENT_RE.search(item) is not None
+        or EXTERNAL_VERIFICATION_RE.search(item) is not None
     )
 
 

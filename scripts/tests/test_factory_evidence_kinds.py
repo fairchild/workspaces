@@ -3449,6 +3449,60 @@ class DecidedKindEverywhereTests(unittest.TestCase):
                 self.assertEqual([entry["item"] for entry in metadata["entries"]], [item])
 
 
+class RecordedKindStandsTests(unittest.TestCase):
+    """A body written before the classifier moved reads as it read then (#1711).
+
+    The kind in the metadata is written as the classifier read the item at the
+    time, so a merged body can carry a kind today's classifier no longer agrees
+    with, and rewording cannot reach it. Only an item whose own wording
+    classifies two ways at once -- the ambiguity the decided kind exists for --
+    is read at the stricter of the two.
+    """
+
+    ITEM = "Every `scripts/tests/*.py` passes under `uv run --script`"
+    DETAIL = ("ran `for f in scripts/tests/*.py; do uv run --script \"$f\"; done` at head e68b4552: "
+              "48 of 48 files passed, 1236 tests, every file ending `OK`")
+    SPLIT_ITEM = "**`swift test --filter FooTests` passes**"
+
+    def body(self, item: str, detail: str, kind: str = "other", status: str = "complete") -> str:
+        entry = {"index": 1, "item": item, "status": status, "detail": detail, "kind": kind}
+        return ("<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
+                f"## Evidence Status\n- [{status}] {item} -- {detail}\n")
+
+    def gate(self, body: str, item: str) -> tuple[dict[str, object], str | None]:
+        accounting, errors = run_contributor.validate_evidence_accounting(body, [item], review_ci=[])
+        return accounting, run_contributor.review_evidence_gate_error("approve", accounting, errors)
+
+    def test_a_recorded_completion_stands_on_an_item_that_classifies_one_way(self) -> None:
+        # The item reads `test-attested` today and was recorded `other` before
+        # the classifier learned that kind. Its wording is not ambiguous, so
+        # the recorded kind stands and the completion with it.
+        self.assertEqual(run_contributor._evidence_item_kind(self.ITEM), "test-attested")
+        self.assertFalse(sys.modules["evidence"]._hand_completion_kind(self.ITEM)[1])
+        accounting, error = self.gate(self.body(self.ITEM, self.DETAIL), self.ITEM)
+        self.assertEqual(accounting["complete_items"], [self.ITEM])
+        self.assertEqual(accounting["blocked_items"], [])
+        self.assertIsNone(error)
+
+    def test_an_item_that_classifies_two_ways_is_still_read_at_the_stricter_kind(self) -> None:
+        self.assertTrue(sys.modules["evidence"]._hand_completion_kind(self.SPLIT_ITEM)[1])
+        accounting, error = self.gate(self.body(self.SPLIT_ITEM, "checked: the suite is green on my machine"), self.SPLIT_ITEM)
+        self.assertEqual(accounting["complete_items"], [])
+        self.assertEqual(accounting["pending_ci_items"], [self.SPLIT_ITEM])
+        self.assertIsNotNone(error)
+
+    def test_an_owner_line_still_answers_a_recorded_other_item(self) -> None:
+        # The owner read is what the recorded kind buys, and an unsplit item
+        # recorded `other` keeps it whatever today's classifier says.
+        body = self.body(self.ITEM, "owner follow-up required", status="blocked").replace(
+            f"- [blocked] {self.ITEM} -- owner follow-up required",
+            f"- [complete] {self.ITEM} -- {self.DETAIL}",
+        )
+        accounting, error = self.gate(body, self.ITEM)
+        self.assertEqual(accounting["complete_items"], [self.ITEM])
+        self.assertIsNone(error)
+
+
 class DocumentedTestFormTests(unittest.TestCase):
     """The `test` form the docs teach has to survive the parser.
 
