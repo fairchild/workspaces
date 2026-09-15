@@ -21,6 +21,7 @@ import re
 import sys
 import tempfile
 import unittest
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -801,6 +802,502 @@ class RunContributorEvidenceTests(unittest.TestCase):
             "[test-output](https://evidence.example/workspaces/pr-42/test-output.txt)",
             reconciled,
         )
+
+
+class LaneProvenanceOnHandWrittenBodiesTests(unittest.TestCase):
+    """What a reconcile records on a PR body nobody's factory turn ever wrote (#1708).
+
+    Such a body carries no evidence metadata, so every `[complete]` line in it
+    reads as hand-written and a lane item stays pending even where the lane ran
+    the command and rewrote the line itself. The reconcile writes the metadata
+    comment, and these say what it may and may not put in it.
+    """
+
+    maxDiff = None
+    BUILD = "swift build"
+    TEST = "swift test --filter WorkspaceProviderTests"
+    OWNER = "Manual QA sign-off from the owner"
+
+    def body(self, *lines: str, validation: bool = True) -> str:
+        parts = ["## Summary", "- Reordered the sidebar rows", "", "## Evidence Status", *lines]
+        if validation:
+            parts += ["", "## Validation", "- blocked on evidence: macOS-only evidence deferred to CI"]
+        return "\n".join(parts) + "\n"
+
+    def reconcile(self, body: str, requested: list[str] | None, **overrides: object) -> str:
+        kwargs: dict[str, object] = {
+            "build_succeeded": True,
+            "tests_succeeded": True,
+            "smoke_succeeded": True,
+        }
+        kwargs.update(overrides)
+        return run_contributor.reconcile_pending_ci_evidence(
+            body, requested_evidence=requested, **kwargs
+        )
+
+    def entries(self, body: str) -> list[dict]:
+        metadata = sys.modules["evidence"]._extract_evidence_metadata(body)
+        self.assertIsInstance(metadata, dict)
+        return list(metadata["entries"])
+
+    def test_lane_completions_count_on_a_body_with_no_metadata(self) -> None:
+        body = self.body(
+            f"- [pending-ci] {self.BUILD} -- self-hosted macOS CI will build this",
+            f"- [pending-ci] {self.TEST} -- self-hosted macOS CI will run this",
+        )
+        reconciled = self.reconcile(body, [self.BUILD, self.TEST])
+
+        self.assertEqual(reconciled.count("<!-- evidence-status:v1"), 1)
+        self.assertEqual(
+            self.entries(reconciled),
+            [
+                {
+                    "index": 1,
+                    "item": self.BUILD,
+                    "status": "complete",
+                    "detail": "`swift build` succeeded on self-hosted macOS CI",
+                    "kind": "build",
+                },
+                {
+                    "index": 2,
+                    "item": self.TEST,
+                    "status": "complete",
+                    "detail": f"`{self.TEST}` succeeded on self-hosted macOS CI",
+                    "kind": "test",
+                },
+            ],
+        )
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            reconciled, [self.BUILD, self.TEST]
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(accounting["source"], "structured")
+        self.assertEqual(accounting["complete_items"], [self.BUILD, self.TEST])
+
+    def test_reconciling_twice_writes_the_same_bytes(self) -> None:
+        body = self.body(
+            f"- [pending-ci] {self.BUILD} -- self-hosted macOS CI will build this",
+            f"- [pending-ci] {self.TEST} -- self-hosted macOS CI will run this",
+        )
+        once = self.reconcile(body, [self.BUILD, self.TEST])
+        twice = self.reconcile(once, [self.BUILD, self.TEST])
+
+        self.assertEqual(twice, once)
+        self.assertEqual(twice.count("<!-- evidence-status:v1"), 1)
+
+    def test_a_body_whose_endings_are_crlf_reconciles_to_the_same_bytes(self) -> None:
+        body = self.body(
+            f"- [pending-ci] {self.BUILD} -- self-hosted macOS CI will build this",
+            f"- [pending-ci] {self.TEST} -- self-hosted macOS CI will run this",
+        )
+        reconciled = self.reconcile(body, [self.BUILD, self.TEST])
+        from_crlf = self.reconcile(body.replace("\n", "\r\n"), [self.BUILD, self.TEST])
+
+        self.assertEqual(from_crlf, reconciled)
+        self.assertNotIn("\r", from_crlf)
+        accounting, _ = run_contributor.validate_evidence_accounting(
+            from_crlf, [self.BUILD, self.TEST]
+        )
+        self.assertEqual(accounting["complete_items"], [self.BUILD, self.TEST])
+
+    def test_a_hand_written_completion_on_a_lane_item_stays_pending(self) -> None:
+        body = self.body(
+            f"- [pending-ci] {self.BUILD} -- self-hosted macOS CI will build this",
+            f"- [complete] {self.TEST} -- ran it on my laptop",
+        )
+        reconciled = self.reconcile(body, [self.BUILD, self.TEST])
+
+        accounting, _ = run_contributor.validate_evidence_accounting(
+            reconciled, [self.BUILD, self.TEST]
+        )
+        self.assertEqual(accounting["complete_items"], [self.BUILD])
+        self.assertEqual(accounting["pending_ci_items"], [self.TEST])
+        recorded = {entry["item"]: entry for entry in self.entries(reconciled)}
+        self.assertEqual(recorded[self.TEST]["status"], "pending-ci")
+        self.assertIn(
+            "the evidence lane completes it by running the command",
+            recorded[self.TEST]["detail"],
+        )
+
+    def test_the_next_run_answers_the_pending_entry_with_the_lanes_own_result(self) -> None:
+        """A refused hand completion is recorded as a request, and the lane answers it.
+
+        The entry the first reconcile writes says pending-ci for a lane kind,
+        which is what a factory body says when the lane is expected to run the
+        item. The next run resolves it the way it resolves any such entry --
+        from what that run itself did, with its own detail, never from the
+        line the refusal was about.
+        """
+        body = self.body(
+            f"- [pending-ci] {self.BUILD} -- self-hosted macOS CI will build this",
+            f"- [complete] {self.TEST} -- ran it on my laptop",
+        )
+        once = self.reconcile(body, [self.BUILD, self.TEST])
+        twice = self.reconcile(once, [self.BUILD, self.TEST])
+
+        recorded = {entry["item"]: entry for entry in self.entries(twice)}
+        self.assertEqual(recorded[self.TEST]["status"], "complete")
+        self.assertEqual(
+            recorded[self.TEST]["detail"], f"`{self.TEST}` succeeded on self-hosted macOS CI"
+        )
+        self.assertNotIn("ran it on my laptop", twice)
+        self.assertEqual(self.reconcile(twice, [self.BUILD, self.TEST]), twice)
+
+    def test_an_owner_item_keeps_being_read_from_its_line(self) -> None:
+        requested = [self.BUILD, self.OWNER]
+        body = self.body(
+            f"- [pending-ci] {self.BUILD} -- self-hosted macOS CI will build this",
+            f"- [complete] {self.OWNER} -- I drove the sheet by hand and the row kept focus",
+        )
+        reconciled = self.reconcile(body, requested)
+
+        recorded = {entry["item"]: entry for entry in self.entries(reconciled)}
+        self.assertEqual(recorded[self.OWNER]["kind"], "other")
+        self.assertEqual(recorded[self.OWNER]["status"], "complete")
+        accounting, errors = run_contributor.validate_evidence_accounting(reconciled, requested)
+        self.assertEqual(errors, [])
+        self.assertEqual(accounting["complete_items"], requested)
+
+        blocked_by_hand = reconciled.replace(
+            f"- [complete] {self.OWNER}", f"- [blocked] {self.OWNER}"
+        )
+        after, _ = run_contributor.validate_evidence_accounting(blocked_by_hand, requested)
+        self.assertEqual(after["blocked_items"], [self.OWNER])
+
+    def test_no_contract_means_no_metadata(self) -> None:
+        """An entry's index is a position in the contract, so without one there is nothing to write."""
+        body = self.body(f"- [pending-ci] {self.BUILD} -- self-hosted macOS CI will build this")
+        for requested in (None, []):
+            with self.subTest(requested=requested):
+                reconciled = self.reconcile(body, requested)
+                self.assertIn(f"- [complete] {self.BUILD} -- ", reconciled)
+                self.assertNotIn("<!-- evidence-status:v1", reconciled)
+                accounting, _ = run_contributor.validate_evidence_accounting(
+                    reconciled, [self.BUILD]
+                )
+                self.assertEqual(accounting["pending_ci_items"], [self.BUILD])
+
+    def test_a_section_carrying_a_line_the_reader_cannot_place_is_left_as_it_reads(self) -> None:
+        """The metadata is read instead of the section, so it is written only where the two agree."""
+        body = self.body(
+            f"- [pending-ci] {self.BUILD} -- self-hosted macOS CI will build this",
+            f"- [complete] {self.OWNER} -- I drove the sheet by hand and the row kept focus",
+            "- the screenshots are in the comment above",
+        )
+        reconciled = self.reconcile(body, [self.BUILD, self.OWNER])
+
+        self.assertIn(f"- [complete] {self.BUILD} -- ", reconciled)
+        self.assertNotIn("<!-- evidence-status:v1", reconciled)
+        self.assertIn("- the screenshots are in the comment above", reconciled)
+
+    def test_a_line_spelling_its_item_differently_is_still_that_item(self) -> None:
+        """An entry's item is the contract's spelling; the line's is what the reader matched.
+
+        A body writes `` `swift build` `` where the issue asks for `swift
+        build`, and recording the line's own text would write an entry no
+        reader can place against the contract.
+        """
+        body = self.body(f"- [pending-ci] `{self.BUILD}` -- self-hosted macOS CI will build this")
+        reconciled = self.reconcile(body, [self.BUILD])
+
+        self.assertEqual(
+            [entry["item"] for entry in self.entries(reconciled)], [self.BUILD]
+        )
+        accounting, errors = run_contributor.validate_evidence_accounting(reconciled, [self.BUILD])
+        self.assertEqual(errors, [])
+        self.assertEqual(accounting["complete_items"], [self.BUILD])
+
+    def test_an_item_outside_the_contract_is_not_recorded(self) -> None:
+        body = self.body(
+            f"- [pending-ci] {self.BUILD} -- self-hosted macOS CI will build this",
+            "- [pending-ci] swift test --filter SomethingElse -- self-hosted macOS CI will run this",
+        )
+        reconciled = self.reconcile(body, [self.BUILD])
+
+        self.assertEqual([entry["item"] for entry in self.entries(reconciled)], [self.BUILD])
+        self.assertIn(
+            "- [complete] swift test --filter SomethingElse -- ",
+            reconciled,
+        )
+
+    def test_a_body_the_comment_would_push_past_what_github_stores_keeps_its_lines(self) -> None:
+        """The edit writes the whole body, so a body too long to store loses the rewrites too."""
+        limit = sys.modules["evidence"].PR_BODY_LIMIT
+        short = self.body(f"- [pending-ci] {self.BUILD} -- self-hosted macOS CI will build this")
+        long = short + "\n" + "x" * (limit - 100 - len(short) - 1)
+        self.assertLess(len(long), limit)
+        # The same body under the limit gains the comment, so the length is
+        # what refused it and not something else about this body.
+        self.assertIn("<!-- evidence-status:v1", self.reconcile(short, [self.BUILD]))
+
+        reconciled = self.reconcile(long, [self.BUILD])
+
+        self.assertIn(f"- [complete] {self.BUILD} -- ", reconciled)
+        self.assertNotIn("<!-- evidence-status:v1", reconciled)
+        self.assertLess(len(reconciled), limit)
+
+    def test_a_comment_this_reader_cannot_use_is_still_metadata_the_body_carries(self) -> None:
+        """A body that carries a comment keeps today's path, whatever this reader makes of it.
+
+        Neither version below is one this revision reads, so the body reads as
+        a hand-written one -- but the comment is a record somebody wrote, and
+        a future version is a record something later reads. Writing over it
+        answers a reader's complaint by deleting what it is about.
+        """
+        section = self.body(f"- [pending-ci] {self.BUILD} -- self-hosted macOS CI will build this")
+        for version in ("v2", "vnope"):
+            for placement, body in (
+                ("above the section", f"<!-- evidence-status:{version}\n" + '{"entries": []}\n-->\n\n' + section),
+                ("below the section", section + f"\n<!-- evidence-status:{version}\n" + '{"entries": []}\n-->\n'),
+            ):
+                with self.subTest(version=version, placement=placement):
+                    reconciled = self.reconcile(body, [self.BUILD])
+                    self.assertIn(f"<!-- evidence-status:{version}", reconciled)
+                    self.assertNotIn("<!-- evidence-status:v1", reconciled)
+
+
+class MetadataBodyIsAlwaysReRenderedTests(unittest.TestCase):
+    """A body that carries metadata is re-rendered from its entries on every run.
+
+    The re-render is the repair: it restores a line someone edited by hand,
+    scrubs a line for an item the metadata has no entry for, and puts back a
+    section someone deleted. Two revisions of this PR tried to skip it on a run
+    that had nothing to add, so as to keep text under the heading the re-render
+    drops -- and each let through an edit a reader could see, because the
+    questions they asked read the section differently from the way a reader
+    does. The skip is gone; the text it was protecting is dropped here exactly
+    as `main` drops it (#1725).
+    """
+
+    maxDiff = None
+    BUILD = "swift build"
+    TEST = "swift test --filter SidebarTests"
+    OWNER = "Manual QA sign-off from the owner"
+
+    def factory_body(
+        self,
+        requested: list[str],
+        *,
+        complete: list[str] = [],
+        blocked: list[str] = [],
+        pending: list[str] = [],
+    ) -> str:
+        body, errors = run_contributor.render_execution_summary_body(
+            "## Summary\n- Reordered the sidebar rows\n\n"
+            "## Validation\n- blocked on evidence: waiting on the owner\n",
+            requested_evidence=requested,
+            evidence_complete=complete,
+            evidence_blocked=blocked,
+            evidence_pending_ci=pending,
+        )
+        self.assertEqual(errors, [])
+        return body
+
+    def reconcile(self, body: str, requested: list[str] | None) -> str:
+        return run_contributor.reconcile_pending_ci_evidence(
+            body,
+            requested_evidence=requested,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+        )
+
+    def verdict(self, body: str, requested: list[str]) -> tuple[object, ...]:
+        accounting, errors = run_contributor.validate_evidence_accounting(body, requested)
+        return (
+            list(accounting["complete_items"]),
+            list(accounting["blocked_items"]),
+            list(accounting["pending_ci_items"]),
+            list(accounting["missing_items"]),
+            errors,
+        )
+
+    def re_rendered(self, body: str) -> str:
+        """The body the re-render would have produced from the entries it carries."""
+        evidence = sys.modules["evidence"]
+        metadata = evidence._extract_evidence_metadata(body)
+        self.assertIsInstance(metadata, dict)
+        return evidence._render_structured_entries(body, list(metadata["entries"]))
+
+    def hand_completed_owner_body(self, requested: list[str], pending: list[str]) -> str:
+        body = self.factory_body(
+            requested,
+            complete=[f"1 -- `{self.BUILD}` succeeded on self-hosted macOS CI"],
+            blocked=["2 -- the owner has not signed off yet"],
+            pending=pending,
+        )
+        edited = body.replace(f"- [blocked] {self.OWNER}", f"- [complete] {self.OWNER}")
+        self.assertNotEqual(edited, body)
+        return edited
+
+    def test_a_hand_edited_owner_line_is_restored_by_a_run_that_resolves_nothing(self) -> None:
+        requested = [self.BUILD, self.OWNER]
+        edited = self.hand_completed_owner_body(requested, pending=[])
+
+        reconciled = self.reconcile(edited, requested)
+
+        self.assertIn(f"- [blocked] {self.OWNER} -- the owner has not signed off yet", reconciled)
+        accounting, _ = run_contributor.validate_evidence_accounting(reconciled, requested)
+        self.assertEqual(accounting["blocked_items"], [self.OWNER])
+        self.assertEqual(accounting["complete_items"], [self.BUILD])
+
+    def test_an_unrelated_item_resolving_does_not_decide_the_owner_item(self) -> None:
+        """The two paths agree, which is the whole of the invariant.
+
+        The verdict for the owner's item cannot turn on whether some other
+        item happened to be `pending-ci` in the same run.
+        """
+        alone = [self.BUILD, self.OWNER]
+        beside = [self.BUILD, self.OWNER, self.TEST]
+        nothing_resolved = self.reconcile(self.hand_completed_owner_body(alone, []), alone)
+        one_resolved = self.reconcile(
+            self.hand_completed_owner_body(beside, ["3 -- self-hosted macOS CI will run this"]),
+            beside,
+        )
+
+        for body, requested in ((nothing_resolved, alone), (one_resolved, beside)):
+            accounting, _ = run_contributor.validate_evidence_accounting(body, requested)
+            self.assertEqual(accounting["blocked_items"], [self.OWNER])
+            self.assertNotIn(self.OWNER, accounting["complete_items"])
+
+    def test_a_hand_edited_lane_line_is_restored_though_no_verdict_moves(self) -> None:
+        """The section has to say what was recorded, not merely read to the same verdict.
+
+        A lane item is read from the metadata, so flipping its visible line by
+        hand moves nothing the gate reports -- and leaves the page saying the
+        opposite of the record. The repair is what a body carrying metadata
+        gets; the skip is for text the re-render would drop, not for lines it
+        would correct.
+        """
+        requested = [self.BUILD]
+        body = self.factory_body(
+            requested, complete=[f"1 -- `{self.BUILD}` succeeded on self-hosted macOS CI"]
+        )
+        edited = body.replace(f"- [complete] {self.BUILD}", f"- [blocked] {self.BUILD}")
+        self.assertNotEqual(edited, body)
+        self.assertEqual(
+            self.verdict(edited, requested), self.verdict(self.re_rendered(edited), requested)
+        )
+
+        reconciled = self.reconcile(edited, requested)
+
+        self.assertIn(f"- [complete] {self.BUILD} -- ", reconciled)
+        self.assertNotIn(f"- [blocked] {self.BUILD}", reconciled)
+
+    def test_a_deleted_section_is_still_repaired(self) -> None:
+        requested = [self.BUILD]
+        body = self.factory_body(
+            requested, complete=[f"1 -- `{self.BUILD}` succeeded on self-hosted macOS CI"]
+        )
+        without = re.sub(r"(?ms)^## Evidence Status\n.*?(?=^## )", "", body)
+        self.assertNotIn("## Evidence Status", without)
+        accounting, errors = run_contributor.validate_evidence_accounting(without, requested)
+        self.assertIn("missing required '## Evidence Status' section", errors)
+
+        reconciled = self.reconcile(without, requested)
+
+        self.assertIn(f"- [complete] {self.BUILD} -- ", reconciled)
+        self.assertEqual(run_contributor.validate_evidence_accounting(reconciled, requested)[1], [])
+
+    def test_no_contract_means_the_re_render_stands(self) -> None:
+        """`_evidence.yml` reconciles with none where the PR closes no single issue here.
+
+        There is then nothing to compare the two bodies over, and the repair is
+        what a body keeps.
+        """
+        requested = [self.BUILD, self.OWNER]
+        edited = self.hand_completed_owner_body(requested, pending=[])
+
+        reconciled = self.reconcile(edited, None)
+
+        self.assertIn(f"- [blocked] {self.OWNER} -- the owner has not signed off yet", reconciled)
+
+    def test_the_reconcile_of_a_metadata_body_is_the_re_render(self) -> None:
+        """The invariant as an equation: reconcile IS the re-render, byte for byte.
+
+        A run that resolves nothing has nothing to add to the entries, so the
+        body it returns has to be the one `_render_structured_entries` makes
+        from them -- not merely one a reader draws the same conclusions from.
+        The three shapes at the end are the ones a conditional skip let
+        through: each reads as agreeing with the record by one measure or
+        another, and each shows a reader something the record does not say.
+        """
+        evidence = sys.modules["evidence"]
+        provenance = LaneProvenanceOnHandWrittenBodiesTests()
+        lane = [provenance.BUILD, provenance.TEST]
+        owner = [provenance.BUILD, provenance.OWNER]
+        ci_item = "CI: `Lint, Test, Build, E2E & Perf` green on the PR head"
+        watched = "I watched the run go green in the Actions tab"
+        ci_body = self.factory_body([ci_item], pending=["1 -- the named check has not run yet"])
+        lane_body = self.factory_body(
+            [self.BUILD], complete=[f"1 -- `{self.BUILD}` succeeded on self-hosted macOS CI"]
+        )
+        bodies: list[tuple[str, str, list[str]]] = [
+            (
+                "a hand-written body the lane gave metadata to",
+                provenance.reconcile(
+                    provenance.body(
+                        f"- [pending-ci] {provenance.BUILD} -- self-hosted macOS CI will build this",
+                        f"- [pending-ci] {provenance.TEST} -- self-hosted macOS CI will run this",
+                    ),
+                    lane,
+                ),
+                lane,
+            ),
+            (
+                "one carrying an owner item",
+                provenance.reconcile(
+                    provenance.body(
+                        f"- [pending-ci] {provenance.BUILD} -- self-hosted macOS CI will build this",
+                        f"- [complete] {provenance.OWNER} -- I drove the sheet by hand and the row kept focus",
+                    ),
+                    owner,
+                ),
+                owner,
+            ),
+            ("a factory body", lane_body, [self.BUILD]),
+            (
+                "an owner line edited to complete",
+                self.hand_completed_owner_body([self.BUILD, self.OWNER], []),
+                [self.BUILD, self.OWNER],
+            ),
+            (
+                "a fenced copy of the pending line above a visible complete one",
+                ci_body.replace(
+                    f"- [pending-ci] {ci_item} -- the named check has not run yet",
+                    f"```\n- [pending-ci] {ci_item} -- the named check has not run yet\n```\n"
+                    f"- [complete] {ci_item} -- {watched}",
+                ),
+                [ci_item],
+            ),
+            (
+                "a line whose detail was rewritten with its status kept",
+                # The visible line only: rewriting the recorded detail as well
+                # would leave the section agreeing with the record, which is a
+                # body nobody edited.
+                lane_body.replace(
+                    f"- [complete] {self.BUILD} -- `{self.BUILD}` succeeded on self-hosted macOS CI",
+                    f"- [complete] {self.BUILD} -- the owner ran it locally and it was fine",
+                ),
+                [self.BUILD],
+            ),
+            (
+                "a complete line for an item the metadata has no entry for",
+                lane_body.replace(
+                    "## Validation",
+                    f"- [complete] {self.TEST} -- ran it on my laptop\n\n## Validation",
+                ),
+                [self.BUILD, self.TEST],
+            ),
+        ]
+        for name, body, requested in bodies:
+            with self.subTest(body=name):
+                metadata = evidence._extract_evidence_metadata(body)
+                self.assertIsInstance(metadata, dict)
+                self.assertEqual(
+                    self.reconcile(body, requested),
+                    evidence._render_structured_entries(body, list(metadata["entries"])),
+                )
 
 
 class EvidenceValidationTests(unittest.TestCase):

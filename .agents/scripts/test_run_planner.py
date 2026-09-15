@@ -2191,42 +2191,31 @@ class RunContributorTests(unittest.TestCase):
             "## Validation\n"
             "- blocked on evidence: macOS-only evidence is deferred to CI\n"
         )
+        requested = [
+            "swift build",
+            "swift test --filter WorkspaceManagerTests.WorkspaceProviderTests",
+            "Screenshot of NewWorkspaceSheet from the exact commit under review",
+        ]
         reconciled = run_contributor.reconcile_pending_ci_evidence(
             body,
+            requested_evidence=requested,
             build_succeeded=True,
             tests_succeeded=True,
             smoke_succeeded=True,
             screenshot_upload_succeeded=True,
             screenshot_urls=[("NewWorkspaceSheet", "https://example.test/evidence.png")],
         )
-        accounting, errors = run_contributor.validate_evidence_accounting(
-            reconciled,
-            [
-                "swift build",
-                "swift test --filter WorkspaceManagerTests.WorkspaceProviderTests",
-                "Screenshot of NewWorkspaceSheet from the exact commit under review",
-            ],
-        )
-        # The lane rewrites each line as complete. With no metadata a line has no
-        # provenance, so the accounting reads lane items as pending for their
-        # lane (#1693); the metadata path is where a lane's completion counts.
-        for item in (
-            "swift build",
-            "swift test --filter WorkspaceManagerTests.WorkspaceProviderTests",
-            "Screenshot of NewWorkspaceSheet from the exact commit under review",
-        ):
+        accounting, errors = run_contributor.validate_evidence_accounting(reconciled, requested)
+        # The lane rewrites each line as complete and records the run beside
+        # them, which is what makes a completion the lane's rather than
+        # hand-written on a body that carries no metadata of its own (#1708).
+        for item in requested:
             self.assertIn(f"- [complete] {item} -- ", reconciled)
         self.assertEqual(errors, [])
-        self.assertEqual(accounting["complete_items"], [])
+        self.assertEqual(accounting["source"], "structured")
+        self.assertEqual(accounting["complete_items"], requested)
         self.assertEqual(accounting["blocked_items"], [])
-        self.assertEqual(
-            accounting["pending_ci_items"],
-            [
-                "swift build",
-                "swift test --filter WorkspaceManagerTests.WorkspaceProviderTests",
-                "Screenshot of NewWorkspaceSheet from the exact commit under review",
-            ],
-        )
+        self.assertEqual(accounting["pending_ci_items"], [])
 
     def test_reconcile_pending_ci_evidence_marks_failed_tests_blocked(self) -> None:
         body = (
@@ -2798,14 +2787,45 @@ class RunContributorTests(unittest.TestCase):
 
         The Linux runner writes evidence_pending_ci for build and test items;
         the macOS evidence job calls reconcile_pending_ci_evidence, which
-        rewrites those lines as [complete] or [blocked]. In a body with no
-        evidence metadata the accounting still reads the rewritten items as
-        pending-ci, since nothing in such a body records that the lane wrote them.
+        rewrites those lines as [complete] or [blocked] and records the run in
+        the metadata comment. A body with no metadata of its own gains one, so
+        the accounting reads those completions as the lane's (#1708).
         """
         body = (
             "## Evidence Status\n"
             "- [pending-ci] swift build -- self-hosted macOS CI will build this\n"
             "- [pending-ci] swift test --filter RunPlannerTests -- self-hosted macOS CI will run this\n\n"
+            "## Validation\n"
+            "- blocked on evidence: macOS-only evidence deferred to CI\n"
+        )
+        requested = ["swift build", "swift test --filter RunPlannerTests"]
+        reconciled = run_contributor.reconcile_pending_ci_evidence(
+            body,
+            requested_evidence=requested,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+        )
+        accounting, errors = run_contributor.validate_evidence_accounting(reconciled, requested)
+        self.assertIn("- [complete] swift build -- ", reconciled)
+        self.assertIn("- [complete] swift test --filter RunPlannerTests -- ", reconciled)
+        self.assertEqual(reconciled.count("<!-- evidence-status:v1"), 1)
+        self.assertEqual(errors, [])
+        self.assertEqual(accounting["complete_items"], requested)
+        self.assertEqual(accounting["blocked_items"], [])
+        self.assertEqual(accounting["pending_ci_items"], [])
+
+    def test_reconcile_without_a_contract_records_nothing(self) -> None:
+        """The same run with no contract in hand leaves the body as it read before.
+
+        `_evidence.yml` reads the contract from the single issue the PR closes,
+        and where there is no such issue it reconciles with none. A metadata
+        entry is an index into that contract, so there is nothing to record --
+        the lines are still rewritten, and still read as hand-written.
+        """
+        body = (
+            "## Evidence Status\n"
+            "- [pending-ci] swift build -- self-hosted macOS CI will build this\n\n"
             "## Validation\n"
             "- blocked on evidence: macOS-only evidence deferred to CI\n"
         )
@@ -2816,20 +2836,13 @@ class RunContributorTests(unittest.TestCase):
             smoke_succeeded=True,
         )
         accounting, errors = run_contributor.validate_evidence_accounting(
-            reconciled,
-            ["swift build", "swift test --filter RunPlannerTests"],
+            reconciled, ["swift build"]
         )
-        # The lane rewrites both lines as complete; with no metadata the
-        # accounting reads lane items as pending for their lane (#1693).
         self.assertIn("- [complete] swift build -- ", reconciled)
-        self.assertIn("- [complete] swift test --filter RunPlannerTests -- ", reconciled)
+        self.assertNotIn("<!-- evidence-status:v1", reconciled)
         self.assertEqual(errors, [])
         self.assertEqual(accounting["complete_items"], [])
-        self.assertEqual(accounting["blocked_items"], [])
-        self.assertEqual(
-            accounting["pending_ci_items"],
-            ["swift build", "swift test --filter RunPlannerTests"],
-        )
+        self.assertEqual(accounting["pending_ci_items"], ["swift build"])
 
     def test_agent_executor_checks_out_pr_head_into_model_workspace(self) -> None:
         executor_workflow = (REPO_ROOT / ".github" / "workflows" / "agent-executor.yml").read_text(encoding="utf-8")

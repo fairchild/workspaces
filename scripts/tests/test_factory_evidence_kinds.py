@@ -4215,5 +4215,103 @@ class DocumentedTestFormTests(unittest.TestCase):
         self.assertIn("`swift test --filter FooTests`", detail)
 
 
+class LaneWrittenMetadataMatchesTheFactoryShapeTests(unittest.TestCase):
+    """The metadata a reconcile writes on a hand-written body is the factory's own shape (#1708).
+
+    The reader treats the metadata as the whole account once it exists, and
+    which rule each item falls to is decided by the `kind` recorded beside it
+    -- an `other` item is read from its visible line, every other kind from
+    the metadata. So a body that gains its metadata from the lane has to gain
+    the same entry for each item that a body written by a factory turn
+    carries, owner items included: leaving them out would report them missing
+    and take the owner's attested line with them.
+    """
+
+    maxDiff = None
+    OWNER_ITEM = "Manual QA sign-off from the owner"
+    PERF_ITEM = "Before and after sidebar rebuild timings for the 500-row fixture"
+    ATTESTED_ITEM = "`uv run --script scripts/tests/test_run_contributor.py` passes"
+    REQUESTED = [
+        "swift build",
+        "swift test --filter SidebarTests",
+        "Screenshot of the sidebar from the exact commit under review",
+        CI_ITEM,
+        DIFF_ITEM,
+        PERF_ITEM,
+        ATTESTED_ITEM,
+        OWNER_ITEM,
+    ]
+
+    def kinds_of(self, body: str) -> dict[str, str]:
+        metadata = sys.modules["evidence"]._extract_evidence_metadata(body)
+        self.assertIsInstance(metadata, dict)
+        return {str(entry["item"]): str(entry["kind"]) for entry in metadata["entries"]}
+
+    def factory_body(self) -> str:
+        rendered, errors = run_contributor.render_execution_summary_body(
+            "## Summary\n- Reordered the sidebar rows\n\n## Validation\n- blocked on evidence: waiting on CI\n",
+            requested_evidence=self.REQUESTED,
+            evidence_complete=[],
+            evidence_blocked=[],
+            evidence_pending_ci=[
+                f"{index} -- self-hosted macOS CI will gather this"
+                for index in range(1, len(self.REQUESTED) + 1)
+            ],
+        )
+        self.assertEqual(errors, [])
+        return rendered
+
+    def hand_written_body(self) -> str:
+        lines = "\n".join(
+            f"- [pending-ci] {item} -- self-hosted macOS CI will gather this"
+            for item in self.REQUESTED
+        )
+        return (
+            "## Summary\n- Reordered the sidebar rows\n\n"
+            f"## Evidence Status\n{lines}\n\n"
+            "## Validation\n- blocked on evidence: waiting on CI\n"
+        )
+
+    def test_the_lane_records_the_kind_the_factory_records_for_every_item(self) -> None:
+        reconciled = run_contributor.reconcile_pending_ci_evidence(
+            self.hand_written_body(),
+            requested_evidence=self.REQUESTED,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+            screenshot_upload_succeeded=True,
+            screenshot_urls=[("sidebar", "https://evidence.example/pr-1/sidebar.png")],
+        )
+
+        self.assertEqual(self.kinds_of(reconciled), self.kinds_of(self.factory_body()))
+        self.assertEqual(self.kinds_of(reconciled)[self.OWNER_ITEM], "other")
+
+    def test_the_lane_answers_only_the_kinds_it_gathers(self) -> None:
+        """What each kind reads as once the lane has written the metadata.
+
+        The three kinds the macOS lane gathers carry its results. `ci`, `diff`,
+        `perf` and `test-attested` are exempt from it and keep the line's own
+        words, so each still waits for the lane that does complete it. An
+        owner's item is the one the lane answers by refusing: it writes the
+        blocked entry that asks the owner to rewrite the line, the same answer
+        it gives on a factory body.
+        """
+        reconciled = run_contributor.reconcile_pending_ci_evidence(
+            self.hand_written_body(),
+            requested_evidence=self.REQUESTED,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+            screenshot_upload_succeeded=True,
+            screenshot_urls=[("sidebar", "https://evidence.example/pr-1/sidebar.png")],
+        )
+        accounting, _ = run_contributor.validate_evidence_accounting(reconciled, self.REQUESTED)
+
+        self.assertEqual(accounting["source"], "structured")
+        self.assertEqual(accounting["complete_items"], self.REQUESTED[:3])
+        self.assertEqual(accounting["pending_ci_items"], self.REQUESTED[3:7])
+        self.assertEqual(accounting["blocked_items"], [self.OWNER_ITEM])
+
+
 if __name__ == "__main__":
     unittest.main()
