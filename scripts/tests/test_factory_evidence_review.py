@@ -135,6 +135,55 @@ class LiveCiVerificationTests(unittest.TestCase):
         self.assertIsNotNone(error)
         self.assertIn("live conclusion: none", error)
 
+    def test_a_red_check_is_caught_whatever_the_body_s_line_endings(self) -> None:
+        # The metadata comment is the only place this CI item is named, so a
+        # body the extractor cannot read leaves its check un-reverified (#1710).
+        body = body_with_entries(
+            [{"index": 1, "item": CI_ITEM, "status": "complete", "detail": "claims green"}]
+        )
+        for name, ending in (("LF", "\n"), ("CRLF", "\r\n"), ("CR", "\r")):
+            with self.subTest(endings=name):
+                error = self.gate(body.replace("\n", ending), run={"conclusion": "failure"})
+                self.assertIsNotNone(error)
+                self.assertIn("`Web CI`", error)
+
+    def test_a_red_check_is_caught_on_a_body_carrying_two_metadata_blocks(self) -> None:
+        # Two shapes of the same hazard. The first is what a factory turn makes
+        # of a CRLF body when its reader and its writer disagree: the rewrite
+        # cannot strip the block it just read, so the body keeps both. The
+        # second is that body seen from the other side, a full block followed
+        # by an empty one. Either way the named check is still recorded here,
+        # and this gate is the one place omission must not hide a requirement.
+        evidence = sys.modules["evidence"]
+        entry = {"index": 1, "item": CI_ITEM, "status": "complete", "detail": "claims green"}
+        crlf = body_with_entries([entry]).replace("\n", "\r\n")
+        rewritten = evidence.update_evidence_entries(
+            crlf, {1: {"status": "complete", "detail": "the lane saw it green"}}
+        )
+        empty_block_last = (
+            body_with_entries([entry])
+            + "\n"
+            + ("<!-- evidence-status:v1\n" + json.dumps({"entries": []}) + "\n-->\n").replace("\n", "\r\n")
+        )
+        for name, body in (("rewritten once", rewritten), ("an empty block last", empty_block_last)):
+            with self.subTest(shape=name):
+                error = self.gate(body, run={"conclusion": "failure"})
+                self.assertIsNotNone(error)
+                self.assertIn("`Web CI`", error)
+
+    def test_a_rewrite_of_a_crlf_body_leaves_one_metadata_block(self) -> None:
+        evidence = sys.modules["evidence"]
+        crlf = body_with_entries(
+            [{"index": 1, "item": CI_ITEM, "status": "complete", "detail": "claims green"}]
+        ).replace("\n", "\r\n")
+        updates = {1: {"status": "blocked", "detail": "the lane refused it"}}
+        once = evidence.update_evidence_entries(crlf, updates)
+        self.assertEqual(once.count("<!-- evidence-status:"), 1)
+        self.assertNotIn("\r", once)
+        # Idempotent: a second turn applying the same updates writes the same
+        # bytes, rather than stacking another block on what it could not strip.
+        self.assertEqual(evidence.update_evidence_entries(once, updates), once)
+
     def test_expected_head_mismatch_blocks_approve(self) -> None:
         body = body_with_entries(
             [{"index": 1, "item": CI_ITEM, "status": "complete", "detail": "green"}]

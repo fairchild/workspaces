@@ -45,7 +45,7 @@ from _helpers import (
 from evidence import (
     _ci_check_name,
     _evidence_item_kind,
-    _extract_evidence_metadata,
+    _evidence_metadata_payloads,
     _extract_test_commands,
     _has_unautomatable_evidence,
     _needs_macos_evidence,
@@ -740,11 +740,26 @@ def _pr_body_and_head(pr_number: int, env: dict[str, str]) -> tuple[str, str]:
 
 
 def _pr_evidence_entries(body: str) -> list[dict[str, object]]:
-    metadata = _extract_evidence_metadata(body)
-    entries = metadata.get("entries") if isinstance(metadata, dict) else None
-    if not isinstance(entries, list):
-        return []
-    return [entry for entry in entries if isinstance(entry, dict)]
+    """Every entry the body records, across every metadata block it carries.
+
+    A body normally carries one block, and the accounting reads the last one:
+    it is the record the factory rewrote most recently. This read is the live
+    CI gate's, where the rule is the stricter one already stated there --
+    omission never hides a requirement -- so an item named in an earlier block
+    is still binding. A body carrying an empty block after a full one would
+    otherwise have its named checks go un-reverified, which is the one thing
+    this gate exists to prevent. Later blocks win per index, so the most
+    recent record of an entry is the one returned.
+    """
+    by_index: dict[object, dict[str, object]] = {}
+    for payload in _evidence_metadata_payloads(body):
+        entries = payload.get("entries")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict):
+                by_index[str(entry.get("index", id(entry)))] = entry
+    return list(by_index.values())
 
 
 def _live_ci_evidence_gate_error(pr_number: int, env: dict[str, str]) -> str | None:
