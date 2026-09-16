@@ -5791,21 +5791,60 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         ]
 
     @staticmethod
-    def notes_lines(body: str) -> list[str]:
-        """The Evidence Notes section's lines, sliced rather than read.
+    def section_boundaries(body: str) -> tuple[list[str], list[int]]:
+        """The body's lines, and the line each section boundary a reader has begins on.
+
+        The oracle for "a heading a reader has" is the parse. A scan for
+        `^## ` is not one: it calls a `## ` line inside a fence a heading and
+        does not see a setext heading at all. Neither is `_rendered_lines`,
+        which emits a fence's content verbatim by design (`evidence.py`), so
+        it says yes to that same fenced line. `is_section_boundary` is the
+        predicate production uses for where a section ends -- an h1 or h2
+        however the author made it, or a dash rule -- and a successor is
+        exactly that.
+
+        A setext heading's token maps to the line its TEXT is on, not its
+        underline, which is where a reader sees the new section begin and so
+        the line a carried block has to stay above.
+        """
+        helpers = sys.modules["_helpers"]
+        normalized = helpers.MARKDOWN_LINE_ENDING_RE.sub("\n", body)
+        return normalized.split("\n"), [
+            token.map[0]
+            for token in helpers.MARKDOWN.parse(normalized)
+            if token.map and helpers.is_section_boundary(token)
+        ]
+
+    @staticmethod
+    def line_offsets(lines: list[str]) -> list[int]:
+        """Where each line starts, in characters, so an offset comparison can be made against it."""
+        offsets, running = [], 0
+        for line in lines:
+            offsets.append(running)
+            running += len(line) + 1
+        return offsets
+
+    def notes_lines(self, body: str) -> list[str]:
+        """The Evidence Notes section's lines, sliced rather than read, and ended by the parser.
 
         `markdown_section` trims the section it returns, which takes the
         indentation off a leading indented block -- and that indentation is
         the difference between a code block and whatever its first line would
-        otherwise be read as.
+        otherwise be read as. So the text comes back as the author's bytes.
+
+        Where it ENDS is the parser's answer, not the next `^## ` line. That
+        scan reports both ways on the shapes this class now carries: it runs
+        past a setext heading, sweeping the author's own next section in as if
+        the write had carried it, and it stops at a `## ` line inside a fence,
+        losing the rest of a note that was carried whole (#1733).
         """
-        marker = "## Evidence Notes\n"
-        body = body.replace("\r\n", "\n")
-        if marker not in body:
+        marker = "## Evidence Notes"
+        lines, boundaries = self.section_boundaries(body)
+        if marker not in lines:
             return []
-        rest = body[body.index(marker) + len(marker) :]
-        end = re.search(r"(?m)^## ", rest)
-        return [line for line in (rest[: end.start()] if end else rest).splitlines() if line.strip()]
+        start = lines.index(marker)
+        end = next((line_no for line_no in boundaries if line_no > start), len(lines))
+        return [line for line in lines[start + 1 : end] if line.strip()]
 
     def test_a_note_a_link_and_an_excerpt_move_to_evidence_notes(self) -> None:
         body = self.body(self.NOTES_BODY_TAIL)
@@ -6262,13 +6301,19 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         # trailing spaces all survive, in the order they were written -- line
         # endings excepted, which every writer of this body has always emitted
         # as `\n` (a CRLF body is mixed after any write, as #1710 records).
-        carried_total = 0
         for label, tail in self.BYTE_FIXTURES + (("the same body in CRLF", None),):
             with self.subTest(body=label):
                 raw = self.body(self.BYTE_FIXTURES[0][1] if tail is None else tail)
                 body = raw.replace("\n", "\r\n") if tail is None else raw
                 source = [line.rstrip("\r") for line in self.status_section_lines(body)]
                 carried = [line.rstrip("\r") for line in self.notes_lines(self.resolved(body))]
+                # Per fixture rather than as a total below the loop. The loop
+                # body asserts nothing at all on a fixture that carried
+                # nothing, so something has to say so -- and a sum over the set
+                # is the wrong thing to say it with: it passes on one large
+                # fixture beside five empty ones, and it names none of them
+                # (#1733).
+                self.assertTrue(carried, f"{label} carried nothing")
                 pointer = 0
                 for line in carried:
                     while pointer < len(source) and source[pointer] != line:
@@ -6277,8 +6322,6 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
                         pointer, len(source), f"{line!r} is not a line of the source section"
                     )
                     pointer += 1
-                carried_total += len(carried)
-        self.assertGreaterEqual(carried_total, 20, "the fixtures carried almost nothing")
 
     PLACEMENT_FIXTURES = BYTE_FIXTURES + (
         # The case the order is really for: an element left open folds what
@@ -6289,32 +6332,286 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         ("a quoted note", "\n> a reviewer asked about the fixture\n"),
     )
 
-    def test_a_carried_block_lands_below_every_line_the_machine_writes(self) -> None:
+    ITEMS = (ITEM, "`pnpm test` in `web-next` passes", "the fixture state survives a relaunch")
+    NOTE_TAIL = "\nA note for the reviewer.\n"
+    OPEN_ELEMENT_TAIL = "\n<details>\n<summary>More</summary>\n\nplain note\n"
+    ONE_HEADING_BELOW = "## Validation\n\n- ran the suite on this head\n"
+    TWO_HEADINGS_BELOW = ONE_HEADING_BELOW + "\n## Risks\n\nNone.\n"
+    RISKS_ALONE_BELOW = "## Risks\n\nNone.\n"
+    # A setext h2 under the status list, with a plain line above it so the
+    # heading is the underlined line alone. The page shows a heading there and
+    # a `^## ` scan sees none, so the scan skipped to `## Validation` and a
+    # block placed between the two passed every assertion while sitting in the
+    # author's own section (#1733).
+    SETEXT_AFTER_PLAIN_TAIL = "\nordinary carried note\n\nBoundary note\n-------------\n"
+    # The same disagreement the other way: a `## ` line inside a fence is code
+    # on the page, and the scan returned it as the successor and truncated the
+    # carried lines at it.
+    FENCED_HEADING_TAIL = "\nA note for the reviewer.\n\n```markdown\n## Not a heading\n```\n"
+    # The setext heading with nothing above it: it ends the status section at
+    # the line below the status list, so there is no block under the heading
+    # to carry at all. Its own test, not a placement fixture, because a
+    # placement fixture has to carry something.
+    SETEXT_ALONE_TAIL = "\nBoundary note\n-------------\n"
+
+    def interleaved_body(
+        self,
+        tail: str,
+        *,
+        entries: int = 1,
+        note_after: int = 1,
+        below: str = ONE_HEADING_BELOW,
+    ) -> str:
+        """A body carrying `entries` status lines, with `tail` written after the `note_after`-th.
+
+        `self.body` writes one status line and one heading below the section,
+        which is the shape where both bounds of the placement collapse into
+        weaker ones that hold wherever the block lands. This says how many of
+        each the body carries.
+        """
+        items = self.ITEMS[:entries]
+        status = [f"- [pending-ci] {item} -- the lane has not run yet" for item in items]
+        meta = {
+            "entries": [
+                {
+                    "index": index + 1,
+                    "item": item,
+                    "status": "pending-ci",
+                    "detail": "the lane has not run yet",
+                    "kind": "test",
+                }
+                for index, item in enumerate(items)
+            ]
+        }
+        section = "\n".join(status[:note_after]) + "\n" + tail + "\n".join(status[note_after:])
+        return (
+            "<!-- evidence-status:v1\n" + json.dumps(meta) + "\n-->\n\n"
+            + "## Evidence Status\n\n" + section.rstrip("\n") + "\n\n" + below
+        )
+
+    def resolve_entries(self, body: str, entries: int) -> str:
+        return sys.modules["evidence"].update_evidence_entries(
+            body,
+            {
+                index + 1: {"status": "complete", "detail": f"{214 + index} tests passed"}
+                for index in range(entries)
+            },
+        )
+
+    def placement_bodies(self) -> list[tuple[str, str, int]]:
+        """Every body the placement is asserted over, each with the status lines it carries."""
+        return [(label, self.body(tail), 1) for label, tail in self.PLACEMENT_FIXTURES] + [
+            # A second heading below the section is where "directly below the
+            # status" and "somewhere above the next heading" come apart: a
+            # block written under `## Validation` satisfies the second.
+            (
+                "a note with a second heading below the section",
+                self.interleaved_body(self.NOTE_TAIL, below=self.TWO_HEADINGS_BELOW),
+                1,
+            ),
+            (
+                "an element left open with a second heading below the section",
+                self.interleaved_body(self.OPEN_ELEMENT_TAIL, below=self.TWO_HEADINGS_BELOW),
+                1,
+            ),
+            # The successor is whatever the author wrote under the status list,
+            # which is not always the `## Validation` the status itself is
+            # placed in front of.
+            (
+                "a section whose successor is Risks, with no Validation at all",
+                self.interleaved_body(self.NOTE_TAIL, below=self.RISKS_ALONE_BELOW),
+                1,
+            ),
+            # Below the LAST status line is the property. With one status line
+            # per body it is also below the first, and a block left sitting
+            # between two of them reads the same as one below them all.
+            (
+                "a note between two status lines",
+                self.interleaved_body(
+                    self.NOTE_TAIL, entries=2, note_after=1, below=self.TWO_HEADINGS_BELOW
+                ),
+                2,
+            ),
+            (
+                "a note between the second and third status lines",
+                self.interleaved_body(
+                    self.NOTE_TAIL, entries=3, note_after=2, below=self.TWO_HEADINGS_BELOW
+                ),
+                3,
+            ),
+            (
+                "an element left open between two status lines",
+                self.interleaved_body(
+                    self.OPEN_ELEMENT_TAIL, entries=2, note_after=1, below=self.TWO_HEADINGS_BELOW
+                ),
+                2,
+            ),
+            # The successor is a heading the page shows, however the author
+            # made it one. A setext h2 is one and a `^## ` scan is blind to it.
+            (
+                "a note whose setext heading follows a plain line",
+                self.interleaved_body(
+                    self.SETEXT_AFTER_PLAIN_TAIL, below=self.TWO_HEADINGS_BELOW
+                ),
+                1,
+            ),
+            # And it is not a `## ` line the page shows as code. This note is
+            # carried whole, fence and all, and the line inside it ends
+            # nothing.
+            (
+                "a note carrying a fenced `## ` line",
+                self.interleaved_body(self.FENCED_HEADING_TAIL, below=self.TWO_HEADINGS_BELOW),
+                1,
+            ),
+        ]
+
+    # Which fixture exists for which varied shape, asserted by name. A `>=`
+    # count over the set is not a guard: deleting the one fixture whose
+    # successor is not `## Validation` left the old floors green, because it
+    # scored false on both of them, and replacing the three-entry fixture with
+    # a copy of the two-entry one did too. Every dimension here is read from
+    # the fixture AS WRITTEN (`fixture_dimensions`), never from the write's
+    # result -- a property read from the result can be satisfied by the defect
+    # it guards, which is what the old count of fixtures with a heading below
+    # the successor did when a wrong placement raised it from 5 to 15.
+    FIXTURE_DIMENSIONS = {
+        "a note with a second heading below the section": "a heading below the successor",
+        "a section whose successor is Risks, with no Validation at all": (
+            "a successor that is not `## Validation`"
+        ),
+        "a note between two status lines": "more than one status line",
+        "a note between the second and third status lines": (
+            "more than one status line above the note"
+        ),
+        "a note whose setext heading follows a plain line": "a setext successor",
+        "a note carrying a fenced `## ` line": "a fenced `## ` line inside a note",
+    }
+
+    def fixture_dimensions(self, body: str) -> set[str]:
+        """Which of the varied shapes this fixture carries, read from the fixture as written.
+
+        The status section of the body the author wrote: how many status lines
+        it holds, how many sit above the first line that is not one, what the
+        first boundary below the heading is, and whether it holds a `## ` line
+        the parser does not call a boundary.
+        """
+        lines, boundaries = self.section_boundaries(body)
+        heading = lines.index("## Evidence Status")
+        successor = next((line_no for line_no in boundaries if line_no > heading), len(lines))
+        status_at = [
+            line_no
+            for line_no in range(heading + 1, successor)
+            if self.ENTRY_LINE_RE.match(lines[line_no])
+        ]
+        note_at = next(
+            (
+                line_no
+                for line_no in range(heading + 1, successor)
+                if lines[line_no].strip() and line_no not in status_at
+            ),
+            successor,
+        )
+        found = set()
+        if len(status_at) > 1:
+            found.add("more than one status line")
+        if len([line_no for line_no in status_at if line_no < note_at]) > 1:
+            found.add("more than one status line above the note")
+        if successor < len(lines):
+            if lines[successor].strip() != "## Validation":
+                found.add("a successor that is not `## Validation`")
+            if not lines[successor].startswith("#"):
+                found.add("a setext successor")
+        if any(line_no > successor for line_no in boundaries):
+            found.add("a heading below the successor")
+        if any(
+            lines[line_no].startswith("## ") and line_no not in boundaries
+            for line_no in range(heading + 1, successor)
+        ):
+            found.add("a fenced `## ` line inside a note")
+        return found
+
+    def successor_heading(self, body: str) -> tuple[int, str] | None:
+        """Where the status section's own successor begins, and the line it is.
+
+        Read from the status section rather than from wherever the notes
+        ended up. A boundary taken as the first `## ` below the notes heading
+        moves with the notes: a block written under `## Validation` and above
+        `## Risks` is then below its own boundary, every assertion holds, and
+        a reader sees the notes in somebody else's section (#1733).
+
+        The FIRST boundary a reader has below the status heading, the notes'
+        own excepted, asked of the parser (`section_boundaries`). Both halves
+        of that are load-bearing, and a `^## ` scan got each wrong in a
+        different direction: on a body whose note ends in a setext heading the
+        scan skipped past it to `## Validation`, so a block placed between the
+        two -- in the author's own section, on the page -- was above the
+        scan's pick and every assertion held; and on a note carrying a fenced
+        `## ` line the scan returned that line, which is not a heading at all.
+        Checking the pick against `_rendered_lines` catches neither: a fence's
+        content is emitted there verbatim, and `## Validation` really is a
+        heading -- just not the first one.
+        """
+        lines, boundaries = self.section_boundaries(body)
+        offsets = self.line_offsets(lines)
+        status = lines.index("## Evidence Status")
+        for line_no in boundaries:
+            if line_no <= status or lines[line_no].strip() == "## Evidence Notes":
+                continue
+            return offsets[line_no], lines[line_no].strip()
+        return None
+
+    def test_a_carried_block_lands_below_the_last_status_line_and_above_the_section_s_successor(
+        self,
+    ) -> None:
         """The order the page-level safety of a move rests on, in the form a test can check.
 
         A block that may fold what follows it -- a `<details>` with no
         `</details>` is the shape -- is safe to move only if it lands below
-        everything the machine writes and above the next heading. Then the
-        status list is visible where the block used to hide it, and the block
-        folds no more than it folded where the author put it.
+        every line the machine writes and above the heading the author wrote
+        under the section. Then the status list is visible where the block used
+        to hide it, and the block folds no more than it folded where the author
+        put it.
+
+        Both bounds are read from the status section, and both say something
+        only because the corpus carries the shapes that tell them from weaker
+        ones: with one status line per body "below the last" is "below the
+        first", and with one heading under the section "above the section's
+        successor" is "above whatever follows the notes", which a block in
+        somebody else's section satisfies (#1733). The guard below the loop
+        holds the corpus to those shapes by name.
+
+        The successor is the first boundary a reader has, asked of the parser.
+        A `^## ` scan is not that oracle in either direction: it skips a setext
+        heading, so a block placed between one and the next `## ` line was
+        above the scan's pick and in the author's section on the page; and it
+        returns a `## ` line inside a fence, which is code. Neither does
+        `_rendered_lines`, which emits a fence's content verbatim by design.
 
         Asserted by offset, over every carried line of every fixture, because
         the rendering oracle below cannot see it: put the notes above the
         status and `_rendered_lines` reports exactly what it reported before.
+
+        A literal `## ` line written under the status list has no fixture here
+        and cannot have one: it ends the section, so nothing below it is the
+        section's to carry and there is no placement to assert. That is the
+        third of the three shapes a `## ` line can take here, and the only one
+        structurally out of reach -- the other two, a fenced copy and a setext
+        heading, are fixtures above.
         """
-        carried_total = 0
-        for label, tail in self.PLACEMENT_FIXTURES:
+        varied: dict[str, set[str]] = {}
+        for label, body, entries in self.placement_bodies():
             with self.subTest(block=label):
-                resolved = self.resolved(self.body(tail))
+                # Read from the fixture as written, before anything is
+                # resolved, and kept for the guard below the loop.
+                varied[label] = self.fixture_dimensions(body)
+                resolved = self.resolve_entries(body, entries)
                 carried = set(self.notes_lines(resolved))
                 # Anti-vacuity first, so a fixture that carries nothing fails
-                # here saying so rather than erroring on the missing heading.
+                # here saying so rather than on the missing boundary.
                 self.assertTrue(carried, f"{label} carried nothing")
-                heading = "## Evidence Notes\n"
-                notes_at = resolved.index(heading)
-                below = re.search(r"(?m)^## ", resolved[notes_at + len(heading) :])
-                self.assertIsNotNone(below, "no heading survives below the notes")
-                boundary = notes_at + len(heading) + below.start()
+                successor = self.successor_heading(resolved)
+                self.assertIsNotNone(successor, "the section's successor did not survive the write")
+                boundary, heading = successor
                 # Located by searching the whole body for the carried text, not
                 # by slicing the section: a slice would put every line inside
                 # the section by construction and assert nothing.
@@ -6325,12 +6622,121 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
                     elif line in carried:
                         carried_at.append(offset)
                     offset += len(line) + 1
-                self.assertTrue(status_at, "the write left no status line")
-                self.assertEqual(len(carried_at), len(self.notes_lines(resolved)))
-                self.assertLess(max(status_at), min(carried_at), "a carried block sits above the status")
-                self.assertLess(max(carried_at), boundary, "a carried block sits below the next heading")
-                carried_total += len(carried_at)
-        self.assertGreaterEqual(carried_total, 20, "the fixtures carried almost nothing")
+                self.assertEqual(len(status_at), entries, "the write did not leave every status line")
+                self.assertLess(max(status_at), min(carried_at), "a carried block sits above a status line")
+                self.assertLess(max(carried_at), boundary, f"a carried block sits below `{heading}`")
+                # Last, so a block in the wrong place fails on where it is
+                # rather than on a count. It fails here when a line of the
+                # notes section was not found in the body at all, which is the
+                # scan going wrong rather than the write.
+                self.assertEqual(
+                    len(carried_at),
+                    len(self.notes_lines(resolved)),
+                    "a line of the notes section was not located in the body",
+                )
+        # Both bounds are only as strong as the shapes under them, so the
+        # corpus is held by name rather than by a count. Each fixture named in
+        # the table has to still carry the shape it exists for, and at least
+        # one other fixture has to lack it -- a dimension every fixture carries
+        # varies nothing, and one no fixture carries is a promise in a name.
+        for label, dimension in self.FIXTURE_DIMENSIONS.items():
+            with self.subTest(fixture=label):
+                self.assertIn(label, varied, f"the fixture for {dimension} is gone")
+                self.assertIn(dimension, varied[label], f"{label} no longer carries {dimension}")
+                self.assertTrue(
+                    [other for other, shapes in varied.items() if dimension not in shapes],
+                    f"every fixture carries {dimension}, so it varies nothing",
+                )
+
+    def test_the_boundary_rejects_a_placement_the_scan_it_replaced_accepted(self) -> None:
+        """The oracle asked about a body the writer did not produce.
+
+        Every placement assertion above runs on the shipped writer's output,
+        and the shipped writer is correct -- so an oracle that cannot tell a
+        wrong placement from a right one passes either way and the test is a
+        formality. That is what the `^## ` scan was: on a body whose status
+        section ends in a setext heading it skipped past that heading to
+        `## Validation`, so a block moved down into the author's own section
+        was still above the scan's pick and every assertion held (#1733).
+
+        Loosening the oracle cannot be caught by mutating the oracle, because
+        a correct writer keeps its lines above the looser bound too. It is
+        caught here, by handing the oracle a body with the block in the wrong
+        place and asserting it says so -- and by asserting, in the same test,
+        that the scan this replaced did not.
+        """
+        body = self.interleaved_body(self.SETEXT_AFTER_PLAIN_TAIL, below=self.TWO_HEADINGS_BELOW)
+        right = self.resolve_entries(body, 1)
+        # The same blocks, with the notes moved below the setext heading: what
+        # a reader sees is a note inside the author's `Boundary note` section.
+        moved = "## Evidence Notes\nordinary carried note\n\n"
+        self.assertIn(moved + "Boundary note\n-------------\n", right)
+        wrong = right.replace(moved + "Boundary note\n-------------\n", "Boundary note\n-------------\n\n" + moved)
+        self.assertNotEqual(wrong, right)
+
+        def scan(text: str) -> tuple[int, str]:
+            """The boundary this replaced: the first `## ` line below the status heading."""
+            start = text.index("## Evidence Status\n")
+            for match in re.finditer(r"(?m)^## .*$", text[start:]):
+                if match.start() == 0 or match.group().strip() == "## Evidence Notes":
+                    continue
+                return start + match.start(), match.group().strip()
+            raise AssertionError("no `## ` line below the status heading")
+
+        for placement, text in (("right", right), ("wrong", wrong)):
+            with self.subTest(placement=placement):
+                carried = set(self.notes_lines(text))
+                self.assertEqual(carried, {"ordinary carried note"})
+                at = min(
+                    offset
+                    for offset, line in zip(self.line_offsets(text.split("\n")), text.split("\n"))
+                    if line in carried
+                )
+                boundary, heading = self.successor_heading(text)
+                self.assertEqual(heading, "Boundary note")
+                # The property, and the answer it gives on each body.
+                self.assertEqual(at < boundary, placement == "right")
+                # The scan says the same thing about both, which is the whole
+                # of the defect: its pick is a heading a reader has, just not
+                # the first one.
+                scan_at, scan_heading = scan(text)
+                self.assertEqual(scan_heading, "## Validation")
+                self.assertLess(at, scan_at)
+
+    def test_a_setext_heading_alone_under_the_status_list_leaves_nothing_to_carry(self) -> None:
+        """The setext shape with nothing above it, kept distinct from the fixture that reproduces the defect.
+
+        A setext h2 directly below the status list ends the status section
+        there, so the section holds the status line and nothing else and the
+        write has no block to move: no `## Evidence Notes` is written, the
+        author's own section is untouched, and nothing is announced as lost
+        because nothing was in the section to lose.
+
+        The brief for this round expected a refusal here. There is none, and
+        the difference matters to anyone reading this file: a refusal means the
+        write saw a block it would not move, and what happens is that the
+        block was never the section's. Asserted as what it is rather than as
+        what it was predicted to be.
+        """
+        helpers = sys.modules["_helpers"]
+        body = self.interleaved_body(self.SETEXT_ALONE_TAIL, below=self.TWO_HEADINGS_BELOW)
+        # Why there is nothing to carry: the section ends at the setext
+        # heading, above it rather than below.
+        self.assertEqual(
+            helpers.markdown_section(body, "Evidence Status"),
+            f"- [pending-ci] {self.ITEMS[0]} -- the lane has not run yet",
+        )
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            resolved = self.resolve_entries(body, 1)
+        self.assertNotIn("## Evidence Notes", resolved)
+        self.assertNotIn("not carried", spoke.getvalue())
+        # The author's section survives whole, heading, underline and all, and
+        # the status line was still rewritten.
+        self.assertIn("\nBoundary note\n-------------\n", resolved)
+        self.assertIn("- [complete] ", resolved)
+        for heading in ("## Validation", "## Risks"):
+            self.assertIn(heading, resolved)
 
     def test_the_parser_s_rendering_shows_no_less_below_the_notes_after_the_move(self) -> None:
         """What the parser's rendering can check about a move, and no more.
