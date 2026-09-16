@@ -1244,29 +1244,105 @@ class HtmlBlockStatusLineTests(unittest.TestCase):
                 block = f"<!-- evidence-status:v1\n{body_text}\n-->\n"
                 self.assertEqual(self.failures(self.body(self.COMPLETE + "\n" + block)), [])
 
+    SKILL_SCRIPTS = REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts"
+    METADATA_OPENER = "<!-- evidence-status:v"
+
+    def evidence_writer(self, scripts_dir: Path | None = None):
+        """The skill's evidence writer, loaded by path, with its one local import pre-registered.
+
+        `evidence.py` opens with `from _helpers import ...`, and putting the
+        skill's directory on `sys.path` to satisfy that would leave it there
+        for every later test in the run -- the care `ParserDefinitionTests`
+        takes when it loads `_helpers` on its own. Registering the module under
+        the name the import asks for satisfies it without a path search, and
+        the name comes back off `sys.modules` afterwards.
+        """
+        scripts_dir = scripts_dir or self.SKILL_SCRIPTS
+        restore = sys.modules.get("_helpers")
+        try:
+            modules = {}
+            for name, path in (("_helpers", "_helpers.py"), ("contributor_evidence", "evidence.py")):
+                spec = importlib.util.spec_from_file_location(name, scripts_dir / path)
+                assert spec and spec.loader
+                modules[name] = importlib.util.module_from_spec(spec)
+                sys.modules[name] = modules[name]
+                spec.loader.exec_module(modules[name])
+            return modules["contributor_evidence"]
+        finally:
+            sys.modules.pop("_helpers", None)
+            if restore is not None:
+                sys.modules["_helpers"] = restore
+
+    def shown_status_section(self, body: str) -> tuple[int, int]:
+        """Where the `## Evidence Status` section the page shows starts and ends, in characters.
+
+        The heading is asked of the parser rather than matched, so a `## `
+        line inside a fenced example is not it -- which is the distinction the
+        writer's own placement turns on.
+        """
+        lines = body.split("\n")
+        starts, offset = [], 0
+        for line in lines:
+            starts.append(offset)
+            offset += len(line) + 1
+        starts.append(offset)
+        tokens = pr_readiness.MARKDOWN.parse(body)
+        for index, token in enumerate(tokens):
+            if not (token.type == "heading_open" and token.tag == "h2" and token.level == 0):
+                continue
+            text = pr_readiness.rendered_inline_text(tokens[index + 1].children)
+            if " ".join(text.split()).casefold() != "evidence status":
+                continue
+            end = next(
+                (
+                    later.map[0]
+                    for later in tokens[index + 3 :]
+                    if later.map and pr_readiness.section_boundary_token(later)
+                ),
+                len(lines),
+            )
+            return starts[token.map[0]], starts[end]
+        raise AssertionError("the page shows no `## Evidence Status` heading")
+
     def test_the_metadata_control_holds_only_because_the_writer_places_it_above(self) -> None:
         # The control above is a control: it passes with the new branch deleted,
         # because the JSON the factory writes has nothing at an anchor. It is
         # not a proof that the factory cannot refuse its own body -- a detail an
         # author supplied can carry HTML, and read run by run under the heading
-        # it anchors. What makes that unreachable is placement, so placement is
-        # what is asserted, on the writer's own source. Found by codex
-        # (gpt-5.6-sol, xhigh).
+        # it anchors. Found by codex (gpt-5.6-sol, xhigh).
         detail = '<span>[blocked] quoted</span>'
         under = f'<!-- evidence-status:v1\n{{"entries": [{{"item": "x", "detail": "{detail}"}}]}}\n-->\n'
         self.assertEqual(self.failures(self.body(self.COMPLETE + "\n" + under)), [self.PENDING])
 
-        source = (
-            REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "evidence.py"
-        ).read_text(encoding="utf-8")
-        span = source[source.index("def _insert_evidence_metadata") :]
-        span = span[: span.index("\ndef ", 1)]
-        # The comment goes in front of the heading it belongs to, so no body the
-        # writer produces puts an HTML block inside the section at all. If this
-        # ever reads the other way round, the case above stops being
-        # unreachable and the gate can refuse a body the factory wrote.
-        self.assertIn('f"{metadata}\\n\\n{match.group(1)}"', span)
-        self.assertNotIn('f"{match.group(1)}', span)
+        # What makes that unreachable is placement, so placement is what is
+        # asserted -- by calling the writer, not by pinning a line of its
+        # source. The source form is a moving target: #1739 rewrites this very
+        # placement to find the heading through the parser, and a test pinned to
+        # the string on `main` would go red whichever of the two merged second.
+        # The behaviour is the same on both, and that is what the guard needs.
+        evidence = self.evidence_writer()
+        payload = {"entries": {"the UI lane": {"status": "complete", "detail": detail}}}
+        plain = "Why this exists.\n\n## Evidence Status\n\n- [complete] the UI lane -- proof\n"
+        fenced = (
+            "Why this exists.\n\n## What\n\n```markdown\n## Evidence Status\n\n- [complete] example\n```\n"
+            "\n## Evidence Status\n\n- [complete] the UI lane -- proof\n"
+        )
+        for name, body in (("plain", plain), ("a fenced example above the real heading", fenced)):
+            with self.subTest(body=name):
+                written = evidence._insert_evidence_metadata(body, payload)
+                start, end = self.shown_status_section(written)
+                self.assertLess(written.index(self.METADATA_OPENER), start)
+                self.assertNotIn(self.METADATA_OPENER, written[start:end])
+                # And so the gate has nothing to refuse in a body the factory
+                # wrote, HTML in the detail and all.
+                self.assertEqual(
+                    [
+                        line
+                        for line in pr_readiness.rendered_status_lines(written)
+                        if pr_readiness.RENDERED_PENDING_RE.match(line)
+                    ],
+                    [],
+                )
 
     def test_a_block_below_the_section_is_not_read(self) -> None:
         for tail in ("\n# Notes\n", "\n## Notes\n", "\n---\n"):
