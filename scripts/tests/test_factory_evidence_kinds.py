@@ -5941,6 +5941,25 @@ class ASectionStartsAtAHeadingThePageShowsTests(unittest.TestCase):
         for label in execution.mergeability_field_labels():
             self.assertIn(f"- {label}:", section)
 
+    def test_a_seeded_section_the_page_would_not_show_stands_the_body_down(self) -> None:
+        # The postcondition is every writer's, not the status writer's. The
+        # seeder appends at the end of the body, and the end of a body holding
+        # a block that never closes is inside that block: the section would be
+        # in the source, absent from the page, and the gate would then ask for
+        # a section the runtime had written (#1734, for the other writer).
+        execution, helpers = sys.modules["execution"], self.helpers()
+        body = "## Summary\n\nwhat.\n\n<pre>\nthe log I never closed\n"
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            seeded = execution.seed_mergeability_section(body, changed_files=["docs/x.md"])
+        self.assertEqual(seeded, body)
+        self.assertIn("is not a heading on the page", spoke.getvalue())
+        self.assertIn("</pre>", spoke.getvalue())
+        # And the control: close the block and the same write goes ahead.
+        closed = body + "</pre>\n"
+        written = execution.seed_mergeability_section(closed, changed_files=["docs/x.md"])
+        self.assertTrue(helpers.has_markdown_section(written, "Mergeability"))
+
     def test_a_heading_the_page_shows_as_code_anywhere_else_is_left_alone(self) -> None:
         # The guard on the change itself: an example is an example wherever it
         # sits, and a reader that started taking fenced lines again would show

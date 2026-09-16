@@ -26,6 +26,7 @@ from _helpers import (
     log,
     markdown_section,
     removed_section_texts,
+    placement_refusal,
     reparsed_without_runaway,
     run_optional,
     section_heading_index,
@@ -2292,22 +2293,14 @@ def _placement_a_reader_cannot_see(written: str) -> str | None:
     Asked of the result rather than of the shapes that produce it: a write
     whose section the page does not show is wrong however it got there, and a
     postcondition cannot be argued out of by the next boundary rule.
+
+    One question, asked once. `placement_refusal` is this question for every
+    writer, and since a section's presence is decided by the same parse the
+    rendered read makes (#1730) the two cannot answer differently; this
+    returns the reason where the caller reports it, and the writer's own call
+    logs it.
     """
-    normalized = MARKDOWN_LINE_ENDING_RE.sub("\n", written)
-    lines = normalized.split("\n")
-    tokens = MARKDOWN.parse(normalized)
-    if _rendered_section_span(tokens, EVIDENCE_STATUS_HEADING, lines) is not None:
-        return None
-    open_block = unterminated_block(tokens, len(lines) - 1 if lines[-1] == "" else len(lines))
-    where = (
-        f" written below {open_block[1]} opened at line {open_block[0].map[0] + 1}"
-        if open_block is not None
-        else ""
-    )
-    return (
-        f"the `## {EVIDENCE_STATUS_HEADING}` section this write places{where} is not a heading "
-        "on the page, so the status would be in the body and absent from what a reader sees"
-    )
+    return placement_refusal(written, written, EVIDENCE_STATUS_HEADING)
 
 
 def write_evidence_status_section(
