@@ -1247,9 +1247,15 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         return text.replace("\r\n", "\n").replace("\r", "\n")
 
     def candidate_bodies(self):
-        """Each boundary shape, under the status section, in both line endings."""
+        """Each boundary shape, under the status section, in every line ending GitHub stores.
+
+        Bare `\r` is the third: the gate normalises it before reading and the
+        skill's heading pattern did not take it, so the two read different
+        sections of one body -- an axis the first derivation missed because it
+        generated only the two endings anyone types (#1734, round 2).
+        """
         for name, candidate in self.BOUNDARY_CANDIDATES.items():
-            for ending in ("\n", "\r\n"):
+            for ending in ("\n", "\r\n", "\r"):
                 body = (self.STATUS + candidate + "\n" + self.CANDIDATE_TAIL).replace("\n", ending)
                 yield name, ending, body
 
@@ -1277,7 +1283,8 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         owner = self.owner_reader()
         compared = 0
         for name, ending, body in self.candidate_bodies():
-            with self.subTest(shape=name, ending="crlf" if "\r" in ending else "lf"):
+            label = {"\n": "lf", "\r\n": "crlf", "\r": "cr"}[ending]
+            with self.subTest(shape=name, ending=label):
                 gate = self._lf(pr_readiness.extract_section(body, "Evidence Status"))
                 skill = self._lf(owner.markdown_section(body, "Evidence Status"))
                 compared += 1
@@ -1285,7 +1292,7 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
                     self.assertNotEqual(gate, skill, self.DIVERGE[name])
                     continue
                 self.assertEqual(gate, skill)
-        self.assertEqual(compared, len(self.BOUNDARY_CANDIDATES) * 2)
+        self.assertEqual(compared, len(self.BOUNDARY_CANDIDATES) * 3)
 
     def test_the_agreement_is_not_vacuous(self) -> None:
         # Two readers that both returned "" would agree on everything. Each
@@ -1305,8 +1312,8 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
                 ended_early += 1
         # A little over half the shapes are boundaries; the rest are the
         # controls that must not be.
-        self.assertGreater(ended_early, 20)
-        self.assertGreater(len(self.BOUNDARY_CANDIDATES) * 2 - ended_early, 10)
+        self.assertGreater(ended_early, 30)
+        self.assertGreater(len(self.BOUNDARY_CANDIDATES) * 3 - ended_early, 15)
 
     def test_a_crlf_body_reaches_the_written_reader_as_the_page_reads_it(self) -> None:
         # The gate's own entry normalises, and the reader repeats it: called
@@ -1366,11 +1373,14 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         # This gate reads the contract through that same function
         # (`github_state.requested_evidence_contract`), not through
         # `extract_section`, so the refusal is what reaches it (#1734).
-        self.assertIsNotNone(owner.contract_read_refusal(body, "Requested Evidence"))
-        self.assertIsNone(owner.contract_read_refusal(body, "Evidence Status"))
+        def bullets(section: str) -> list[str]:
+            return [line for line in section.splitlines() if line.startswith("- ")]
+
+        self.assertIsNotNone(owner.contract_read_refusal(body, "Requested Evidence", bullets))
+        self.assertIsNone(owner.contract_read_refusal(body, "Evidence Status", bullets))
         self.assertIsNone(
             owner.contract_read_refusal(
-                body.replace("# Reviewer notes", "## Reviewer notes"), "Requested Evidence"
+                body.replace("# Reviewer notes", "## Reviewer notes"), "Requested Evidence", bullets
             )
         )
 

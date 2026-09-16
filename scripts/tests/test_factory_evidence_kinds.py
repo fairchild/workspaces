@@ -4982,6 +4982,35 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
         self.assertIsNotNone(refusal)
         self.assertIn("Reviewer notes", refusal)
 
+    def test_a_contract_cut_by_a_heading_a_runaway_fence_hides_is_refused_too(self) -> None:
+        # In response to the confirmation pass. The section's end can come from
+        # the repaired parse -- a fence with no closing line hides every
+        # heading below it, and the reader blanks the opener and asks again --
+        # so a rule that looked for an h1 token in the body as parsed found
+        # none and let the cut through. The refusal asks what the two readings
+        # of the section list instead, which reaches the repaired cut without
+        # knowing it exists.
+        helpers = sys.modules["_helpers"]
+        body = "## Blocked By\n\n- #101\n\n```markdown\n# Reviewer notes\n\n- #202\n"
+        numbers, refusal = helpers.blocked_by_contract(body)
+        self.assertEqual(numbers, [])
+        self.assertIsNotNone(refusal)
+        self.assertIn("# Reviewer notes", refusal)
+
+    def test_a_heading_that_drops_no_item_is_not_a_cut(self) -> None:
+        # The other half, and the reason the question is about items rather
+        # than about headings: an h1 an author writes below a complete
+        # contract, with prose under it, takes nothing out of the contract.
+        # Refusing there would strand an issue over a heading that costs
+        # nothing.
+        items, refusal = self.evidence().requested_evidence_contract(
+            "## Requested Evidence\n\n- `swift test` passes\n\n"
+            "# Design notes\n\nThis section asks for no evidence.\n\n"
+            "## Blocked By\n\n- none\n"
+        )
+        self.assertEqual(items, ["`swift test` passes"])
+        self.assertIsNone(refusal)
+
     def test_the_blocked_by_contract_refuses_on_the_same_shape(self) -> None:
         # The other contract, and the more dangerous one to read short: an
         # empty blocker list releases the issue.
@@ -6008,6 +6037,64 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertLess(
             resolved.index("## Evidence Notes"),
             resolved.index("## Validation\n\n- ran the suite on this head"),
+        )
+
+    def test_a_heading_on_the_last_line_is_replaced_rather_than_duplicated(self) -> None:
+        # In response to the confirmation pass. The cut matched a heading only
+        # where a newline followed it, so a body ending on its heading had a
+        # section every reader could see and none the cut could take: the write
+        # placed a second copy above and left the first standing. Reached in
+        # production through the blocked note, which writes `## Validation` on
+        # a body whose last line is that heading.
+        helpers = sys.modules["_helpers"]
+        body = "intro\n\n## Evidence Status"
+        written = helpers.insert_markdown_section(body, "Evidence Status", "- new")
+        self.assertEqual(written.count("## Evidence Status"), 1)
+        self.assertEqual(helpers.markdown_section(written, "Evidence Status"), "- new")
+        pending = (
+            "## Summary\n\nwhat\n\n## Evidence Status\n\n"
+            "- [pending-ci] proof -- waiting\n\n## Validation"
+        )
+        rendered, errors = run_contributor.render_execution_summary_body(
+            pending,
+            requested_evidence=["proof"],
+            evidence_complete=None,
+            evidence_blocked=None,
+            evidence_pending_ci=["1 -- waiting"],
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(rendered.count("## Validation"), 1)
+
+    def test_a_body_whose_client_sent_bare_carriage_returns_has_its_sections(self) -> None:
+        # The gate normalises every line ending GitHub stores before it reads;
+        # the cut's pattern took `\r\n` and `\n` but not a bare `\r`, so one
+        # file read a section of this body and the other read none of it.
+        helpers = sys.modules["_helpers"]
+        body = "## Evidence Status\r\r- [complete] x -- y\r\r## Validation\r- ran it\r"
+        self.assertEqual(helpers.markdown_section(body, "Evidence Status"), "- [complete] x -- y")
+        self.assertTrue(helpers.has_markdown_section(body, "Validation"))
+
+    def test_a_rewrite_keeps_the_hard_break_on_the_line_above_the_section(self) -> None:
+        # Two spaces at the end of the line above a section are a hard break on
+        # the page, and a splice that trimmed them changed how a body renders
+        # around a section it was only asked to replace. The line BELOW is the
+        # asymmetry, and it is deliberate: its leading whitespace comes off,
+        # because an indent kept there stops it being a boundary once the
+        # section's own content is a list, and the section then runs past the
+        # heading that used to end it -- which the rewrite sweep catches.
+        helpers = sys.modules["_helpers"]
+        body = "intro with hard break  \n## Evidence Status\nold\n\n## Validation\nkeep\n"
+        written = helpers.insert_markdown_section(body, "Evidence Status", "new")
+        self.assertIn("intro with hard break  \n", written)
+        self.assertEqual(helpers.markdown_section(written, "Evidence Status"), "new")
+        self.assertIn("## Validation\nkeep", written)
+        indented = helpers.insert_markdown_section(
+            "intro\n\n## Evidence Status\nold\n   ## Validation\nkeep\n",
+            "Evidence Status",
+            "- [complete] x -- proof",
+        )
+        self.assertEqual(
+            helpers.markdown_section(indented, "Evidence Status"), "- [complete] x -- proof"
         )
 
     def test_the_notes_land_under_the_status_and_not_merely_above_the_next_heading(self) -> None:

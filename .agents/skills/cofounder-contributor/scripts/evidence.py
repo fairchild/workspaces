@@ -1010,6 +1010,21 @@ def _rendered_lines(body: str, heading: str | None = None) -> list[str]:
     return lines
 
 
+def _requested_evidence_items(section: str) -> list[str]:
+    """The items a `## Requested Evidence` section lists, from the section's text.
+
+    Taken out of the contract reader so the refusal can ask what the two
+    readings of the section actually list, rather than whether a heading of a
+    given kind sits between them.
+    """
+    fallback_sentence = EVIDENCE_FALLBACK_SENTENCE.casefold()
+    return [
+        item
+        for item in _wrapped_bullets(section)
+        if item.lower() != "none" and item.casefold() != fallback_sentence
+    ]
+
+
 def requested_evidence_contract(body: str) -> tuple[list[str], str | None]:
     """What this issue asks the pull request to prove, or why it cannot be read.
 
@@ -1022,16 +1037,10 @@ def requested_evidence_contract(body: str) -> tuple[list[str], str | None]:
     admission does not admit, the review gate does not approve, delivery does
     not deliver.
     """
-    refusal = contract_read_refusal(body, "Requested Evidence")
+    refusal = contract_read_refusal(body, "Requested Evidence", _requested_evidence_items)
     if refusal is not None:
         return [], refusal
-    evidence_section = markdown_section(body, "Requested Evidence")
-    fallback_sentence = EVIDENCE_FALLBACK_SENTENCE.casefold()
-    return [
-        item
-        for item in _wrapped_bullets(evidence_section)
-        if item.lower() != "none" and item.casefold() != fallback_sentence
-    ], None
+    return _requested_evidence_items(markdown_section(body, "Requested Evidence")), None
 
 
 def _lf(body: str) -> str:
