@@ -6010,6 +6010,33 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
             resolved.index("## Validation\n\n- ran the suite on this head"),
         )
 
+    def test_the_notes_land_under_the_status_and_not_merely_above_the_next_heading(self) -> None:
+        # The two placements this writer could use are the same placement on
+        # every fixture where `## Evidence Status` is the heading directly
+        # above `## Validation`, which is every fixture the file had. Here an
+        # author's own h1 section sits between them, so "directly below the
+        # status" and "above the next Validation heading" are different lines,
+        # and only one of them is the promise the writer's docstring makes
+        # (#1733's first gap, live in this PR's writer).
+        body = (
+            self.meta()
+            + f"## Evidence Status\n\n- [pending-ci] {self.ITEM} -- the lane has not run yet\n"
+            + f"\n{self.NOTE}\n"
+            + "\n# Release blockers\n\n- the signing profile is missing\n"
+            + "\n## Validation\n\n- ran the suite on this head\n"
+        )
+        resolved = self.resolved(body)
+        self.assertEqual(self.notes_section(resolved), self.NOTE)
+        self.assertLess(
+            resolved.index("## Evidence Notes"), resolved.index("# Release blockers")
+        )
+        self.assertLess(
+            resolved.index("## Evidence Status"), resolved.index("## Evidence Notes")
+        )
+        # The author's section is untouched and a second write moves nothing.
+        self.assertIn("- the signing profile is missing", resolved)
+        self.assertEqual(self.resolved(resolved), resolved)
+
     def test_an_empty_notes_section_goes_rather_than_outliving_the_status(self) -> None:
         # A heading with nothing under it is a section this writer would place
         # next run and a reader finds above the status now: leaving it is what
