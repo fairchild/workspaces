@@ -1170,11 +1170,53 @@ class HtmlBlockStatusLineTests(unittest.TestCase):
             with self.subTest(block=block.splitlines()[1]):
                 self.assertEqual(self.failures(self.body(block)), [])
 
+    def test_a_character_reference_inside_a_block_is_the_character_it_shows(self) -> None:
+        # A browser decodes a character reference inside raw HTML, so
+        # `&#91;blocked&#93;` is a visible `[blocked]` on the page -- the same
+        # writing #1706 was filed for, in the one place the parser does not
+        # decode it for us. Found by codex (gpt-5.6-sol, xhigh).
+        for token in ("&#91;blocked&#93;", "&lbrack;pending-ci&rbrack;", "&#x5B;blocked&#x5D;"):
+            with self.subTest(token=token):
+                block = f"<div>\n{token} the UI lane\n</div>\n"
+                self.assertEqual(self.failures(self.body(self.COMPLETE + "\n" + block)), [self.PENDING])
+
+    def test_a_status_split_across_tags_on_one_line_is_read_whole(self) -> None:
+        # Markup inside a line shows nothing, so the page puts
+        # `<span>[block</span><strong>ed]</strong> the UI lane` on one line
+        # reading `[blocked] the UI lane`. Run by run each piece is a fragment
+        # and neither anchors, which is why the line is also read with its
+        # markup joined out. Found by codex (gpt-5.6-sol, xhigh).
+        block = "<div><span>[block</span><strong>ed]</strong> the UI lane</div>\n"
+        self.assertEqual(self.failures(self.body(self.COMPLETE + "\n" + block)), [self.PENDING])
+        self.assertIn("[blocked] the UI lane", pr_readiness.rendered_status_lines(self.body(block)))
+
+    def test_a_run_after_text_on_the_same_line_is_read_as_its_own_line(self) -> None:
+        # The knowing cost of reading run by run, pinned rather than left to be
+        # rediscovered: the page shows `Context: [blocked] is a label` as one
+        # line that does not open with a status, and the gate refuses it
+        # because the second run does. Reading only the joined line would spare
+        # this body and lose an HTML table's second cell, which is a line a
+        # reader really does see on its own. Found by codex (gpt-5.6-sol,
+        # xhigh).
+        refused = "<div>Context: <span>[blocked] is a label</span></div>\n"
+        self.assertEqual(self.failures(self.body(self.COMPLETE + "\n" + refused)), [self.PENDING])
+        # No markup, no second run: prose that names the token mid-line passes.
+        passes = "<div>Context: [blocked] is a label on the issue</div>\n"
+        self.assertEqual(self.failures(self.body(self.COMPLETE + "\n" + passes)), [])
+
+    def test_a_block_inside_a_quote_is_read(self) -> None:
+        # The block is nested one level inside the quote and renders on the
+        # page like any other. Found by codex (gpt-5.6-sol, xhigh).
+        section = self.COMPLETE + "\n> <div>\n> [blocked] the UI lane\n> </div>\n"
+        self.assertEqual(self.failures(self.body(section)), [self.PENDING])
+
     def test_the_factory_metadata_comment_is_not_a_status_line(self) -> None:
-        # The factory writes its own evidence metadata as an HTML block under
-        # or above this heading, and a stored entry's status is a JSON value
-        # rather than a line that opens with `[blocked]`. It is read like any
-        # other block -- no shape of it is special-cased -- and trips nothing.
+        # The factory writes its own evidence metadata as an HTML block, and a
+        # stored entry's status is a JSON value rather than a line that opens
+        # with `[blocked]`. It is read like any other block -- no shape of it is
+        # special-cased -- and trips nothing, in both the shapes the writer
+        # emits. This is a control and passes at the merge base too; the test
+        # below is the one that says why it stays true.
         payload = '{"entries": [{"index": 1, "item": "the UI lane", "status": "blocked", "detail": "[blocked] waiting"}]}'
         indented = (
             "{\n"
@@ -1191,6 +1233,30 @@ class HtmlBlockStatusLineTests(unittest.TestCase):
             with self.subTest(payload=name):
                 block = f"<!-- evidence-status:v1\n{body_text}\n-->\n"
                 self.assertEqual(self.failures(self.body(self.COMPLETE + "\n" + block)), [])
+
+    def test_the_metadata_control_holds_only_because_the_writer_places_it_above(self) -> None:
+        # The control above is a control: it passes with the new branch deleted,
+        # because the JSON the factory writes has nothing at an anchor. It is
+        # not a proof that the factory cannot refuse its own body -- a detail an
+        # author supplied can carry HTML, and read run by run under the heading
+        # it anchors. What makes that unreachable is placement, so placement is
+        # what is asserted, on the writer's own source. Found by codex
+        # (gpt-5.6-sol, xhigh).
+        detail = '<span>[blocked] quoted</span>'
+        under = f'<!-- evidence-status:v1\n{{"entries": [{{"item": "x", "detail": "{detail}"}}]}}\n-->\n'
+        self.assertEqual(self.failures(self.body(self.COMPLETE + "\n" + under)), [self.PENDING])
+
+        source = (
+            REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "evidence.py"
+        ).read_text(encoding="utf-8")
+        span = source[source.index("def _insert_evidence_metadata") :]
+        span = span[: span.index("\ndef ", 1)]
+        # The comment goes in front of the heading it belongs to, so no body the
+        # writer produces puts an HTML block inside the section at all. If this
+        # ever reads the other way round, the case above stops being
+        # unreachable and the gate can refuse a body the factory wrote.
+        self.assertIn('f"{metadata}\\n\\n{match.group(1)}"', span)
+        self.assertNotIn('f"{match.group(1)}', span)
 
     def test_a_block_below_the_section_is_not_read(self) -> None:
         for tail in ("\n# Notes\n", "\n## Notes\n", "\n---\n"):

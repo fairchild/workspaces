@@ -28,6 +28,7 @@ a shape the gate catches.
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import re
@@ -305,7 +306,7 @@ HTML_MARKUP_RE = re.compile(r"</?[A-Za-z][^>]*>|<!--|-->")
 
 
 def html_block_text_lines(content: str) -> list[str]:
-    """Every run of text a raw HTML block holds, with its markup taken out.
+    """Every line of text a raw HTML block shows, read two ways: run by run, and whole.
 
     GitHub prints a raw HTML block as itself, so a status between its tags is a
     status a reader acts on -- and the parser models no inline inside an
@@ -314,26 +315,45 @@ def html_block_text_lines(content: str) -> list[str]:
     of the token. `<div>` on the line below the heading and `[blocked] the UI
     lane` under it reached neither view while the page showed it (#1736).
 
-    A line is cut at every run of markup rather than read whole, so the status
-    in `<summary>[blocked] item</summary>` is read where reading the source
-    line would find a `<` at the anchor and stop. Cutting is strictly wider
-    than reading the line whole: a line with no markup is one run, and a run
-    with markup in front of it is one the whole line could not have matched.
+    Each source line gives up to two candidates, because one reading cannot
+    hold both shapes the page produces.
+
+    Run by run, cut at every piece of markup: a tag pair on one line is a cell
+    of its own on the page, so `<td>[pending-ci]</td><td>the lane</td>` is two
+    lines a reader sees and the status is at the head of the second. It is also
+    what reaches `<summary>[blocked] item</summary>`, whose source line begins
+    with a `<` where the anchor sits. The cost is an over-refusal this accepts
+    knowingly: `Context: <span>[blocked] x</span>` renders as one line that
+    does not open with the status, and its second run does.
+
+    Whole, the runs joined with nothing between: markup inside a line is
+    invisible on the page, so `<span>[block</span><strong>ed]</strong> x`
+    renders as `[blocked] x` and is a status the runs alone cannot see, each
+    holding a fragment. Joining with nothing rather than a space is what keeps
+    the token together; the run reading is what keeps the cells apart.
+
+    Both are decoded, since a character reference inside a block is the
+    character the page shows and `&#91;blocked&#93;` is a visible `[blocked]`
+    -- the reading `rendered_inline_text` gets from the parser for free
+    everywhere else (#1706). Decoding only ever adds a match: the anchored
+    prefix of a status line carries no `&`, so it survives unchanged.
 
     Text inside a comment is read like any other run. A comment renders as
     nothing, and the rule is that invisible text may refuse and may never
     accept (#1729): refusing on `<!-- [blocked] x -->` costs an author a minute
     and costs the gate no soundness, where accepting on it is the hole. So no
-    run is called visible or hidden, and the factory's own metadata comment is
-    not special-cased -- it carries JSON, whose lines open on a brace or a
-    quote, and the anchor passes over it.
+    run is called visible or hidden, HTML is never interpreted -- nothing here
+    decides which elements are open -- and the factory's own metadata comment
+    is not special-cased. It carries JSON, whose lines open on a brace or a
+    quote, and the writer places it above this heading rather than under it.
     """
-    return [
-        text
-        for line in content.split("\n")
-        for run in HTML_MARKUP_RE.split(line)
-        if (text := run.strip())
-    ]
+    lines: list[str] = []
+    for line in content.split("\n"):
+        runs = [run for run in HTML_MARKUP_RE.split(line) if run.strip()]
+        lines.extend(html.unescape(run).strip() for run in runs)
+        if len(runs) > 1:
+            lines.append(html.unescape("".join(runs)).strip())
+    return [line for line in lines if line]
 
 
 def rendered_status_lines(body: str) -> list[str]:
