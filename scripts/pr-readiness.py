@@ -16,9 +16,10 @@ The `## Evidence Status` section is read two ways, and a pending line seen by
 either one fails the gate. The written view matches the lines as an author
 typed them; the rendered view parses the body as GitHub Flavored Markdown and
 reads every line the page shows -- a list item, a paragraph, a table cell, a
-sub-heading -- so an escape, a character reference or inline HTML around the
-status token is resolved rather than hiding it (#1706), and a status outside a
-list item is still a status (#1727). The two are combined as a conjunction of
+sub-heading, the text of a raw HTML block -- so an escape, a character
+reference or inline HTML around the status token is resolved rather than hiding
+it (#1706), a status outside a list item is still a status (#1727), and one the
+page prints from raw HTML is one too (#1736). The two are combined as a conjunction of
 refusals, never a vote: the rendered view can only add failures, so it cannot
 pass a body the written view fails, and a shape only one of them sees is still
 a shape the gate catches.
@@ -295,6 +296,46 @@ def rendered_inline_text(children: list[Token] | None) -> str:
     return "".join(parts)
 
 
+# An HTML tag, or either delimiter of a comment. It is a lexical run, not an
+# element: the pattern says where markup sits on a line, never which elements
+# are open or whether what is between them is shown. Deciding that is a second
+# renderer, and the contributor skill records that the one we had disagreed
+# with GitHub.
+HTML_MARKUP_RE = re.compile(r"</?[A-Za-z][^>]*>|<!--|-->")
+
+
+def html_block_text_lines(content: str) -> list[str]:
+    """Every run of text a raw HTML block holds, with its markup taken out.
+
+    GitHub prints a raw HTML block as itself, so a status between its tags is a
+    status a reader acts on -- and the parser models no inline inside an
+    `html_block`, so the rendered view read nothing there at all and the
+    written view caught only what its own anchor covers, a list marker in front
+    of the token. `<div>` on the line below the heading and `[blocked] the UI
+    lane` under it reached neither view while the page showed it (#1736).
+
+    A line is cut at every run of markup rather than read whole, so the status
+    in `<summary>[blocked] item</summary>` is read where reading the source
+    line would find a `<` at the anchor and stop. Cutting is strictly wider
+    than reading the line whole: a line with no markup is one run, and a run
+    with markup in front of it is one the whole line could not have matched.
+
+    Text inside a comment is read like any other run. A comment renders as
+    nothing, and the rule is that invisible text may refuse and may never
+    accept (#1729): refusing on `<!-- [blocked] x -->` costs an author a minute
+    and costs the gate no soundness, where accepting on it is the hole. So no
+    run is called visible or hidden, and the factory's own metadata comment is
+    not special-cased -- it carries JSON, whose lines open on a brace or a
+    quote, and the anchor passes over it.
+    """
+    return [
+        text
+        for line in content.split("\n")
+        for run in HTML_MARKUP_RE.split(line)
+        if (text := run.strip())
+    ]
+
+
 def rendered_status_lines(body: str) -> list[str]:
     """The text of every line a reader sees under `## Evidence Status`.
 
@@ -308,7 +349,8 @@ def rendered_status_lines(body: str) -> list[str]:
     heading outright -- so every one of them is a line whose status a reader
     acts on. Code under the heading, fenced or indented, is a code block and
     has no inline of its own, which is what `split_fenced_blocks` says on the
-    written side.
+    written side. A raw HTML block has no inline either, and the page prints it
+    anyway, so its own lines are read through `html_block_text_lines` (#1736).
 
     The section is the one the written view reads, found by what renders rather
     than by what was typed: it opens at a top-level h2 whose rendered text is
@@ -343,6 +385,8 @@ def rendered_status_lines(body: str) -> list[str]:
                 lines.extend(
                     part.strip() for part in rendered_inline_text(token.children).split("\n")
                 )
+            elif token.type == "html_block":
+                lines.extend(html_block_text_lines(token.content))
             index += 1
     return lines
 

@@ -1066,6 +1066,199 @@ class RenderedStatusLineTests(unittest.TestCase):
         )
 
 
+class HtmlBlockStatusLineTests(unittest.TestCase):
+    """A status a raw HTML block puts on the page is a status line (#1736).
+
+    GitHub prints a raw HTML block as itself, so the text between its tags is
+    text a reader acts on -- and the parser models no inline inside an
+    `html_block`, so the rendered view read nothing there at all. The written
+    view caught the shapes its own anchor covers, a list marker in front of the
+    token, and missed a bare `[blocked]` line, a `<summary>` and a comment. The
+    rendered view now reads each run of text between the block's markup through
+    `RENDERED_PENDING_RE`, which can only add refusals to what stands.
+
+    HTML is still never interpreted: taking the markup out of a line is not
+    deciding which elements are open, and no run is called visible or hidden.
+    Text inside a comment is read, and refusing on `<!-- [blocked] x -->` costs
+    an author a minute and costs the gate no soundness, where accepting on it
+    would be the hole this closes (#1729).
+
+    The boundary is unchanged, and the `# Notes` line in the issue's own
+    reproduction stays inside the section for both views: the page shows no
+    heading there -- the block prints those characters as text -- so ending the
+    section at that line is what neither view should do. The gap was the status
+    below it going unread, not where the section ends.
+
+    Refusing any HTML block under the heading outright, which is the owner read
+    in the contributor skill, is not available here: the factory writes its own
+    metadata comment as an HTML block, and 13 of the 63 stored bodies with this
+    heading carry one.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+    PENDING = PendingLineShapeTests.PENDING
+    COMPLETE = "- [complete] swift test -- 1992 tests passed\n"
+    # The issue's reproduction: no blank line before the block, so `<div>` opens
+    # a raw HTML block that runs to the blank line after `</div>`.
+    ISSUE_BLOCK = "<div>\n# Notes\n- {status} the UI lane -- a status line\n</div>\n"
+
+    def failures(self, body: str) -> list[str]:
+        return pr_readiness.evaluate(pr(body), self.FILES).failures
+
+    def body(self, section: str) -> str:
+        return GOOD_BODY + f"\n## Evidence Status\n{section}"
+
+    def test_the_issue_reproduction_fails_for_either_token(self) -> None:
+        # Green before this change as well as after it, and kept as the pin
+        # that says so: #1736 was filed against a tree where the written view
+        # stopped at the `#` line inside the block, and #1737 landed the
+        # parsed boundary the same day, which put the status back inside the
+        # section for that view. This shape is now caught twice over.
+        for status in ("[blocked]", "[pending-ci]"):
+            with self.subTest(status=status):
+                self.assertEqual(self.failures(self.body(self.ISSUE_BLOCK.format(status=status))), [self.PENDING])
+
+    def test_the_rendered_view_reads_the_blocks_text_and_leaves_the_boundary_alone(self) -> None:
+        # The read reached directly. `# Notes` comes back as one of the block's
+        # lines rather than ending the section, because the page prints it as
+        # text; the written view keeps it inside the section for the same
+        # reason.
+        body = self.body(self.ISSUE_BLOCK.format(status="[blocked]"))
+        self.assertEqual(
+            pr_readiness.rendered_status_lines(body),
+            ["# Notes", "- [blocked] the UI lane -- a status line"],
+        )
+        self.assertIn("[blocked] the UI lane", pr_readiness.extract_section(body, "Evidence Status"))
+
+    def test_a_status_with_no_list_marker_in_a_block_fails(self) -> None:
+        # What the written view's anchor cannot reach: it asks for a list
+        # marker, and the page shows the line with or without one.
+        section = self.COMPLETE + "\n<div>\n[blocked] the UI lane\n</div>\n"
+        body = self.body(section)
+        # Asserted on the written view's own reading rather than through the
+        # gate: the conjunction of refusals lets one view answer for a line the
+        # other cannot see, so a verdict alone cannot tell the two apart.
+        written = pr_readiness.extract_section(body, "Evidence Status", strip=False)
+        self.assertIn("[blocked] the UI lane", written)
+        self.assertIsNone(pr_readiness.PENDING_STATUS_RE.search(written))
+        self.assertEqual(self.failures(body), [self.PENDING])
+
+    def test_a_status_inside_a_tag_pair_on_one_line_fails(self) -> None:
+        # `<details>` renders its summary, so the reader sees the status; the
+        # line's own text opens with a tag, which is why reading the source
+        # line whole would miss it.
+        for block in (
+            "<details><summary>[blocked] the UI lane</summary></details>\n",
+            "<details>\n<summary>[blocked] the UI lane</summary>\n</details>\n",
+            "<table>\n<tr><td>[pending-ci]</td><td>the UI lane</td></tr>\n</table>\n",
+        ):
+            with self.subTest(block=block.splitlines()[0]):
+                self.assertEqual(self.failures(self.body(self.COMPLETE + "\n" + block)), [self.PENDING])
+
+    def test_a_status_inside_a_comment_refuses(self) -> None:
+        # A comment renders as nothing, and the rule is that invisible text may
+        # refuse and may never accept: the gate does not weigh what is visible,
+        # so a hidden `[blocked]` fails rather than passing quietly.
+        self.assertEqual(self.failures(self.body(self.COMPLETE + "\n<!-- [blocked] hidden -->\n")), [self.PENDING])
+
+    def test_a_block_of_complete_text_passes(self) -> None:
+        for block in (
+            "<div>\n- [complete] the UI lane -- swift test passed\n</div>\n",
+            "<div>\n[complete] the UI lane -- swift test passed\n</div>\n",
+            "<div>\nsee the [blocked] label on the issue for context\n</div>\n",
+        ):
+            with self.subTest(block=block.splitlines()[1]):
+                self.assertEqual(self.failures(self.body(block)), [])
+
+    def test_the_factory_metadata_comment_is_not_a_status_line(self) -> None:
+        # The factory writes its own evidence metadata as an HTML block under
+        # or above this heading, and a stored entry's status is a JSON value
+        # rather than a line that opens with `[blocked]`. It is read like any
+        # other block -- no shape of it is special-cased -- and trips nothing.
+        payload = '{"entries": [{"index": 1, "item": "the UI lane", "status": "blocked", "detail": "[blocked] waiting"}]}'
+        indented = (
+            "{\n"
+            '  "entries": [\n'
+            "    {\n"
+            '      "item": "the UI lane",\n'
+            '      "status": "blocked",\n'
+            '      "detail": "[blocked] waiting"\n'
+            "    }\n"
+            "  ]\n"
+            "}"
+        )
+        for name, body_text in (("compact", payload), ("indented", indented)):
+            with self.subTest(payload=name):
+                block = f"<!-- evidence-status:v1\n{body_text}\n-->\n"
+                self.assertEqual(self.failures(self.body(self.COMPLETE + "\n" + block)), [])
+
+    def test_a_block_below_the_section_is_not_read(self) -> None:
+        for tail in ("\n# Notes\n", "\n## Notes\n", "\n---\n"):
+            with self.subTest(tail=tail.strip()):
+                body = self.body(self.COMPLETE + tail + "<div>\n- [blocked] not this section's\n</div>\n")
+                self.assertEqual(pr_readiness.rendered_status_lines(body), [self.COMPLETE.strip()[2:]])
+                self.assertEqual(self.failures(body), [])
+
+    def test_a_block_inside_a_fence_is_still_an_example(self) -> None:
+        # A fenced block is a code block to the parser, with no `html_block`
+        # token and no inline of its own, which is what both views say of every
+        # other fenced line.
+        section = self.COMPLETE + "\n```markdown\n<div>\n[blocked] example\n</div>\n```\n"
+        body = self.body(section)
+        self.assertEqual(pr_readiness.rendered_status_lines(body), [self.COMPLETE.strip()[2:]])
+        self.assertEqual(self.failures(body), [])
+
+    def test_a_block_above_the_heading_is_not_read(self) -> None:
+        body = GOOD_BODY + "\n<div>\n[blocked] above the heading\n</div>\n\n## Evidence Status\n" + self.COMPLETE
+        self.assertEqual(pr_readiness.rendered_status_lines(body), [self.COMPLETE.strip()[2:]])
+        self.assertEqual(self.failures(body), [])
+
+    def test_a_fence_inside_a_block_is_not_a_fence_on_the_page(self) -> None:
+        # Markdown is not processed inside a raw HTML block, so the backticks
+        # and the line under them are characters the page prints. The written
+        # view's line scanner cannot see the block it is in and takes the
+        # opener for a fence -- stripping the example on the closed shape, and
+        # reporting an unclosed fence on the other. The rendered view reads the
+        # block's own lines either way, which is what makes the status visible
+        # to the gate on both.
+        opener, status = "```markdown", "[blocked] printed as raw HTML"
+        closed = f"<div>\n{opener}\n{status}\n```\n</div>\n"
+        self.assertEqual(self.failures(self.body(self.COMPLETE + "\n" + closed)), [self.PENDING])
+        unclosed = f"<div>\n{opener}\n{status}\n</div>\n"
+        self.assertEqual(
+            self.failures(self.body(self.COMPLETE + "\n" + unclosed)),
+            [
+                f'Evidence Status opens a code fence that never closes: "{opener}". '
+                "Close it so the status lines after it are read.",
+                self.PENDING,
+            ],
+        )
+
+    def test_a_heading_a_block_swallows_does_not_end_the_section(self) -> None:
+        # An HTML block runs to a blank line, so a `## Notes` line inside one is
+        # characters the block prints rather than a heading. Neither view ends
+        # the section there -- the parser models no heading token, and that is
+        # the page's answer too -- so the status under it is this section's and
+        # fails the gate.
+        section = self.COMPLETE + "\n<div>\n## Notes\n[blocked] under a line that only looks like a heading\n"
+        body = self.body(section)
+        self.assertEqual(
+            pr_readiness.rendered_status_lines(body),
+            [
+                self.COMPLETE.strip()[2:],
+                "## Notes",
+                "[blocked] under a line that only looks like a heading",
+            ],
+        )
+        self.assertEqual(self.failures(body), [self.PENDING])
+
+    def test_a_block_nested_in_a_list_item_is_read_too(self) -> None:
+        # The walk reads every line under the heading whatever depth it sits
+        # at, the way it already reads an inline inside a quote or an item, and
+        # an indented block renders on the page like any other.
+        section = self.COMPLETE + "\n- the UI lane\n\n  <div>\n  [blocked] still waiting\n  </div>\n"
+        self.assertEqual(self.failures(self.body(section)), [self.PENDING])
+
 class ParserDefinitionTests(unittest.TestCase):
     """The gate and the contributor skill read one section by one definition of markdown.
 
