@@ -1161,6 +1161,16 @@ class HtmlBlockStatusLineTests(unittest.TestCase):
         # so a hidden `[blocked]` fails rather than passing quietly.
         self.assertEqual(self.failures(self.body(self.COMPLETE + "\n<!-- [blocked] hidden -->\n")), [self.PENDING])
 
+    def test_a_comment_ends_at_an_abrupt_closer_too(self) -> None:
+        # A browser ends a comment at `--!>` as well as at `-->`, so the text
+        # after one is on the page while a reader of `-->` alone still has it
+        # inside the comment. The contributor skill refuses a metadata block
+        # carrying `--!>` for the same reason. Found by CodeQL
+        # (`py/bad-tag-filter`, high) on the first push.
+        block = "<!-- a note --!> [blocked] the UI lane -->\n"
+        self.assertIn("[blocked] the UI lane", pr_readiness.rendered_status_lines(self.body(block)))
+        self.assertEqual(self.failures(self.body(self.COMPLETE + "\n" + block)), [self.PENDING])
+
     def test_a_block_of_complete_text_passes(self) -> None:
         for block in (
             "<div>\n- [complete] the UI lane -- swift test passed\n</div>\n",

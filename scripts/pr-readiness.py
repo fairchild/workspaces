@@ -302,7 +302,13 @@ def rendered_inline_text(children: list[Token] | None) -> str:
 # are open or whether what is between them is shown. Deciding that is a second
 # renderer, and the contributor skill records that the one we had disagreed
 # with GitHub.
-HTML_MARKUP_RE = re.compile(r"</?[A-Za-z][^>]*>|<!--|-->")
+#
+# A comment ends at `--!>` as well as at `-->`, which is what a browser does
+# with it -- the contributor skill's `_is_machine_metadata_comment` refuses a
+# block carrying one for the same reason. Reading only `-->` leaves the text
+# after an `--!>` inside the comment for this pattern and outside it on the
+# page, so a visible `[blocked]` there went unread (`py/bad-tag-filter`).
+HTML_MARKUP_RE = re.compile(r"</?[A-Za-z][^>]*>|<!--|--!?>")
 
 
 def html_block_text_lines(content: str) -> list[str]:
