@@ -6289,32 +6289,167 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         ("a quoted note", "\n> a reviewer asked about the fixture\n"),
     )
 
-    def test_a_carried_block_lands_below_every_line_the_machine_writes(self) -> None:
+    ITEMS = (ITEM, "`pnpm test` in `web-next` passes", "the fixture state survives a relaunch")
+    NOTE_TAIL = "\nA note for the reviewer.\n"
+    OPEN_ELEMENT_TAIL = "\n<details>\n<summary>More</summary>\n\nplain note\n"
+    ONE_HEADING_BELOW = "## Validation\n\n- ran the suite on this head\n"
+    TWO_HEADINGS_BELOW = ONE_HEADING_BELOW + "\n## Risks\n\nNone.\n"
+    RISKS_ALONE_BELOW = "## Risks\n\nNone.\n"
+
+    def interleaved_body(
+        self,
+        tail: str,
+        *,
+        entries: int = 1,
+        note_after: int = 1,
+        below: str = ONE_HEADING_BELOW,
+    ) -> str:
+        """A body carrying `entries` status lines, with `tail` written after the `note_after`-th.
+
+        `self.body` writes one status line and one heading below the section,
+        which is the shape where both bounds of the placement collapse into
+        weaker ones that hold wherever the block lands. This says how many of
+        each the body carries.
+        """
+        items = self.ITEMS[:entries]
+        status = [f"- [pending-ci] {item} -- the lane has not run yet" for item in items]
+        meta = {
+            "entries": [
+                {
+                    "index": index + 1,
+                    "item": item,
+                    "status": "pending-ci",
+                    "detail": "the lane has not run yet",
+                    "kind": "test",
+                }
+                for index, item in enumerate(items)
+            ]
+        }
+        section = "\n".join(status[:note_after]) + "\n" + tail + "\n".join(status[note_after:])
+        return (
+            "<!-- evidence-status:v1\n" + json.dumps(meta) + "\n-->\n\n"
+            + "## Evidence Status\n\n" + section.rstrip("\n") + "\n\n" + below
+        )
+
+    def resolve_entries(self, body: str, entries: int) -> str:
+        return sys.modules["evidence"].update_evidence_entries(
+            body,
+            {
+                index + 1: {"status": "complete", "detail": f"{214 + index} tests passed"}
+                for index in range(entries)
+            },
+        )
+
+    def placement_bodies(self) -> list[tuple[str, str, int]]:
+        """Every body the placement is asserted over, each with the status lines it carries."""
+        return [(label, self.body(tail), 1) for label, tail in self.PLACEMENT_FIXTURES] + [
+            # A second heading below the section is where "directly below the
+            # status" and "somewhere above the next heading" come apart: a
+            # block written under `## Validation` satisfies the second.
+            (
+                "a note with a second heading below the section",
+                self.interleaved_body(self.NOTE_TAIL, below=self.TWO_HEADINGS_BELOW),
+                1,
+            ),
+            (
+                "an element left open with a second heading below the section",
+                self.interleaved_body(self.OPEN_ELEMENT_TAIL, below=self.TWO_HEADINGS_BELOW),
+                1,
+            ),
+            # The successor is whatever the author wrote under the status list,
+            # which is not always the `## Validation` the status itself is
+            # placed in front of.
+            (
+                "a section whose successor is Risks, with no Validation at all",
+                self.interleaved_body(self.NOTE_TAIL, below=self.RISKS_ALONE_BELOW),
+                1,
+            ),
+            # Below the LAST status line is the property. With one status line
+            # per body it is also below the first, and a block left sitting
+            # between two of them reads the same as one below them all.
+            (
+                "a note between two status lines",
+                self.interleaved_body(
+                    self.NOTE_TAIL, entries=2, note_after=1, below=self.TWO_HEADINGS_BELOW
+                ),
+                2,
+            ),
+            (
+                "a note between the second and third status lines",
+                self.interleaved_body(
+                    self.NOTE_TAIL, entries=3, note_after=2, below=self.TWO_HEADINGS_BELOW
+                ),
+                3,
+            ),
+            (
+                "an element left open between two status lines",
+                self.interleaved_body(
+                    self.OPEN_ELEMENT_TAIL, entries=2, note_after=1, below=self.TWO_HEADINGS_BELOW
+                ),
+                2,
+            ),
+        ]
+
+    @staticmethod
+    def successor_heading(body: str) -> tuple[int, str] | None:
+        """Where the status section's own successor begins, and the heading line it is.
+
+        Read from the status section rather than from wherever the notes
+        ended up. A boundary taken as the first `## ` below the notes heading
+        moves with the notes: a block written under `## Validation` and above
+        `## Risks` is then below its own boundary, every assertion holds, and
+        a reader sees the notes in somebody else's section (#1733).
+
+        A raw scan, like the sibling slices here and for the same reason -- no
+        fixture in this class writes a `## ` line inside a block -- and the
+        caller checks the line it returns against what the page renders.
+        """
+        body = body.replace("\r\n", "\n")
+        start = body.index("## Evidence Status\n")
+        for match in re.finditer(r"(?m)^## .*$", body[start:]):
+            if match.start() == 0 or match.group().strip() == "## Evidence Notes":
+                continue
+            return start + match.start(), match.group().strip()
+        return None
+
+    def test_a_carried_block_lands_below_the_last_status_line_and_above_the_section_s_successor(
+        self,
+    ) -> None:
         """The order the page-level safety of a move rests on, in the form a test can check.
 
         A block that may fold what follows it -- a `<details>` with no
         `</details>` is the shape -- is safe to move only if it lands below
-        everything the machine writes and above the next heading. Then the
-        status list is visible where the block used to hide it, and the block
-        folds no more than it folded where the author put it.
+        every line the machine writes and above the heading the author wrote
+        under the section. Then the status list is visible where the block used
+        to hide it, and the block folds no more than it folded where the author
+        put it.
+
+        Both bounds are read from the status section, and both say something
+        only because the corpus carries the shapes that tell them from weaker
+        ones: with one status line per body "below the last" is "below the
+        first", and with one heading under the section "above the section's
+        successor" is "above whatever follows the notes", which a block in
+        somebody else's section satisfies (#1733). The counters at the end
+        hold the corpus to both.
 
         Asserted by offset, over every carried line of every fixture, because
         the rendering oracle below cannot see it: put the notes above the
         status and `_rendered_lines` reports exactly what it reported before.
         """
-        carried_total = 0
-        for label, tail in self.PLACEMENT_FIXTURES:
+        rendered = sys.modules["evidence"]._rendered_lines
+        carried_total = interleaved = with_a_heading_below = 0
+        for label, body, entries in self.placement_bodies():
             with self.subTest(block=label):
-                resolved = self.resolved(self.body(tail))
+                resolved = self.resolve_entries(body, entries)
                 carried = set(self.notes_lines(resolved))
                 # Anti-vacuity first, so a fixture that carries nothing fails
-                # here saying so rather than erroring on the missing heading.
+                # here saying so rather than on the missing boundary.
                 self.assertTrue(carried, f"{label} carried nothing")
-                heading = "## Evidence Notes\n"
-                notes_at = resolved.index(heading)
-                below = re.search(r"(?m)^## ", resolved[notes_at + len(heading) :])
-                self.assertIsNotNone(below, "no heading survives below the notes")
-                boundary = notes_at + len(heading) + below.start()
+                successor = self.successor_heading(resolved)
+                self.assertIsNotNone(successor, "the section's successor did not survive the write")
+                boundary, heading = successor
+                # And it is a heading a reader has, not one only the scan sees.
+                self.assertIn(heading, rendered(resolved), f"{heading} is not a heading on the page")
                 # Located by searching the whole body for the carried text, not
                 # by slicing the section: a slice would put every line inside
                 # the section by construction and assert nothing.
@@ -6325,12 +6460,30 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
                     elif line in carried:
                         carried_at.append(offset)
                     offset += len(line) + 1
-                self.assertTrue(status_at, "the write left no status line")
-                self.assertEqual(len(carried_at), len(self.notes_lines(resolved)))
-                self.assertLess(max(status_at), min(carried_at), "a carried block sits above the status")
-                self.assertLess(max(carried_at), boundary, "a carried block sits below the next heading")
+                # Counted before the assertions, so a placement failure is
+                # reported as one rather than as a corpus that lost its shapes.
                 carried_total += len(carried_at)
+                interleaved += entries > 1
+                with_a_heading_below += len(re.findall(r"(?m)^## ", resolved[boundary:])) > 1
+                self.assertEqual(len(status_at), entries, "the write did not leave every status line")
+                self.assertLess(max(status_at), min(carried_at), "a carried block sits above a status line")
+                self.assertLess(max(carried_at), boundary, f"a carried block sits below `{heading}`")
+                # Last, so a block in the wrong place fails on where it is
+                # rather than on a count. It fails here when a line of the
+                # notes section was not found in the body at all, which is the
+                # scan going wrong rather than the write.
+                self.assertEqual(
+                    len(carried_at),
+                    len(self.notes_lines(resolved)),
+                    "a line of the notes section was not located in the body",
+                )
         self.assertGreaterEqual(carried_total, 20, "the fixtures carried almost nothing")
+        # Both bounds are only as strong as the shapes under them. A corpus
+        # that loses the bodies carrying several status lines, or the ones
+        # with a heading below the successor, asserts "somewhere above
+        # something" again while the names still promise this.
+        self.assertGreaterEqual(interleaved, 3, "no fixture carries more than one status line")
+        self.assertGreaterEqual(with_a_heading_below, 5, "no fixture has a heading below the successor")
 
     def test_the_parser_s_rendering_shows_no_less_below_the_notes_after_the_move(self) -> None:
         """What the parser's rendering can check about a move, and no more.
