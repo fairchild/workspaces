@@ -1415,6 +1415,106 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         )
 
 
+class TheRuntimeSeedsASectionWhereThisGateStillMatchesALineTests(unittest.TestCase):
+    """What the seeder writes, and what this gate still reads instead (#1730).
+
+    `seed_mergeability_section` decided whether a body already had the section
+    by matching a `## Mergeability` line anywhere, so a body documenting the
+    section's format in a fenced example got nothing written and said nothing
+    about it. The runtime's presence check is a parse now and it writes the
+    section.
+
+    This gate is the other half, and it is not fixed here. Since #1734 its
+    written read ENDS where the parser says, but it still STARTS at the first
+    line matching `^## <heading>`, so on a body like this one it reads the
+    example as the section. Out of scope by measurement rather than by
+    preference: of 400 stored pull-request bodies, none carries a section
+    heading this gate reads that the page shows as code -- the shape is real
+    (three stored issues carry a fenced `## Evidence Status`) but has not
+    landed on a body this gate reads. The pinning is here so the next person
+    inherits the residual rather than rediscovering it.
+    """
+
+    SCRIPTS = REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts"
+
+    def seeder(self):
+        """The runtime's own module, loaded by path so this file's imports stay its own."""
+        sys.path.insert(0, str(self.SCRIPTS))
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "contributor_execution", self.SCRIPTS / "execution.py"
+            )
+            assert spec and spec.loader
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+        finally:
+            sys.path.remove(str(self.SCRIPTS))
+
+    def reader(self):
+        """The skill's reader, loaded by path, for what the page shows."""
+        spec = importlib.util.spec_from_file_location(
+            "contributor_helpers", self.SCRIPTS / "_helpers.py"
+        )
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    FENCED_EXAMPLE_BODY = GOOD_BODY.replace(
+        """## Mergeability
+
+- Surface: desktop
+- User-facing behavior changed: none; refactor only
+- Non-happy paths considered: nil userdata and zero address behavior covered
+- Release/ops preconditions: not applicable
+- Residual risk or follow-up: none
+""",
+        """The format this PR is about, for reference:
+
+```markdown
+## Mergeability
+
+- Surface: desktop
+```
+""",
+    )
+
+    def test_the_runtime_writes_the_section_the_page_did_not_show(self) -> None:
+        # The fix: the body had no Mergeability section a reader could see,
+        # and now it has one, with the author's example left alone.
+        reader = self.reader()
+        self.assertFalse(reader.has_markdown_section(self.FENCED_EXAMPLE_BODY, "Mergeability"))
+        seeded = self.seeder().seed_mergeability_section(
+            self.FENCED_EXAMPLE_BODY, changed_files=["Sources/Foo.swift"]
+        )
+        self.assertTrue(reader.has_markdown_section(seeded, "Mergeability"))
+        self.assertEqual(
+            reader.markdown_section(seeded, "Mergeability").splitlines()[0],
+            "- Surface: desktop — `Sources/Foo.swift`",
+        )
+        self.assertIn("```markdown\n## Mergeability", seeded)
+
+    def test_this_gate_still_takes_the_first_line_it_matches_as_the_start(self) -> None:
+        # The residual, pinned rather than claimed fixed. The gate reads the
+        # example's field list on the seeded body, where the skill reads the
+        # section the runtime wrote; both end where the parser says, and only
+        # the start disagrees.
+        seeded = self.seeder().seed_mergeability_section(
+            self.FENCED_EXAMPLE_BODY, changed_files=["Sources/Foo.swift"]
+        )
+        gate_read = pr_readiness.extract_section(seeded, "Mergeability")
+        self.assertIn("- Surface: desktop", gate_read)
+        self.assertNotIn("`Sources/Foo.swift`", gate_read)
+        self.assertNotEqual(gate_read, self.reader().markdown_section(seeded, "Mergeability"))
+        # It costs a refusal rather than an approval here: the fields the
+        # example does not carry are reported unanswered, so the gate fails a
+        # body a reader would call complete-but-unfilled either way.
+        result = pr_readiness.evaluate(pr(seeded), ["Sources/Foo.swift"])
+        self.assertFalse(result.ok)
+        self.assertTrue(all("field is empty or still default" in text for text in result.failures), result.failures)
+
+
 class ReadinessCommentTests(unittest.TestCase):
     def test_failure_comment_names_failures_and_pastes_template(self) -> None:
         body = GOOD_BODY.replace("- Residual risk or follow-up: none", "")
