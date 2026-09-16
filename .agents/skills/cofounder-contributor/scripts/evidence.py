@@ -708,6 +708,17 @@ def _rendered_inline(text: str) -> str:
     return inline_text(tokens[0].children if tokens else None)
 
 
+def _heading_count_refusal(count: int) -> str:
+    """Why a body with no `Evidence Status` heading, or with two, has no section to read."""
+    return f"a reader sees {count} `Evidence Status` headings, not one"
+
+
+# The one refusal that says there is nothing here to read, as against a section
+# a reader has and this read will not interpret. Built from the same function
+# that produces it, so the two cannot drift apart.
+NO_STATUS_HEADING_REFUSAL = _heading_count_refusal(0)
+
+
 def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
     """The text of each status line GitHub renders under `## Evidence Status`, or why none can be trusted.
 
@@ -733,7 +744,7 @@ def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
         and " ".join(inline_text(tokens[index + 1].children).split()).casefold() == "evidence status"
     ]
     if len(headings) != 1:
-        return [], f"a reader sees {len(headings)} `Evidence Status` headings, not one"
+        return [], _heading_count_refusal(len(headings))
     start = headings[0]
     if tokens[start].tag != "h2":
         return [], f"the `Evidence Status` heading is an {tokens[start].tag}, not an h2"
@@ -1260,7 +1271,13 @@ def _rendered_markdown_entries(
         "duplicate_items": duplicate_items,
         "source": "markdown",
     }
-    return parsed, unreadable if section_present else None
+    # Reported when a reader has a heading to refuse, which is a different
+    # question from `section_present`: a heading carrying inline HTML is on the
+    # page and is not this section (`section_heading_index`), and the reason it
+    # cannot be read is exactly what its author needs to see. Only a body with
+    # no such heading at all is silent, and that is the one refusal this read
+    # gives for having nothing to read.
+    return parsed, None if unreadable == NO_STATUS_HEADING_REFUSAL else unreadable
 
 
 # What completes each kind when there is no metadata, for the item a hand-written

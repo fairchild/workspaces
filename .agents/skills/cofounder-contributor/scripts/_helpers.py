@@ -254,6 +254,29 @@ def section_heading_index(tokens: list[Token], heading: str) -> int | None:
     heading it looks like. The first such heading wins, which is the rule the
     rendered read already applied: a body with two is a body whose second one
     no reader is reading.
+
+    A heading carrying inline HTML is not this section, whatever its text
+    reads as. `inline_text` drops every tag but `<br>`, which is the right
+    reading for a requested item or a recorded detail and the wrong one for
+    identity: `## Evidence <del>Status</del>` is struck through on the page,
+    `## <details>Evidence Status</details>` is a collapsed widget, and
+    `## Evidence<br>Status` is two lines -- and each of the three became this
+    section, whose contents the rewrite then replaced, with no reader left to
+    disagree and raise it (#1730). Both reads agreeing against the page is the
+    shape #1734 exists to prevent.
+
+    Any tag, not a list of the ones that show something. `_unreadable_inline`
+    in `evidence.py` already answers this question that way for a status line,
+    and `_rendered_status_lines` refuses this very heading for carrying inline
+    HTML; a second answer here is the disagreement, one function away. The
+    alternative needs a set of tags GitHub's sanitizer renders as nothing,
+    which is a second renderer built from an allow-list this repo does not
+    hold -- and its only plausible members are `<span>` and a comment. Nothing
+    is lost by refusing them: no shape here was this section before #1730's
+    change, `<span>` included, so the rule declines to widen rather than taking
+    something away. The cost is that `## <span>Evidence Status</span>` gets a
+    second, real heading written below it, where the gate's ambiguity check
+    refuses the body -- fail closed, and visible.
     """
     wanted = " ".join(heading.split()).casefold()
     return next(
@@ -261,6 +284,7 @@ def section_heading_index(tokens: list[Token], heading: str) -> int | None:
             index
             for index, token in enumerate(tokens)
             if is_section_heading(token)
+            and not any(child.type == "html_inline" for child in tokens[index + 1].children or [])
             and " ".join(inline_text(tokens[index + 1].children).split()).casefold() == wanted
         ),
         None,
@@ -638,6 +662,28 @@ def has_markdown_section(body: str, heading: str) -> bool:
     text when it asks for one.
     """
     return section_heading_index(_parsed(body), heading) is not None
+
+
+# How the readiness gate finds a section's START: a literal `## <heading>` line
+# at column 0 with the line ending directly after it (`extract_section` in
+# `scripts/pr-readiness.py`). It is written here rather than imported because
+# that script is a PEP 723 entry point with its own pin and no package to
+# import from -- the same reason `MARKDOWN` is written in both files -- and
+# `SectionStartAgreementBetweenTheGateAndTheSkillTests` fails when the two
+# answer differently on any shape.
+#
+# It is narrower than `has_markdown_section`, which asks the parser: emphasis,
+# an indent of up to three spaces and a setext underline all make a heading the
+# page shows and this pattern does not find. #1742 owns moving the gate onto a
+# parse; until it does, a writer whose output the gate must be able to read
+# asks this as well.
+GATE_SECTION_START_RE = r"(?mi)^## {heading}\n"
+
+
+def gate_reads_markdown_section(body: str, heading: str) -> bool:
+    """Whether the readiness gate's literal reader finds this section's start."""
+    normalized = MARKDOWN_LINE_ENDING_RE.sub("\n", body)
+    return re.search(GATE_SECTION_START_RE.format(heading=re.escape(heading)), normalized) is not None
 
 
 def _section_removed(body: str, heading: str) -> tuple[str, str | None, list[str]]:

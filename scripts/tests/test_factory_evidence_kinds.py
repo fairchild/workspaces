@@ -5986,6 +5986,114 @@ class ASectionStartsAtAHeadingThePageShowsTests(unittest.TestCase):
                 )
 
 
+class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
+    """A heading is this section only if the page shows it as this heading (#1730).
+
+    `inline_text` drops every tag but `<br>` -- the right reading for a
+    requested item or a recorded detail, and the wrong one for identity. Asked
+    on a heading it made `## Evidence <del>Status</del>`, `## <details>Evidence
+    Status</details>` and `## Evidence<br>Status` all read as `Evidence
+    Status`, so each BECAME the section and the rewrite replaced its contents
+    with the entries in hand -- taking the author's own status line with it. A
+    reader sees struck-through text, a collapsed disclosure widget, and two
+    lines. Both reads agreed against the page, so the disagreement refusal
+    #1737 built had nothing to fire on.
+
+    The rule is any inline HTML, not a list of the tags that show something.
+    `_unreadable_inline` already answers it that way for a status line, and
+    `_rendered_status_lines` refuses this very heading for carrying inline
+    HTML; a second answer in `section_heading_index` is the disagreement one
+    function away. The alternative needs the set of tags GitHub's sanitizer
+    renders as nothing -- a second renderer, built from an allow-list this repo
+    does not hold, whose only plausible members are `<span>` and a comment.
+
+    Nothing is lost by refusing those two. None of these shapes was this
+    section before #1730's change, `<span>` included, so the rule declines to
+    widen rather than taking something away; the tests below hold at the merge
+    base as well as here, and fail only in between.
+    """
+
+    ITEM = "the UI lane"
+    AUTHORS_LINE = f"- [pending-ci] {ITEM} -- waiting"
+    ENTRIES = {ITEM: {"status": "complete", "detail": "swift test passed"}}
+    # Each renders as something other than a plain `Evidence Status` heading:
+    # struck through, a disclosure widget, two lines, an empty span.
+    SHAPES = {
+        "del": "## Evidence <del>Status</del>",
+        "s": "## Evidence <s>Status</s>",
+        "details": "## <details>Evidence Status</details>",
+        "br": "## Evidence<br>Status",
+        "span": "## <span>Evidence Status</span>",
+        "comment": "## Evidence Status<!-- a note -->",
+    }
+
+    def helpers(self):
+        return sys.modules["_helpers"]
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def body(self, heading: str) -> str:
+        return f"Why this exists.\n\n{heading}\n\n{self.AUTHORS_LINE}\n\n## Validation\n\n- ran\n"
+
+    def test_none_of_them_is_the_section(self) -> None:
+        helpers = self.helpers()
+        for name, heading in self.SHAPES.items():
+            with self.subTest(shape=name):
+                body = self.body(heading)
+                self.assertFalse(helpers.has_markdown_section(body, "Evidence Status"))
+                self.assertEqual(helpers.markdown_section(body, "Evidence Status"), "")
+
+    def test_the_rewrite_leaves_the_authors_line_where_it_is(self) -> None:
+        # The harm, stated as the author sees it: their own `[pending-ci]` line
+        # is replaced by the entries in hand when the rewrite believes it owns
+        # the section. It does not own these.
+        for name, heading in self.SHAPES.items():
+            with self.subTest(shape=name):
+                body = self.body(heading)
+                written, stood_down = self.evidence().write_evidence_status_section(body, self.ENTRIES)
+                self.assertIn(self.AUTHORS_LINE, written, stood_down)
+
+    def test_a_plain_heading_is_still_the_section_and_still_rewritten(self) -> None:
+        # The control the other way: nothing above is a refusal of headings in
+        # general.
+        helpers = self.helpers()
+        body = self.body("## Evidence Status")
+        self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
+        written, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
+        self.assertNotIn(self.AUTHORS_LINE, written)
+
+    def test_emphasis_is_markdown_rather_than_a_tag_and_stays_this_section(self) -> None:
+        # The line this rule does not cross. `**Evidence Status**` is bold on
+        # the page and reads as the heading it looks like, which is the
+        # widening #1730 makes on purpose; it is not a tag and nothing here
+        # takes it back. Green here and red at the merge base, where the
+        # presence check was a literal pattern.
+        helpers = self.helpers()
+        body = self.body("## **Evidence Status**")
+        self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
+        written, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
+        self.assertNotIn(self.AUTHORS_LINE, written)
+
+    def test_the_read_still_says_why_rather_than_saying_nothing_is_there(self) -> None:
+        # A heading the page shows and this reader will not own is not the same
+        # as no heading at all, and the author needs to be told which. The
+        # rendered read's refusal names the HTML; reporting it turns on whether
+        # a reader has a heading to refuse, not on `section_present`, which
+        # this change makes false for exactly these shapes.
+        evidence = self.evidence()
+        for name, heading in self.SHAPES.items():
+            with self.subTest(shape=name):
+                body = self.body(heading)
+                parsed, unreadable = evidence._rendered_markdown_entries(body, [self.ITEM])
+                self.assertFalse(parsed["section_present"])
+                self.assertIn("HTML", unreadable or "")
+        # And a body with no heading at all stays silent, which is the one
+        # refusal that means there is nothing here to read.
+        plain = f"Why this exists.\n\n## Validation\n\n- ran\n"
+        self.assertIsNone(evidence._rendered_markdown_entries(plain, [self.ITEM])[1])
+
+
 class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
     """A re-render of `## Evidence Status` moves what is not a status line rather than dropping it (#1725).
 
