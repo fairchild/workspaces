@@ -36,7 +36,7 @@ CONTRIBUTOR_SCRIPTS = (
 if str(CONTRIBUTOR_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(CONTRIBUTOR_SCRIPTS))
 
-from evidence import extract_requested_evidence  # noqa: E402
+from evidence import requested_evidence_contract  # noqa: E402
 from patch_policy import (  # noqa: E402
     RepoEnumerationError,
     issue_body_path_candidates,
@@ -110,6 +110,21 @@ TERMINAL_DECLINE_COMMENTS = {
     "privileged": PRIVILEGED_COMMENT,
     "no_evidence_contract": NO_EVIDENCE_CONTRACT_COMMENT,
 }
+
+
+def unreadable_contract_comment(reason: str) -> str:
+    """Admission's decline when a contract section is cut by a heading.
+
+    Its own comment rather than an entry in the static table, because the
+    reason names the line the author has to move, and that line is different
+    on every issue.
+    """
+    return (
+        "Factory admission: declined — a contract section on this issue cannot be "
+        f"read as written: {reason}. Removing `ready`; fix the section and re-release.\n\n"
+        "A heading of level 1 ends the section above it, so the items below it are "
+        "outside the contract even though the page still shows them in the list."
+    )
 WIP_COMMENT = (
     f"Factory admission: deferred — the {FACTORY_WIP_CAP}-issue factory WIP "
     "cap is full; leaving this issue ready."
@@ -508,7 +523,14 @@ def evaluate_claim(
         return ClaimDecision(action, f"issue is missing labels: {', '.join(missing)}")
     if privileged_scope(issue, tracked_files=tracked_files):
         return ClaimDecision("privileged", "issue indicates privileged-path scope")
-    if not extract_requested_evidence(str(issue.get("body") or "")):
+    requested, contract_refusal = requested_evidence_contract(str(issue.get("body") or ""))
+    if contract_refusal is not None:
+        # A contract a heading cuts in half is not a contract this lane can
+        # admit: the items below the cut would never be asked for, and the
+        # page gives the author no sign of it. `ready` comes off with the
+        # line named, the same as a missing label (#1734, round 2).
+        return ClaimDecision("unreadable_evidence_contract", contract_refusal)
+    if not requested:
         # The contributor runtime refuses to execute without an explicit
         # contract (FACTORY_REQUIRE_EXPLICIT_EVIDENCE, set on every factory
         # run). Catching it here instead costs one API read; catching it there
@@ -961,6 +983,10 @@ def claim(
     # so a label change someone made since then stands (#1596).
     if decision.action in TERMINAL_DECLINES:
         comment_once(client, issue_number, TERMINAL_DECLINE_COMMENTS[decision.action])
+        client.remove_label(issue_number, "ready")
+        return
+    if decision.action == "unreadable_evidence_contract":
+        comment_once(client, issue_number, unreadable_contract_comment(decision.reason))
         client.remove_label(issue_number, "ready")
         return
     if decision.action == "missing_labels":

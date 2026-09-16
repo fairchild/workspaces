@@ -17,9 +17,11 @@ from _helpers import (
     MARKDOWN,
     MARKDOWN_LINE_ENDING_RE,
     REPO_ROOT,
+    contract_read_refusal,
     has_markdown_section,
     insert_markdown_section,
     is_section_boundary,
+    is_section_heading,
     log,
     markdown_section,
     heading_cut_hits_an_example,
@@ -850,7 +852,10 @@ def _rendered_section_span(
 
     The heading is matched on the text a reader sees, at the level
     `markdown_section` matches it: an h2 at the top of the body, not one nested
-    inside a list, and the first such heading wins.
+    inside a list, and the first such heading wins. `is_section_heading` is
+    that level and `is_section_boundary` is where the section stops, which are
+    two questions rather than one -- an h1 ends a section without being a
+    section this addresses (#1734).
 
     The section ends where `is_section_boundary` says it does, which is the
     same call the written read makes on the same tokens -- so the two views
@@ -867,8 +872,7 @@ def _rendered_section_span(
     wanted = " ".join(heading.split()).casefold()
     for index, token in enumerate(tokens):
         if (
-            token.type != "heading_open"
-            or not is_section_boundary(token)
+            not is_section_heading(token)
             or " ".join(_inline_text(tokens[index + 1].children).split()).casefold() != wanted
         ):
             continue
@@ -1006,14 +1010,37 @@ def _rendered_lines(body: str, heading: str | None = None) -> list[str]:
     return lines
 
 
-def extract_requested_evidence(body: str) -> list[str]:
-    evidence_section = markdown_section(body, "Requested Evidence")
+def _requested_evidence_items(section: str) -> list[str]:
+    """The items a `## Requested Evidence` section lists, from the section's text.
+
+    Taken out of the contract reader so the refusal can ask what the two
+    readings of the section actually list, rather than whether a heading of a
+    given kind sits between them.
+    """
     fallback_sentence = EVIDENCE_FALLBACK_SENTENCE.casefold()
     return [
         item
-        for item in _wrapped_bullets(evidence_section)
+        for item in _wrapped_bullets(section)
         if item.lower() != "none" and item.casefold() != fallback_sentence
     ]
+
+
+def requested_evidence_contract(body: str) -> tuple[list[str], str | None]:
+    """What this issue asks the pull request to prove, or why it cannot be read.
+
+    The items and the reason come back together, and there is no way to ask
+    for one without the other, because a caller that read a truncated contract
+    as the whole of it would stop demanding the items below the cut -- an
+    author could drop an obligation by writing a heading in the middle of the
+    section, with nothing on the page or in the run saying so
+    (`contract_read_refusal`). Every reader of this contract refuses instead:
+    admission does not admit, the review gate does not approve, delivery does
+    not deliver.
+    """
+    refusal = contract_read_refusal(body, "Requested Evidence", _requested_evidence_items)
+    if refusal is not None:
+        return [], refusal
+    return _requested_evidence_items(markdown_section(body, "Requested Evidence")), None
 
 
 def _lf(body: str) -> str:
@@ -2299,6 +2326,43 @@ def _section_notes(section: str) -> list[str]:
     return carried
 
 
+def _placement_a_reader_cannot_see(written: str) -> str | None:
+    """Why the page would not show the `## Evidence Status` this write just placed, or None.
+
+    The placement walks to the first `## Validation` the page shows as a
+    heading and falls back to the end of the body when it shows none. Below a
+    raw HTML block that never closes the page shows nothing as itself, so that
+    fallback writes the section inside a block a reader reads as markup: the
+    status is in the source, absent from the page, and the metadata comment
+    still carries it to every gate -- an approval over evidence nobody can see.
+
+    Until a section ended at an h1 the cut refused such a body outright, and
+    that refusal is about the cut (`_write_refusal`): a section with no
+    boundary after it, reached through a block that never closed. The cut is
+    safe now, because the section ends above the block. This asks the same
+    question of the insertion (#1734).
+
+    Asked of the result rather than of the shapes that produce it: a write
+    whose section the page does not show is wrong however it got there, and a
+    postcondition cannot be argued out of by the next boundary rule.
+    """
+    normalized = MARKDOWN_LINE_ENDING_RE.sub("\n", written)
+    lines = normalized.split("\n")
+    tokens = MARKDOWN.parse(normalized)
+    if _rendered_section_span(tokens, EVIDENCE_STATUS_HEADING, lines) is not None:
+        return None
+    open_block = unterminated_block(tokens, len(lines) - 1 if lines[-1] == "" else len(lines))
+    where = (
+        f" written below {open_block[1]} opened at line {open_block[0].map[0] + 1}"
+        if open_block is not None
+        else ""
+    )
+    return (
+        f"the `## {EVIDENCE_STATUS_HEADING}` section this write places{where} is not a heading "
+        "on the page, so the status would be in the body and absent from what a reader sees"
+    )
+
+
 def write_evidence_status_section(
     body: str, status_lines: Iterable[str]
 ) -> tuple[str, str | None]:
@@ -2310,10 +2374,14 @@ def write_evidence_status_section(
     waiting (#1729). What they agree on: the status list is rewritten from the
     entries in hand, and every other block that was under the heading moves,
     in the order it was written, to a top-level `## Evidence Notes` directly
-    below. A body that carried no such block has no such section, a body that
-    has one keeps it directly below the status, and a second write over the
-    first moves nothing, since by then the notes are no longer under the
-    heading.
+    below -- anchored to the status section rather than to whatever heading
+    follows it, so the two stay together wherever the status itself sits. A
+    body that carried no such block has no such section, a body that has one
+    keeps it directly below the status, and a second write over the first
+    moves nothing, since by then the notes are no longer under the heading.
+
+    A section the body already has is rewritten where its author put it, so a
+    write moves the status list's contents and nothing else.
 
     The text carried forward is read from the same call that cuts it, so the
     write cannot take out a span the read did not see. It stands the body down
@@ -2341,6 +2409,12 @@ def write_evidence_status_section(
         return source, notes_refusal
     # Appended to what that section already held rather than replacing it.
     blocks = [kept_text for text in kept if (kept_text := _without_edge_blank_lines(text))] + notes
+
+    def placed(candidate: str) -> tuple[str, str | None]:
+        """The rewritten body, or the source standing whole and why."""
+        unseen = _placement_a_reader_cannot_see(candidate)
+        return (source, unseen) if unseen else (candidate, None)
+
     written = insert_markdown_section(
         strip_markdown_section(body, EVIDENCE_NOTES_HEADING) if kept else body,
         EVIDENCE_STATUS_HEADING,
@@ -2351,9 +2425,9 @@ def write_evidence_status_section(
         # Nothing to hold, and no heading left behind: an empty one is a
         # section this writer would place next run and a reader would find
         # above the status now.
-        return written, None
+        return placed(written)
     with_notes = insert_markdown_section(
-        written, EVIDENCE_NOTES_HEADING, "\n\n".join(blocks), before_heading="Validation"
+        written, EVIDENCE_NOTES_HEADING, "\n\n".join(blocks), after_heading=EVIDENCE_STATUS_HEADING
     )
     if len(with_notes) > PR_BODY_LIMIT >= len(written):
         # A body GitHub will not store is not a body, and dropping the notes is
@@ -2366,8 +2440,8 @@ def write_evidence_status_section(
             f"{len(blocks)} block(s) would take the body to {len(with_notes)} characters, "
             f"past the {PR_BODY_LIMIT} GitHub stores"
         )
-        return written, None
-    return with_notes, None
+        return placed(written)
+    return placed(with_notes)
 
 
 def render_execution_summary_body(

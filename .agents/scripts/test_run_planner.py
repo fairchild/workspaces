@@ -1789,7 +1789,7 @@ class RunContributorTests(unittest.TestCase):
             "- swift test --filter WorkspaceManagerTests.WorkspaceProviderTests\n"
         )
         self.assertEqual(
-            run_contributor.extract_requested_evidence(body),
+            run_contributor.requested_evidence_contract(body)[0],
             ["swift test --filter WorkspaceManagerTests.WorkspaceProviderTests"],
         )
 

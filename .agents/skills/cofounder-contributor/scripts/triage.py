@@ -25,7 +25,7 @@ from _helpers import (
 from evidence import (
     _explicit_evidence_contract,
     evaluate_evidence_accounting,
-    extract_requested_evidence,
+    requested_evidence_contract,
     format_requested_evidence_numbered,
     summarize_evidence_accounting_by_index,
     summarize_requested_evidence,
@@ -33,7 +33,7 @@ from evidence import (
 from github_state import (
     HISTORY_QUERY,
     claim_is_stale,
-    extract_blocked_by,
+    blocked_by_contract,
     extract_execution_priority,
     extract_issue_discussion_number,
     extract_pr_issue_reference,
@@ -634,8 +634,10 @@ def format_pr_list_for_context(
         }
         if issue_number is not None:
             issue_body = str(issue_map.get(issue_number, {}).get("body", ""))
-            requested_evidence = extract_requested_evidence(issue_body)
+            requested_evidence, contract_refusal = requested_evidence_contract(issue_body)
             accounting = evaluate_evidence_accounting(pr_body, requested_evidence)
+            if contract_refusal is not None:
+                entry["contract_refusal"] = contract_refusal
             entry["linkedIssue"] = issue_number
             if _explicit_evidence_contract(requested_evidence):
                 summary: dict[str, object] = {
@@ -792,8 +794,13 @@ def classify_execution_work(
         body = str(issue.get("body", ""))
         discussion_number = extract_issue_discussion_number(body)
         priority = extract_execution_priority(body)
-        blocked_by = extract_blocked_by(body)
-        requested_evidence = extract_requested_evidence(body)
+        blocked_by, blocked_by_refusal = blocked_by_contract(body)
+        requested_evidence, requested_evidence_refusal = requested_evidence_contract(body)
+        contract_refusals = [
+            refusal
+            for refusal in (requested_evidence_refusal, blocked_by_refusal)
+            if refusal is not None
+        ]
         blockers = [
             blocker
             for blocker in blocked_by
@@ -832,6 +839,7 @@ def classify_execution_work(
             "priority": priority,
             "blocked_by": blocked_by,
             "requested_evidence": requested_evidence,
+            "contract_refusals": contract_refusals,
             "approval_reason": (
                 f"{AGENT_READY_LABEL} label present"
                 if AGENT_READY_LABEL in labels
@@ -865,7 +873,10 @@ def classify_execution_work(
             claimed_issues.append(item)
             continue
 
-        if AGENT_READY_LABEL not in labels or blockers or linked_prs:
+        # A cut contract keeps the issue out of the ready queue rather than
+        # releasing it with the obligations that survived the cut; the item
+        # above carries the reason, so the queue says why it is not offered.
+        if AGENT_READY_LABEL not in labels or blockers or linked_prs or contract_refusals:
             continue
         if latest_claim is not None and claim_agent and claim_agent != current_agent:
             continue

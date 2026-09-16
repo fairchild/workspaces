@@ -176,46 +176,62 @@ def closes_fence(line: str, run: str) -> bool:
     return re.fullmatch(rf" {{0,3}}{re.escape(run[0])}{{{len(run)},}}[ \t]*", line) is not None
 
 
-# What ends a section for the written view: a heading of level 1 or 2 at column
-# 0. An h1 below an h2 opens a new top-level section, so the lines under it are
-# outside the section on the page -- `rendered_status_lines` stops there
-# already, and one boundary serves both views (#1674, #1729). Level 3 and below
-# is a sub-heading inside the section, and its lines are the section's. A run of
-# hashes with no text is a heading too: CommonMark ends the run on a space, a
-# tab or the line's end, which is what the trailing group asks for -- and on
-# nothing else, since `\s` would take a nonbreaking space or a vertical tab for
-# a heading where the page shows a paragraph, and the lines below one would
-# leave the section for this view while staying in it for the other.
-# Column 0 only, though a heading may sit up to three spaces in: indented, it is
-# a list item's continuation as often as it is a top-level heading, and which
-# one is the parser's answer rather than a line's. Reading past it runs the
-# section long, which can add a refusal and cannot drop one.
-SECTION_BOUNDARY_HEADING_RE = re.compile(r"^#{1,2}(?:[ \t]|$)")
+def section_boundary_token(token: Token) -> bool:
+    """Whether a parsed token starts something other than the section above it.
+
+    A top-level heading of level 1 or 2, however the author made it -- hashes
+    or an underline -- or a top-level dash rule. One definition for both of
+    this gate's views: the rendered read asks it about the tokens it walks,
+    and the written read asks it about the same tokens to find where to stop
+    slicing. A rule of asterisks or underscores ends nothing, and an h3 is a
+    sub-heading inside the section.
+
+    The contributor skill's `is_section_boundary` is this rule, written there
+    for its own reader; the cross-file test in `test_pr_readiness.py` fails
+    when the two answer differently on any shape where they can.
+    """
+    if token.level != 0:
+        return False
+    if token.type == "hr":
+        return token.markup.startswith("-")
+    return token.type == "heading_open" and token.tag in {"h1", "h2"}
 
 
 def extract_section(body: str, heading: str, *, strip: bool = True) -> str:
-    # A section runs to the next heading of level 1 or 2 or to a `---` rule, and
-    # one inside a fence is the fence's content. Stripping takes the first line's
-    # indent along with the blank lines around the section, so a reader that
-    # cares about indentation asks for it unstripped.
-    start = re.search(rf"(?mi)^## {re.escape(heading)}\n", body)
+    """The body text under `## <heading>`, as written, up to where the section ends.
+
+    The end is asked of the parser rather than matched line by line. A scanner
+    reading `---` as a rule and nothing else took `----`, `- - -` and a line
+    of dashes with trailing spaces for ordinary text, kept the text line of a
+    setext heading inside the section it ends, read past a heading indented
+    one space, and stopped at a heading the page shows inside an unterminated
+    HTML block -- five shapes on which the gate and the contributor skill read
+    different sections of the same body, each found by enumerating the two
+    rules against each other rather than by a body that failed (#1734).
+
+    Stripping takes the first line's indent along with the blank lines around
+    the section, so a reader that cares about indentation asks for it
+    unstripped.
+    """
+    # Every line ending GitHub stores. `evaluate` normalises the body it
+    # reads; this repeats it because the function is called directly too, and
+    # a CRLF body read here without it has no sections at all.
+    normalized = LINE_ENDING_RE.sub("\n", body)
+    start = re.search(rf"(?mi)^## {re.escape(heading)}\n", normalized)
     if not start:
         return ""
-    lines = body[start.end():].split("\n")
-    kept: list[str] = []
-    run = ""
-    for index, line in enumerate(lines):
-        if run:
-            if closes_fence(line, run):
-                run = ""
-        elif SECTION_BOUNDARY_HEADING_RE.match(line) or (
-            line == "---" and 0 < index < len(lines) - 1
-        ):
-            break
-        else:
-            run = fence_opener(line)
-        kept.append(line)
-    section = "\n".join(kept)
+    lines = normalized.split("\n")
+    heading_line = normalized[: start.start()].count("\n")
+    tokens = MARKDOWN.parse(normalized)
+    stop = next(
+        (
+            token.map[0]
+            for token in tokens
+            if token.map and token.map[0] > heading_line and section_boundary_token(token)
+        ),
+        len(lines),
+    )
+    section = "\n".join(lines[heading_line + 1 : stop])
     return section.strip() if strip else section
 
 
@@ -321,10 +337,7 @@ def rendered_status_lines(body: str) -> list[str]:
         index += 3  # heading_open, its inline, heading_close
         while index < len(tokens):
             token = tokens[index]
-            if token.level == 0 and (
-                (token.type == "hr" and token.markup.startswith("-"))
-                or (token.type == "heading_open" and token.tag in {"h1", "h2"})
-            ):
+            if section_boundary_token(token):
                 break
             if token.type == "inline":
                 lines.extend(
@@ -941,7 +954,19 @@ def check_evidence_delivery(pr_number: int, *, expected_head: str = "") -> int:
             if issue is None:
                 report.update(status="unavailable", reason_code="requested_evidence_unavailable")
                 return 1
-            requested_evidence = github_state.extract_requested_evidence(str(issue.get("body", "")))
+            requested_evidence, contract_refusal = github_state.requested_evidence_contract(
+                str(issue.get("body", ""))
+            )
+            if contract_refusal is not None:
+                # Delivery over a contract that cannot be read would prepare
+                # evidence for the items that survived the cut and call the
+                # PR delivered; the reason names the line to move.
+                report.update(
+                    status="unavailable",
+                    reason_code="requested_evidence_unreadable",
+                    reason=contract_refusal,
+                )
+                return 1
         prepared = review_evidence.prepare_review_evidence(
             pr, checks, REPO_ROOT, expected_head=expected_head,
             requested_evidence=requested_evidence,

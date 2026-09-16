@@ -740,6 +740,59 @@ class FactoryImplementTests(unittest.TestCase):
         self.assertIn("matched=false", outputs)
         self.assertNotIn("matched=true", outputs)
 
+    CUT_CONTRACT_ISSUE_BODY = (
+        "Change Sources/Feature.swift\n\n"
+        "## Requested Evidence\n\n- `swift test` passes\n\n"
+        "# Reviewer notes\n\n- a screenshot of the narrowed row\n"
+    )
+
+    def test_a_contract_cut_by_a_heading_is_declined_rather_than_read_short(self) -> None:
+        # The first of the three readers of this contract. An h1 in the middle
+        # of the section takes every item below it out of the contract, with
+        # the page still listing them; admitting the issue would run it against
+        # a promise smaller than its author wrote. `ready` comes off and the
+        # comment names the line to move.
+        decision = factory_implement.evaluate_claim(
+            self.issue(body=self.CUT_CONTRACT_ISSUE_BODY), 0
+        )
+        self.assertEqual(decision.action, "unreadable_evidence_contract")
+        self.assertIn("line 7", decision.reason)
+        self.assertIn("# Reviewer notes", decision.reason)
+        # And the control: at an h2 the section has always ended, so the
+        # contract is the item above it and the issue is admitted.
+        self.assertEqual(
+            factory_implement.evaluate_claim(
+                self.issue(
+                    body=self.CUT_CONTRACT_ISSUE_BODY.replace(
+                        "# Reviewer notes", "## Reviewer notes"
+                    )
+                ),
+                0,
+            ).action,
+            "claim",
+        )
+
+    def test_the_cut_contract_decline_withdraws_ready_and_names_the_line(self) -> None:
+        client = self.claim_client(
+            self.issue(
+                body=self.CUT_CONTRACT_ISSUE_BODY,
+                labels=("agent", "task", "ready", "quality"),
+            )
+        )
+        actions_client = mock.Mock()
+        actions_client.workflow_runs_on.return_value = []
+
+        outputs = self.run_claim(client, actions_client)
+
+        client.comment.assert_called_once()
+        comment_body = client.comment.call_args.args[1]
+        self.assertIn("# Reviewer notes", comment_body)
+        self.assertIn("re-release", comment_body)
+        client.remove_label.assert_called_once_with(42, "ready")
+        client.update_issue.assert_not_called()
+        self.assertIn("matched=false", outputs)
+        self.assertNotIn("matched=true", outputs)
+
     def test_missing_required_label_on_a_released_issue_speaks_and_withdraws_ready(
         self,
     ) -> None:
@@ -1608,14 +1661,18 @@ class EvidenceReconcileContractTests(unittest.TestCase):
         self.assertIn('gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY"', step)
         # The contract comes from the issue, not from the PR body the
         # reconciler is about to rewrite. Naming both halves, because
-        # `extract_requested_evidence(body_path.read_text())` reads as
+        # `requested_evidence_contract(body_path.read_text())` reads as
         # plausible code and would take the contract from the wrong file
         # (codex review finding).
         self.assertIn('issue_body_path = Path("issue-body.md")', step)
         self.assertRegex(
             step,
-            r"requested_evidence=module\.extract_requested_evidence\(\s*\n\s*issue_body_path\.read_text\(\)",
+            r"module\.requested_evidence_contract\(\s*\n\s*issue_body_path\.read_text\(\)",
         )
+        # And a contract it cannot read stops the reconcile rather than
+        # completing the items that survived the cut (#1734, round 2).
+        self.assertIn("if contract_refusal is not None:", step)
+        self.assertIn("raise SystemExit(1)", step)
 
     def test_the_reconcile_step_runs_on_the_path_that_succeeds(self) -> None:
         # `steps.pr.outcome == 'failure'` reads as a guard and disables

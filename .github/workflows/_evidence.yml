@@ -341,10 +341,17 @@ jobs:
           body_path = Path("pr-body.md")
           issue_body_path = Path("issue-body.md")
           test_output_path = Path("evidence-artifacts/test-output.txt")
+          requested_evidence, contract_refusal = module.requested_evidence_contract(
+              issue_body_path.read_text()
+          )
+          if contract_refusal is not None:
+              # Reconciling against the items above the cut would complete a
+              # smaller contract than the issue wrote, and the body it writes
+              # is what every later gate reads.
+              print(f"::error title=Evidence reconcile contract::{contract_refusal}")
+              raise SystemExit(1)
           kwargs = dict(
-              requested_evidence=module.extract_requested_evidence(
-                  issue_body_path.read_text()
-              ),
+              requested_evidence=requested_evidence,
               build_succeeded=os.environ["BUILD_SUCCEEDED"] == "true",
               tests_succeeded=os.environ["TESTS_SUCCEEDED"] == "true",
               smoke_succeeded=os.environ["SMOKE_SUCCEEDED"] == "true",

@@ -161,6 +161,30 @@ class LiveCiVerificationTests(unittest.TestCase):
         ):
             return execution._live_ci_evidence_gate_error(42, env or {})
 
+    def test_a_linked_issue_whose_contract_is_cut_blocks_the_verdict(self) -> None:
+        # The second of the three readers of the contract. The gate resolves
+        # the issue's Requested Evidence to know which checks must be live-
+        # green; a section an h1 cuts hands it the items above the cut, so a
+        # named check written below one would never be verified and the
+        # approval would be over a smaller promise than the issue made.
+        body = body_with_entries(
+            [{"index": 1, "item": CI_ITEM, "status": "complete", "detail": "green earlier"}]
+        )
+        cut = (
+            "## Requested Evidence\n\n- `swift test` passes\n\n"
+            "# Reviewer notes\n\n- CI: `Web CI` green on the PR head\n"
+        )
+        with (
+            mock.patch.object(execution, "_pr_body_and_head", return_value=(body, HEAD)),
+            mock.patch.object(execution, "repo_owner_name", return_value=("fairchild", "workspaces")),
+            mock.patch.object(execution, "extract_pr_issue_reference", return_value=(7, "april")),
+            mock.patch.object(execution, "fetch_detailed_issue", return_value={"body": cut}),
+        ):
+            error = execution._live_ci_evidence_gate_error(42, {})
+        self.assertIsNotNone(error)
+        self.assertIn("cannot be read", error)
+        self.assertIn("# Reviewer notes", error)
+
     def test_green_live_check_passes(self) -> None:
         body = body_with_entries(
             [{"index": 1, "item": CI_ITEM, "status": "complete", "detail": "green earlier"}]
