@@ -1507,12 +1507,131 @@ class TheRuntimeSeedsASectionWhereThisGateStillMatchesALineTests(unittest.TestCa
         self.assertIn("- Surface: desktop", gate_read)
         self.assertNotIn("`Sources/Foo.swift`", gate_read)
         self.assertNotEqual(gate_read, self.reader().markdown_section(seeded, "Mergeability"))
-        # It costs a refusal rather than an approval here: the fields the
-        # example does not carry are reported unanswered, so the gate fails a
-        # body a reader would call complete-but-unfilled either way.
+        # On THIS fixture it costs a refusal: the example carries one field, so
+        # the three it omits are reported unanswered. That is the fixture's
+        # doing, not the rule's -- a fenced example carrying all four fields is
+        # read as a filled section and approved, which is the same misread
+        # spending an approval instead. #1742 owns moving this start onto a
+        # parse; the shape is pinned there rather than claimed fixed here.
         result = pr_readiness.evaluate(pr(seeded), ["Sources/Foo.swift"])
         self.assertFalse(result.ok)
         self.assertTrue(all("field is empty or still default" in text for text in result.failures), result.failures)
+
+
+class TheSeedersIdentityIsNoWiderThanThisGatesTests(unittest.TestCase):
+    """A heading this gate cannot read is not one the seeder treats as present (#1730).
+
+    The runtime's presence check asks the parser now, so a heading the page
+    shows is a heading to it: `## **Mergeability**`, one indented up to three
+    spaces, and a setext `Mergeability` over a rule. This gate still finds a
+    section's START with a literal `^## <heading>` line. Left alone, the two
+    compose into a body the factory believes it healed and the gate then
+    blocks: seeding is skipped because the section is there, and
+    `extract_section` returns nothing, so `Missing ## Mergeability section from
+    the PR body` — main PASS, head FAIL, on three shapes that pass today.
+
+    Fail-closed, and still a body that used to merge and would not. So the
+    seeder asks both questions and skips only when both say yes: the page shows
+    the heading, AND this gate can read it. Each half is load-bearing — without
+    the first a fenced example counts and the body goes out with no section at
+    all (#1730's own bug), without the second the shapes above go unseeded.
+
+    The narrowing is this gate's, not the runtime's, and it comes out when
+    #1742 moves this start onto a parse. Until then the copy of the rule lives
+    beside the reader that needs it, and the test below fails if the two drift.
+    """
+
+    SCRIPTS = TheRuntimeSeedsASectionWhereThisGateStillMatchesALineTests.SCRIPTS
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+    BODY = """A paragraph long enough to say why this pull request exists at all, plainly.
+
+{heading}
+
+- Surface: desktop
+- User-facing behavior changed: none
+- Non-happy paths considered: yes
+- Residual risk or follow-up: none
+
+## Evidence
+
+- [x] Not a testable change
+"""
+    # Each is a heading the page shows and this gate's literal start misses.
+    SHAPES = {
+        "emphasis": "## **Mergeability**",
+        "indented three spaces": "   ## Mergeability",
+        "setext": "Mergeability\n---",
+        "trailing spaces": "## Mergeability  ",
+    }
+
+    def seeder(self):
+        return TheRuntimeSeedsASectionWhereThisGateStillMatchesALineTests.seeder(self)
+
+    def reader(self):
+        return TheRuntimeSeedsASectionWhereThisGateStillMatchesALineTests.reader(self)
+
+    def test_a_heading_only_the_page_shows_is_seeded_and_the_gate_then_passes(self) -> None:
+        for name, heading in self.SHAPES.items():
+            with self.subTest(shape=name):
+                body = self.BODY.format(heading=heading)
+                seeded = self.seeder().seed_mergeability_section(body, changed_files=self.FILES)
+                self.assertNotEqual(seeded, body, "the seeder returned the body unwritten")
+                self.assertIn("\n## Mergeability\n", seeded)
+                self.assertEqual(pr_readiness.evaluate(pr(seeded), self.FILES).failures, [])
+
+    def test_the_two_halves_are_both_load_bearing(self) -> None:
+        reader, seeder = self.reader(), self.seeder()
+        # A literal heading the page shows: both yes, so nothing is written.
+        literal = self.BODY.format(heading="## Mergeability")
+        self.assertTrue(reader.has_markdown_section(literal, "Mergeability"))
+        self.assertTrue(reader.gate_reads_markdown_section(literal, "Mergeability"))
+        self.assertEqual(seeder.seed_mergeability_section(literal, changed_files=self.FILES), literal)
+        # A fenced example: this gate's literal start finds it and the page
+        # does not show it, so the parse is what sends the seeder in.
+        fenced = TheRuntimeSeedsASectionWhereThisGateStillMatchesALineTests.FENCED_EXAMPLE_BODY
+        self.assertTrue(reader.gate_reads_markdown_section(fenced, "Mergeability"))
+        self.assertFalse(reader.has_markdown_section(fenced, "Mergeability"))
+        # And the other way for each shape above.
+        for name, heading in self.SHAPES.items():
+            with self.subTest(shape=name):
+                body = self.BODY.format(heading=heading)
+                self.assertTrue(reader.has_markdown_section(body, "Mergeability"))
+                self.assertFalse(reader.gate_reads_markdown_section(body, "Mergeability"))
+
+    def test_the_skills_copy_of_this_gates_start_answers_as_this_gate_does(self) -> None:
+        # The rule is written twice -- this script is a PEP 723 entry point
+        # with its own pin and no package for the skill to import -- so the
+        # shapes are enumerated against both readers rather than trusted to
+        # stay in step. `extract_section` returning text is this gate finding
+        # the start; the skill's predicate has to say the same thing.
+        reader = self.reader()
+        shapes = (
+            "## Mergeability",
+            "## mergeability",
+            "##  Mergeability",
+            "## Mergeability  ",
+            "## **Mergeability**",
+            "   ## Mergeability",
+            "    ## Mergeability",
+            "Mergeability\n---",
+            "### Mergeability",
+            "## Mergeability extra",
+            "## Mergeability\r",
+        )
+        for shape in shapes:
+            for ending in ("\n", "\r\n"):
+                with self.subTest(shape=shape, ending=ending.encode("unicode_escape").decode()):
+                    body = f"Why this exists.{ending}{ending}{shape}{ending}{ending}- Surface: desktop{ending}"
+                    # This gate itself is the oracle rather than a second copy
+                    # of its pattern. The section has content in every fixture,
+                    # so text back means the start was found and "" means it
+                    # was not.
+                    gate_finds = bool(pr_readiness.extract_section(body, "Mergeability"))
+                    self.assertEqual(
+                        reader.gate_reads_markdown_section(body, "Mergeability"),
+                        gate_finds,
+                        shape,
+                    )
 
 
 class ReadinessCommentTests(unittest.TestCase):

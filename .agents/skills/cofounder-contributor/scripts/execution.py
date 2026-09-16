@@ -31,6 +31,7 @@ from _helpers import (
     VALIDATOR_SCRIPT,
     _normalize_login,
     branch_name_for_issue,
+    gate_reads_markdown_section,
     has_markdown_section,
     insert_markdown_section,
     issue_label_names,
@@ -527,7 +528,18 @@ def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) ->
     structural checks pass at PR-open time without inventing claims. An
     agent-authored Mergeability section is kept verbatim.
     """
-    if has_markdown_section(summary_body, "Mergeability"):
+    # Two questions, and seeding is skipped only when both say yes. The page
+    # has to show the heading, or a `## Mergeability` line inside a fenced
+    # example counts and the body goes out with no section at all (#1730); and
+    # the gate has to be able to read it, or a heading the page shows but the
+    # gate's literal start misses -- emphasis, an indent, a setext underline --
+    # leaves the runtime believing it healed a body the gate then blocks.
+    # Dropping either half reintroduces one of the two. The second is the
+    # gate's narrowness, not this reader's, and it comes out when #1742 moves
+    # the gate's start onto a parse.
+    if has_markdown_section(summary_body, "Mergeability") and gate_reads_markdown_section(
+        summary_body, "Mergeability"
+    ):
         return summary_body
 
     what_line = _mergeability_clip(_first_content_line(what_section(summary_body)))
