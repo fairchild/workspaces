@@ -2786,6 +2786,47 @@ class RevisionTurnTests(unittest.TestCase):
             os.unlink(output_path)
         return exit_code, commands, comments, outputs
 
+    # No heading the page shows below the block that never closes, so every
+    # placement for `## Evidence Status` is inside it and the write stands the
+    # body down.
+    UNWRITABLE_BODY = (
+        "## Summary\n- Rewrote the sheet's status mapping\n\n"
+        "<pre>\nthe log I pasted and never closed\n"
+    )
+
+    def test_a_body_that_cannot_be_written_is_said_on_the_pull_request(self) -> None:
+        # #1733: the stand-down reason went to stderr and into the Actions
+        # step log, where the author who edited the body never looks. The run
+        # still fails -- nothing was written -- and now the person who has to
+        # close the block is told which line it is, on the pull request they
+        # are reading. Same crossing as `emit_refused_privileged_paths` makes
+        # for the issue side.
+        state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        with mock.patch.object(self, "_state", return_value=state):
+            exit_code, _, comments, _ = self._route(
+                dirty=True,
+                live_body="stale body",
+                data=self._data(self.UNWRITABLE_BODY),
+                revision=False,
+            )
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(len(comments), 1)
+        self.assertIn("left as written", comments[0])
+        self.assertIn("</pre>", comments[0])
+        self.assertIn(self.PERSONA, comments[0])
+
+    def test_an_ordinary_turn_posts_no_stand_down_comment(self) -> None:
+        # The control: the same turn on a body that writes says nothing extra.
+        state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        with mock.patch.object(self, "_state", return_value=state):
+            exit_code, _, comments, _ = self._route(
+                dirty=True, live_body="stale body", data=self._data(), revision=False
+            )
+        self.assertEqual(
+            [comment for comment in comments if "left as written" in comment], []
+        )
+        self.assertEqual(exit_code, 0)
+
     def test_body_only_revision_edits_the_pr_without_committing(self) -> None:
         exit_code, commands, comments, outputs = self._route(dirty=False, live_body="stale body")
 

@@ -513,7 +513,7 @@ Scope note: an unindented paragraph is a new block, not part of the bullet.
     )
 
     def test_a_wrapped_bullet_yields_the_whole_item(self) -> None:
-        items = run_contributor.extract_requested_evidence(self.WRAPPED_BODY)
+        items = run_contributor.requested_evidence_contract(self.WRAPPED_BODY)[0]
         self.assertEqual(len(items), 2)
         self.assertEqual(
             items[0],
@@ -524,14 +524,14 @@ Scope note: an unindented paragraph is a new block, not part of the bullet.
         self.assertTrue(items[1].endswith("go unnoticed"))
 
     def test_an_unindented_paragraph_does_not_join_the_bullet_above(self) -> None:
-        items = run_contributor.extract_requested_evidence(self.WRAPPED_BODY)
+        items = run_contributor.requested_evidence_contract(self.WRAPPED_BODY)[0]
         self.assertNotIn("Scope note", " ".join(items))
 
     def test_an_item_with_an_internal_em_dash_round_trips(self) -> None:
         # Authored in the issue, written as a markdown status line in the PR
         # body, matched by the gate -- the whole path, not just the regex.
         body = f"## Requested Evidence\n\n- {self.EM_DASH_ITEM}\n"
-        requested = run_contributor.extract_requested_evidence(body)
+        requested = run_contributor.requested_evidence_contract(body)[0]
         self.assertEqual(requested, [self.EM_DASH_ITEM])
 
         pr_body = (
@@ -596,14 +596,14 @@ class SectionHeadingCaseTests(unittest.TestCase):
     ITEMS = "- `swift test` passes\n- Screenshots of the new sidebar\n"
 
     def test_a_lower_case_requested_evidence_heading_is_the_same_contract(self) -> None:
-        canonical = run_contributor.extract_requested_evidence(
+        canonical = run_contributor.requested_evidence_contract(
             f"## Requested Evidence\n\n{self.ITEMS}"
-        )
+        )[0]
         self.assertEqual(canonical, ["`swift test` passes", "Screenshots of the new sidebar"])
         for heading in ("Requested evidence", "requested evidence", "REQUESTED EVIDENCE"):
             with self.subTest(heading=heading):
                 self.assertEqual(
-                    run_contributor.extract_requested_evidence(f"## {heading}\n\n{self.ITEMS}"),
+                    run_contributor.requested_evidence_contract(f"## {heading}\n\n{self.ITEMS}")[0],
                     canonical,
                 )
 
@@ -657,8 +657,8 @@ class SectionHeadingCaseTests(unittest.TestCase):
         # carries its own copy of the match, and if the two disagreed, one would
         # call an issue blocked and the other would not.
         body = "## Blocked by\n\n- #12\n- #34\n"
-        self.assertEqual(run_contributor.extract_blocked_by(body), [12, 34])
-        self.assertEqual(sync_execution_state.extract_blocked_by(body), [12, 34])
+        self.assertEqual(run_contributor.blocked_by_contract(body)[0], [12, 34])
+        self.assertEqual(sync_execution_state.blocked_by_contract(body)[0], [12, 34])
 
 
 class EvidenceSplitAnchoringTests(unittest.TestCase):
@@ -709,7 +709,7 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
   1. a nested ordered step
 """
         self.assertEqual(
-            run_contributor.extract_requested_evidence(body),
+            run_contributor.requested_evidence_contract(body)[0],
             ["the item, which wraps onto a continuation line"],
         )
 
@@ -720,7 +720,7 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
   > a nested quote
 """
         self.assertEqual(
-            run_contributor.extract_requested_evidence(body),
+            run_contributor.requested_evidence_contract(body)[0],
             ["the item, which wraps"],
         )
 
@@ -734,21 +734,21 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
 - the second item
 """
         self.assertEqual(
-            run_contributor.extract_requested_evidence(body),
+            run_contributor.requested_evidence_contract(body)[0],
             ["the first item ```inline``` proves it", "the second item"],
         )
 
     def test_a_quote_marker_needs_no_space_but_a_threshold_is_not_one(self) -> None:
         self.assertEqual(
-            run_contributor.extract_requested_evidence(
+            run_contributor.requested_evidence_contract(
                 "## Requested Evidence\n\n- the item\n  >nested quote\n"
-            ),
+            )[0],
             ["the item"],
         )
         self.assertEqual(
-            run_contributor.extract_requested_evidence(
+            run_contributor.requested_evidence_contract(
                 "## Requested Evidence\n\n- the pass rate holds at\n  >= 95% of runs\n"
-            ),
+            )[0],
             ["the pass rate holds at >= 95% of runs"],
         )
 
@@ -763,7 +763,7 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
   ```
 """
         self.assertEqual(
-            run_contributor.extract_requested_evidence(body),
+            run_contributor.requested_evidence_contract(body)[0],
             ["the real item", "an item showing the shape:"],
         )
 
@@ -865,7 +865,7 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
 - the second item
 """
         self.assertEqual(
-            run_contributor.extract_requested_evidence(body),
+            run_contributor.requested_evidence_contract(body)[0],
             ["the real item", "the second item"],
         )
 
@@ -883,7 +883,7 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
 - the second item
 """
         self.assertEqual(
-            run_contributor.extract_requested_evidence(body),
+            run_contributor.requested_evidence_contract(body)[0],
             ["the real item", "the second item"],
         )
 
@@ -905,7 +905,7 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         # GitHub renders everything after an unterminated fence as code, so
         # the contract holds what a reader can actually see as a bullet.
         body = "## Requested Evidence\n\n- first\n\n```\n- sample\n\n- never rendered\n"
-        self.assertEqual(run_contributor.extract_requested_evidence(body), ["first"])
+        self.assertEqual(run_contributor.requested_evidence_contract(body)[0], ["first"])
 
     def test_the_guard_only_fires_where_the_lane_is_ambiguous(self) -> None:
         # The guard leaves a line alone when a reading is `ci` or `diff`. It
@@ -966,7 +966,7 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         # open a block that swallows every later requested item.
         body = "## Requested Evidence\n\n- first\n\n    ```\n\n- second\n"
         self.assertEqual(
-            run_contributor.extract_requested_evidence(body), ["first", "second"]
+            run_contributor.requested_evidence_contract(body)[0], ["first", "second"]
         )
 
     def test_an_over_indented_fence_does_not_join_the_bullet_above(self) -> None:
@@ -974,7 +974,7 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         # put a row of backticks in the item text.
         body = "## Requested Evidence\n\n- the item\n    ```\n- second\n"
         self.assertEqual(
-            run_contributor.extract_requested_evidence(body), ["the item", "second"]
+            run_contributor.requested_evidence_contract(body)[0], ["the item", "second"]
         )
 
     def test_a_tab_indented_fence_is_indented_code_not_a_fence(self) -> None:
@@ -985,7 +985,7 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         # can see was asked for.
         body = "## Requested Evidence\n\n- first\n\t```\n- second\n"
         self.assertEqual(
-            run_contributor.extract_requested_evidence(body), ["first", "second"]
+            run_contributor.requested_evidence_contract(body)[0], ["first", "second"]
         )
 
     def test_indentation_before_a_fence_is_counted_in_columns(self) -> None:
@@ -1002,7 +1002,7 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
             body = f"## Requested Evidence\n\n- first\n{indent}```\n- second\n"
             with self.subTest(indent=repr(indent)):
                 self.assertEqual(
-                    run_contributor.extract_requested_evidence(body),
+                    run_contributor.requested_evidence_contract(body)[0],
                     ["first"] if opens_a_block else ["first", "second"],
                 )
 
@@ -1016,7 +1016,7 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
             body = f"## Requested Evidence\n\n- first\n{space * 4}```\n- second\n"
             with self.subTest(space=repr(space)):
                 self.assertEqual(
-                    run_contributor.extract_requested_evidence(body), ["first", "second"]
+                    run_contributor.requested_evidence_contract(body)[0], ["first", "second"]
                 )
 
     def test_an_escape_hides_a_backtick_in_prose_but_not_inside_a_span(self) -> None:
@@ -4710,17 +4710,32 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
         self.assert_h1_section_survives(written)
         self.assertIn(f"- [complete] {self.ITEM} -- 10 passed", written)
 
-    def test_the_write_leaves_the_h1_where_the_author_put_it(self) -> None:
-        # What the write does move is its own section: cut from above the h1 and
-        # placed back at the heading it is placed before, `## Evidence Status`
-        # lands below the author's section rather than above it. The author's
-        # heading keeps its line and its blocks; the machine's section is the
-        # one that travels, which is the trade for not touching the h1 at all.
+    def test_the_write_leaves_every_heading_in_the_order_the_author_wrote_it(self) -> None:
+        # Nothing moves, the machine's own section included. A rewrite replaces
+        # the section where it stands, so a shorter cut cannot lift
+        # `## Evidence Status` out from under the author's h1 and land it at
+        # the placement point -- which is what it did until the write learned
+        # to re-insert at the offset it cut from (#1734, round 2).
+        body = self.body()
         written = self.evidence().update_evidence_entries(
-            self.body(), {1: {"status": "complete", "detail": "10 passed"}}
+            body, {1: {"status": "complete", "detail": "10 passed"}}
         )
-        self.assertLess(written.index("# Release blockers"), written.index("## Evidence Status"))
-        self.assertLess(written.index("## Evidence Status"), written.index("## Validation"))
+        headings = ("## Evidence Status", "# Release blockers", "## Validation")
+        self.assertEqual(
+            [heading for heading in headings if heading in written],
+            sorted((h for h in headings if h in written), key=written.index),
+        )
+        self.assertEqual(
+            [heading for heading in headings if heading in body],
+            sorted((h for h in headings if h in body), key=body.index),
+        )
+        # And a second write over the first is a fixed point.
+        self.assertEqual(
+            self.evidence().update_evidence_entries(
+                written, {1: {"status": "complete", "detail": "10 passed"}}
+            ),
+            written,
+        )
 
     def test_the_written_read_stops_before_a_top_level_h1(self) -> None:
         self.assertEqual(
@@ -4812,14 +4827,20 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
         "# Release blockers\n\n<pre>\nnever closed\n"
     )
 
-    def test_a_write_the_page_would_not_show_stands_the_body_down(self) -> None:
-        # The regression the wider boundary opened, and the postcondition that
-        # closes it. The cut is safe -- the section ends above the `<pre>` --
-        # so the refusal about the cut no longer fires, and the placement then
-        # falls back to the end of the body because the page shows no
-        # `## Validation` below a block that never closes. The section landed
-        # inside that block: in the source, absent from the page, and still
-        # carried to every gate by the metadata comment.
+    # The same body with no `## Evidence Status` section at all. Where the
+    # section exists it is replaced where it stands, so the placement question
+    # never arises; this is the shape where it does -- a new section, and
+    # nowhere visible to put it.
+    NO_SECTION_PLACEMENT_BODY = HIDDEN_PLACEMENT_BODY.replace(
+        "## Evidence Status\n\n- [pending-ci] `swift test` passes -- waiting\n\n", ""
+    )
+
+    def test_a_write_over_the_author_s_own_section_lands_where_the_page_shows_it(self) -> None:
+        # Codex's reproducing body, and the answer it gets now. The regression
+        # was the cut going short and the re-insert falling back to the end of
+        # the body, inside a block that never closes. A section replaced where
+        # it stands cannot travel there at all, so this body is written --
+        # correctly, above the author's h1 -- rather than stood down.
         written, errors = run_contributor.render_execution_summary_body(
             self.HIDDEN_PLACEMENT_BODY,
             requested_evidence=["`swift test` passes"],
@@ -4827,7 +4848,24 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
             evidence_blocked=None,
             evidence_pending_ci=None,
         )
-        self.assertEqual(written, self.HIDDEN_PLACEMENT_BODY)
+        self.assertEqual(errors, [])
+        self.assertIn("- [complete] `swift test` passes -- 214 tests passed", written)
+        self.assertLess(written.index("## Evidence Status"), written.index("# Release blockers"))
+        self.assertIsNone(self.evidence()._placement_a_reader_cannot_see(written))
+
+    def test_a_new_section_the_page_would_not_show_stands_the_body_down(self) -> None:
+        # The postcondition's own case: no section to replace, and every
+        # placement below the `<pre>` that never closes. Written there the
+        # status would be in the source, absent from the page, and still
+        # carried to every gate by the metadata comment.
+        written, errors = run_contributor.render_execution_summary_body(
+            self.NO_SECTION_PLACEMENT_BODY,
+            requested_evidence=["`swift test` passes"],
+            evidence_complete=["1 -- 214 tests passed"],
+            evidence_blocked=None,
+            evidence_pending_ci=None,
+        )
+        self.assertEqual(written, self.NO_SECTION_PLACEMENT_BODY)
         self.assertEqual(len(errors), 1)
         self.assertIn("is not a heading on the page", errors[0])
         self.assertIn("</pre>", errors[0])
@@ -4837,7 +4875,7 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
         # stands whole with its metadata, so the record and the page still say
         # the same thing, and the run says which block did it.
         evidence = self.evidence()
-        body = self.meta() + self.HIDDEN_PLACEMENT_BODY
+        body = self.meta() + self.NO_SECTION_PLACEMENT_BODY
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
             written = evidence.update_evidence_entries(
@@ -4899,28 +4937,64 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
         )
         self.assertIn("- [blocked] the signing profile is missing", plain)
 
-    def test_an_h1_after_the_requested_evidence_section_is_not_part_of_the_contract(self) -> None:
-        # The one direction where the wider boundary buys an approval rather
-        # than costing one. A shorter Evidence Status section holds fewer
+    OWNER_ITEM = "a note on whether the fixture state survives a relaunch"
+    CUT_CONTRACT_BODY = (
+        f"## Requested Evidence\n\n- {OWNER_ITEM}\n\n"
+        "# Reviewer notes\n\n- a screenshot of the narrowed row\n\n"
+        f"## Evidence Status\n\n- [complete] {OWNER_ITEM} -- checked: the fixture survived\n\n"
+        "## Validation\n\n- ran the suite on this head\n"
+    )
+
+    def test_a_contract_an_h1_cuts_is_refused_rather_than_read_short(self) -> None:
+        # The one direction where a shorter section buys an approval rather
+        # than costing one, and the one place this change refuses instead of
+        # narrowing. A shorter Evidence Status section holds fewer
         # completions, which can only cost one; a shorter `## Requested
-        # Evidence` section is a shorter contract, so an item the author wrote
-        # under their own h1 is no longer something the PR has to prove. That is
-        # what the page shows -- the bullet is under `# Reviewer notes`, not
-        # under the contract -- and it is the read the gate has taken since
-        # #1674, so this is the reader catching up to it rather than a new
-        # looseness.
-        owner = "a note on whether the fixture state survives a relaunch"
-        body = (
-            f"## Requested Evidence\n\n- {owner}\n\n"
-            "# Reviewer notes\n\n- a screenshot of the narrowed row\n\n"
-            f"## Evidence Status\n\n- [complete] {owner} -- checked: the fixture survived\n\n"
-            "## Validation\n\n- ran the suite on this head\n"
+        # Evidence` section is a shorter promise, so an item an author wrote
+        # below their own h1 would stop being something the PR has to prove --
+        # with the page still showing it in the list and nothing in the run
+        # saying it had stopped counting.
+        items, refusal = self.evidence().requested_evidence_contract(self.CUT_CONTRACT_BODY)
+        self.assertEqual(items, [])
+        self.assertIsNotNone(refusal)
+        self.assertIn("## Requested Evidence", refusal)
+        self.assertIn("line 5", refusal)
+        self.assertIn("# Reviewer notes", refusal)
+
+    def test_an_h2_ends_the_contract_silently_as_it_always_has(self) -> None:
+        # The control, and the boundary of the refusal: a heading at the
+        # section's own level reads as the next section to every reader, the
+        # author included, so it ends the contract without a word -- which it
+        # did before any of this.
+        items, refusal = self.evidence().requested_evidence_contract(
+            self.CUT_CONTRACT_BODY.replace("# Reviewer notes", "## Reviewer notes")
         )
-        requested = self.evidence().extract_requested_evidence(body)
-        self.assertEqual(requested, [owner])
-        accounting, errors = run_contributor.validate_evidence_accounting(body, requested, review_ci=[])
-        self.assertEqual(accounting["missing_items"], [])
-        self.assertIsNone(run_contributor.review_evidence_gate_error("APPROVE", accounting, errors))
+        self.assertEqual(items, [self.OWNER_ITEM])
+        self.assertIsNone(refusal)
+
+    def test_a_setext_h1_cuts_the_contract_too(self) -> None:
+        # An underline of equals signs is an h1 on the page; a rule that only
+        # counted `#` would let the same item vanish under it.
+        items, refusal = self.evidence().requested_evidence_contract(
+            self.CUT_CONTRACT_BODY.replace("# Reviewer notes", "Reviewer notes\n==============")
+        )
+        self.assertEqual(items, [])
+        self.assertIsNotNone(refusal)
+        self.assertIn("Reviewer notes", refusal)
+
+    def test_the_blocked_by_contract_refuses_on_the_same_shape(self) -> None:
+        # The other contract, and the more dangerous one to read short: an
+        # empty blocker list releases the issue.
+        helpers = sys.modules["_helpers"]
+        body = "## Blocked By\n\n- #101\n\n# Reviewer notes\n\n- #202\n"
+        numbers, refusal = helpers.blocked_by_contract(body)
+        self.assertEqual(numbers, [])
+        self.assertIsNotNone(refusal)
+        self.assertIn("## Blocked By", refusal)
+        self.assertEqual(
+            helpers.blocked_by_contract("## Blocked By\n\n- #101\n\n## Notes\n\n- #202\n"),
+            ([101], None),
+        )
 
     def test_an_h1_a_runaway_fence_hides_still_ends_the_section(self) -> None:
         # The third place the boundary is asked: a fence with no closing line
@@ -5081,13 +5155,13 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         for body in bodies:
             with self.subTest(body=body[:50]):
                 self.assertEqual(
-                    run_contributor.extract_blocked_by(body),
-                    sync_execution_state.extract_blocked_by(body),
+                    run_contributor.blocked_by_contract(body)[0],
+                    sync_execution_state.blocked_by_contract(body)[0],
                 )
         # The underline makes `something` a heading, so the section stops there
         # and #202 is in the section below it -- the answer the merge base gave
         # through its literal match, now the answer both readers give.
-        self.assertEqual(run_contributor.extract_blocked_by(self.BLOCKED_BY_BODY), [101])
+        self.assertEqual(run_contributor.blocked_by_contract(self.BLOCKED_BY_BODY)[0], [101])
 
     ORPHAN_BODY = "## Evidence Status\n\n- [x] one - done\n\nnote\n---\n- [x] two - done\n"
 
@@ -5128,15 +5202,18 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
                 refusal = self.write_refusal(helpers, body, heading)
                 with self.subTest(body=body[:50], heading=heading):
                     if refusal is not None:
-                        # Either the heading the parser reads as code, whose
-                        # closer a write would eat, or a block that never
-                        # closed and so hides where the section ends. The body
+                        # One of three: the heading the parser reads as code,
+                        # whose closer a write would eat; a block that never
+                        # closed and so hides where the section ends; or an
+                        # end only the repaired parse can see, which a cut
+                        # would reach by deleting a fence opener. The body
                         # stands and the reason names which.
                         self.assertEqual(rewritten, body)
                         self.assertEqual(remainder, body)
                         self.assertTrue(
                             "inside the code block" in refusal
-                            or "runs to the end of the body" in refusal,
+                            or "runs to the end of the body" in refusal
+                            or "only a repaired parse can see" in refusal,
                             refusal,
                         )
                         continue
@@ -5296,14 +5373,17 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         "the factory's own metadata comment at the end": (
             "## Evidence Status\n\n- [x] one\n\n<!-- evidence-status:v1\n{}\n-->\n", False
         ),
+        # Refusing since #1734 round 2: the end is a line only the repaired
+        # parse can see, and a cut to it takes the fence's opening line along,
+        # so the log below it comes back as live markdown.
         "a heading hidden inside a runaway fence": (
-            "## Evidence Status\n\n```\nthe log, never closed\n\n## Risks\n\nNone.\n", False
+            "## Evidence Status\n\n```\nthe log, never closed\n\n## Risks\n\nNone.\n", True
         ),
         "a heading hidden and indented three spaces": (
-            "## Evidence Status\n\n```\nthe log, never closed\n\n   ## Risks\n\nNone.\n", False
+            "## Evidence Status\n\n```\nthe log, never closed\n\n   ## Risks\n\nNone.\n", True
         ),
         "a heading hidden behind an underline": (
-            "## Evidence Status\n\n```\nthe log, never closed\n\nRisks\n---\n\nNone.\n", False
+            "## Evidence Status\n\n```\nthe log, never closed\n\nRisks\n---\n\nNone.\n", True
         ),
         "a fenced heading whose closer the write would eat": (
             "## Summary\n\n```markdown\n## Evidence Status\n- [complete] the item -- proof\n```\n\n"
@@ -5316,7 +5396,9 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         # is pinned from both sides. A section with nothing after it ends at
         # the end of the body, whatever block the body ends inside; a heading
         # the parser reads as code is an example, and replacing it would take
-        # the block's closing line with it.
+        # the block's closing line with it; and an end only the repaired parse
+        # can see is not an end a writer may cut to, though a reader may read
+        # to it.
         helpers = sys.modules["_helpers"]
         for name, (body, refuses) in self.WRITE_SEAM.items():
             with self.subTest(case=name):
@@ -5335,16 +5417,16 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
                         self.assertTrue(helpers.has_markdown_section(rewritten, heading), heading)
 
     # The five block openers CommonMark runs to the end of the document when
-    # their closer never comes. The fence is repaired instead of refused --
-    # blanking its opener shows the headings below it -- and the raw HTML ones
-    # are refused, because the repair is not extended to text the page renders
-    # as nothing. Either way no section is lost, which is the property.
+    # their closer never comes, with the reason each write refuses. The raw
+    # HTML ones hide where the section ends; the fence's end is a heading only
+    # the repair can see, which a reader may read to and a writer may not cut
+    # to. Either way no section is lost, which is the property.
     RUNAWAY_OPENERS = {
-        "<!-- a reviewer note": True,
-        "<pre>": True,
-        "<script>": True,
-        "<![CDATA[": True,
-        "```": False,
+        "<!-- a reviewer note": "runs to the end of the body",
+        "<pre>": "runs to the end of the body",
+        "<script>": "runs to the end of the body",
+        "<![CDATA[": "runs to the end of the body",
+        "```": "only a repaired parse can see",
     }
 
     def test_two_writes_under_a_block_that_never_closes_delete_no_section(self) -> None:
@@ -5355,7 +5437,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         # cut, and a refusal names the missing closer and the opening line.
         helpers = sys.modules["_helpers"]
         headings = ("Summary", "Evidence Status", "Performance", "Blocked By", "Risks")
-        for opener, refuses in self.RUNAWAY_OPENERS.items():
+        for opener, reason in self.RUNAWAY_OPENERS.items():
             body = (
                 "## Summary\n\ntext\n\n## Evidence Status\n\n- [complete] item -- proof\n"
                 f"{opener}\n\n## Performance\n\nBefore: 1 ms\nAfter: 2 ms\n\n"
@@ -5363,30 +5445,41 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
             )
             with self.subTest(opener=opener):
                 refusal = self.write_refusal(helpers, body, "Evidence Status")
-                self.assertEqual(refusal is not None, refuses, refusal)
-                if refuses:
-                    self.assertIn("runs to the end of the body", refusal)
-                    self.assertRegex(refusal, r"opened at line \d+")
+                self.assertIsNotNone(refusal, opener)
+                self.assertIn(reason, refusal)
+                self.assertRegex(refusal, r"line \d+")
                 one = helpers.insert_markdown_section(body, "Evidence Status", "- [complete] item -- proof")
                 two = helpers.insert_markdown_section(one, "Performance", "Before: 1 ms\nAfter: 2 ms")
                 for heading in headings:
                     self.assertTrue(helpers.has_markdown_section(two, heading), heading)
 
-    def test_an_unclosed_fence_at_the_end_writes_for_a_different_reason_than_one_hiding_a_heading(self) -> None:
-        # Two fence shapes that both write, and they must not be one case. A
-        # fence hiding a heading is located by the repair, so the section ends
-        # at that heading. A fence with nothing after it is located by
-        # nothing, and the section runs to the end of the body -- which is
-        # right, because the page shows that text as code.
+    def test_an_unclosed_fence_at_the_end_writes_where_one_hiding_a_heading_refuses(self) -> None:
+        # Two fence shapes with opposite answers, and they must not be one
+        # case. A fence hiding a heading gives the section an end only the
+        # repair can see: the reader reads to it, and the writer refuses,
+        # because cutting there deletes the fence's opening line and shows the
+        # log below as markdown. A fence with nothing after it hides no
+        # heading, so the section runs to the end of the body and the write is
+        # safe -- the page shows that text as code either way.
         helpers, evidence = sys.modules["_helpers"], sys.modules["evidence"]
         hiding = "## Evidence Status\n\n```\nthe log, never closed\n\n## Risks\n\nNone.\n"
         nothing_after = "## Summary\n\nnote\n\n## Evidence Status\n\n```\nthe log, never closed\n"
-        for name, body, keeps_risks in (("hiding a heading", hiding, True), ("nothing after", nothing_after, False)):
+        for name, body, refuses in (("hiding a heading", hiding, True), ("nothing after", nothing_after, False)):
             with self.subTest(case=name):
-                self.assertIsNone(self.write_refusal(helpers, body, "Evidence Status"))
+                refusal = self.write_refusal(helpers, body, "Evidence Status")
+                self.assertEqual(refusal is not None, refuses, refusal)
                 written = helpers.insert_markdown_section(body, "Evidence Status", "- [x] written")
+                if refuses:
+                    # The body stands, the fence opener with it, and the read
+                    # still stops at the heading the repair found.
+                    self.assertEqual(written, body)
+                    self.assertIn("```", written)
+                    self.assertEqual(
+                        helpers.markdown_section(body, "Evidence Status"), "```\nthe log, never closed"
+                    )
+                    continue
                 self.assertEqual(helpers.markdown_section(written, "Evidence Status"), "- [x] written")
-                self.assertEqual(helpers.has_markdown_section(written, "Risks"), keeps_risks)
+                self.assertFalse(helpers.has_markdown_section(written, "Risks"))
         # And the repair is what tells them apart: for the first it reports a
         # boundary below the heading, for the second there is none to report.
         for body, boundary_below in ((hiding, True), (nothing_after, False)):
@@ -5742,19 +5835,21 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertEqual(self.notes_section(resolved), "- [x] pasted the log into the thread")
         self.assertIsNone(sys.modules["evidence"]._rendered_status_lines(resolved)[1])
 
-    def test_a_block_with_no_end_is_left_to_the_rewrite_rather_than_carried(self) -> None:
-        # A fence with no closing line has no end the body states, so there is
-        # no block to carry: relocating the opener alone would take every
-        # section below it into the notes. It is left where the rewrite finds
-        # it and deleted there, which is what the merge base does with it --
-        # refusing the write instead would strand a body the runaway repair
-        # already rewrites, leaving the lane's completion unwritten forever.
+    def test_a_block_with_no_end_stands_the_write_down_rather_than_being_deleted(self) -> None:
+        # A fence with no closing line has no end the body states, and the
+        # section's end is then a heading only the repaired parse can see. The
+        # rewrite used to cut to it, which deleted the opener and the author's
+        # log with it and showed the lines below as markdown; it stands the
+        # body down instead (#1734, round 2). The cost is real and accepted:
+        # the lane cannot write this body again until someone closes the
+        # fence, and the run says which line that is.
         body = self.body("\n```\n214 tests passed\n")
-        resolved = self.resolved(body)
-        self.assertIn(f"- [complete] {self.ITEM} -- 214 tests passed", resolved)
-        self.assertNotIn("```", resolved)
-        self.assertNotIn("Evidence Notes", resolved)
-        self.assertIsNone(sys.modules["evidence"]._rendered_status_lines(resolved)[1])
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            resolved = self.resolved(body)
+        self.assertEqual(resolved, body)
+        self.assertIn("```", resolved)
+        self.assertIn("only a repaired parse can see", spoke.getvalue())
 
     def test_a_section_whose_end_is_hidden_still_refuses_in_both_writers(self) -> None:
         # The refusal that is not new: an HTML block with no closer runs to
@@ -5927,17 +6022,18 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
     def test_a_notes_heading_the_cut_cannot_match_leaves_the_order_it_found(self) -> None:
         # The recorded limit, not a claim about it: a heading line carrying
         # trailing spaces is one a reader sees and the cut passes over, so it
-        # stands where it was and the status is placed below it rather than
-        # above. Widening the cut to match it is not free -- the same
-        # looseness would let a section the model wrote pose as the owner's
-        # (`OwnerKindHandEditTests`) -- so what is asked of this shape is that
-        # it settle: the second write moves nothing and the section still
-        # reads.
+        # stands where it was -- below the status section, which is rewritten
+        # where its author put it. Widening the cut to match it is not free --
+        # the same looseness would let a section the model wrote pose as the
+        # owner's (`OwnerKindHandEditTests`) -- so what is asked of this shape
+        # is that it settle: the second write moves nothing and the section
+        # still reads.
         evidence = sys.modules["evidence"]
         body = self.body("\nA note.\n\n## Evidence Notes   \n\nolder note\n")
         once = self.resolved(body)
         self.assertEqual(self.resolved(once), once)
-        self.assertLess(once.index("## Evidence Notes   "), once.index("## Evidence Status"))
+        self.assertLess(once.index("## Evidence Status"), once.index("## Evidence Notes   "))
+        self.assertLess(body.index("## Evidence Status"), body.index("## Evidence Notes   "))
         self.assertIsNone(evidence._rendered_status_lines(once)[1])
         # The note still moved, into a section of its own.
         self.assertEqual(self.notes_section(once), "A note.")
@@ -6011,7 +6107,6 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
     def test_every_block_not_carried_is_named_on_the_run_s_output(self) -> None:
         # A loss nobody can see is the failure this file keeps paying for.
         for label, tail, expected in (
-            ("an unclosed fence", "\n```\n214 tests passed\n", "code fence with no closing line"),
             # Nested, because an unclosed comment at the top of the section
             # hides where the section ends and the whole write refuses first.
             ("an unclosed comment in a quote", "\n> <!-- a note I never closed\n> keep this\n", "a raw HTML block with no `-->`"),

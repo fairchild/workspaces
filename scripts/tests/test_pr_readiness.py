@@ -1146,10 +1146,14 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
     rewrites it, which is how a `# Release blockers` after the section came to
     be carried into `## Evidence Notes` with its `- [blocked]` bullet dropped.
 
-    The fixtures are one per boundary kind the gate names, so a level removed
-    from either side is caught here and not only in that side's own tests: drop
-    the h1 from `SECTION_BOUNDARY_HEADING_RE` and the gate reads past the h1
-    fixture; drop it from the skill's `is_section_boundary` and the reader does.
+    The fixtures are derived rather than listed: every line shape on which the
+    two rules CAN differ, crossed with both line endings GitHub stores. Listing
+    the shapes someone thought of is how this test passed while the two sides
+    disagreed on a setext h1, on three dash rules CommonMark ends a section at,
+    on a heading indented one space and on a heading under an unterminated HTML
+    block -- four divergences the list did not name and a derivation does
+    (#1734, round 2). A shape the two answer differently belongs in `DIVERGE`
+    with its reason, and a new one goes red here.
     """
 
     HELPERS_PATH = (
@@ -1174,6 +1178,81 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         "the heading itself written as an h1": "# Evidence Status\n\n- [complete] unit tests -- 10 passed\n\n## Validation\n- ran it\n",
     }
 
+    # Every line shape that could end a section, derived from the two rules
+    # rather than recalled: the heading levels and the ways to write one
+    # (hashes, hashes with no text, a closing run, an underline), the indents
+    # CommonMark allows and the one it does not, the dash rules of every
+    # length and spacing, the rules that are not dashes, the fence forms, the
+    # blocks that hide a heading, and the nestings that stop one from being
+    # top-level.
+    BOUNDARY_CANDIDATES = {
+        "atx h1": "# Release blockers\n",
+        "atx h2": "## Release blockers\n",
+        "atx h3": "### Release blockers\n",
+        "atx h1 indented one": " # Release blockers\n",
+        "atx h1 indented three": "   # Release blockers\n",
+        "atx h1 indented four": "    # Release blockers\n",
+        "atx h2 indented three": "   ## Release blockers\n",
+        "bare hash": "#\n",
+        "bare double hash": "##\n",
+        "hash tab": "#\tRelease blockers\n",
+        "hash nonbreaking space": "#\u00a0Release blockers\n",
+        "hash no space": "#Release blockers\n",
+        "atx h1 trailing spaces": "# Release blockers   \n",
+        "atx h1 closed form": "# Release blockers #\n",
+        "setext h1 three equals": "Release blockers\n===\n",
+        "setext h1 one equal": "Release blockers\n=\n",
+        "setext h1 trailing spaces": "Release blockers\n===   \n",
+        "setext h1 indented three": "Release blockers\n   ===\n",
+        "setext h2 dashes": "Release blockers\n---\n",
+        "setext h2 five dashes": "Release blockers\n-----\n",
+        "setext h2 indented": "Release blockers\n  ---\n",
+        "dash rule": "\n---\n",
+        "dash rule four": "\n----\n",
+        "dash rule spaced": "\n- - -\n",
+        "dash rule trailing spaces": "\n---   \n",
+        "dash rule indented": "\n   ---\n",
+        "asterisk rule": "\n***\n",
+        "underscore rule": "\n___\n",
+        "h1 in closed fence": "```markdown\n# Release blockers\n```\n",
+        "h1 in closed tilde fence": "~~~\n# Release blockers\n~~~\n",
+        "h1 in fence indented three": "   ```\n   # Release blockers\n   ```\n",
+        "h1 in four backtick fence": "````\n# Release blockers\n````\n",
+        "h1 in fence with info backtick": "``` a`b\n# Release blockers\n```\n",
+        "h1 under runaway fence": "```\nthe log, never closed\n\n# Release blockers\n",
+        "h1 after closed comment": "<!-- a note -->\n\n# Release blockers\n",
+        "h1 after unclosed comment": "<!-- a note\n\n# Release blockers\n",
+        "h1 in a list item": "- # Release blockers\n",
+        "h1 in a quote": "> # Release blockers\n",
+        "h2 in a quote": "> ## Release blockers\n",
+        "h1 in an indented code block": "    # Release blockers\n\ntext\n",
+    }
+    CANDIDATE_TAIL = "- [blocked] the signing profile is missing\n\n## Validation\n- ran it\n"
+
+    # The shapes the two answer differently, each with why it is not a defect
+    # to fix. Anything else differing is.
+    DIVERGE = {
+        "h1 under runaway fence": (
+            "a fence with no closing line hides every heading below it, and the skill blanks "
+            "the opener and parses again to read the heading the author wrote, where the gate "
+            "reads the page as CommonMark leaves it and runs the section to the end of the "
+            "body. The page is on the gate's side and the author on the skill's, so this one "
+            "is a judgement rather than a rule; the gate reads longer, which can add a refusal "
+            "and cannot drop one"
+        ),
+    }
+
+    @staticmethod
+    def _lf(text: str) -> str:
+        return text.replace("\r\n", "\n").replace("\r", "\n")
+
+    def candidate_bodies(self):
+        """Each boundary shape, under the status section, in both line endings."""
+        for name, candidate in self.BOUNDARY_CANDIDATES.items():
+            for ending in ("\n", "\r\n"):
+                body = (self.STATUS + candidate + "\n" + self.CANDIDATE_TAIL).replace("\n", ending)
+                yield name, ending, body
+
     def owner_reader(self):
         """The skill's reader, loaded by path so the test does not put its directory on `sys.path`."""
         spec = importlib.util.spec_from_file_location("contributor_helpers", self.HELPERS_PATH)
@@ -1190,6 +1269,77 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
                     pr_readiness.extract_section(body, "Evidence Status"),
                     owner.markdown_section(body, "Evidence Status"),
                 )
+
+    def test_the_two_rules_agree_on_every_shape_that_could_end_a_section(self) -> None:
+        # The derived property. Each shape is put under the status section and
+        # read by both files; the extent has to match, so the comparison is on
+        # one kind of line ending rather than on the author's bytes.
+        owner = self.owner_reader()
+        compared = 0
+        for name, ending, body in self.candidate_bodies():
+            with self.subTest(shape=name, ending="crlf" if "\r" in ending else "lf"):
+                gate = self._lf(pr_readiness.extract_section(body, "Evidence Status"))
+                skill = self._lf(owner.markdown_section(body, "Evidence Status"))
+                compared += 1
+                if name in self.DIVERGE:
+                    self.assertNotEqual(gate, skill, self.DIVERGE[name])
+                    continue
+                self.assertEqual(gate, skill)
+        self.assertEqual(compared, len(self.BOUNDARY_CANDIDATES) * 2)
+
+    def test_the_agreement_is_not_vacuous(self) -> None:
+        # Two readers that both returned "" would agree on everything. Each
+        # shape has to move the boundary for at least one of them, and the
+        # status line has to survive in every reading.
+        owner = self.owner_reader()
+        ended_early = 0
+        for name, _, body in self.candidate_bodies():
+            gate = self._lf(pr_readiness.extract_section(body, "Evidence Status"))
+            with self.subTest(shape=name):
+                self.assertIn("[complete] unit tests -- 10 passed", gate)
+                self.assertIn(
+                    "[complete] unit tests -- 10 passed",
+                    self._lf(owner.markdown_section(body, "Evidence Status")),
+                )
+            if "[blocked]" not in gate:
+                ended_early += 1
+        # A little over half the shapes are boundaries; the rest are the
+        # controls that must not be.
+        self.assertGreater(ended_early, 20)
+        self.assertGreater(len(self.BOUNDARY_CANDIDATES) * 2 - ended_early, 10)
+
+    def test_a_crlf_body_reaches_the_written_reader_as_the_page_reads_it(self) -> None:
+        # The gate's own entry normalises, and the reader repeats it: called
+        # directly with a CRLF body -- which is what a test or a future caller
+        # does -- the `\r` before the newline stopped the heading pattern
+        # matching and every section came back empty.
+        body = self.FIXTURES["an h1 after the section"].replace("\n", "\r\n")
+        self.assertEqual(
+            pr_readiness.extract_section(body, "Evidence Status"),
+            "- [complete] unit tests -- 10 passed",
+        )
+        self.assertEqual(
+            pr_readiness.evaluate(pr(body), []).__class__,
+            pr_readiness.evaluate(pr(self.FIXTURES["an h1 after the section"]), []).__class__,
+        )
+
+    def test_the_gate_s_own_two_views_share_one_boundary_definition(self) -> None:
+        # Written and rendered ask the same function, so a shape cannot end the
+        # section for one view and not the other inside this file.
+        body = self.FIXTURES["an h1 after the section"]
+        tokens = pr_readiness.MARKDOWN.parse(body)
+        self.assertTrue(
+            any(
+                pr_readiness.section_boundary_token(token)
+                and token.type == "heading_open"
+                and token.tag == "h1"
+                for token in tokens
+            )
+        )
+        self.assertNotIn("[blocked]", pr_readiness.extract_section(body, "Evidence Status"))
+        self.assertEqual(
+            [line for line in pr_readiness.rendered_status_lines(body) if "[blocked]" in line], []
+        )
 
     def test_the_contract_section_is_bounded_alike_too(self) -> None:
         # The boundary is not particular to one heading, and the section it
@@ -1209,6 +1359,19 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         )
         self.assertEqual(
             owner.markdown_section(body, "Requested Evidence"), "- `swift test` passes"
+        )
+        # And on this one section agreeing on a shorter read is not the end of
+        # it: a shorter contract is fewer obligations, so the reader every
+        # caller goes through refuses the body outright and names the line.
+        # This gate reads the contract through that same function
+        # (`github_state.requested_evidence_contract`), not through
+        # `extract_section`, so the refusal is what reaches it (#1734).
+        self.assertIsNotNone(owner.contract_read_refusal(body, "Requested Evidence"))
+        self.assertIsNone(owner.contract_read_refusal(body, "Evidence Status"))
+        self.assertIsNone(
+            owner.contract_read_refusal(
+                body.replace("# Reviewer notes", "## Reviewer notes"), "Requested Evidence"
+            )
         )
 
     def test_the_h1_fixture_is_the_one_the_boundary_level_is_witnessed_on(self) -> None:
@@ -1379,7 +1542,9 @@ class EvidenceDeliveryPreflightTests(unittest.TestCase):
             fetch_review_checks=mock.Mock(return_value=self.checks),
             extract_pr_issue_reference=mock.Mock(return_value=(None, None)),
             fetch_detailed_issue=mock.Mock(),
-            extract_requested_evidence=mock.Mock(return_value=["Screenshot of terminal"]),
+            requested_evidence_contract=mock.Mock(
+                return_value=(["Screenshot of terminal"], None)
+            ),
         )
         self.prepared = mock.Mock(status="ready", reason_code="ready", artifacts=[{
             "id": "image-1", "url": "https://evidence.cloudcompute.com/workspaces/pr-42/screen.png",
@@ -1448,6 +1613,23 @@ class EvidenceDeliveryPreflightTests(unittest.TestCase):
         self.assertEqual(self.github.fetch_detailed_issue.call_args.args[:3], ("fairchild", "workspaces", 12))
         self.assertEqual(self.evidence.prepare_review_evidence.call_args.kwargs["requested_evidence"],
                          ["Screenshot of terminal"])
+
+    def test_a_linked_issue_whose_contract_is_cut_stops_the_delivery(self):
+        # The third of the three readers of this contract. Delivering over the
+        # items above the cut would prepare evidence for a smaller promise than
+        # the issue made and report the PR delivered; the reason names the line.
+        self.github.extract_pr_issue_reference.return_value = (12, None)
+        self.github.requested_evidence_contract.return_value = (
+            [],
+            "the `## Requested Evidence` section is cut by the top-level heading at line 5 "
+            "(`# Reviewer notes`); move the heading below the section or the items under it",
+        )
+        code, report = self.run_delivery()
+        self.assertEqual(code, 1)
+        self.assertEqual(report["status"], "unavailable")
+        self.assertEqual(report["reason_code"], "requested_evidence_unreadable")
+        self.assertIn("# Reviewer notes", report["reason"])
+        self.evidence.prepare_review_evidence.assert_not_called()
 
     def test_missing_live_pr_or_requested_issue_cannot_pass(self):
         for missing in ("pr", "issue"):

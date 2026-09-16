@@ -26,7 +26,7 @@ if _scripts_dir not in sys.path:
 # agrees until one of them changes: the moment the shared one read a boundary
 # this one did not, the two disagreed about whether an issue was blocked
 # (#1723, round 2).
-from _helpers import extract_blocked_by  # noqa: E402
+from _helpers import blocked_by_contract  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 GH_DISCUSS_SCRIPT = REPO_ROOT / ".agents" / "skills" / "gh-discuss" / "scripts" / "gh-discuss.py"
@@ -450,7 +450,11 @@ def desired_execution_labels(
     if not planned_comment_has_owner_approval(planned_comment, owner_login):
         return labels, "discussion not execution-approved"
 
-    blocked_by = extract_blocked_by(body)
+    blocked_by, blocked_by_refusal = blocked_by_contract(body)
+    if blocked_by_refusal is not None:
+        # A `## Blocked By` section nobody can read holds the issue where it
+        # is: an empty blocker list read off a cut section would release it.
+        return labels, blocked_by_refusal
     blockers = [
         blocker
         for blocker in blocked_by

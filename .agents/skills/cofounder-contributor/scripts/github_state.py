@@ -15,7 +15,7 @@ from _helpers import (
     REPO_ROOT,
     _normalize_login,
     _parse_timestamp,
-    extract_blocked_by,
+    blocked_by_contract,
     issue_label_presence,
     markdown_section,
     persona_slug,
@@ -23,7 +23,7 @@ from _helpers import (
     run_optional,
 )
 from evidence import (
-    extract_requested_evidence,
+    requested_evidence_contract,
     resolve_named_ci_evidence,
     checks_api_env,
     validate_evidence_accounting,
@@ -439,7 +439,7 @@ def extract_execution_priority(body: str) -> int | None:
     return int(match.group("priority"))
 
 
-# `extract_blocked_by` is re-exported from `_helpers`, which is the one copy
+# `blocked_by_contract` is re-exported from `_helpers`, which is the one copy
 # both readers of a `## Blocked By` section go through.
 
 
@@ -812,7 +812,9 @@ def find_issue_execution_state(
         None,
     )
     other_pr = next((pr for pr in linked_prs if pr is not own_pr), None)
-    blocked_by = extract_blocked_by(str(issue.get("body", "")))
+    issue_body = str(issue.get("body", ""))
+    blocked_by, blocked_by_refusal = blocked_by_contract(issue_body)
+    requested_evidence, requested_evidence_refusal = requested_evidence_contract(issue_body)
     blockers = [
         blocker
         for blocker in blocked_by
@@ -846,7 +848,15 @@ def find_issue_execution_state(
             )
         ),
         "blockers": blockers,
-        "requested_evidence": extract_requested_evidence(str(issue.get("body", ""))),
+        "requested_evidence": requested_evidence,
+        # A contract nobody can read is not an empty contract. Both lists
+        # above are empty when their section is cut, and this is what stops a
+        # caller reading that as "nothing to prove, nothing to wait for".
+        "contract_refusals": [
+            refusal
+            for refusal in (requested_evidence_refusal, blocked_by_refusal)
+            if refusal is not None
+        ],
         "latest_claim": latest_claim,
         "stale_claim": stale_claim,
         "own_pr": own_pr,
@@ -883,16 +893,25 @@ def find_pr_review_state(pr_number: int, env: dict[str, str]) -> dict[str, objec
     issue_number, contributor = extract_pr_issue_reference(str(pr.get("body", "")))
     issue = None
     requested_evidence: list[str] = []
+    contract_refusal: str | None = None
     if issue_number is not None:
         issue = next((item for item in work_state["issues"] if int(item["number"]) == issue_number), None)
         if issue is not None:
-            requested_evidence = extract_requested_evidence(str(issue.get("body", "")))
+            requested_evidence, contract_refusal = requested_evidence_contract(
+                str(issue.get("body", ""))
+            )
 
     named_ci = resolve_named_ci_evidence(requested_evidence, str(pr.get("headRefOid", "")), env)
     accounting, errors = validate_evidence_accounting(
         str(pr.get("body", "")), requested_evidence if contributor else [],
         review_ci=named_ci if contributor else None,
     )
+    # An unreadable contract joins the evidence errors rather than sitting
+    # beside them, because the gate reads that list and a verdict given over a
+    # contract nobody could read is a verdict over the items that survived the
+    # cut (#1734, round 2).
+    if contract_refusal is not None and contributor:
+        errors = [*errors, f"the linked issue's evidence contract cannot be read: {contract_refusal}"]
     return {
         "pr": pr,
         "issue_number": issue_number,

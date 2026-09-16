@@ -17,6 +17,7 @@ from _helpers import (
     MARKDOWN,
     MARKDOWN_LINE_ENDING_RE,
     REPO_ROOT,
+    contract_read_refusal,
     has_markdown_section,
     insert_markdown_section,
     is_section_boundary,
@@ -1009,14 +1010,28 @@ def _rendered_lines(body: str, heading: str | None = None) -> list[str]:
     return lines
 
 
-def extract_requested_evidence(body: str) -> list[str]:
+def requested_evidence_contract(body: str) -> tuple[list[str], str | None]:
+    """What this issue asks the pull request to prove, or why it cannot be read.
+
+    The items and the reason come back together, and there is no way to ask
+    for one without the other, because a caller that read a truncated contract
+    as the whole of it would stop demanding the items below the cut -- an
+    author could drop an obligation by writing a heading in the middle of the
+    section, with nothing on the page or in the run saying so
+    (`contract_read_refusal`). Every reader of this contract refuses instead:
+    admission does not admit, the review gate does not approve, delivery does
+    not deliver.
+    """
+    refusal = contract_read_refusal(body, "Requested Evidence")
+    if refusal is not None:
+        return [], refusal
     evidence_section = markdown_section(body, "Requested Evidence")
     fallback_sentence = EVIDENCE_FALLBACK_SENTENCE.casefold()
     return [
         item
         for item in _wrapped_bullets(evidence_section)
         if item.lower() != "none" and item.casefold() != fallback_sentence
-    ]
+    ], None
 
 
 def _lf(body: str) -> str:
@@ -2350,10 +2365,14 @@ def write_evidence_status_section(
     waiting (#1729). What they agree on: the status list is rewritten from the
     entries in hand, and every other block that was under the heading moves,
     in the order it was written, to a top-level `## Evidence Notes` directly
-    below. A body that carried no such block has no such section, a body that
-    has one keeps it directly below the status, and a second write over the
-    first moves nothing, since by then the notes are no longer under the
-    heading.
+    below -- anchored to the status section rather than to whatever heading
+    follows it, so the two stay together wherever the status itself sits. A
+    body that carried no such block has no such section, a body that has one
+    keeps it directly below the status, and a second write over the first
+    moves nothing, since by then the notes are no longer under the heading.
+
+    A section the body already has is rewritten where its author put it, so a
+    write moves the status list's contents and nothing else.
 
     The text carried forward is read from the same call that cuts it, so the
     write cannot take out a span the read did not see. It stands the body down
@@ -2399,7 +2418,7 @@ def write_evidence_status_section(
         # above the status now.
         return placed(written)
     with_notes = insert_markdown_section(
-        written, EVIDENCE_NOTES_HEADING, "\n\n".join(blocks), before_heading="Validation"
+        written, EVIDENCE_NOTES_HEADING, "\n\n".join(blocks), after_heading=EVIDENCE_STATUS_HEADING
     )
     if len(with_notes) > PR_BODY_LIMIT >= len(written):
         # A body GitHub will not store is not a body, and dropping the notes is

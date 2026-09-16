@@ -141,7 +141,7 @@ from evidence import (  # noqa: E402, F401
     classify_evidence_errors,
     evaluate_evidence_accounting,
     extract_evidence_status_entries,
-    extract_requested_evidence,
+    requested_evidence_contract,
     format_requested_evidence_numbered,
     latest_completed_check_run,
     resolve_named_ci_evidence,
@@ -175,8 +175,8 @@ from github_state import (  # noqa: E402, F401
     current_branch,
     default_branch,
     detect_bot_login,
+    blocked_by_contract,
     discussion_execution_status,
-    extract_blocked_by,
     extract_execution_priority,
     extract_issue_discussion_number,
     extract_pr_issue_reference,
@@ -257,6 +257,7 @@ from execution import (  # noqa: E402, F401
     build_body,
     build_execution_summary_body,
     claim_marker,
+    compose_body_standdown_comment,
     compose_claim_comment,
     compose_pr_body,
     compose_revision_comment,
@@ -975,9 +976,11 @@ def build_reviewable_pr_candidates(
         updated_at = str(pr.get("updatedAt", ""))
         updated_timestamp = _parse_timestamp(updated_at)
         requested_evidence_count = 0
+        contract_refusal = None
         if issue_number is not None:
             issue_body = str(issue_map.get(issue_number, {}).get("body", ""))
-            requested_evidence_count = len(extract_requested_evidence(issue_body))
+            requested, contract_refusal = requested_evidence_contract(issue_body)
+            requested_evidence_count = len(requested)
         candidates.append(
             {
                 "number": int(pr["number"]),
@@ -987,6 +990,10 @@ def build_reviewable_pr_candidates(
                 "updated_sort": updated_timestamp.timestamp() if updated_timestamp is not None else 0.0,
                 "linked_issue_number": issue_number,
                 "requested_evidence_count": requested_evidence_count,
+                # Zero here means the issue asked for nothing; this says the
+                # count is unknown because the section could not be read, so
+                # a selector cannot read the two as the same answer.
+                "contract_refusal": contract_refusal,
             }
         )
     candidates.sort(key=lambda item: (bool(item["is_draft"]), -float(item["updated_sort"]), int(item["number"])))
@@ -1692,8 +1699,18 @@ def prepare_action_review(task_envelope: str, payloads: list[UntrustedGitHubPayl
     number = int(task["selected_item"]["number"])
     owner, name = repo_owner_name(env)
     comments = review_comments(number, env)
-    requested = [item for payload in payloads if payload.source_type == "issue"
-                 for item in extract_requested_evidence(payload.body)]
+    contracts = [
+        requested_evidence_contract(payload.body)
+        for payload in payloads
+        if payload.source_type == "issue"
+    ]
+    # A contract that cannot be read stops the review before any evidence is
+    # prepared: preparing over the items that survived the cut would produce a
+    # verdict about a smaller promise than the issue made (#1734, round 2).
+    for _, refusal in contracts:
+        if refusal is not None:
+            raise ValueError(f"linked issue evidence contract cannot be read: {refusal}")
+    requested = [item for items, _ in contracts for item in items]
     for attempt in (1, 2):
         pr = fetch_detailed_pull_request(owner, name, number, env)
         if pr is None:

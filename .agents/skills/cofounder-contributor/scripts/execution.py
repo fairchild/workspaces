@@ -52,7 +52,7 @@ from evidence import (
     _needs_screenshot_evidence,
     classify_evidence_errors,
     resolve_named_ci_evidence,
-    extract_requested_evidence,
+    requested_evidence_contract,
     render_execution_summary_body,
     review_evidence_gate_error,
     synthesize_initial_execution_evidence,
@@ -345,6 +345,32 @@ def compose_revision_escalation_comment(
             f"**This needs @{owner}** — this turn changed neither the code nor the PR body:",
             "",
             reason,
+        ]
+    ) + "\n"
+
+
+def compose_body_standdown_comment(persona: str, reasons: list[str]) -> str:
+    """April's note on the PR when its body could not be rewritten.
+
+    The reasons name a line in the body -- a fence or an HTML block that never
+    closes -- and the person who has to close it is the person who edited the
+    body, who reads the pull request and not the workflow log. Announced
+    through `log()` alone the run said it on stderr, where the author never
+    looks (#1733); this is the crossing `emit_refused_privileged_paths` makes
+    for the same gap on the issue side.
+    """
+    listed = "\n".join(f"- {reason}" for reason in reasons)
+    return "\n".join(
+        [
+            f"*{persona}*",
+            "",
+            "**This PR body was left as written.** The evidence section could not be "
+            "rewritten, so nothing was changed rather than writing over text whose end "
+            "the body does not state:",
+            "",
+            listed,
+            "",
+            "Closing the block named above lets the next run write the section.",
         ]
     ) + "\n"
 
@@ -773,7 +799,9 @@ def _live_ci_evidence_gate_error(pr_number: int, env: dict[str, str]) -> str | N
         issue = fetch_detailed_issue(owner, name, issue_number, env)
         if issue is None:
             return "linked issue evidence requirements are unavailable"
-        requested = extract_requested_evidence(str(issue.get("body", "")))
+        requested, contract_refusal = requested_evidence_contract(str(issue.get("body", "")))
+        if contract_refusal is not None:
+            return f"linked issue evidence requirements cannot be read: {contract_refusal}"
     # Legacy CI entries remain binding even if the linked issue no longer names
     # them. Omission from the PR body never hides a requirement in the issue.
     items = list(dict.fromkeys(requested + [str(entry.get("item", "")).strip()
@@ -1141,6 +1169,19 @@ def route_execution_action(
         )
         log(json.dumps({"error_class": "execution_blocked", "detail": f"blocked by {state['blockers']}", "issue": issue_number}))
         return 1
+    contract_refusals = list(state.get("contract_refusals", []))
+    if contract_refusals:
+        # Before the contract is read as a list of obligations, not after: the
+        # items that survive a cut section are a smaller promise than the
+        # issue made, and executing against them ships a PR whose gate asks
+        # for less than the author wrote (#1734, round 2).
+        detail = "; ".join(contract_refusals)
+        print(
+            f"error: issue #{issue_number} has a contract section that cannot be read: {detail}",
+            file=sys.stderr,
+        )
+        log(json.dumps({"error_class": "evidence_validation", "detail": detail, "issue": issue_number}))
+        return 1
 
     requested_evidence = list(state.get("requested_evidence", []))
     factory_requires_evidence = (
@@ -1207,6 +1248,15 @@ def route_execution_action(
             file=sys.stderr,
         )
         log(json.dumps({"error_class": "evidence_validation", "detail": "; ".join(summary_errors), "issue": issue_number}))
+        # On the pull request as well as in the log, where the author who
+        # edited the body can see which line to close. Only the errors about
+        # the write itself: the rest are the runtime's own accounting, and a
+        # person cannot act on those.
+        standdown = [error for error in summary_errors if "was not rewritten" in error]
+        if standdown and own_pr is not None:
+            _post_pr_comment(
+                int(own_pr["number"]), compose_body_standdown_comment(persona, standdown), env
+            )
         return 1
 
     _, evidence_errors = validate_evidence_accounting(summary_body, requested_evidence)

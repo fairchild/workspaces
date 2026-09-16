@@ -366,6 +366,7 @@ def _section_bounds(body: str, heading: str) -> tuple[int, int, int, str | None]
         )
 
     located = first_boundary_after(tokens)
+    from_repair = False
     repaired = reparsed_without_runaway(tokens, lines)
     if repaired is not None:
         # A runaway fence hides every heading below it. Whichever boundary
@@ -373,13 +374,18 @@ def _section_bounds(body: str, heading: str) -> tuple[int, int, int, str | None]
         # one that can see the hidden ones.
         hidden_boundary = first_boundary_after(repaired)
         if hidden_boundary is not None and (located is None or hidden_boundary < located):
-            located = hidden_boundary
+            located, from_repair = hidden_boundary, True
     stop = len(line_starts) if located is None else located
     end = line_starts[stop] if stop < len(line_starts) else len(body)
     # The number of lines the author wrote, which is what a block's span reaches
     # when it runs to the end of the body.
     written_lines = len(lines) - 1 if lines and lines[-1] == "" else len(lines)
-    return match.start(), match.end(), end, _write_refusal(tokens, heading_line, located, written_lines)
+    return (
+        match.start(),
+        match.end(),
+        end,
+        _write_refusal(tokens, heading_line, located, written_lines, from_repair=from_repair),
+    )
 
 
 # What each raw-HTML block kind CommonMark ends on. Kinds 1 to 5 end on a
@@ -445,12 +451,17 @@ def unterminated_block(tokens: list[Token], line_count: int) -> tuple[Token, str
 
 
 def _write_refusal(
-    tokens: list[Token], heading_line: int, located: int | None, line_count: int
+    tokens: list[Token],
+    heading_line: int,
+    located: int | None,
+    line_count: int,
+    *,
+    from_repair: bool = False,
 ) -> str | None:
     """Why replacing this section would corrupt the body, or None.
 
-    Two shapes, and both come down to a cut whose far end the author did not
-    write. The first: the heading a literal match found is a `##` line inside a
+    Three shapes, and each comes down to a cut whose far end the author did
+    not write. The first: the heading a literal match found is a `##` line inside a
     fenced example, which is code rather than a heading, so cutting from there
     to the section's end takes the fence's closing line along and the next
     write to any section above the opener takes the rest of the body.
@@ -464,11 +475,16 @@ def _write_refusal(
     of kinds 1 to 5 hides its contents, so a cut there is over text nobody can
     see, and that is the one to refuse.
 
-    The two fence cases are told apart by the repair rather than by this: where
-    an unclosed fence hides a heading, `reparsed_without_runaway` finds it and
-    the section ends there, so this never sees the case. Where the repair finds
-    no boundary, nothing below the fence is a section and everything below it
-    is visible as code.
+    The third: the end is a boundary only the REPAIRED parse can see. The
+    repair blanks a fence that never closes and asks the parser again, which
+    is a good answer for a reader -- it reads the heading the author wrote
+    rather than the code an unclosed fence makes of it -- and a bad one for a
+    writer. The line it stops at is inside the fence, so a cut to it takes the
+    ` ```markdown ` opener along and the lines that were code come back as
+    live markdown: a fenced `# Release blockers` becomes a heading and a
+    fenced `- [blocked]` becomes a status line nobody wrote (#1734, round 2).
+    A writer that cannot see the end in the body as parsed refuses; the reader
+    keeps the repair.
 
     A last section whose final block closes, or is a `<details>` or any other
     kind-6 or kind-7 block, or is indented code, is not this shape either.
@@ -488,6 +504,12 @@ def _write_refusal(
             f"the `##` line at line {heading_line + 1} is inside the code block opened at line "
             f"{holder.map[0] + 1}, so it is an example rather than a heading; replacing it would "
             "take the block's closing line with it"
+        )
+    if from_repair:
+        return (
+            "the end of this section is a heading only a repaired parse can see: the line at "
+            f"line {(located or 0) + 1} sits inside a fence that never closes, so a rewrite "
+            "would delete the fence's opening line and show the code below it as markdown"
         )
     if located is not None:
         return None
@@ -568,16 +590,85 @@ def strip_markdown_section(body: str, heading: str) -> str:
     return stripped
 
 
-def extract_blocked_by(body: str) -> list[int]:
-    """The issue numbers a `## Blocked By` section names, in the order written.
+def contract_read_refusal(body: str, heading: str) -> str | None:
+    """Why this section cannot be read as a contract, or None.
+
+    A section ends at a top-level heading of level 1 or 2 (#1734), which for
+    every other section is exactly what the page shows. A contract is the one
+    section where reading LESS is a loosening: the items under `## Requested
+    Evidence` are what a pull request must prove, and the issues under
+    `## Blocked By` are what must land first, so a heading an author writes in
+    the middle of one silently drops the obligations below it. Nothing on the
+    page says an item stopped counting, and the run that stops demanding it
+    says nothing either.
+
+    So a contract read fails closed where every other read narrows: an h1
+    inside the span the h2-and-rule boundary would have taken names the line
+    and refuses, and the author moves the heading or the items. An h2 has
+    ended a section since before any of this and keeps doing so silently --
+    a heading at the section's own level reads as the next section to
+    everyone, author included.
+    """
+    bounds = _section_bounds(body, heading)
+    if bounds is None:
+        return None
+    lines = MARKDOWN_LINE_ENDING_RE.split(body)
+    tokens = MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", body))
+    line_starts = [0] + [end.end() for end in MARKDOWN_LINE_ENDING_RE.finditer(body)]
+    heading_line = bisect.bisect_right(line_starts, bounds[0]) - 1
+    cut = next(
+        (
+            token
+            for token in tokens
+            if token.map
+            and token.map[0] > heading_line
+            and token.level == 0
+            and token.type == "heading_open"
+            and token.tag == "h1"
+        ),
+        None,
+    )
+    if cut is None:
+        return None
+    # The section the h1 would cut runs to the next h2 or dash rule; an h1
+    # after that ends a later section and takes nothing from this one.
+    section_end = next(
+        (
+            token.map[0]
+            for token in tokens
+            if token.map
+            and token.map[0] > heading_line
+            and is_section_boundary(token)
+            and not (token.type == "heading_open" and token.tag == "h1")
+        ),
+        len(lines),
+    )
+    if cut.map[0] >= section_end:
+        return None
+    written = lines[cut.map[0]].strip() if cut.map[0] < len(lines) else ""
+    return (
+        f"the `## {heading}` section is cut by the top-level heading at line {cut.map[0] + 1} "
+        f"(`{written}`); move the heading below the section or the items under it"
+    )
+
+
+def blocked_by_contract(body: str) -> tuple[list[int], str | None]:
+    """The issue numbers a `## Blocked By` section names, or why it cannot be read.
 
     The reader of record for both paths that ask: the contributor runtime
     through `github_state` and the lifecycle sync through its own entry point.
     They held character-identical copies and drifted the moment one of them
     read a boundary the other did not, so there is one copy (#1723, round 2).
+
+    The numbers and the reason come back together because a caller that took
+    the numbers alone would read a shortened blocker list as an empty one and
+    start work the issue says is blocked (`contract_read_refusal`).
     """
+    refusal = contract_read_refusal(body, "Blocked By")
+    if refusal is not None:
+        return [], refusal
     numbers = [int(number) for number in re.findall(r"#(\d+)", markdown_section(body, "Blocked By"))]
-    return list(dict.fromkeys(numbers))
+    return list(dict.fromkeys(numbers)), None
 
 
 def _heading_pattern(heading: str) -> str:
@@ -666,7 +757,24 @@ def insert_markdown_section(
     content: str,
     *,
     before_heading: str | None = None,
+    after_heading: str | None = None,
 ) -> str:
+    """The body with this section rewritten, where the author already had one.
+
+    A section that exists is replaced where it stands. Placement is a question
+    only about a section the body does not have yet: moving one an author
+    placed reorders their document for them, and it did -- the rewrite that
+    stopped deleting a `# Release blockers` heading under Evidence Status then
+    lifted Evidence Status out from under it, because the cut was shorter and
+    the re-insert went to the placement point rather than back to the offset
+    it came from (#1734, round 2). Keeping the content is the headline;
+    keeping it where its author put it is the property.
+
+    `before_heading` and `after_heading` place a NEW section: above a heading
+    the page shows, or directly below one, respectively. `after_heading` is
+    how a carried-notes section lands under the status list it was carried out
+    of, rather than merely somewhere above the next heading.
+    """
     # Newlines only, at both ends. The first line's indentation is content
     # where a block was written as indented code -- taking four spaces off it
     # turns a `## Validation` a reviewer pasted as an example into a heading --
@@ -675,6 +783,7 @@ def insert_markdown_section(
     # The author's body, untrimmed, because that is the text the cut is made
     # on and the text `section_write_refusal` answers about. Trimming here and
     # not there made the guard name a refusal while the write went ahead.
+    bounds = _section_bounds(body, heading)
     removed, refusal, _ = _section_removed(body, heading)
     if refusal is not None:
         # Reported here and only here: appending the new section to a body
@@ -682,9 +791,20 @@ def insert_markdown_section(
         # the body without saying so let a caller believe it had written.
         log(f"refusing to rewrite the `{heading}` section: {refusal}")
         return body
+    if bounds is not None:
+        # In place: everything above the old section's heading, the new
+        # section, then the rest with any later copy of the section cut out of
+        # it -- the same cut `_section_removed` makes, applied to the tail so
+        # the text above is untouched.
+        above = body[: bounds[0]].rstrip()
+        below, _, _ = _section_removed(body[bounds[2] :], heading)
+        return "\n\n".join(part for part in (above, section, below.strip()) if part)
     cleaned = removed.strip()
     if before_heading and (at := visible_heading_offset(cleaned, before_heading)) is not None:
         return f"{cleaned[:at]}{section}\n\n{cleaned[at:]}"
+    if after_heading and (span := _section_bounds(cleaned, after_heading)) is not None:
+        above, below = cleaned[: span[2]].rstrip(), cleaned[span[2] :].strip()
+        return "\n\n".join(part for part in (above, section, below) if part)
     if cleaned:
         return f"{cleaned}\n\n{section}"
     return section

@@ -41,7 +41,7 @@ CONTRIBUTOR_SCRIPTS = (
 if str(CONTRIBUTOR_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(CONTRIBUTOR_SCRIPTS))
 
-from evidence import extract_requested_evidence  # noqa: E402
+from evidence import requested_evidence_contract  # noqa: E402
 from patch_policy import sensitive_agent_patch_paths  # noqa: E402
 
 
@@ -284,7 +284,15 @@ def budget_decline_reason(
 def linked_issue_evidence_contract(
     client: GitHubClient, linked_issue: int
 ) -> list[str]:
-    return extract_requested_evidence(str(client.issue(linked_issue).get("body") or ""))
+    """The items the linked issue asks for; empty when the section cannot be read.
+
+    A cut section reads as no contract here, which is the fail-closed answer
+    for this caller: admission takes `evidence_contract` as the reason a
+    revision turn is worth spending, so an unreadable one declines the turn
+    rather than spending it against the items that survived the cut.
+    """
+    items, refusal = requested_evidence_contract(str(client.issue(linked_issue).get("body") or ""))
+    return [] if refusal is not None else items
 
 
 def evaluate_admission(
