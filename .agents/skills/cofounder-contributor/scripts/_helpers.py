@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Callable
+from itertools import groupby
 from pathlib import Path
 
 from markdown_it import MarkdownIt
@@ -159,6 +160,70 @@ def issue_label_presence(issue: dict[str, object]) -> set[str]:
     return issue_label_names(issue)
 
 
+# A `<br>` is the one inline tag that renders as something: a line break. It
+# arrives as `html_inline` like every other tag, and the tag name is what
+# identifies it, so attributes and a self-closing slash are all one shape.
+HTML_BREAK_TAG_RE = re.compile(r"(?i)^<br\b[^>]*>$")
+
+
+def inline_text(children: list[Token] | None, *, break_text: str = " ") -> str:
+    """Inline tokens as the text a reader sees, keeping the markup that carries meaning.
+
+    Emphasis is transparent, so `**item**` is the item. A code span keeps its
+    backticks, since requested items name commands in them, and a comment
+    delimiter inside one is text. A link or image keeps its target, since a
+    proof's link is the proof. Strikethrough keeps its tildes, since a
+    struck-out item is not the item. A status line never reaches here with
+    inline HTML or a break in it (`_unreadable_inline`); a requested item or a
+    recorded detail can, and there inline HTML shows nothing and a break is a
+    space.
+
+    `break_text` is what a line break becomes. A status line is one line, so a
+    break there is a space; a body read line by line (`_rendered_lines`) asks
+    for a newline, because a PR body renders a break as a line break. A `<br>`
+    is one of those breaks and not an invisible tag: dropping it glued the
+    words on either side into one, and `1<br>2 tests passed` then quoted a
+    count nobody wrote.
+    """
+    parts: list[str] = []
+    targets: list[str] = []
+    for token in children or []:
+        kind = token.type
+        if kind == "text":
+            parts.append(token.content)
+        elif kind == "code_inline":
+            longest = max((len(list(run)) for char, run in groupby(token.content) if char == "`"), default=0)
+            ticks = "`" * (longest + 1)
+            pad = " " if token.content.startswith("`") or token.content.endswith("`") else ""
+            parts.append(f"{ticks}{pad}{token.content}{pad}{ticks}")
+        elif kind in {"softbreak", "hardbreak"} or (
+            kind == "html_inline" and HTML_BREAK_TAG_RE.match(token.content.strip())
+        ):
+            parts.append(break_text)
+        elif kind == "link_open":
+            targets.append(str(token.attrGet("href") or ""))
+            parts.append("[")
+        elif kind == "link_close":
+            parts.append(f"]({targets.pop() if targets else ''})")
+        elif kind == "image":
+            parts.append(f"![{token.content}]({token.attrGet('src') or ''})")
+        elif kind in {"s_open", "s_close"}:
+            parts.append("~~")
+        elif kind not in {"em_open", "em_close", "strong_open", "strong_close", "html_inline"}:
+            parts.append(token.content)
+    return "".join(parts)
+
+
+def _parsed(body: str) -> list[Token]:
+    """The body as the parser sees it, whatever line endings the client sent.
+
+    Every read that asks the parser a question about a body comes through
+    here, so a CR-only body is not a body with no headings to one reader and a
+    body with all of them to another.
+    """
+    return MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", body))
+
+
 def is_section_heading(token: Token) -> bool:
     """Whether a parsed token opens a heading at the level a section is addressed by.
 
@@ -171,6 +236,59 @@ def is_section_heading(token: Token) -> bool:
     to prevent (#1734).
     """
     return token.level == 0 and token.type == "heading_open" and token.tag == "h2"
+
+
+def section_heading_index(tokens: list[Token], heading: str) -> int | None:
+    """Where `## <heading>` opens in a parsed body, as a token index, or None.
+
+    The one answer to "which heading is this section", asked by the reader,
+    the writer and the rendered read alike. It is a parse rather than a
+    pattern because a `## Mergeability` line inside a fenced example is code:
+    the page shows an example there, and a presence check that matched it told
+    the seeder a section was already written and left the body without one
+    (#1730). The same line fooled the section cut, which then read an
+    example's text as the section and refused every write to it.
+
+    Matched on the text a reader sees, normalised for case and runs of
+    whitespace, so a heading carrying trailing spaces or emphasis is the
+    heading it looks like. The first such heading wins, which is the rule the
+    rendered read already applied: a body with two is a body whose second one
+    no reader is reading.
+
+    A heading carrying inline HTML is not this section, whatever its text
+    reads as. `inline_text` drops every tag but `<br>`, which is the right
+    reading for a requested item or a recorded detail and the wrong one for
+    identity: `## Evidence <del>Status</del>` is struck through on the page,
+    `## <details>Evidence Status</details>` is a collapsed widget, and
+    `## Evidence<br>Status` is two lines -- and each of the three became this
+    section, whose contents the rewrite then replaced, with no reader left to
+    disagree and raise it (#1730). Both reads agreeing against the page is the
+    shape #1734 exists to prevent.
+
+    Any tag, not a list of the ones that show something. `_unreadable_inline`
+    in `evidence.py` already answers this question that way for a status line,
+    and `_rendered_status_lines` refuses this very heading for carrying inline
+    HTML; a second answer here is the disagreement, one function away. The
+    alternative needs a set of tags GitHub's sanitizer renders as nothing,
+    which is a second renderer built from an allow-list this repo does not
+    hold -- and its only plausible members are `<span>` and a comment. Nothing
+    is lost by refusing them: no shape here was this section before #1730's
+    change, `<span>` included, so the rule declines to widen rather than taking
+    something away. The cost is that `## <span>Evidence Status</span>` gets a
+    second, real heading written below it, where the gate's ambiguity check
+    refuses the body -- fail closed, and visible.
+    """
+    wanted = " ".join(heading.split()).casefold()
+    return next(
+        (
+            index
+            for index, token in enumerate(tokens)
+            if is_section_heading(token)
+            and not any(child.type == "html_inline" for child in tokens[index + 1].children or [])
+            and " ".join(inline_text(tokens[index + 1].children).split()).casefold() == wanted
+        ),
+        None,
+    )
 
 
 def is_section_boundary(token: Token) -> bool:
@@ -342,30 +460,37 @@ def _section_bounds(
     a completion cannot be left outside every section by the rewrite that
     follows it (#1723, round 2).
 
-    The boundary is asked of the parser because matching a three-dash line is
-    not the rule the page applies: three dashes directly under a line of text
-    are that line's setext underline, and a section read as ending there is
-    empty on the page and whole here. An unclosed fence is where the parser's
-    answer is the worse one, and `reparsed_without_runaway` is that exception --
-    whichever boundary comes first ends the section.
+    Both ends are asked of the parser, because neither is a rule a pattern
+    states. A three-dash line directly under a line of text is that line's
+    setext underline, and a section read as ending there is empty on the page
+    and whole here; a `## <heading>` line inside a fenced example is code, and
+    a section read as starting there is an example's text, which is how a
+    write to one came to refuse and a seeder to seed nothing (#1730). An
+    unclosed fence is where the parser's answer is the worse one, and
+    `reparsed_without_runaway` is that exception -- whichever boundary comes
+    first ends the section. That repair answers about the END alone: a heading
+    a runaway fence swallows is a heading no reader sees, so no section starts
+    there for either view.
     """
-    # Anchored on `\n` alone, a CRLF body read as having no section while
-    # `has_markdown_section` said it had one, and the writer then appended a
-    # second copy of it rather than replacing the first (`_heading_pattern`).
-    match = re.search(_heading_pattern(heading), body)
-    if match is None:
-        return None
-    line_starts = [0] + [end.end() for end in MARKDOWN_LINE_ENDING_RE.finditer(body)]
-    heading_line = bisect.bisect_right(line_starts, match.start()) - 1
     lines = MARKDOWN_LINE_ENDING_RE.split(body)
-    tokens = MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", body))
+    tokens = _parsed(body)
+    index = section_heading_index(tokens, heading)
+    if index is None:
+        return None
+    # A setext heading is two lines, its underline included, so the text
+    # starts where the heading block stops rather than one line below it.
+    heading_line, heading_stop = tokens[index].map
+    line_starts = [0] + [end.end() for end in MARKDOWN_LINE_ENDING_RE.finditer(body)]
+
+    def offset(line: int) -> int:
+        return line_starts[line] if line < len(line_starts) else len(body)
 
     def first_boundary_after(parsed: list[Token]) -> int | None:
         return next(
             (
                 token.map[0]
                 for token in parsed
-                if token.map and token.map[0] > heading_line and boundary(token)
+                if token.map and token.map[0] >= heading_stop and boundary(token)
             ),
             None,
         )
@@ -380,16 +505,15 @@ def _section_bounds(
         hidden_boundary = first_boundary_after(repaired)
         if hidden_boundary is not None and (located is None or hidden_boundary < located):
             located, from_repair = hidden_boundary, True
-    stop = len(line_starts) if located is None else located
-    end = line_starts[stop] if stop < len(line_starts) else len(body)
+    end = offset(len(line_starts) if located is None else located)
     # The number of lines the author wrote, which is what a block's span reaches
     # when it runs to the end of the body.
     written_lines = len(lines) - 1 if lines and lines[-1] == "" else len(lines)
     return (
-        match.start(),
-        match.end(),
+        offset(heading_line),
+        offset(heading_stop),
         end,
-        _write_refusal(tokens, heading_line, located, written_lines, from_repair=from_repair),
+        _write_refusal(tokens, located, written_lines, from_repair=from_repair),
     )
 
 
@@ -457,7 +581,6 @@ def unterminated_block(tokens: list[Token], line_count: int) -> tuple[Token, str
 
 def _write_refusal(
     tokens: list[Token],
-    heading_line: int,
     located: int | None,
     line_count: int,
     *,
@@ -465,22 +588,17 @@ def _write_refusal(
 ) -> str | None:
     """Why replacing this section would corrupt the body, or None.
 
-    Three shapes, and each comes down to a cut whose far end the author did
-    not write. The first: the heading a literal match found is a `##` line inside a
-    fenced example, which is code rather than a heading, so cutting from there
-    to the section's end takes the fence's closing line along and the next
-    write to any section above the opener takes the rest of the body.
+    Two shapes, and both come down to a cut whose far end the author did not
+    write. The first: the section has no boundary after it and got there
+    through a block that never closed. What decides is the block's kind, not
+    where the section sits. A fence with no closing line shows the rest of the
+    body as code, so a reader sees that text and the section really does run
+    to the end: cutting to the end is correct, and refusing would cost a write
+    to a body that works, paid by an author who did nothing wrong. A raw HTML
+    block of kinds 1 to 5 hides its contents, so a cut there is over text
+    nobody can see, and that is the one to refuse.
 
-    The second: the section has no boundary after it and got there through a
-    block that never closed. What decides there is the block's kind, not where
-    the section sits. A fence with no closing line shows the rest of the body
-    as code, so a reader sees that text and the section really does run to the
-    end: cutting to the end is correct, and refusing would cost a write to a
-    body that works, paid by an author who did nothing wrong. A raw HTML block
-    of kinds 1 to 5 hides its contents, so a cut there is over text nobody can
-    see, and that is the one to refuse.
-
-    The third: the end is a boundary only the REPAIRED parse can see. The
+    The second: the end is a boundary only the REPAIRED parse can see. The
     repair blanks a fence that never closes and asks the parser again, which
     is a good answer for a reader -- it reads the heading the author wrote
     rather than the code an unclosed fence makes of it -- and a bad one for a
@@ -491,25 +609,15 @@ def _write_refusal(
     A writer that cannot see the end in the body as parsed refuses; the reader
     keeps the repair.
 
+    The shape that used to come first -- a heading the parser reads as code,
+    whose fence's closing line the cut would eat -- cannot arise now. A
+    section starts at a heading token, and a `##` line inside a fence is not
+    one, so there is no section there to cut (#1730). That refusal was the
+    cost of finding the start by pattern, and it went with the pattern.
+
     A last section whose final block closes, or is a `<details>` or any other
     kind-6 or kind-7 block, or is indented code, is not this shape either.
     """
-    holder = next(
-        (
-            token
-            for token in tokens
-            if token.type in {"fence", "code_block"}
-            and token.map
-            and token.map[0] <= heading_line < token.map[1]
-        ),
-        None,
-    )
-    if holder is not None and holder.map[1] < line_count and (located is None or located > holder.map[1]):
-        return (
-            f"the `##` line at line {heading_line + 1} is inside the code block opened at line "
-            f"{holder.map[0] + 1}, so it is an example rather than a heading; replacing it would "
-            "take the block's closing line with it"
-        )
     if from_repair:
         return (
             "the end of this section is a heading only a repaired parse can see: the line at "
@@ -543,16 +651,39 @@ def markdown_section(body: str, heading: str) -> str:
 
 
 def has_markdown_section(body: str, heading: str) -> bool:
-    """Whether the body carries a `## <heading>` line, at every line ending GitHub stores.
+    """Whether the page shows a `## <heading>` heading in this body.
 
-    Matched more loosely than the cut, because this answers what a reader
-    sees: a heading line carrying trailing spaces is a heading on the page.
-    `(?m)^` only follows a newline, so the bare carriage returns some clients
-    send need the lookbehind -- without it this said a body had no sections
-    while the readiness gate, which normalises first, read them all.
+    The same question `_section_bounds` asks, and the same answer, because it
+    is the same call: a presence check that matched a pattern said yes to a
+    `## Mergeability` line inside a fenced example, so the seeder returned a
+    body it had written nothing to and the readiness gate then asked for the
+    section the runtime believed it had seeded (#1730). One reader, so a
+    caller cannot be told a section is there and then handed an example's
+    text when it asks for one.
     """
-    pattern = rf"(?mi)(?:^|(?<=\r))## {re.escape(heading)}[^\S\r\n]*(?:\r|\n|\Z)"
-    return re.search(pattern, body) is not None
+    return section_heading_index(_parsed(body), heading) is not None
+
+
+# How the readiness gate finds a section's START: a literal `## <heading>` line
+# at column 0 with the line ending directly after it (`extract_section` in
+# `scripts/pr-readiness.py`). It is written here rather than imported because
+# that script is a PEP 723 entry point with its own pin and no package to
+# import from -- the same reason `MARKDOWN` is written in both files -- and
+# `SectionStartAgreementBetweenTheGateAndTheSkillTests` fails when the two
+# answer differently on any shape.
+#
+# It is narrower than `has_markdown_section`, which asks the parser: emphasis,
+# an indent of up to three spaces and a setext underline all make a heading the
+# page shows and this pattern does not find. #1742 owns moving the gate onto a
+# parse; until it does, a writer whose output the gate must be able to read
+# asks this as well.
+GATE_SECTION_START_RE = r"(?mi)^## {heading}\n"
+
+
+def gate_reads_markdown_section(body: str, heading: str) -> bool:
+    """Whether the readiness gate's literal reader finds this section's start."""
+    normalized = MARKDOWN_LINE_ENDING_RE.sub("\n", body)
+    return re.search(GATE_SECTION_START_RE.format(heading=re.escape(heading)), normalized) is not None
 
 
 def _section_removed(body: str, heading: str) -> tuple[str, str | None, list[str]]:
@@ -684,92 +815,57 @@ def blocked_by_contract(body: str) -> tuple[list[int], str | None]:
     return numbers, None
 
 
-def _heading_pattern(heading: str) -> str:
-    r"""How the section cut matches this heading's line.
-
-    Every line ending GitHub stores, on both sides of the line. `(?m)^` only
-    follows a newline, so a body whose client sent bare carriage returns had no
-    heading here at all while the readiness gate, which normalises first, read
-    the section -- the two files then held different sections of one body. And
-    a heading on the last line with nothing after it ends at the end of the
-    body rather than at a newline: matched only against `\n`, it was a section
-    to every reader and none to the cut, so the write left it standing and
-    placed a second copy beside it (#1734, round 2).
-
-    One definition, because a guard that asks which lines the cut would take
-    has to ask in the cut's own terms: matched more loosely still -- a heading
-    line carrying trailing spaces -- it refused a body whose line the cut does
-    not take at all.
-    """
-    return rf"(?mi)(?:^|(?<=\r))## {re.escape(heading)}(?:\r\n|\r|\n|\Z)"
-
-
-def _visible_offsets(body: str, offsets: list[int]) -> list[int]:
-    """Those of `offsets` whose line the page shows as itself rather than as code or raw HTML."""
-    tokens = MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", body))
-    line_starts = [0] + [end.end() for end in MARKDOWN_LINE_ENDING_RE.finditer(body)]
-    hidden = [
-        token.map
-        for token in tokens
-        if token.type in {"fence", "code_block", "html_block"} and token.map
-    ]
-    return [
-        offset
-        for offset in offsets
-        if not any(
-            start <= bisect.bisect_right(line_starts, offset) - 1 < stop for start, stop in hidden
-        )
-    ]
-
-
-def heading_cut_hits_an_example(body: str, heading: str) -> str | None:
-    """Why rewriting this section would cut into a fenced example of it, or None.
-
-    The cut takes every line matching `_heading_pattern`, and one written
-    inside a fenced example is code rather than a heading: cutting from it
-    takes the block's closing line along, and the body a reader is left with
-    carries a fence that never opened. The writer's own guard sees that shape
-    only where the fence closes before the end of the body, which is the case
-    it was filed on; this is the same shape where it does not.
-
-    The other direction -- a heading the page shows that the cut cannot match,
-    so the write leaves it standing and appends a second copy -- is not one of
-    these. A body carrying two sections a reader accepts has no line that is
-    the owner's, which is the reading that keeps a forged section from posing
-    as one, and standing the write down there would leave the forgery alone in
-    the body with nothing beside it.
-    """
-    taken = [match.start() for match in re.finditer(_heading_pattern(heading), body)]
-    if len(taken) == len(_visible_offsets(body, taken)):
-        return None
-    return (
-        f"a `## {heading}` line in the body is inside a code block, so it is an example rather "
-        "than a heading; a rewrite takes every occurrence and would take the block's closing "
-        "line with it"
-    )
-
-
-def visible_heading_offset(body: str, heading: str) -> int | None:
-    """Where the page's first `## <heading>` heading starts, or None if the page shows none.
+def section_heading_offset(body: str, heading: str) -> int | None:
+    """Where the page's `## <heading>` heading starts in the body, or None if it shows none.
 
     A writer that places a section "before" a heading has to place it before a
     heading a reader sees. A `##` line inside a fenced example is code, and a
     section written in front of one lands inside the fence -- taking the whole
     status list and the metadata beside it out of the rendered body, which is
-    how a second ordinary write came to leave a PR showing no Evidence Status
-    at all. So a match inside a code block or inside raw HTML is not one of
-    these, and a body whose only match is code gets None: the caller appends
-    rather than guessing.
-
-    Matched more loosely than the cut -- trailing spaces on the line, and a
-    heading on the last line with nothing after it -- because a reader sees
-    both as headings, and this answers where a reader sees one.
+    how a second ordinary write came to leave a pull request showing no
+    Evidence Status at all (#1723). So the heading is the one the parser
+    found, which is the same heading `markdown_section` reads and the same one
+    `has_markdown_section` answers about: a body whose only match is code has
+    no heading here, and the caller appends rather than guessing.
     """
-    offsets = [
-        match.start()
-        for match in re.finditer(rf"(?mi)^## {re.escape(heading)}[^\S\n]*$", body)
-    ]
-    return next(iter(_visible_offsets(body, offsets)), None)
+    tokens = _parsed(body)
+    index = section_heading_index(tokens, heading)
+    if index is None:
+        return None
+    line_starts = [0] + [end.end() for end in MARKDOWN_LINE_ENDING_RE.finditer(body)]
+    line = tokens[index].map[0]
+    return line_starts[line] if line < len(line_starts) else len(body)
+
+
+def placement_refusal(body: str, written: str, heading: str) -> str | None:
+    """Why the page would not show the section this write places, or None.
+
+    A write is a write when a reader can see it. Every placement is either
+    before a heading the page shows or at the end of the body, and the end of
+    a body holding a block that never closes is inside that block: the section
+    is then in the source, absent from the page, and still carried to every
+    gate by the metadata beside it -- an approval over evidence nobody can
+    read (#1734).
+
+    Asked of the result rather than of the shapes that produce it, with the
+    same call that answers whether a body has a section at all. A write whose
+    section the page does not show is wrong however it got there, and a
+    postcondition cannot be argued out of by the next placement rule.
+    """
+    if has_markdown_section(written, heading):
+        return None
+    lines = MARKDOWN_LINE_ENDING_RE.split(body)
+    written_lines = len(lines) - 1 if lines and lines[-1] == "" else len(lines)
+    open_block = unterminated_block(_parsed(body), written_lines)
+    where = (
+        f" below {open_block[1]} opened at line {open_block[0].map[0] + 1}"
+        if open_block is not None
+        else ""
+    )
+    return (
+        f"the `## {heading}` section this write places{where} is not a heading on the page, so "
+        "it would be in the body and absent from what a reader sees"
+    )
 
 
 def insert_markdown_section(
@@ -812,6 +908,23 @@ def insert_markdown_section(
         # the body without saying so let a caller believe it had written.
         log(f"refusing to rewrite the `{heading}` section: {refusal}")
         return body
+    written = _rewritten(body, bounds, removed, section, heading, before_heading, after_heading)
+    if (unshown := placement_refusal(body, written, heading)) is not None:
+        log(f"refusing to write the `{heading}` section: {unshown}")
+        return body
+    return written
+
+
+def _rewritten(
+    body: str,
+    bounds: tuple[int, int, int, str | None] | None,
+    removed: str,
+    section: str,
+    heading: str,
+    before_heading: str | None,
+    after_heading: str | None,
+) -> str:
+    """The body with the section in place, before the postcondition is asked of it."""
     if bounds is not None:
         # In place: everything above the old section's heading, the new
         # section, then the rest. Above the splice only line endings come off,
@@ -830,7 +943,7 @@ def insert_markdown_section(
             below, _, _ = _section_removed(below, heading)
         return "\n\n".join(part for part in (above, section, below.strip()) if part)
     cleaned = removed.strip()
-    if before_heading and (at := visible_heading_offset(cleaned, before_heading)) is not None:
+    if before_heading and (at := section_heading_offset(cleaned, before_heading)) is not None:
         return f"{cleaned[:at]}{section}\n\n{cleaned[at:]}"
     if after_heading and (span := _section_bounds(cleaned, after_heading)) is not None:
         above, below = cleaned[: span[2]].rstrip(), cleaned[span[2] :].strip()

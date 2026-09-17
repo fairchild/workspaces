@@ -5065,18 +5065,25 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
             )
         )
 
-    def test_the_two_predicates_are_asked_for_the_two_questions(self) -> None:
-        # The call sites, named: the rendered read asks for the level once, to
-        # decide the heading is its own, and for the boundary where the section
-        # stops. Swapping either reintroduces one of the two bugs, so the
-        # source is checked rather than only the behaviour.
-        source = (
-            REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "evidence.py"
-        ).read_text(encoding="utf-8")
+    def test_the_two_questions_are_asked_of_the_two_readers(self) -> None:
+        # The call sites, named: the rendered read asks which heading is the
+        # section once -- through `section_heading_index`, the same call the
+        # written read makes, so the two cannot find it in different places
+        # (#1730) -- and asks `is_section_boundary` where the section stops.
+        # Swapping either reintroduces one of the two bugs, so the source is
+        # checked rather than only the behaviour.
+        scripts = REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts"
+        source = (scripts / "evidence.py").read_text(encoding="utf-8")
         span = source[source.index("def _rendered_section_span") :]
         span = span[: span.index("\ndef ", 1)]
-        self.assertEqual(span.count("is_section_heading("), 1)
+        self.assertEqual(span.count("section_heading_index("), 1)
+        self.assertEqual(span.count("is_section_heading("), 0)
         self.assertEqual(span.count("is_section_boundary("), 2)
+        # And the level question is asked once, where the shared finder is.
+        helpers = (scripts / "_helpers.py").read_text(encoding="utf-8")
+        finder = helpers[helpers.index("def section_heading_index") :]
+        finder = finder[: finder.index("\ndef ", 1)]
+        self.assertEqual(finder.count("is_section_heading("), 1)
 
 
 class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
@@ -5414,20 +5421,23 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         "a heading hidden behind an underline": (
             "## Evidence Status\n\n```\nthe log, never closed\n\nRisks\n---\n\nNone.\n", True
         ),
-        "a fenced heading whose closer the write would eat": (
+        # Writing since #1730: a `##` line inside a fence is not a heading, so
+        # the body has no section there, the write places a real one and the
+        # example keeps its closing line.
+        "a fenced heading the write no longer reads as one": (
             "## Summary\n\n```markdown\n## Evidence Status\n- [complete] the item -- proof\n```\n\n"
-            "## Risks\n\nNone.\n", True
+            "## Risks\n\nNone.\n", False
         ),
     }
 
     def test_a_write_refuses_only_where_the_end_is_a_guess(self) -> None:
         # Refusing too readily costs the lane its record of a run, so the seam
         # is pinned from both sides. A section with nothing after it ends at
-        # the end of the body, whatever block the body ends inside; a heading
-        # the parser reads as code is an example, and replacing it would take
-        # the block's closing line with it; and an end only the repaired parse
-        # can see is not an end a writer may cut to, though a reader may read
-        # to it.
+        # the end of the body, whatever block the body ends inside; an end
+        # only the repaired parse can see is not an end a writer may cut to,
+        # though a reader may read to it; and a heading the parser reads as
+        # code is an example rather than a section to refuse a write to, so a
+        # body whose only copy is fenced gets a real section written beside it.
         helpers = sys.modules["_helpers"]
         for name, (body, refuses) in self.WRITE_SEAM.items():
             with self.subTest(case=name):
@@ -5479,8 +5489,16 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
                 self.assertRegex(refusal, r"line \d+")
                 one = helpers.insert_markdown_section(body, "Evidence Status", "- [complete] item -- proof")
                 two = helpers.insert_markdown_section(one, "Performance", "Before: 1 ms\nAfter: 2 ms")
+                # Asked of the text, because under a block that never closes
+                # the page shows none of these headings as headings -- before
+                # the writes as much as after (#1730). The loss this is
+                # against is a section leaving the body, not a section the
+                # author hid; and no section may stop being shown.
                 for heading in headings:
-                    self.assertTrue(helpers.has_markdown_section(two, heading), heading)
+                    self.assertIn(f"## {heading}", two, heading)
+                shown_before = {h for h in headings if helpers.has_markdown_section(body, h)}
+                shown_after = {h for h in headings if helpers.has_markdown_section(two, h)}
+                self.assertTrue(shown_before <= shown_after, (shown_before, shown_after))
 
     def test_an_unclosed_fence_at_the_end_writes_where_one_hiding_a_heading_refuses(self) -> None:
         # Two fence shapes with opposite answers, and they must not be one
@@ -5566,6 +5584,11 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         "## Validation\n\n- ok\n\n## Risks\n\nNone.\n"
     )
 
+    UNTERMINATED_BLOCK_BODY = (
+        "## Summary\n\nwhat.\n\n## Mergeability\n\n- Surface: docs\n<!-- a reviewer note\n\n"
+        "## Risks\n\nNone.\n"
+    )
+
     def test_a_refused_write_says_so_rather_than_returning_the_body(self) -> None:
         # A refusal that returns the body and logs nothing is a write the
         # caller believes happened, so the reason comes from the writer, once,
@@ -5575,21 +5598,45 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         captured = io.StringIO()
         with contextlib.redirect_stderr(captured):
             out = helpers.insert_markdown_section(
+                self.UNTERMINATED_BLOCK_BODY, "Mergeability", "- Surface: agent-runtime"
+            )
+        self.assertEqual(out, self.UNTERMINATED_BLOCK_BODY)
+        self.assertIn("refusing to rewrite the `Mergeability` section", captured.getvalue())
+        self.assertIn("runs to the end of the body", captured.getvalue())
+
+    def test_a_write_to_a_body_whose_only_copy_is_fenced_places_a_real_section(self) -> None:
+        # The refusal that is gone, and what replaced it. A `##` line inside a
+        # fenced example is not a heading, so there is no section under it to
+        # cut and nothing to refuse: the write places a real section and
+        # leaves the example alone. That refusal was the cost of finding the
+        # start by pattern, and the better answer was never to match there.
+        helpers = sys.modules["_helpers"]
+        captured = io.StringIO()
+        with contextlib.redirect_stderr(captured):
+            out = helpers.insert_markdown_section(
                 self.FENCED_EXAMPLE_BODY, "Mergeability", "- Surface: agent-runtime"
             )
-        self.assertEqual(out, self.FENCED_EXAMPLE_BODY)
-        self.assertIn("refusing to rewrite the `Mergeability` section", captured.getvalue())
-        self.assertIn("inside the code block", captured.getvalue())
+        self.assertEqual(captured.getvalue(), "")
+        self.assertEqual(helpers.markdown_section(out, "Mergeability"), "- Surface: agent-runtime")
+        self.assertIn("```markdown\n## Mergeability\n- Surface: docs\n```", out)
+        for heading in ("Summary", "Validation", "Risks"):
+            self.assertTrue(helpers.has_markdown_section(out, heading), heading)
+        # A second write replaces what the first placed rather than adding a
+        # third copy beside the example.
+        again = helpers.insert_markdown_section(out, "Mergeability", "- Surface: docs")
+        self.assertEqual(again.count("## Mergeability"), 2)
+        self.assertEqual(helpers.markdown_section(again, "Mergeability"), "- Surface: docs")
 
     ITEM_FOR_WRITE = "a note on whether the fixture state survives a relaunch"
 
-    def test_the_runtime_write_surfaces_the_refusal_on_its_own_errors(self) -> None:
+    def test_the_runtime_write_places_a_section_where_the_body_had_only_an_example(self) -> None:
         # The site that really reaches the writer:
         # `render_execution_summary_body` rewrites Evidence Status on the body
         # the model wrote. On a body whose only `## Evidence Status` is a
-        # fenced example it returns the body untouched and puts the reason in
-        # the errors it already returns, so the run reports it rather than
-        # believing it wrote.
+        # fenced example it used to return the body untouched with the reason
+        # in its errors -- a good refusal, and one nobody should have needed:
+        # the example is not a section, so the run now writes a real one
+        # beside it and the PR carries its evidence (#1730).
         body = (
             "## Summary\n\nwhat.\n\n```markdown\n## Evidence Status\n- [complete] x -- proof\n```\n\n"
             "## Validation\n\n- ok\n"
@@ -5601,12 +5648,18 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
             evidence_blocked=None,
             evidence_pending_ci=None,
         )
-        self.assertEqual(rendered, body)
-        self.assertTrue(
-            any("Evidence Status section was not rewritten" in error for error in errors), errors
+        self.assertEqual(errors, [])
+        helpers = sys.modules["_helpers"]
+        self.assertIn(
+            f"- [complete] {self.ITEM_FOR_WRITE} -- checked: the fixture survived",
+            helpers.markdown_section(rendered, "Evidence Status"),
         )
-        self.assertTrue(any("inside the code block" in error for error in errors), errors)
-        # The control: the same call on an ordinary body does write.
+        # The author's example keeps its fence, its line and its closer.
+        self.assertIn("```markdown\n## Evidence Status\n- [complete] x -- proof\n```", rendered)
+        # And the example's own completion is not the run's: the status the
+        # gate reads is the one that was written.
+        self.assertNotIn("x -- proof", helpers.markdown_section(rendered, "Evidence Status"))
+        # The control: the same call on an ordinary body still writes.
         ordinary = "## Summary\n\nwhat.\n\n## Validation\n\n- ok\n"
         written, ok_errors = run_contributor.render_execution_summary_body(
             ordinary,
@@ -5616,26 +5669,35 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
             evidence_pending_ci=None,
         )
         self.assertEqual(ok_errors, [])
-        self.assertIn(self.ITEM_FOR_WRITE, sys.modules["_helpers"].markdown_section(written, "Evidence Status"))
+        self.assertIn(self.ITEM_FOR_WRITE, helpers.markdown_section(written, "Evidence Status"))
 
-    def test_seeding_mergeability_never_reaches_the_writer_on_a_fenced_example(self) -> None:
-        # Not this PR's refusal, and not fixed here: `seed_mergeability_section`
-        # returns early because `has_markdown_section` matches the `##` line
-        # inside the fenced example, so the writer is never called and nothing
-        # is logged. Identical at the merge base. It is a silent no-op of its
-        # own -- the readiness gate then wants a Mergeability section the
-        # runtime believed it had seeded -- and it is pinned here so the site
-        # is not mistaken for one this PR's reason reaches.
+    def test_seeding_mergeability_seeds_a_body_whose_only_copy_is_a_fenced_example(self) -> None:
+        # #1730, the issue this test was pinned for. `seed_mergeability_section`
+        # asked `has_markdown_section`, which matched the `##` line inside the
+        # fenced example, so it returned the body it was given, seeded nothing
+        # and said nothing -- and the readiness gate then asked for the section
+        # the runtime believed it had written. The presence check is a parse
+        # now: a fenced heading is an example, so the body has no Mergeability
+        # section and the seeder writes one.
         execution = sys.modules["execution"]
         helpers = sys.modules["_helpers"]
-        self.assertTrue(helpers.has_markdown_section(self.FENCED_EXAMPLE_BODY, "Mergeability"))
+        self.assertFalse(helpers.has_markdown_section(self.FENCED_EXAMPLE_BODY, "Mergeability"))
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
             result = execution.seed_mergeability_section(
                 self.FENCED_EXAMPLE_BODY, changed_files=["docs/x.md"]
             )
-        self.assertEqual(result, self.FENCED_EXAMPLE_BODY)
+        self.assertNotEqual(result, self.FENCED_EXAMPLE_BODY)
         self.assertEqual(spoke.getvalue(), "")
+        self.assertTrue(helpers.has_markdown_section(result, "Mergeability"))
+        seeded = helpers.markdown_section(result, "Mergeability")
+        self.assertIn("- Surface: docs", seeded)
+        for label in execution.mergeability_field_labels():
+            self.assertIn(f"- {label}:", seeded)
+        # The author's example is untouched: the body now carries two
+        # `## Mergeability` lines and the page shows exactly one of them.
+        self.assertIn("```markdown\n## Mergeability\n- Surface: docs\n```", result)
+        self.assertEqual(result.count("## Mergeability"), 2)
 
     STRIP_FLIP_BODY = (
         "## Summary\n\nwhat.\n\n```\nlog opens here and never closes\n\n"
@@ -5649,10 +5711,21 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         # text, asked once: whatever the reason says, the write does.
         helpers = sys.modules["_helpers"]
         refusal = self.write_refusal(helpers, self.STRIP_FLIP_BODY, "Evidence Status")
-        written = helpers.insert_markdown_section(
-            self.STRIP_FLIP_BODY, "Evidence Status", "- [complete] y -- checked"
-        )
-        self.assertEqual(refusal is not None, written == self.STRIP_FLIP_BODY, refusal)
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            written = helpers.insert_markdown_section(
+                self.STRIP_FLIP_BODY, "Evidence Status", "- [complete] y -- checked"
+            )
+        # Two questions now, and a body that comes back unchanged answers to
+        # one of them: the cut's guard, or the writer's own postcondition that
+        # the page would show what it placed. Whichever it is, it is said.
+        if written == self.STRIP_FLIP_BODY:
+            self.assertTrue(
+                refusal is not None or "not a heading on the page" in spoke.getvalue(),
+                spoke.getvalue(),
+            )
+        else:
+            self.assertIsNone(refusal)
         # And the answer does not depend on a trailing newline.
         self.assertEqual(
             self.write_refusal(helpers, self.STRIP_FLIP_BODY, "Evidence Status") is None,
@@ -5733,6 +5806,292 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         rewritten = helpers.insert_markdown_section(body, "Evidence Status", "- [x] written")
         self.assertEqual(rewritten.count("## Evidence Status"), 1)
         self.assertNotIn("- [x] second", rewritten)
+
+
+class ASectionStartsAtAHeadingThePageShowsTests(unittest.TestCase):
+    """A section starts where a reader sees a heading, not where a pattern matches (#1730).
+
+    `has_markdown_section` was a presence check with no parse behind it and
+    the section cut was a literal `^## <heading>` match, so a `##` line inside
+    a fenced example was a heading to both. The seeder read one and returned a
+    body it had seeded nothing into, silently, and the readiness gate then
+    asked for the section the runtime believed it had written. The same match
+    made an example's text the section a reader of Evidence Status got, and an
+    example's `[complete]` line the proof the gate recorded.
+
+    The start is a parse now -- a top-level h2 whose text a reader sees as this
+    heading -- which is the same call the rendered read makes, so the two views
+    cannot find their section in different places.
+    """
+
+    ITEM = "a note on whether the fixture state survives a relaunch"
+    EXAMPLE = f"- [complete] {ITEM} -- an example, not a claim"
+    REAL = f"- [complete] {ITEM} -- checked: the fixture survived"
+    FENCED_ONLY = (
+        f"## Summary\n\nwhat.\n\n```markdown\n## Evidence Status\n{EXAMPLE}\n```\n\n"
+        "## Validation\n\n- ok\n"
+    )
+    FENCED_ABOVE_REAL = (
+        f"## Summary\n\n```markdown\n## Evidence Status\n{EXAMPLE}\n```\n\n"
+        f"## Evidence Status\n\n{REAL}\n\n## Validation\n\n- ok\n"
+    )
+
+    def helpers(self):
+        return sys.modules["_helpers"]
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def test_a_body_whose_only_heading_is_fenced_has_no_section(self) -> None:
+        helpers = self.helpers()
+        self.assertFalse(helpers.has_markdown_section(self.FENCED_ONLY, "Evidence Status"))
+        self.assertEqual(helpers.markdown_section(self.FENCED_ONLY, "Evidence Status"), "")
+        # And the page agrees, which is the point: the rendered read finds no
+        # section there either, and did not before this change.
+        normalized = helpers.MARKDOWN_LINE_ENDING_RE.sub("\n", self.FENCED_ONLY)
+        self.assertIsNone(
+            self.evidence()._rendered_section_span(
+                helpers.MARKDOWN.parse(normalized), "Evidence Status", normalized.split("\n")
+            )
+        )
+
+    def test_a_fenced_copy_above_a_real_section_is_not_the_section(self) -> None:
+        # The forged-evidence shape, and the one that cost a reading rather
+        # than a write: the example's `[complete]` line was what the gate
+        # recorded as the proof for this item.
+        helpers = self.helpers()
+        self.assertTrue(helpers.has_markdown_section(self.FENCED_ABOVE_REAL, "Evidence Status"))
+        self.assertEqual(
+            helpers.markdown_section(self.FENCED_ABOVE_REAL, "Evidence Status"), self.REAL
+        )
+        entries = run_contributor.extract_evidence_status_entries(
+            self.FENCED_ABOVE_REAL, [self.ITEM]
+        )["entries"]
+        self.assertEqual(entries[self.ITEM]["detail"], "checked: the fixture survived")
+
+    def test_the_two_views_find_the_section_in_the_same_place(self) -> None:
+        # The pair rule, on the START. The two agreed about where a section
+        # ends since #1723 and could still disagree about where it began: on
+        # the body above, the written read's section was the example's and the
+        # rendered read's was the author's.
+        helpers, evidence = self.helpers(), self.evidence()
+        for name, body in {
+            "a fenced copy above a real one": self.FENCED_ABOVE_REAL,
+            "a fenced copy only": self.FENCED_ONLY,
+            "an ordinary body": f"## Evidence Status\n\n{self.REAL}\n\n## Validation\n\n- ok\n",
+            "a setext heading": f"Evidence Status\n---------------\n\n{self.REAL}\n\n## Validation\n\n- ok\n",
+            "trailing spaces on the heading": f"## Evidence Status  \n\n{self.REAL}\n\n## Validation\n\n- ok\n",
+            "emphasis in the heading": f"## **Evidence Status**\n\n{self.REAL}\n\n## Validation\n\n- ok\n",
+            "a heading indented three spaces": f"## Summary\n\nwhat.\n\n   ## Evidence Status\n\n{self.REAL}\n",
+            "a heading in a quote": f"## Summary\n\n> ## Evidence Status\n> {self.REAL}\n",
+            "a heading in a list": f"## Summary\n\n- ## Evidence Status\n  {self.REAL}\n",
+            "the heading written as an h1": f"# Evidence Status\n\n{self.REAL}\n\n## Validation\n\n- ok\n",
+            "a heading on the last line": "## Summary\n\nwhat.\n\n## Evidence Status",
+        }.items():
+            with self.subTest(body=name):
+                normalized = helpers.MARKDOWN_LINE_ENDING_RE.sub("\n", body)
+                tokens = helpers.MARKDOWN.parse(normalized)
+                span = evidence._rendered_section_span(
+                    tokens, "Evidence Status", normalized.split("\n")
+                )
+                self.assertEqual(
+                    helpers.has_markdown_section(body, "Evidence Status"), span is not None
+                )
+                if span is None:
+                    continue
+                # The same heading token, so the same line of the body.
+                index = helpers.section_heading_index(tokens, "Evidence Status")
+                self.assertEqual(span[0], index + 3)
+
+    def test_a_setext_heading_is_a_section_for_the_reader_and_the_writer_alike(self) -> None:
+        # Decided rather than inherited: an underline is what makes the line
+        # above it a heading, and the page then shows a heading there whatever
+        # the author meant -- the answer #1723 already gave for a setext line
+        # that ENDS a section, and the rendered read already gave for one that
+        # starts it. So the written read takes it too, and the writer cuts the
+        # underline with the line it underlines rather than leaving a stray
+        # rule where the heading was.
+        helpers = self.helpers()
+        body = f"## Summary\n\nwhat.\n\nEvidence Status\n---------------\n\n{self.REAL}\n\n## Validation\n\n- ok\n"
+        self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
+        self.assertEqual(helpers.markdown_section(body, "Evidence Status"), self.REAL)
+        written = helpers.insert_markdown_section(body, "Evidence Status", "- [complete] y -- proof")
+        self.assertEqual(helpers.markdown_section(written, "Evidence Status"), "- [complete] y -- proof")
+        self.assertNotIn("---------------", written)
+        self.assertNotIn(self.REAL, written)
+        # The sections around it are untouched and a second write is a fixed point.
+        for heading in ("Summary", "Validation"):
+            self.assertTrue(helpers.has_markdown_section(written, heading), heading)
+        self.assertEqual(
+            helpers.insert_markdown_section(written, "Evidence Status", "- [complete] y -- proof"),
+            written,
+        )
+
+    def test_the_runtime_seeds_mergeability_and_the_gate_then_finds_it(self) -> None:
+        # The issue's own reproduction, end to end: the runtime writes the
+        # section, and the section it writes is the one a reader sees.
+        execution, helpers = sys.modules["execution"], self.helpers()
+        body = self.FENCED_ONLY.replace("Evidence Status", "Mergeability").replace(
+            self.EXAMPLE, "- Surface: docs"
+        )
+        seeded = execution.seed_mergeability_section(body, changed_files=["docs/x.md"])
+        self.assertNotEqual(seeded, body)
+        self.assertTrue(helpers.has_markdown_section(seeded, "Mergeability"))
+        section = helpers.markdown_section(seeded, "Mergeability")
+        for label in execution.mergeability_field_labels():
+            self.assertIn(f"- {label}:", section)
+
+    def test_a_seeded_section_the_page_would_not_show_stands_the_body_down(self) -> None:
+        # The postcondition is every writer's, not the status writer's. The
+        # seeder appends at the end of the body, and the end of a body holding
+        # a block that never closes is inside that block: the section would be
+        # in the source, absent from the page, and the gate would then ask for
+        # a section the runtime had written (#1734, for the other writer).
+        execution, helpers = sys.modules["execution"], self.helpers()
+        body = "## Summary\n\nwhat.\n\n<pre>\nthe log I never closed\n"
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            seeded = execution.seed_mergeability_section(body, changed_files=["docs/x.md"])
+        self.assertEqual(seeded, body)
+        self.assertIn("is not a heading on the page", spoke.getvalue())
+        self.assertIn("</pre>", spoke.getvalue())
+        # And the control: close the block and the same write goes ahead.
+        closed = body + "</pre>\n"
+        written = execution.seed_mergeability_section(closed, changed_files=["docs/x.md"])
+        self.assertTrue(helpers.has_markdown_section(written, "Mergeability"))
+
+    def test_a_heading_the_page_shows_as_code_anywhere_else_is_left_alone(self) -> None:
+        # The guard on the change itself: an example is an example wherever it
+        # sits, and a reader that started taking fenced lines again would show
+        # up here as well as above.
+        helpers = self.helpers()
+        for name, body in {
+            "fenced below the real section": (
+                f"## Evidence Status\n\n{self.REAL}\n\n## Validation\n\n"
+                f"```markdown\n## Evidence Status\n{self.EXAMPLE}\n```\n"
+            ),
+            "indented four spaces": (
+                f"## Summary\n\nwhat.\n\n    ## Evidence Status\n    {self.EXAMPLE}\n\n"
+                f"## Evidence Status\n\n{self.REAL}\n"
+            ),
+        }.items():
+            with self.subTest(body=name):
+                self.assertEqual(helpers.markdown_section(body, "Evidence Status"), self.REAL)
+                written = helpers.insert_markdown_section(
+                    body, "Evidence Status", "- [complete] z -- proof"
+                )
+                self.assertIn(self.EXAMPLE, written)
+                self.assertEqual(
+                    helpers.markdown_section(written, "Evidence Status"), "- [complete] z -- proof"
+                )
+
+
+class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
+    """A heading is this section only if the page shows it as this heading (#1730).
+
+    `inline_text` drops every tag but `<br>` -- the right reading for a
+    requested item or a recorded detail, and the wrong one for identity. Asked
+    on a heading it made `## Evidence <del>Status</del>`, `## <details>Evidence
+    Status</details>` and `## Evidence<br>Status` all read as `Evidence
+    Status`, so each BECAME the section and the rewrite replaced its contents
+    with the entries in hand -- taking the author's own status line with it. A
+    reader sees struck-through text, a collapsed disclosure widget, and two
+    lines. Both reads agreed against the page, so the disagreement refusal
+    #1737 built had nothing to fire on.
+
+    The rule is any inline HTML, not a list of the tags that show something.
+    `_unreadable_inline` already answers it that way for a status line, and
+    `_rendered_status_lines` refuses this very heading for carrying inline
+    HTML; a second answer in `section_heading_index` is the disagreement one
+    function away. The alternative needs the set of tags GitHub's sanitizer
+    renders as nothing -- a second renderer, built from an allow-list this repo
+    does not hold, whose only plausible members are `<span>` and a comment.
+
+    Nothing is lost by refusing those two. None of these shapes was this
+    section before #1730's change, `<span>` included, so the rule declines to
+    widen rather than taking something away; the tests below hold at the merge
+    base as well as here, and fail only in between.
+    """
+
+    ITEM = "the UI lane"
+    AUTHORS_LINE = f"- [pending-ci] {ITEM} -- waiting"
+    ENTRIES = {ITEM: {"status": "complete", "detail": "swift test passed"}}
+    # Each renders as something other than a plain `Evidence Status` heading:
+    # struck through, a disclosure widget, two lines, an empty span.
+    SHAPES = {
+        "del": "## Evidence <del>Status</del>",
+        "s": "## Evidence <s>Status</s>",
+        "details": "## <details>Evidence Status</details>",
+        "br": "## Evidence<br>Status",
+        "span": "## <span>Evidence Status</span>",
+        "comment": "## Evidence Status<!-- a note -->",
+    }
+
+    def helpers(self):
+        return sys.modules["_helpers"]
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def body(self, heading: str) -> str:
+        return f"Why this exists.\n\n{heading}\n\n{self.AUTHORS_LINE}\n\n## Validation\n\n- ran\n"
+
+    def test_none_of_them_is_the_section(self) -> None:
+        helpers = self.helpers()
+        for name, heading in self.SHAPES.items():
+            with self.subTest(shape=name):
+                body = self.body(heading)
+                self.assertFalse(helpers.has_markdown_section(body, "Evidence Status"))
+                self.assertEqual(helpers.markdown_section(body, "Evidence Status"), "")
+
+    def test_the_rewrite_leaves_the_authors_line_where_it_is(self) -> None:
+        # The harm, stated as the author sees it: their own `[pending-ci]` line
+        # is replaced by the entries in hand when the rewrite believes it owns
+        # the section. It does not own these.
+        for name, heading in self.SHAPES.items():
+            with self.subTest(shape=name):
+                body = self.body(heading)
+                written, stood_down = self.evidence().write_evidence_status_section(body, self.ENTRIES)
+                self.assertIn(self.AUTHORS_LINE, written, stood_down)
+
+    def test_a_plain_heading_is_still_the_section_and_still_rewritten(self) -> None:
+        # The control the other way: nothing above is a refusal of headings in
+        # general.
+        helpers = self.helpers()
+        body = self.body("## Evidence Status")
+        self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
+        written, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
+        self.assertNotIn(self.AUTHORS_LINE, written)
+
+    def test_emphasis_is_markdown_rather_than_a_tag_and_stays_this_section(self) -> None:
+        # The line this rule does not cross. `**Evidence Status**` is bold on
+        # the page and reads as the heading it looks like, which is the
+        # widening #1730 makes on purpose; it is not a tag and nothing here
+        # takes it back. Green here and red at the merge base, where the
+        # presence check was a literal pattern.
+        helpers = self.helpers()
+        body = self.body("## **Evidence Status**")
+        self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
+        written, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
+        self.assertNotIn(self.AUTHORS_LINE, written)
+
+    def test_the_read_still_says_why_rather_than_saying_nothing_is_there(self) -> None:
+        # A heading the page shows and this reader will not own is not the same
+        # as no heading at all, and the author needs to be told which. The
+        # rendered read's refusal names the HTML; reporting it turns on whether
+        # a reader has a heading to refuse, not on `section_present`, which
+        # this change makes false for exactly these shapes.
+        evidence = self.evidence()
+        for name, heading in self.SHAPES.items():
+            with self.subTest(shape=name):
+                body = self.body(heading)
+                parsed, unreadable = evidence._rendered_markdown_entries(body, [self.ITEM])
+                self.assertFalse(parsed["section_present"])
+                self.assertIn("HTML", unreadable or "")
+        # And a body with no heading at all stays silent, which is the one
+        # refusal that means there is nothing here to read.
+        plain = f"Why this exists.\n\n## Validation\n\n- ran\n"
+        self.assertIsNone(evidence._rendered_markdown_entries(plain, [self.ITEM])[1])
 
 
 class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
@@ -6019,13 +6378,16 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertIsNone(unreadable)
         self.assertEqual(lines, [f"[complete] {self.ITEM} -- 214 tests passed"])
 
-    def test_a_fenced_notes_example_stands_the_write_down_rather_than_cutting_into_it(self) -> None:
-        # The cut takes every `## Evidence Notes` line, and one inside a fenced
-        # example is code: cutting from it takes the fence's closing line, and
-        # the body a reader is left with has a fence that never opened. The
-        # writer's own guard sees that shape only where the fence closes before
-        # the end of the body; this is the same shape where it does not.
+    def test_a_fenced_notes_example_is_left_where_it_is_and_the_write_goes_ahead(self) -> None:
+        # The cut used to take every `## Evidence Notes` LINE, so one inside a
+        # fenced example was a section it would cut from -- taking the fence's
+        # closing line with it -- and the writer stood the whole body down to
+        # avoid that. The cut takes headings now, and a fenced line is not
+        # one: the example stays exactly as its author wrote it, the notes
+        # section the write needs is placed beside it, and nothing is refused
+        # (#1730).
         evidence = sys.modules["evidence"]
+        helpers = sys.modules["_helpers"]
         body = (
             self.meta() + f"## Evidence Status\n\n- [pending-ci] {self.ITEM} -- the lane has not"
             " run yet\n\nA note.\n\n## Validation\n\n```markdown\n## Evidence Notes\nexample\n```\n"
@@ -6035,10 +6397,17 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
             resolved = evidence.update_evidence_entries(
                 body, {1: {"status": "complete", "detail": "214 tests passed"}}
             )
-        self.assertEqual(resolved, body)
-        self.assertIn("is an example rather than a heading", spoke.getvalue())
-        # A heading line the cut does not match -- trailing spaces on it -- is
-        # not one of these, and the write goes ahead.
+        self.assertNotEqual(resolved, body)
+        self.assertEqual(spoke.getvalue(), "")
+        self.assertIn("```markdown\n## Evidence Notes\nexample\n```", resolved)
+        self.assertEqual(self.notes_section(resolved), "A note.")
+        self.assertIn(f"- [complete] {self.ITEM} -- 214 tests passed", resolved)
+        # The page shows one notes heading, not the example's, and a second
+        # write is a fixed point.
+        self.assertTrue(helpers.has_markdown_section(resolved, "Evidence Notes"))
+        self.assertEqual(self.resolved(resolved), resolved)
+        # And a heading line carrying trailing spaces writes the same way it
+        # always did -- that shape was never the refusal's.
         spaced = body.replace("## Evidence Notes\nexample", "## Evidence Notes  \nexample")
         self.assertNotEqual(
             evidence.update_evidence_entries(
@@ -6172,24 +6541,24 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertNotIn("Evidence Notes", resolved)
         self.assertEqual(self.resolved(resolved), resolved)
 
-    def test_a_notes_heading_the_cut_cannot_match_leaves_the_order_it_found(self) -> None:
-        # The recorded limit, not a claim about it: a heading line carrying
-        # trailing spaces is one a reader sees and the cut passes over, so it
-        # stands where it was -- below the status section, which is rewritten
-        # where its author put it. Widening the cut to match it is not free --
-        # the same looseness would let a section the model wrote pose as the
-        # owner's (`OwnerKindHandEditTests`) -- so what is asked of this shape
-        # is that it settle: the second write moves nothing and the section
-        # still reads.
+    def test_a_notes_heading_carrying_trailing_spaces_is_the_section_it_looks_like(self) -> None:
+        # The recorded limit, gone. A heading line with trailing spaces is one
+        # a reader sees, and the cut used to pass over it: the old notes
+        # section stood where it was and the status was placed below it, so a
+        # body ended up showing two notes-shaped headings. The heading is a
+        # token now, whitespace normalised, so the cut takes it and the notes
+        # come back as one section under the status -- what the writer's own
+        # docstring promises (#1730).
         evidence = sys.modules["evidence"]
         body = self.body("\nA note.\n\n## Evidence Notes   \n\nolder note\n")
         once = self.resolved(body)
         self.assertEqual(self.resolved(once), once)
-        self.assertLess(once.index("## Evidence Status"), once.index("## Evidence Notes   "))
-        self.assertLess(body.index("## Evidence Status"), body.index("## Evidence Notes   "))
+        self.assertNotIn("## Evidence Notes   ", once)
+        self.assertEqual(once.count("## Evidence Notes"), 1)
+        self.assertLess(once.index("## Evidence Status"), once.index("## Evidence Notes"))
         self.assertIsNone(evidence._rendered_status_lines(once)[1])
-        # The note still moved, into a section of its own.
-        self.assertEqual(self.notes_section(once), "A note.")
+        # Both notes are in the one section, the older first.
+        self.assertEqual(self.notes_section(once), "older note\n\nA note.")
 
     def test_a_body_at_the_limit_keeps_the_status_it_cannot_keep_the_notes_with(self) -> None:
         # A body GitHub will not store is not a body. Carrying the notes past

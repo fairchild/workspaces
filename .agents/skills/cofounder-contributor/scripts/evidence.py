@@ -8,7 +8,7 @@ import re
 import shlex
 import sys
 from collections.abc import Iterable, Iterator
-from itertools import groupby, islice
+from itertools import islice
 
 from markdown_it.token import Token
 
@@ -19,15 +19,18 @@ from _helpers import (
     REPO_ROOT,
     contract_read_refusal,
     has_markdown_section,
+    inline_text,
     insert_markdown_section,
     is_section_boundary,
     is_section_heading,
     log,
     markdown_section,
-    heading_cut_hits_an_example,
     removed_section_texts,
+    placement_refusal,
     reparsed_without_runaway,
     run_optional,
+    section_heading_index,
+    section_heading_offset,
     strip_markdown_section,
     unmovable_block,
     unterminated_block,
@@ -680,60 +683,6 @@ def _is_machine_metadata_comment(content: str) -> bool:
     )
 
 
-# A `<br>` is the one inline tag that renders as something: a line break. It
-# arrives as `html_inline` like every other tag, and the tag name is what
-# identifies it, so attributes and a self-closing slash are all one shape.
-HTML_BREAK_TAG_RE = re.compile(r"(?i)^<br\b[^>]*>$")
-
-
-def _inline_text(children: list[Token] | None, *, break_text: str = " ") -> str:
-    """Inline tokens as the text a reader sees, keeping the markup that carries meaning.
-
-    Emphasis is transparent, so `**item**` is the item. A code span keeps its
-    backticks, since requested items name commands in them, and a comment
-    delimiter inside one is text. A link or image keeps its target, since a
-    proof's link is the proof. Strikethrough keeps its tildes, since a
-    struck-out item is not the item. A status line never reaches here with
-    inline HTML or a break in it (`_unreadable_inline`); a requested item or a
-    recorded detail can, and there inline HTML shows nothing and a break is a
-    space.
-
-    `break_text` is what a line break becomes. A status line is one line, so a
-    break there is a space; a body read line by line (`_rendered_lines`) asks
-    for a newline, because a PR body renders a break as a line break. A `<br>`
-    is one of those breaks and not an invisible tag: dropping it glued the
-    words on either side into one, and `1<br>2 tests passed` then quoted a
-    count nobody wrote.
-    """
-    parts: list[str] = []
-    targets: list[str] = []
-    for token in children or []:
-        kind = token.type
-        if kind == "text":
-            parts.append(token.content)
-        elif kind == "code_inline":
-            longest = max((len(list(run)) for char, run in groupby(token.content) if char == "`"), default=0)
-            ticks = "`" * (longest + 1)
-            pad = " " if token.content.startswith("`") or token.content.endswith("`") else ""
-            parts.append(f"{ticks}{pad}{token.content}{pad}{ticks}")
-        elif kind in {"softbreak", "hardbreak"} or (
-            kind == "html_inline" and HTML_BREAK_TAG_RE.match(token.content.strip())
-        ):
-            parts.append(break_text)
-        elif kind == "link_open":
-            targets.append(str(token.attrGet("href") or ""))
-            parts.append("[")
-        elif kind == "link_close":
-            parts.append(f"]({targets.pop() if targets else ''})")
-        elif kind == "image":
-            parts.append(f"![{token.content}]({token.attrGet('src') or ''})")
-        elif kind in {"s_open", "s_close"}:
-            parts.append("~~")
-        elif kind not in {"em_open", "em_close", "strong_open", "strong_close", "html_inline"}:
-            parts.append(token.content)
-    return "".join(parts)
-
-
 def _unreadable_inline(children: list[Token] | None) -> str | None:
     """Why a list item's inline tokens cannot be read as one status line, or None.
 
@@ -756,7 +705,18 @@ def _unreadable_inline(children: list[Token] | None) -> str | None:
 def _rendered_inline(text: str) -> str:
     """Markdown text, such as a requested item or a recorded detail, read as a status line is."""
     tokens = MARKDOWN.parseInline(text)
-    return _inline_text(tokens[0].children if tokens else None)
+    return inline_text(tokens[0].children if tokens else None)
+
+
+def _heading_count_refusal(count: int) -> str:
+    """Why a body with no `Evidence Status` heading, or with two, has no section to read."""
+    return f"a reader sees {count} `Evidence Status` headings, not one"
+
+
+# The one refusal that says there is nothing here to read, as against a section
+# a reader has and this read will not interpret. Built from the same function
+# that produces it, so the two cannot drift apart.
+NO_STATUS_HEADING_REFUSAL = _heading_count_refusal(0)
 
 
 def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
@@ -781,10 +741,10 @@ def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
         index
         for index, token in enumerate(tokens)
         if token.type == "heading_open"
-        and " ".join(_inline_text(tokens[index + 1].children).split()).casefold() == "evidence status"
+        and " ".join(inline_text(tokens[index + 1].children).split()).casefold() == "evidence status"
     ]
     if len(headings) != 1:
-        return [], f"a reader sees {len(headings)} `Evidence Status` headings, not one"
+        return [], _heading_count_refusal(len(headings))
     start = headings[0]
     if tokens[start].tag != "h2":
         return [], f"the `Evidence Status` heading is an {tokens[start].tag}, not an h2"
@@ -816,7 +776,7 @@ def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
             refusal = _unreadable_inline(children)
             if refusal:
                 return [], refusal
-            lines.append(_inline_text(children).strip())
+            lines.append(inline_text(children).strip())
             index += 5
         index += 1
     return lines, None
@@ -850,12 +810,15 @@ def _rendered_section_span(
 ) -> tuple[int, int, int | None] | None:
     """Where the section under `## <heading>` starts and stops, in tokens and in source lines.
 
-    The heading is matched on the text a reader sees, at the level
-    `markdown_section` matches it: an h2 at the top of the body, not one nested
-    inside a list, and the first such heading wins. `is_section_heading` is
-    that level and `is_section_boundary` is where the section stops, which are
-    two questions rather than one -- an h1 ends a section without being a
-    section this addresses (#1734).
+    The heading is the one `section_heading_index` finds, which is the call
+    the written read makes: an h2 at the top of the body whose text a reader
+    sees as this heading, not one nested inside a list, and the first such
+    heading wins. `is_section_heading` is that level and `is_section_boundary`
+    is where the section stops, which are two questions rather than one -- an
+    h1 ends a section without being a section this addresses (#1734). Written
+    twice, the two agreed about the END and could still disagree about where
+    the section STARTED -- a fenced `## Evidence Status` above the real one
+    was the written read's section and not this one's (#1730).
 
     The section ends where `is_section_boundary` says it does, which is the
     same call the written read makes on the same tokens -- so the two views
@@ -869,34 +832,28 @@ def _rendered_section_span(
     is the body split on its line endings; without it the exception is not
     applied, which is the reading a caller wanting the whole token span wants.
     """
-    wanted = " ".join(heading.split()).casefold()
-    for index, token in enumerate(tokens):
-        if (
-            not is_section_heading(token)
-            or " ".join(_inline_text(tokens[index + 1].children).split()).casefold() != wanted
-        ):
-            continue
-        start = index + 3
-        stop = next(
-            (offset for offset in range(start, len(tokens)) if is_section_boundary(tokens[offset])),
-            len(tokens),
-        )
-        swallowed = None
-        if lines is not None and token.map:
-            repaired = reparsed_without_runaway(tokens, lines)
-            if repaired is not None:
-                swallowed = next(
-                    (
-                        other.map[0]
-                        for other in repaired
-                        if other.map
-                        and other.map[0] >= token.map[1]
-                        and is_section_boundary(other)
-                    ),
-                    None,
-                )
-        return start, stop, swallowed
-    return None
+    index = section_heading_index(tokens, heading)
+    if index is None:
+        return None
+    token = tokens[index]
+    start = index + 3
+    stop = next(
+        (offset for offset in range(start, len(tokens)) if is_section_boundary(tokens[offset])),
+        len(tokens),
+    )
+    swallowed = None
+    if lines is not None and token.map:
+        repaired = reparsed_without_runaway(tokens, lines)
+        if repaired is not None:
+            swallowed = next(
+                (
+                    other.map[0]
+                    for other in repaired
+                    if other.map and other.map[0] >= token.map[1] and is_section_boundary(other)
+                ),
+                None,
+            )
+    return start, stop, swallowed
 
 
 def _rendered_lines(body: str, heading: str | None = None) -> list[str]:
@@ -974,12 +931,12 @@ def _rendered_lines(body: str, heading: str | None = None) -> list[str]:
             # measurement while the heading it formed still ended the section.
             # Hashes on a heading nobody hashed are the smaller wrong: no
             # reader is shown them, and a statement still ends there.
-            text = _inline_text(tokens[index + 1].children)
+            text = inline_text(tokens[index + 1].children)
             emit(token, [f"{'#' * int(token.tag[1:])} {text}".rstrip()])
             index += 3
             continue
         elif kind == "paragraph_open":
-            emit(token, _inline_text(tokens[index + 1].children, break_text="\n").split("\n"))
+            emit(token, inline_text(tokens[index + 1].children, break_text="\n").split("\n"))
             index += 3
             continue
         elif kind in {"fence", "code_block"}:
@@ -1005,7 +962,7 @@ def _rendered_lines(body: str, heading: str | None = None) -> list[str]:
             emit(token, [" | ".join(row or [])])
             row = None
         elif kind == "inline" and row is not None:
-            row.append(_inline_text(token.children).strip())
+            row.append(inline_text(token.children).strip())
         index += 1
     return lines
 
@@ -1105,12 +1062,14 @@ def _insert_evidence_metadata(body: str, payload: dict[str, object]) -> str:
         f"-->"
     )
     cleaned = _strip_evidence_metadata(body).strip()
-    pattern = r"(?mi)^(## Evidence Status)\s*$"
-    if re.search(pattern, cleaned):
-        # A function replacement, not a string: the metadata carries `\uXXXX`
-        # escapes now, and `re.sub` reads a backslash in a replacement string
-        # as one of its own. The heading stays as it was written.
-        return re.sub(pattern, lambda match: f"{metadata}\n\n{match.group(1)}", cleaned, count=1)
+    # Above the heading the page shows, not above the first line that looks
+    # like one: a body documenting the section in a fenced example took the
+    # comment inside the fence, where it is text a reader sees and no metadata
+    # any run can find (#1730). `section_heading_offset` is the same reader
+    # the writer and the gate use.
+    at = section_heading_offset(cleaned, EVIDENCE_STATUS_HEADING)
+    if at is not None:
+        return f"{cleaned[:at]}{metadata}\n\n{cleaned[at:]}"
     if cleaned:
         return f"{cleaned}\n\n{metadata}"
     return metadata
@@ -1312,7 +1271,13 @@ def _rendered_markdown_entries(
         "duplicate_items": duplicate_items,
         "source": "markdown",
     }
-    return parsed, unreadable if section_present else None
+    # Reported when a reader has a heading to refuse, which is a different
+    # question from `section_present`: a heading carrying inline HTML is on the
+    # page and is not this section (`section_heading_index`), and the reason it
+    # cannot be read is exactly what its author needs to see. Only a body with
+    # no such heading at all is silent, and that is the one refusal this read
+    # gives for having nothing to read.
+    return parsed, None if unreadable == NO_STATUS_HEADING_REFUSAL else unreadable
 
 
 # What completes each kind when there is no metadata, for the item a hand-written
@@ -2166,7 +2131,7 @@ def _is_status_list_item(tokens: list[Token], index: int) -> bool:
         # those took a table's header row for the item's text and deleted the
         # table with it.
         return False
-    text = _inline_text(tokens[index + 2].children).strip()
+    text = inline_text(tokens[index + 2].children).strip()
     return EVIDENCE_STATUS_PREFIX_RE.match(f"- {text}") is not None
 
 
@@ -2345,22 +2310,14 @@ def _placement_a_reader_cannot_see(written: str) -> str | None:
     Asked of the result rather than of the shapes that produce it: a write
     whose section the page does not show is wrong however it got there, and a
     postcondition cannot be argued out of by the next boundary rule.
+
+    One question, asked once. `placement_refusal` is this question for every
+    writer, and since a section's presence is decided by the same parse the
+    rendered read makes (#1730) the two cannot answer differently; this
+    returns the reason where the caller reports it, and the writer's own call
+    logs it.
     """
-    normalized = MARKDOWN_LINE_ENDING_RE.sub("\n", written)
-    lines = normalized.split("\n")
-    tokens = MARKDOWN.parse(normalized)
-    if _rendered_section_span(tokens, EVIDENCE_STATUS_HEADING, lines) is not None:
-        return None
-    open_block = unterminated_block(tokens, len(lines) - 1 if lines[-1] == "" else len(lines))
-    where = (
-        f" written below {open_block[1]} opened at line {open_block[0].map[0] + 1}"
-        if open_block is not None
-        else ""
-    )
-    return (
-        f"the `## {EVIDENCE_STATUS_HEADING}` section this write places{where} is not a heading "
-        "on the page, so the status would be in the body and absent from what a reader sees"
-    )
+    return placement_refusal(written, written, EVIDENCE_STATUS_HEADING)
 
 
 def write_evidence_status_section(
@@ -2385,16 +2342,19 @@ def write_evidence_status_section(
 
     The text carried forward is read from the same call that cuts it, so the
     write cannot take out a span the read did not see. It stands the body down
-    on two shapes and writes nothing: a section whose end an unclosed HTML
-    block hides, and a `## <heading>` line the page shows as code.
+    and writes nothing where the section's end is a guess: a block that never
+    closed hides it, or only a repaired parse can see it. A `## <heading>`
+    line the page shows as code was a third such shape, and was the cost of
+    matching the heading by pattern -- the section starts at a heading token
+    now, so there is no section under a fenced one to write to (#1730).
+
+    The body is taken as the author wrote it. It used to be newline-terminated
+    first, because the cut's pattern ended on one and a heading on the last
+    line was a section to every reader and none to the cut; the parser reads
+    that heading, so the terminator is no longer part of the question.
     """
-    # Newline-terminated throughout, because the cut's pattern ends on one: a
-    # heading on the last line with nothing after it is a section to a reader
-    # and none to the cut, and the write then appends a second copy beside it.
-    source, body = body, body if body.endswith("\n") else f"{body}\n"
+    source = body
     sections, refusal = removed_section_texts(body, EVIDENCE_STATUS_HEADING)
-    if refusal is None:
-        refusal = heading_cut_hits_an_example(body, EVIDENCE_STATUS_HEADING)
     if refusal is not None:
         return source, refusal
     notes = [block for section in sections for block in _section_notes(section)]
@@ -2403,8 +2363,6 @@ def write_evidence_status_section(
     # rule. Placing the status around a notes section still in the body put
     # the two in one order on the first write and the other on the second.
     kept, notes_refusal = removed_section_texts(body, EVIDENCE_NOTES_HEADING)
-    if notes_refusal is None:
-        notes_refusal = heading_cut_hits_an_example(body, EVIDENCE_NOTES_HEADING)
     if notes_refusal is not None:
         return source, notes_refusal
     # Appended to what that section already held rather than replacing it.
@@ -3047,7 +3005,7 @@ def _perf_underlined_measurement(body: str) -> bool:
     return any(
         tokens[index].type == "heading_open"
         and not tokens[index].markup.startswith("#")
-        and PERF_FIELD_RE.match(_inline_text(tokens[index + 1].children).strip())
+        and PERF_FIELD_RE.match(inline_text(tokens[index + 1].children).strip())
         for index in range(span[0], min(span[1] + 1, len(tokens) - 1))
     )
 
