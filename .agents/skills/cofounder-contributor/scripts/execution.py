@@ -361,8 +361,14 @@ def rejected_heading_checked_line(head_sha: str) -> str:
     the lane's attestation that an outcome happened, validated against live
     state before they are written; a note about somebody's heading attests
     nothing, and giving it a marker would put a forgeable token next to model
-    prose for no gain. The worst a forged copy of this line can do is keep a
-    note from being said twice, which is what it is for.
+    prose for no gain.
+
+    It is forgeable, and the cost is not only a repeat suppressed: a copy
+    posted BEFORE the first genuine note suppresses that one (codex,
+    gpt-5.6-sol, xhigh). `_is_prior_rejected_heading_note` asks for the
+    headline beside it and for this text to be a line of its own, so a forgery
+    has to reproduce the note -- at which point the author has been told, which
+    is the whole point of saying it.
     """
     return f"{REJECTED_HEADING_CHECKED_PREFIX} `{head_sha}`."
 
@@ -384,17 +390,20 @@ def compose_rejected_heading_comment(persona: str, note: str, head_sha: str) -> 
     note the same kind of claim as the refusal it exists to correct -- true
     sounding, wrongly attributed (#1730, round 2).
 
-    The note itself is already escaped for this surface (`code_span`); the
-    delimiter strip is the same one model prose gets, so no line of quoted text
-    can spell a marker.
+    Nothing here touches the note. Every value it quotes is already fenced by
+    `code_span`, which takes the comment delimiters out BEFORE it measures the
+    backtick runs -- and a strip applied afterwards, which is what this used to
+    do, can join two runs into one long enough to close the fence and put a
+    live `@mention` back in the comment (codex, gpt-5.6-sol, xhigh). A string
+    that has been fenced is finished.
     """
     return "\n".join(
         [
             f"*{persona}*",
             "",
-            "**Your `## Evidence Status` heading was not read as the section.**",
+            REJECTED_HEADING_HEADLINE,
             "",
-            f"- {_neutralized_model_text(note)}",
+            f"- {note}",
             "",
             "This turn went ahead and the body was updated. While both headings stand, "
             "the read that collects your evidence refuses this body -- \"a reader sees 2 "
@@ -422,13 +431,26 @@ def post_rejected_heading_note(
     the write, it was said on turns whose write then refused and returned the
     body untouched (#1730, round 2).
 
-    Once per head, because the note is about a body and a body has a commit.
-    Re-running a turn at the same head re-posts nothing; a new commit that
-    still carries the tagged heading says it again, which is right -- the
-    author has pushed since and the heading is still there.
+    Once per head in the ordinary case, and best-effort about it. Re-running a
+    turn at the same head re-posts nothing; a new commit that still carries the
+    tagged heading says it again, which is right -- the author has pushed since
+    and the heading is still there.
 
-    Best-effort at every step. A comment is the report of the work, never the
-    work, so neither the read nor the post can fail this turn.
+    Three ways it says the note twice, all of them deliberate rather than
+    fixed, and all in the same direction (codex, gpt-5.6-sol, xhigh). The
+    comment read returns a page, so a pull request past that length stops
+    finding the older note. A read that fails returns nothing and the note goes
+    again. And two turns racing at one head can both find no note and both
+    post. The alternative to each is a note that is never said, and the reason
+    this exists is that nothing was said at all.
+
+    One way it is quieter than the head suggests: a PR body can be edited
+    without a commit, so a second body-only turn at the same head does not
+    repeat the note even if the author has since written a different tagged
+    heading.
+
+    A comment is the report of the work, never the work, so neither the read
+    nor the post can fail this turn.
     """
     note = rejected_heading_note(written_body, "Evidence Status")
     if note is None:
@@ -436,7 +458,10 @@ def post_rejected_heading_note(
     log(note)
     log(json.dumps({"error_class": "rejected_heading", "detail": note, "pr": pr_number}))
     checked = rejected_heading_checked_line(head_sha)
-    if any(checked in body for body in _pr_comment_bodies(pr_number, env)):
+    if any(
+        _is_prior_rejected_heading_note(body, checked)
+        for body in _pr_comment_bodies(pr_number, env)
+    ):
         return False
     return _post_pr_comment(
         pr_number, compose_rejected_heading_comment(persona, note, head_sha), env
@@ -494,11 +519,33 @@ def _post_pr_comment(pr_number: int, body: str, env: dict[str, str]) -> bool:
     return posted != sentinel
 
 
-def _pr_comment_bodies(pr_number: int, env: dict[str, str]) -> list[str]:
-    """Every comment already on this pull request, or [] when they cannot be read.
+REJECTED_HEADING_HEADLINE = "**Your `## Evidence Status` heading was not read as the section.**"
 
-    Best-effort by design: a read that fails must not stop the turn, and the
-    only thing it costs is that a note may be said twice.
+
+def _is_prior_rejected_heading_note(comment: str, checked: str) -> bool:
+    """Whether this comment is this runtime's note about this head.
+
+    Two conditions, because one was forgeable in the direction that matters. A
+    substring match on the head line alone is satisfied by that text inside an
+    HTML comment or a fence in somebody else's comment -- and a copy posted
+    before the first genuine note suppresses it, which is worse than a repeat
+    (codex, gpt-5.6-sol, xhigh). So the head line has to be a line of its own,
+    and the note's headline has to be here too. A comment that carries both has
+    said the thing this one would say.
+    """
+    return REJECTED_HEADING_HEADLINE in comment and any(
+        line.strip() == checked for line in comment.splitlines()
+    )
+
+
+def _pr_comment_bodies(pr_number: int, env: dict[str, str]) -> list[str]:
+    """The comments `gh` returns for this pull request, or [] when they cannot be read.
+
+    Not every comment: `gh pr view --json comments` asks GraphQL for a page,
+    and a pull request longer than that page hides its oldest comments from
+    this read. Best-effort in the same direction as a failed read -- both end
+    in the note being said again rather than never, which is the failure this
+    is allowed to have.
     """
     try:
         raw = run_optional(

@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from collections.abc import Callable
 from itertools import groupby
 from pathlib import Path
@@ -164,8 +165,7 @@ def issue_label_presence(issue: dict[str, object]) -> set[str]:
 # arrives as `html_inline` like every other tag, and the tag name is what
 # identifies it, so attributes and a self-closing slash are all one shape.
 HTML_BREAK_TAG_RE = re.compile(r"(?i)^<br\b[^>]*>$")
-# Everything a line ending or a terminal escape is made of. A note quotes text
-# somebody else wrote, and it reaches surfaces that read control characters.
+# Everything a line ending or a terminal escape is made of.
 CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
@@ -182,20 +182,36 @@ def code_span(text: str) -> str:
     mention GitHub delivers to a person who has nothing to do with this
     (#1730, round 2).
 
-    So the text is flattened to one line with its control characters gone, and
-    fenced with one backtick more than the longest run inside it -- the rule
-    `inline_text` already applies to a code span it re-emits, written here once
-    and called from both. A space pads a value that starts or ends on a
-    backtick, which is what CommonMark requires to keep it inside.
+    Three removals, then the fence, and nothing may mutate the result
+    afterwards. Order is the whole of it: a comment delimiter taken out AFTER
+    the fence was measured can JOIN two backtick runs into one long enough to
+    close it -- ``` `<!--`` `` `` `@octocat `` in one attribute becomes ``` ```
+    once `<!--` goes, which ends a three-backtick span and puts the mention
+    back in live markdown. Codex (gpt-5.6-sol, xhigh) found that with the
+    delimiters stripped by the caller; they are stripped here now, before the
+    runs are counted, and the caller mutates nothing.
 
-    Both halves of the flattening are load-bearing and only one of them is
-    obvious. `CONTROL_CHARACTER_RE` takes the C0 range and DEL; the bare
-    `.split()` takes every other character Python calls whitespace, which is
-    where U+2028, U+2029 and U+0085 are -- each of them a line break to
-    something downstream and none of them in that range. Narrowing the split to
-    `.split(" ")`, which reads like the same thing, puts those three back.
+    What goes: the delimiters, to a fixpoint, because one deletion can splice a
+    fresh one together; the C0 range and DEL; every Unicode format character,
+    which is where a zero-width space and a right-to-left override live -- each
+    invisible, and the override reorders what a reader sees for the rest of the
+    line; and every run of whitespace, collapsed to one space. That last step
+    is a bare `.split()` on purpose: U+2028, U+2029 and U+0085 are line breaks
+    downstream and none of them is in the C0 range, so narrowing it to
+    `.split(" ")` -- which reads like the same thing -- puts all three back.
     """
-    return fenced_code_span(" ".join(CONTROL_CHARACTER_RE.sub(" ", text).split()) or " ")
+    stripped = text
+    while True:
+        without = stripped.replace("<!--", "").replace("-->", "")
+        if without == stripped:
+            break
+        stripped = without
+    visible = "".join(
+        character
+        for character in CONTROL_CHARACTER_RE.sub(" ", stripped)
+        if unicodedata.category(character) != "Cf"
+    )
+    return fenced_code_span(" ".join(visible.split()) or " ")
 
 
 def fenced_code_span(text: str) -> str:
@@ -402,22 +418,24 @@ def rejected_heading_note(body: str, heading: str) -> str | None:
     line = lines[tokens[index].map[0]].strip() if tokens[index].map else f"## {heading}"
     readable = section_heading_index(tokens, heading)
     if readable is None:
-        written = (
-            f"No plain `## {heading}` heading is in this body, so nothing here is read as "
-            "that section."
-        )
-    elif (tokens[readable].map or (0, 0))[0] > (tokens[index].map or (0, 0))[0]:
-        written = f"A plain `## {heading}` was written below it."
+        where = f"No readable `{heading}` h2 is in this body, so nothing here is read as that section."
     else:
-        # The ordinary case is a heading the write put BELOW the author's, and
-        # "below it" is the part that tells them which of the two is which. It
-        # is a claim about position, so on a body that already carried a plain
-        # heading above the tagged one it was simply false.
-        written = f"A plain `## {heading}` above it is the one being read as that section."
+        # Two things this sentence used to say that the body cannot support.
+        # It said "a plain `## {heading}`", where the reader that accepts it
+        # accepts a setext h2 and an emphasised one too, so the note named a
+        # syntax the body need not carry. And it said "was WRITTEN below it",
+        # which is a claim about who put it there -- a body is evidence for
+        # what is in it and for nothing else. It says where it is and that it
+        # is the one being read (codex, gpt-5.6-sol, xhigh).
+        below = (tokens[readable].map or (0, 0))[0] > (tokens[index].map or (0, 0))[0]
+        where = (
+            f"A readable `{heading}` h2 {'below' if below else 'above'} it is the one "
+            "read as that section."
+        )
     return (
         f"{code_span(line)} carries inline HTML ({code_span(tag)}), so it is not read as the "
         f"`{heading}` section -- a tag can strike, hide or fold what follows it, and "
-        f"which one it does is not something this reader decides. {written} "
+        f"which one it does is not something this reader decides. {where} "
         "Remove the tags from yours, or remove yours."
     )
 

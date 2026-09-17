@@ -752,12 +752,22 @@ def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
         rejected = rejected_section_headings(tokens, EVIDENCE_STATUS_HEADING)
         named = ""
         if rejected and len(headings) > 1:
-            # Every tagged heading, not the first. With both of them tagged,
-            # naming one and saying that removing it leaves a body with one
-            # heading is true and useless: what remains is the other tagged
-            # heading, still not read as the section, so the author repairs,
-            # re-runs, and meets this refusal again (#1730, round 2). What is
-            # left after the removal is stated rather than implied.
+            # Every tagged heading, not the first: with both of them tagged,
+            # naming one left the other -- still tagged, still not read -- and
+            # the author repaired, re-ran and met this refusal again.
+            #
+            # And what it asks for is the STATE that clears this refusal, not
+            # the result of removing something. Two goes at predicting that
+            # result were wrong in two different ways: subtracting rejections
+            # from headings counted an `# Evidence Status` as though removing
+            # a tag would leave it readable, and counting readable h2s instead
+            # ignored that this refusal counts every heading whose text reads
+            # as this one, at any level and any depth, so a body with one good
+            # h2 and one h1 still refuses. A predicate that decides the repair
+            # and a predicate that judges it have to be the same one, and the
+            # honest way to say that is to describe the body to aim for
+            # (#1730, round 2; the second miss found by codex, gpt-5.6-sol,
+            # xhigh).
             places = [
                 f"line {span[0] + 1}" if (span := tokens[index].map) else "an unknown line"
                 for index, _ in rejected
@@ -768,33 +778,10 @@ def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
             ]
             carries = phrases[0] if len(phrases) == 1 else ", ".join(phrases[:-1]) + f" and {phrases[-1]}"
             unread = "it is not read" if len(rejected) == 1 else "none of them is read"
-            those = "that one" if len(rejected) == 1 else "those"
-            # What is LEFT that a reader reads as this section, not what is
-            # left of the count. `headings` here is every heading whose text
-            # reads as this one at any level and any depth, and a rejection is
-            # a top-level h2 -- so on a body with a tagged h2 and an `# Evidence
-            # Status` below it, subtracting gave 1 and promised a repair that
-            # leaves a readable heading, where an h1 is not one either and the
-            # author meets this refusal again. `is_section_heading` is the
-            # predicate that decides, so it is the predicate that counts.
-            remaining = sum(
-                1
-                for index in headings
-                if is_section_heading(tokens[index])
-                and not any(child.type == "html_inline" for child in tokens[index + 1].children or [])
+            named = (
+                f"; {carries}, and {unread} as the section. Leave exactly one heading whose "
+                "text reads as `Evidence Status` -- top level, an h2, and carrying no tags"
             )
-            if remaining:
-                counted = "one heading" if remaining == 1 else f"{remaining} headings"
-                named = (
-                    f"; {carries}, and {unread} as the section, so removing {those} is what "
-                    f"leaves a body with {counted} a reader reads as this section"
-                )
-            else:
-                named = (
-                    f"; {carries}, and {unread} as the section, so removing {those} would leave "
-                    "a body with no heading a reader reads as this section; take the tags off "
-                    f"{'it' if len(rejected) == 1 else 'one of them'} instead"
-                )
         return [], f"{_heading_count_refusal(len(headings))}{named}"
     start = headings[0]
     if tokens[start].tag != "h2":

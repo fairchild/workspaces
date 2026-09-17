@@ -1641,7 +1641,10 @@ class TheSeedersIdentityIsNoWiderThanThisGatesTests(unittest.TestCase):
             # pattern's literal space to `\s` -- which reads like a tidy-up --
             # left the suite green while the gate started finding sections on
             # lines the page shows as paragraphs.
-            "whitespace after the marker": tuple(
+            # Named for the separator rather than for whitespace, because the
+            # empty member -- `##Mergeability` -- is the absence of one
+            # (codex, gpt-5.6-sol, xhigh).
+            "separator after the marker": tuple(
                 f"##{gap}{text}" for gap in ("  ", "\t", " ", "\x0c", "\x0b", "")
             ),
             "trailing whitespace": tuple(

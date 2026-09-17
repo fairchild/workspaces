@@ -2875,7 +2875,7 @@ class RevisionTurnTests(unittest.TestCase):
         self.assertEqual(len(notes), 1, comments)
         self.assertIn("<span>", notes[0])
         self.assertIn(self.PERSONA, notes[0])
-        self.assertIn("A plain `## Evidence Status` was written below it", notes[0])
+        self.assertIn("A readable `Evidence Status` h2 below it is the one read", notes[0])
         # And it names this head, which is what makes it once per head.
         execution = sys.modules["execution"]
         self.assertIn(execution.rejected_heading_checked_line(self.LIVE_HEAD), notes[0])
@@ -3003,6 +3003,47 @@ class RevisionTurnTests(unittest.TestCase):
         self.assertEqual(
             [comment for comment in comments if "was not read as the section" in comment], []
         )
+
+    def test_a_forged_head_line_alone_does_not_suppress_the_note(self) -> None:
+        """The dedup check asks for the note, not for a string (#1730, round 2).
+
+        A substring match on the head line is satisfied by that text inside an
+        HTML comment or a fence in anybody's comment -- and a copy posted
+        BEFORE the first genuine note suppresses the one that matters, which is
+        worse than a repeat (codex, gpt-5.6-sol, xhigh). The headline has to be
+        there too, and the head line has to be a line of its own; a comment
+        carrying both has said what this one would say.
+        """
+        execution = sys.modules["execution"]
+        checked = execution.rejected_heading_checked_line(self.LIVE_HEAD)
+        for name, forged in (
+            ("hidden in an HTML comment", f"<!-- {checked} -->"),
+            ("inside a fence", f"```\n{checked}\n```"),
+            ("quoted mid-sentence", f"Someone wrote: {checked} in passing."),
+        ):
+            with self.subTest(forgery=name):
+                _, _, comments, _ = self._route_with_tagged_heading(existing_comments=[forged])
+                self.assertEqual(
+                    len([c for c in comments if "was not read as the section" in c]), 1, name
+                )
+        # The real thing still suppresses it, and a real one at another head
+        # does not.
+        real = execution.compose_rejected_heading_comment(self.PERSONA, "a note", self.LIVE_HEAD)
+        _, _, quiet, _ = self._route_with_tagged_heading(existing_comments=[real])
+        self.assertEqual([c for c in quiet if "was not read as the section" in c], [])
+        other = execution.compose_rejected_heading_comment(self.PERSONA, "a note", "f" * 40)
+        _, _, again, _ = self._route_with_tagged_heading(existing_comments=[other])
+        self.assertEqual(len([c for c in again if "was not read as the section" in c]), 1)
+
+    def test_a_comment_read_that_fails_says_the_note_again_rather_than_never(self) -> None:
+        # The chosen failure direction, pinned: an unreadable comment list ends
+        # in a repeat, not in silence. The reason this exists is that nothing
+        # was said at all.
+        execution = sys.modules["execution"]
+        real = execution.compose_rejected_heading_comment(self.PERSONA, "a note", self.LIVE_HEAD)
+        with mock.patch.object(execution, "_pr_comment_bodies", return_value=[]):
+            _, _, comments, _ = self._route_with_tagged_heading(existing_comments=[real])
+        self.assertEqual(len([c for c in comments if "was not read as the section" in c]), 1)
 
     def test_a_comment_that_cannot_be_posted_does_not_fail_the_turn(self) -> None:
         # A comment is the report of the work, never the work. `gh` missing
