@@ -1598,6 +1598,9 @@ class TheSeedersIdentityIsNoWiderThanThisGatesTests(unittest.TestCase):
                 self.assertTrue(reader.has_markdown_section(body, "Mergeability"))
                 self.assertFalse(reader.gate_reads_markdown_section(body, "Mergeability"))
 
+    HEADING = "Mergeability"
+    ATX = f"## {HEADING}"
+
     # Every axis on which the gate's pattern and the parser's heading grammar
     # could disagree, each read off the two rule sets rather than remembered.
     # The gate's pattern is `(?mi)^## {heading}\n`: a literal `## `, at column
@@ -1609,26 +1612,64 @@ class TheSeedersIdentityIsNoWiderThanThisGatesTests(unittest.TestCase):
     # nobody thought of: widening the gate to accept a closing hash run
     # (`## Mergeability ##`, an ordinary ATX heading) left all 153 tests green,
     # because no fixture carried one.
-    START_AXES = {
-        "the pattern's own shape": ("## Mergeability",),
-        "case": ("## mergeability", "## MERGEABILITY"),
-        # `(?i)` on a str pattern folds the full Unicode table, so the gate
-        # aliases a long s onto an s; the parser's text comparison does too.
-        "unicode case folding": ("## Mergeabilitſ", "## MERGEABILITY"[:-1] + "Y"),
-        "closing hashes": ("## Mergeability ##", "## Mergeability #", "## Mergeability  ###"),
-        "runs of whitespace after the marker": ("##  Mergeability", "##\tMergeability"),
-        "trailing spaces": ("## Mergeability  ", "## Mergeability\t"),
-        "indent": ("   ## Mergeability", "    ## Mergeability", " ## Mergeability"),
-        "setext, both underlines": ("Mergeability\n---", "Mergeability\n==="),
-        "emphasis": ("## **Mergeability**", "## _Mergeability_"),
-        "level": ("### Mergeability", "# Mergeability"),
-        "text that is not the heading": ("## Mergeability extra", "## Merge ability"),
-        "a stray carriage return": ("## Mergeability\r",),
-    }
+    #
+    # And GENERATED rather than typed, because a listed set is also wrong on
+    # the shape somebody mistyped. One member was `"## MERGEABILITY"[:-1] + "Y"`,
+    # which is `## MERGEABILITY` -- the case axis a second time -- so the set
+    # held 23 distinct shapes under a count of 24 and the count was the only
+    # thing that noticed nothing (#1730, round 2). Each axis is now a rule
+    # applied to the pattern's own shape, and the distinct count is asserted.
+    @classmethod
+    def start_axes(cls) -> dict[str, tuple[str, ...]]:
+        text, atx = cls.HEADING, cls.ATX
+        return {
+            "the pattern's own shape": (atx,),
+            "case": (atx.lower(), atx.upper()),
+            # `(?i)` on a str pattern folds the whole Unicode table and
+            # `casefold()` does not fold the same way. A dotted capital I
+            # matches the gate's pattern and is NOT this heading to the
+            # parser, so the gate reads a section under a name the page does
+            # not show -- which is the divergence `has_markdown_section`
+            # carries and #1742 owns. What this test asks is narrower and the
+            # shape still belongs to it: the skill's copy has to give the
+            # gate's answer, whichever answer that is.
+            "unicode case folding": (f"## MERGEABİLİTY",),
+            "closing hashes": tuple(f"{atx}{run}" for run in (" ##", " #", "  ###")),
+            # CommonMark allows a space or a tab after the hashes and nothing
+            # else, so every other blank-looking character is a widening this
+            # gate must not make. Without a fixture carrying one, relaxing the
+            # pattern's literal space to `\s` -- which reads like a tidy-up --
+            # left the suite green while the gate started finding sections on
+            # lines the page shows as paragraphs.
+            "whitespace after the marker": tuple(
+                f"##{gap}{text}" for gap in ("  ", "\t", " ", "\x0c", "\x0b", "")
+            ),
+            "trailing whitespace": tuple(
+                f"{atx}{tail}" for tail in ("  ", "\t", " ", "\x0c")
+            ),
+            "indent": tuple(f"{' ' * count}{atx}" for count in (1, 3, 4)),
+            "setext, both underlines": tuple(f"{text}\n{rule}" for rule in ("---", "===")),
+            "emphasis": tuple(f"## {mark}{text}{mark}" for mark in ("**", "_")),
+            "level": tuple(f"{'#' * level} {text}" for level in (1, 3)),
+            "text that is not the heading": (f"{atx} extra", "## Merge ability"),
+            "a stray carriage return": (f"{atx}\r",),
+        }
+
     # A floor under the derivation, not a substitute for it: the axes above
-    # are the guard, and this fails when one is dropped wholesale.
+    # are the guard, and this fails when one is dropped wholesale. The distinct
+    # count is the second half, and it is the half that catches a member
+    # written twice.
     START_AXIS_COUNT = 12
-    START_SHAPE_COUNT = 24
+    START_SHAPE_COUNT = 29
+
+    def test_the_start_shapes_are_distinct(self) -> None:
+        # A duplicate is a fixture that pins nothing and a count that says it
+        # did. This is what the two numbers together mean.
+        axes = self.start_axes()
+        shapes = [shape for members in axes.values() for shape in members]
+        self.assertEqual(len(axes), self.START_AXIS_COUNT)
+        self.assertEqual(len(shapes), self.START_SHAPE_COUNT)
+        self.assertEqual(len(set(shapes)), self.START_SHAPE_COUNT, "a shape is listed twice")
 
     def test_the_skills_copy_of_this_gates_start_answers_as_this_gate_does(self) -> None:
         # The rule is written twice -- this script is a PEP 723 entry point
@@ -1637,29 +1678,19 @@ class TheSeedersIdentityIsNoWiderThanThisGatesTests(unittest.TestCase):
         # stay in step. `extract_section` returning text is this gate finding
         # the start; the skill's predicate has to say the same thing.
         #
-        # Two axes are stated here rather than fixtured, and for different
-        # reasons.
-        #
-        # A heading on the last line with no line ending after it: the gate's
-        # pattern asks for a `\n` and would not match, and the skill's copy
-        # asks for the same one, so the two agree -- but every body this gate
-        # reads comes from GitHub, which stores a trailing newline, so the
-        # shape is unreachable and a fixture would pin a path no body takes.
-        #
-        # A heading whose section is empty (`## Mergeability` with the next
-        # heading directly below): this oracle cannot see it. `extract_section`
-        # returns "" both for a start it did not find and for one it found with
-        # nothing under it, so a fixture there asserts the oracle's blind spot
-        # rather than the two readers' agreement. Checking it would need a
-        # second copy of the gate's pattern in this file, which is the thing
-        # the oracle exists to avoid. The two readers do agree on it -- the
-        # start is the same literal line to both -- and that is an argument,
-        # not a measurement, which is why it is written here and not asserted.
+        # One axis is stated here rather than fixtured. A heading whose section
+        # is empty (`## Mergeability` with the next heading directly below):
+        # this oracle cannot see it. `extract_section` returns "" both for a
+        # start it did not find and for one it found with nothing under it, so
+        # a fixture there asserts the oracle's blind spot rather than the two
+        # readers' agreement. Checking it would need a second copy of the
+        # gate's pattern in this file, which is the thing the oracle exists to
+        # avoid. The two readers do agree on it -- the start is the same
+        # literal line to both -- and that is an argument, not a measurement,
+        # which is why it is written here and not asserted.
         reader = self.reader()
-        self.assertEqual(len(self.START_AXES), self.START_AXIS_COUNT)
-        self.assertEqual(sum(len(v) for v in self.START_AXES.values()), self.START_SHAPE_COUNT)
         agreed = 0
-        for axis, shapes in self.START_AXES.items():
+        for axis, shapes in self.start_axes().items():
             for shape in shapes:
                 for ending in ("\n", "\r\n"):
                     with self.subTest(axis=axis, shape=shape, ending=ending.encode("unicode_escape").decode()):
@@ -1680,13 +1711,40 @@ class TheSeedersIdentityIsNoWiderThanThisGatesTests(unittest.TestCase):
                         agreed += 1
         self.assertEqual(agreed, self.START_SHAPE_COUNT * 2)
 
+    def test_a_heading_on_the_body_s_last_line_answers_the_same_in_both(self) -> None:
+        """The shape that was argued to be unreachable, and is not (#1730, round 2).
+
+        The argument was that every body this gate reads comes from GitHub,
+        which stores a trailing newline, so a heading with no line ending after
+        it is a path no body takes. `--body-file` is the other entry point: it
+        reads a file an author wrote locally, and a file need not end in a
+        newline. So the shape is reachable, both readers refuse it -- each asks
+        for the `\\n` the pattern names -- and it is a fixture rather than a
+        paragraph.
+        """
+        reader = self.reader()
+        for label, body in (
+            ("nothing under the heading", "Why this exists.\n\n## Mergeability"),
+            ("content, no trailing newline", "Why this exists.\n\n## Mergeability\n\n- Surface: desktop"),
+        ):
+            with self.subTest(body=label):
+                self.assertEqual(
+                    reader.gate_reads_markdown_section(body, "Mergeability"),
+                    bool(pr_readiness.extract_section(body, "Mergeability")),
+                )
+        # And the one that names the residual: with no newline after it the
+        # heading is found by neither, where the page shows a heading.
+        terminal = "Why this exists.\n\n## Mergeability"
+        self.assertFalse(reader.gate_reads_markdown_section(terminal, "Mergeability"))
+        self.assertTrue(reader.has_markdown_section(terminal, "Mergeability"))
+
     def test_the_axes_are_not_all_one_answer(self) -> None:
         # A guard whose fixtures all score the same way tests nothing about
         # where the line is. The set has to carry both answers, and a shape the
         # gate reads has to sit beside one it does not.
         reader = self.reader()
         found = {True: [], False: []}
-        for axis, shapes in self.START_AXES.items():
+        for axis, shapes in self.start_axes().items():
             for shape in shapes:
                 body = f"Why this exists.\n\n{shape}\n\n- Surface: desktop\n"
                 found[reader.gate_reads_markdown_section(body, "Mergeability")].append(
@@ -1694,6 +1752,7 @@ class TheSeedersIdentityIsNoWiderThanThisGatesTests(unittest.TestCase):
                 )
         self.assertGreaterEqual(len(found[True]), 3, found)
         self.assertGreaterEqual(len(found[False]), 8, found)
+
 
 class ReadinessCommentTests(unittest.TestCase):
     def test_failure_comment_names_failures_and_pastes_template(self) -> None:
