@@ -1237,6 +1237,11 @@ def _finish_revision_without_diff(
             cwd=REPO_ROOT,
             env=env,
         )
+        # This path publishes a body too, without committing one, so it owes
+        # the same report as the paths that push. The head is the live one --
+        # nothing was pushed -- and that is the commit this body is attached
+        # to, so it is the right thing to say the note was read from.
+        post_rejected_heading_note(pr_number, persona, pr_body, live_head, env)
         posted = _post_revision_reply(pr_number, persona, model_body, review_id, env)
     else:
         outcome = "needs-owner"

@@ -2951,6 +2951,59 @@ class RevisionTurnTests(unittest.TestCase):
             len([comment for comment in moved if "was not read as the section" in comment]), 1
         )
 
+    def test_a_body_only_revision_that_publishes_a_body_reports_the_heading_too(self) -> None:
+        """Every path that writes a body reports, and this one writes without committing.
+
+        A revision turn with no file changes still edits the PR body when the
+        model rewrote it, which is a publication like any other -- and it went
+        through `_finish_revision_without_diff`, which the note's move to
+        "after the write" did not reach. The author got a body with a plain
+        heading written below theirs and nothing said about it (#1730, round 2).
+
+        The head here is the live one rather than a pushed commit, because
+        nothing was pushed; that is the commit the body is attached to, so it
+        is the right thing to dedup on.
+        """
+        execution = sys.modules["execution"]
+        state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        with mock.patch.object(self, "_state", return_value=state):
+            exit_code, commands, comments, outputs = self._route(
+                dirty=False,
+                live_body="stale body",
+                data=self._data(self.TAGGED_HEADING_BODY),
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(outputs["revision_outcome"], "body-only")
+        edits = [index for index, command in enumerate(commands) if command[:3] == ["gh", "pr", "edit"]]
+        self.assertEqual(len(edits), 1, commands)
+        notes = [comment for comment in comments if "was not read as the section" in comment]
+        self.assertEqual(len(notes), 1, comments)
+        self.assertIn(execution.rejected_heading_checked_line(self.LIVE_HEAD), notes[0])
+        posts = [
+            index
+            for index, command in enumerate(commands)
+            if command[:3] == ["gh", "pr", "comment"]
+            and "was not read as the section" in command[command.index("--body") + 1]
+        ]
+        self.assertEqual(len(posts), 1, commands)
+        self.assertLess(edits[0], posts[0])
+
+    def test_a_revision_that_moves_nothing_reports_no_heading(self) -> None:
+        # The other outcome of the same function: an identical body is a turn
+        # that published nothing, so there is nothing to report.
+        state = {**self._state(), "requested_evidence": []}
+        data = self._data(self.TAGGED_HEADING_BODY)
+        with mock.patch.object(self, "_state", return_value=state):
+            exit_code, commands, comments, outputs = self._route(
+                dirty=False, live_body=self._rendered_pr_body(data), data=data
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(outputs["revision_outcome"], "needs-owner")
+        self.assertFalse(any(command[:3] == ["gh", "pr", "edit"] for command in commands))
+        self.assertEqual(
+            [comment for comment in comments if "was not read as the section" in comment], []
+        )
+
     def test_a_comment_that_cannot_be_posted_does_not_fail_the_turn(self) -> None:
         # A comment is the report of the work, never the work. `gh` missing
         # from PATH raises out of `subprocess.run`, which `run_optional` does
