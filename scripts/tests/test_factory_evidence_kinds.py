@@ -7308,6 +7308,18 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
                     )
                     pointer += 1
 
+    # Two blocks whose adjacency is a heading: a line of `=` directly under a
+    # line of text is that text's setext underline, so the blank line between
+    # them is the difference between two paragraphs and an h1 the author never
+    # wrote. Written in both orders because the seam is between the blocks and
+    # not a property of either one.
+    TEXT_THEN_EQUALS_TAIL = "\nA note for the reviewer.\n\n===\n"
+    EQUALS_THEN_TEXT_TAIL = "\n===\n\nA note for the reviewer.\n"
+    # The same hazard at the other seam: the author's own `---` thematic break
+    # is what follows the notes, and a carried line landing directly above it
+    # turns the rule into that line's underline.
+    AUTHOR_RULE_BELOW = "---\n\nA closing remark.\n"
+
     PLACEMENT_FIXTURES = BYTE_FIXTURES + (
         # The case the order is really for: an element left open folds what
         # follows it on GitHub's page, so where the write puts it is the whole
@@ -7315,6 +7327,8 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         ("an element left open", "\n<details>\n<summary>More</summary>\n\nplain note\n"),
         ("a fenced excerpt", "\n```\n214 tests passed\n```\n"),
         ("a quoted note", "\n> a reviewer asked about the fixture\n"),
+        ("a text note above a line of equals", TEXT_THEN_EQUALS_TAIL),
+        ("a line of equals above a text note", EQUALS_THEN_TEXT_TAIL),
     )
 
     ITEMS = (ITEM, "`pnpm test` in `web-next` passes", "the fixture state survives a relaunch")
@@ -7446,6 +7460,14 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
             (
                 "a note carrying a fenced `## ` line",
                 self.interleaved_body(self.FENCED_HEADING_TAIL, below=self.TWO_HEADINGS_BELOW),
+                1,
+            ),
+            # The successor is a rule rather than a heading, which is the
+            # shape where the carried region's tail seam decides whether the
+            # author still has a rule.
+            (
+                "a note whose successor is the author's own dash rule",
+                self.interleaved_body(self.NOTE_TAIL, below=self.AUTHOR_RULE_BELOW),
                 1,
             ),
         ]
@@ -7771,7 +7793,125 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         # `## Validation` example into a heading of its own.
         ("indented output above a note", "\n    214 tests passed\n\nand a note under it.\n"),
         ("nothing that is not an entry", ""),
+        # Two paragraphs whose adjacency would be a heading: see
+        # `TEXT_THEN_EQUALS_TAIL`. Round-tripped in both orders as well as
+        # placed, because "every line comes back" and "the blank line between
+        # them comes back" are different properties and only the second one
+        # decides whether the page gains a heading.
+        ("a text note above a line of equals", TEXT_THEN_EQUALS_TAIL),
+        ("a line of equals above a text note", EQUALS_THEN_TEXT_TAIL),
     )
+
+    @staticmethod
+    def page_blocks(body: str) -> list[tuple[str, str]]:
+        """Every top-level heading and rule the page shows, as (tag, text), in order.
+
+        The oracle for "a heading the author did not write". Read from the
+        parse for the reason `section_boundaries` gives: a `^## ` scan calls a
+        fenced line a heading and is blind to a setext one, and a setext one is
+        exactly what a seam can manufacture.
+        """
+        helpers = sys.modules["_helpers"]
+        normalized = helpers.MARKDOWN_LINE_ENDING_RE.sub("\n", body)
+        tokens = helpers.MARKDOWN.parse(normalized)
+        blocks = []
+        for index, token in enumerate(tokens):
+            if token.level != 0:
+                continue
+            if token.type == "heading_open":
+                blocks.append((token.tag, helpers.inline_text(tokens[index + 1].children).strip()))
+            elif token.type == "hr":
+                blocks.append(("hr", ""))
+        return blocks
+
+    @staticmethod
+    def top_level_blocks(text: str) -> list[str]:
+        """The type of each top-level block the parser reads, so a seam that merges two shows up as one."""
+        helpers = sys.modules["_helpers"]
+        return [
+            token.type
+            for token in helpers.MARKDOWN.parse(helpers.MARKDOWN_LINE_ENDING_RE.sub("\n", text))
+            if token.level == 0 and token.nesting >= 0 and token.type != "inline"
+        ]
+
+    def test_the_seam_between_two_carried_blocks_stays_a_blank_line(self) -> None:
+        """Two blocks a reader sees as two are carried as two (#1738).
+
+        The carried blocks are joined when they are written back, and on this
+        fixture the join is the whole of what a reader gets: a line of `=`
+        directly under a line of text is that text's setext underline, so a
+        seam of one newline turns two paragraphs into an `<h1>` nobody wrote
+        and swallows the note's text into its title. Written in both orders,
+        because the seam belongs to neither block.
+
+        Every placement branch in `insert_markdown_section` joins with a blank
+        line today, which is why this passes; the fixture is what keeps it true
+        through the next edit of that function. The last assertion is the
+        oracle's own check -- the wrong seam really does make the heading, so
+        passing here is a property of the writer rather than of the parser.
+        """
+        for label, tail, blocks in (
+            ("a text note above a line of equals", self.TEXT_THEN_EQUALS_TAIL, ("A note for the reviewer.", "===")),
+            ("a line of equals above a text note", self.EQUALS_THEN_TEXT_TAIL, ("===", "A note for the reviewer.")),
+        ):
+            with self.subTest(order=label):
+                body = self.body(tail)
+                self.assertEqual(self.page_blocks(body), [("h2", "Evidence Status"), ("h2", "Validation")])
+                resolved = self.resolved(body)
+                # Two blocks, in the order written, with the blank line back.
+                self.assertEqual(self.notes_section(resolved), "\n\n".join(blocks))
+                # And nothing new on the page: the author's two headings, plus
+                # the one the write is allowed to add.
+                self.assertEqual(
+                    self.page_blocks(resolved),
+                    [("h2", "Evidence Status"), ("h2", "Evidence Notes"), ("h2", "Validation")],
+                )
+                # A second write moves nothing: the blocks are no longer under
+                # the status heading, so the seam is not rebuilt.
+                self.assertEqual(self.resolved(resolved), resolved)
+                # The oracle is not vacuous: the blank line is the only thing
+                # between these two blocks and one block. Which one differs by
+                # order -- `text` then `===` is a setext h1 that eats the note
+                # into its title, and `===` then `text` is a single paragraph
+                # by lazy continuation -- and neither is what the author wrote.
+                self.assertEqual(len(self.top_level_blocks("\n\n".join(blocks))), 2)
+                self.assertEqual(
+                    len(self.top_level_blocks("\n".join(blocks))),
+                    1,
+                    "the wrong seam leaves two blocks, so this fixture pins nothing",
+                )
+
+    def test_the_seam_at_the_tail_of_the_carried_region_keeps_the_author_s_rule(self) -> None:
+        """A `---` the author wrote as a thematic break is still one after the move (#1738).
+
+        The other seam. The carried region lands directly above whatever
+        followed the status section, and here that is the author's own rule --
+        so a tail seam of one newline makes the last carried line the rule's
+        setext text, which costs the author a rule and hands the page an
+        `<h2>` in its place. The rule is also the section's boundary, so this
+        is the one fixture where the block the write stops at is the block the
+        seam could destroy.
+        """
+        body = self.interleaved_body(self.NOTE_TAIL, below=self.AUTHOR_RULE_BELOW)
+        self.assertEqual(self.page_blocks(body), [("h2", "Evidence Status"), ("hr", "")])
+        resolved = self.resolve_entries(body, 1)
+        self.assertEqual(self.notes_section(resolved), "A note for the reviewer.")
+        # The rule is still a rule, and the page gained only the notes heading.
+        self.assertEqual(
+            self.page_blocks(resolved),
+            [("h2", "Evidence Status"), ("h2", "Evidence Notes"), ("hr", "")],
+        )
+        self.assertIn("\n\nA closing remark.\n", resolved)
+        self.assertEqual(self.resolve_entries(resolved, 1), resolved)
+        # Same oracle check: without the blank line the author has no rule and
+        # the note is its heading text.
+        self.assertEqual(
+            self.page_blocks("A note for the reviewer.\n\n---"), [("hr", "")]
+        )
+        self.assertEqual(
+            self.page_blocks("A note for the reviewer.\n---"),
+            [("h2", "A note for the reviewer.")],
+        )
 
     def test_no_line_that_is_not_an_entry_is_ever_dropped(self) -> None:
         # The property the fix is: whatever a body carried under the heading
