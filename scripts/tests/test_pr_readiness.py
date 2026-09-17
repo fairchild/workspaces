@@ -1139,21 +1139,32 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
 
     Two files answer this, and neither can import the other: the gate runs on
     every PR in the repo from its own PEP 723 pin, and the skill's reader is a
-    private module in a skill directory. So the rule is written twice -- a line
-    scanner here, a parser predicate there -- and agreement is a property to
-    assert rather than a thing the code structure gives. Where they part
-    company, a body is one section to the gate and another to the reader that
-    rewrites it, which is how a `# Release blockers` after the section came to
-    be carried into `## Evidence Notes` with its `- [blocked]` bullet dropped.
+    private module in a skill directory. So the rule is written twice and
+    agreement is a property to assert rather than a thing the code structure
+    gives. Where they part company, a body is one section to the gate and
+    another to the reader that rewrites it, which is how a `# Release blockers`
+    after the section came to be carried into `## Evidence Notes` with its
+    `- [blocked]` bullet dropped.
 
-    The fixtures are derived rather than listed: every line shape on which the
-    two rules CAN differ, crossed with both line endings GitHub stores. Listing
-    the shapes someone thought of is how this test passed while the two sides
-    disagreed on a setext h1, on three dash rules CommonMark ends a section at,
-    on a heading indented one space and on a heading under an unterminated HTML
-    block -- four divergences the list did not name and a derivation does
-    (#1734, round 2). A shape the two answer differently belongs in `DIVERGE`
-    with its reason, and a new one goes red here.
+    The fixtures are the cross product of two axes rather than a list: the line
+    shape being tested as a boundary, and the block it is written inside or
+    under, over all three line endings GitHub stores. Listing the shapes
+    someone thought of is how this test passed while the two sides disagreed on
+    a setext h1, on three dash rules, on a heading indented one space and on a
+    heading under an unterminated HTML block (#1734, round 2); listing them
+    along ONE axis is how it then passed naming a single divergence while
+    eighteen more cells diverged, because the shape and the block it sits in
+    were varied together and `h1 under runaway fence` reads as one fixture
+    (#1738).
+
+    Which cells diverge is derived here, not declared. The two readers run the
+    same parser over the same body, so a construct alone cannot tell them
+    apart: the whole of the difference is the skill's repair of a fence that
+    never closes (`reparsed_without_runaway`), which the gate does not make. So
+    they diverge on exactly the cells where the gate's own reading comes back
+    holding an open fence -- and `split_fenced_blocks`, this gate's own line
+    scanner, already says which those are. A cell that breaks that equivalence
+    in either direction goes red here, including one nobody named.
     """
 
     HELPERS_PATH = (
@@ -1178,14 +1189,17 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         "the heading itself written as an h1": "# Evidence Status\n\n- [complete] unit tests -- 10 passed\n\n## Validation\n- ran it\n",
     }
 
-    # Every line shape that could end a section, derived from the two rules
+    # The line shapes that could end a section, derived from the two rules
     # rather than recalled: the heading levels and the ways to write one
     # (hashes, hashes with no text, a closing run, an underline), the indents
     # CommonMark allows and the one it does not, the dash rules of every
-    # length and spacing, the rules that are not dashes, the fence forms, the
-    # blocks that hide a heading, and the nestings that stop one from being
-    # top-level.
-    BOUNDARY_CANDIDATES = {
+    # length and spacing, and the rules that are not dashes.
+    #
+    # Shapes only, with nothing around them. WHERE a shape sits is the second
+    # axis, and keeping the two apart is the point: as a single fixture, `h1
+    # under runaway fence` said the divergence belonged to the h1, and it
+    # belongs to the fence.
+    BOUNDARY_CONSTRUCTS = {
         "atx h1": "# Release blockers\n",
         "atx h2": "## Release blockers\n",
         "atx h3": "### Release blockers\n",
@@ -1214,50 +1228,80 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         "dash rule indented": "\n   ---\n",
         "asterisk rule": "\n***\n",
         "underscore rule": "\n___\n",
-        "h1 in closed fence": "```markdown\n# Release blockers\n```\n",
-        "h1 in closed tilde fence": "~~~\n# Release blockers\n~~~\n",
-        "h1 in fence indented three": "   ```\n   # Release blockers\n   ```\n",
-        "h1 in four backtick fence": "````\n# Release blockers\n````\n",
-        "h1 in fence with info backtick": "``` a`b\n# Release blockers\n```\n",
-        "h1 under runaway fence": "```\nthe log, never closed\n\n# Release blockers\n",
-        "h1 after closed comment": "<!-- a note -->\n\n# Release blockers\n",
-        "h1 after unclosed comment": "<!-- a note\n\n# Release blockers\n",
-        "h1 in a list item": "- # Release blockers\n",
-        "h1 in a quote": "> # Release blockers\n",
-        "h2 in a quote": "> ## Release blockers\n",
-        "h1 in an indented code block": "    # Release blockers\n\ntext\n",
+    }
+
+    # Where the shape is written: the fence forms it can sit inside or under,
+    # the blocks that hide a heading, and the nestings that stop one being
+    # top-level. `(above, below, first, rest)` -- the text written above the
+    # construct, the text written below it, and the prefix its first and its
+    # later lines carry.
+    #
+    # Four runaway forms, because a fence's closing rule has four ways to go
+    # unmet and one ``` example proved only the first: a tilde fence closes on
+    # tildes, a four-backtick fence is not closed by three, and a three-tick
+    # line inside a four-tick one opens a second fence once the first is
+    # repaired -- the loop in `reparsed_without_runaway` is written for that
+    # and had no fixture reaching it.
+    BOUNDARY_CONTEXTS = {
+        "bare": ("", "", "", ""),
+        "in a closed backtick fence": ("```markdown\n", "```\n", "", ""),
+        "in a closed tilde fence": ("~~~\n", "~~~\n", "", ""),
+        "in a closed fence indented three": ("   ```\n", "   ```\n", "   ", "   "),
+        "in a closed four backtick fence": ("````\n", "````\n", "", ""),
+        # A backtick inside a backtick fence's info string means the line opens
+        # no fence, so the construct below it is live markdown and the line
+        # meant to CLOSE the fence is the one that opens one -- and that one
+        # never closes. This is the context where divergence depends on the
+        # construct: a construct that ends the section ends it above the
+        # runaway fence and the two agree, and one that does not leaves both
+        # readers looking at the fence, where they do not.
+        "under a voided fence opener, above a real one": ("``` a`b\n", "```\n", "", ""),
+        "under a runaway backtick fence": ("```\nthe log, never closed\n\n", "", "", ""),
+        "under a runaway tilde fence": ("~~~\nthe log, never closed\n\n", "", "", ""),
+        "under a runaway four backtick fence": ("````\nthe log, never closed\n\n", "", "", ""),
+        "under a nested four then three fence": ("````\nthe log\n```\nstill code\n\n", "", "", ""),
+        "after a closed comment": ("<!-- a note -->\n\n", "", "", ""),
+        # CommonMark runs an unclosed comment to the end of the document too,
+        # and neither reader repairs it -- the skill's repair is fences only.
+        # So this context hides as much as a runaway fence and costs no
+        # divergence at all, which is the control saying the divergence is
+        # about the repair rather than about hiding.
+        "under an unclosed comment": ("<!-- a note\n\n", "", "", ""),
+        "in a list item": ("", "", "- ", "  "),
+        "in a block quote": ("", "", "> ", "> "),
+        "in an indented code block": ("", "\ntext\n", "    ", "    "),
     }
     CANDIDATE_TAIL = "- [blocked] the signing profile is missing\n\n## Validation\n- ran it\n"
-
-    # The shapes the two answer differently, each with why it is not a defect
-    # to fix. Anything else differing is.
-    DIVERGE = {
-        "h1 under runaway fence": (
-            "a fence with no closing line hides every heading below it, and the skill blanks "
-            "the opener and parses again to read the heading the author wrote, where the gate "
-            "reads the page as CommonMark leaves it and runs the section to the end of the "
-            "body. The page is on the gate's side and the author on the skill's, so this one "
-            "is a judgement rather than a rule; the gate reads longer, which can add a refusal "
-            "and cannot drop one"
-        ),
-    }
 
     @staticmethod
     def _lf(text: str) -> str:
         return text.replace("\r\n", "\n").replace("\r", "\n")
 
+    @staticmethod
+    def in_context(construct: str, context: tuple[str, str, str, str]) -> str:
+        """One construct written into one context, so the grid is generated rather than transcribed."""
+        above, below, first, rest = context
+        lines = construct.split("\n")
+        indented = [
+            line if index == len(lines) - 1 and line == "" else (first if index == 0 else rest) + line
+            for index, line in enumerate(lines)
+        ]
+        return above + "\n".join(indented) + below
+
     def candidate_bodies(self):
-        """Each boundary shape, under the status section, in every line ending GitHub stores.
+        """Every construct, in every context, in every line ending GitHub stores.
 
         Bare `\r` is the third: the gate normalises it before reading and the
         skill's heading pattern did not take it, so the two read different
         sections of one body -- an axis the first derivation missed because it
         generated only the two endings anyone types (#1734, round 2).
         """
-        for name, candidate in self.BOUNDARY_CANDIDATES.items():
-            for ending in ("\n", "\r\n", "\r"):
-                body = (self.STATUS + candidate + "\n" + self.CANDIDATE_TAIL).replace("\n", ending)
-                yield name, ending, body
+        for construct_name, construct in self.BOUNDARY_CONSTRUCTS.items():
+            for context_name, context in self.BOUNDARY_CONTEXTS.items():
+                for ending in ("\n", "\r\n", "\r"):
+                    candidate = self.in_context(construct, context)
+                    body = (self.STATUS + candidate + "\n" + self.CANDIDATE_TAIL).replace("\n", ending)
+                    yield construct_name, context_name, ending, body
 
     def owner_reader(self):
         """The skill's reader, loaded by path so the test does not put its directory on `sys.path`."""
@@ -1276,44 +1320,97 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
                     owner.markdown_section(body, "Evidence Status"),
                 )
 
+    # The whole of the difference between the two readers, stated as the one
+    # thing that causes it rather than as a list of shapes it shows up on.
+    DIVERGENCE = (
+        "the skill ends the section at the first boundary the REPAIRED parse finds -- it blanks "
+        "the opener of a fence that never closes and asks the parser again, so it reads the "
+        "heading the author wrote -- and the gate ends it at the next boundary the unrepaired "
+        "parse finds, which is the end of the body, because CommonMark runs an unclosed fence to "
+        "the last line and every heading below it is code. The page is on the gate's side and "
+        "the author on the skill's. What the longer reading costs is measured in "
+        "`WhatTheGateSLongerReadingCostsTests`: it is not one direction"
+    )
+
+    # Both counts, so the property cannot be satisfied by a grid that stopped
+    # generating. 28 constructs x 15 contexts x 3 line endings.
+    CELL_COUNT = 28 * 15 * 3
+    DIVERGING_CELLS = 354
+
     def test_the_two_rules_agree_on_every_shape_that_could_end_a_section(self) -> None:
-        # The derived property. Each shape is put under the status section and
-        # read by both files; the extent has to match, so the comparison is on
-        # one kind of line ending rather than on the author's bytes.
+        # The derived property. Each cell is read by both files and the extents
+        # have to match -- on one kind of line ending rather than on the
+        # author's bytes -- unless the gate's own reading came back holding a
+        # fence nothing closes, which is the one thing the skill repairs and
+        # the gate does not.
         owner = self.owner_reader()
-        compared = 0
-        for name, ending, body in self.candidate_bodies():
+        agreed = diverged = 0
+        for construct, context, ending, body in self.candidate_bodies():
             label = {"\n": "lf", "\r\n": "crlf", "\r": "cr"}[ending]
-            with self.subTest(shape=name, ending=label):
+            with self.subTest(shape=construct, context=context, ending=label):
                 gate = self._lf(pr_readiness.extract_section(body, "Evidence Status"))
                 skill = self._lf(owner.markdown_section(body, "Evidence Status"))
-                compared += 1
-                if name in self.DIVERGE:
-                    self.assertNotEqual(gate, skill, self.DIVERGE[name])
-                    continue
-                self.assertEqual(gate, skill)
-        self.assertEqual(compared, len(self.BOUNDARY_CANDIDATES) * 3)
+                # The predictor is this gate's own line scanner, not a second
+                # copy of either boundary rule, so it cannot drift into
+                # agreeing with the thing it is predicting.
+                left_open = pr_readiness.split_fenced_blocks(gate)[1] is not None
+                if left_open:
+                    self.assertNotEqual(gate, skill, self.DIVERGENCE)
+                    diverged += 1
+                else:
+                    self.assertEqual(gate, skill)
+                    agreed += 1
+        self.assertEqual(agreed + diverged, self.CELL_COUNT)
+        self.assertEqual(diverged, self.DIVERGING_CELLS)
+
+    def test_the_divergence_is_the_repair_and_not_the_hiding(self) -> None:
+        # Which cells diverge, named by context, so the count above cannot be
+        # met by the wrong cells. Every runaway fence form diverges on every
+        # construct; the one context that hides as much and is not a fence --
+        # an unclosed comment, which CommonMark also runs to the last line --
+        # diverges on none, because neither reader repairs it. And one context
+        # splits, which is the cell the old one-axis list could not express.
+        owner = self.owner_reader()
+        by_context: dict[str, set[bool]] = {name: set() for name in self.BOUNDARY_CONTEXTS}
+        for _, context, _, body in self.candidate_bodies():
+            gate = self._lf(pr_readiness.extract_section(body, "Evidence Status"))
+            by_context[context].add(gate != self._lf(owner.markdown_section(body, "Evidence Status")))
+        always = {name for name, answers in by_context.items() if answers == {True}}
+        never = {name for name, answers in by_context.items() if answers == {False}}
+        split = {name for name, answers in by_context.items() if answers == {True, False}}
+        self.assertEqual(
+            always,
+            {
+                "under a runaway backtick fence",
+                "under a runaway tilde fence",
+                "under a runaway four backtick fence",
+                "under a nested four then three fence",
+            },
+        )
+        self.assertIn("under an unclosed comment", never)
+        self.assertEqual(split, {"under a voided fence opener, above a real one"})
 
     def test_the_agreement_is_not_vacuous(self) -> None:
-        # Two readers that both returned "" would agree on everything. Each
-        # shape has to move the boundary for at least one of them, and the
-        # status line has to survive in every reading.
+        # Two readers that both returned "" would agree on everything. The
+        # status line has to survive in every reading, and the boundary has to
+        # actually move: each reader has to end the section early on some
+        # cells and run past the `[blocked]` line on others.
         owner = self.owner_reader()
-        ended_early = 0
-        for name, _, body in self.candidate_bodies():
+        gate_early = skill_early = 0
+        for construct, context, _, body in self.candidate_bodies():
             gate = self._lf(pr_readiness.extract_section(body, "Evidence Status"))
-            with self.subTest(shape=name):
+            skill = self._lf(owner.markdown_section(body, "Evidence Status"))
+            with self.subTest(shape=construct, context=context):
                 self.assertIn("[complete] unit tests -- 10 passed", gate)
-                self.assertIn(
-                    "[complete] unit tests -- 10 passed",
-                    self._lf(owner.markdown_section(body, "Evidence Status")),
-                )
-            if "[blocked]" not in gate:
-                ended_early += 1
-        # A little over half the shapes are boundaries; the rest are the
-        # controls that must not be.
-        self.assertGreater(ended_early, 30)
-        self.assertGreater(len(self.BOUNDARY_CANDIDATES) * 3 - ended_early, 15)
+                self.assertIn("[complete] unit tests -- 10 passed", skill)
+            gate_early += "[blocked]" not in gate
+            skill_early += "[blocked]" not in skill
+        # Floors on both readers in both directions, so neither can be a
+        # function that always stops or always runs on.
+        for reader, early in (("gate", gate_early), ("skill", skill_early)):
+            with self.subTest(reader=reader):
+                self.assertGreater(early, 100)
+                self.assertGreater(self.CELL_COUNT - early, 100)
 
     def test_a_crlf_body_reaches_the_written_reader_as_the_page_reads_it(self) -> None:
         # The gate's own entry normalises, and the reader repeats it: called
@@ -1516,6 +1613,35 @@ class TheRuntimeSeedsASectionWhereThisGateStillMatchesALineTests(unittest.TestCa
         result = pr_readiness.evaluate(pr(seeded), ["Sources/Foo.swift"])
         self.assertFalse(result.ok)
         self.assertTrue(all("field is empty or still default" in text for text in result.failures), result.failures)
+
+    def test_the_refusal_this_gate_cannot_make_here_and_why(self) -> None:
+        """Why the fail-open this start causes is not closed by refusing the shape.
+
+        `WhatTheGateSLongerReadingCostsTests` measures what the gate's longer
+        reading costs: on `Mergeability` and on `Validation` it drops a refusal
+        the shorter reading makes. The obvious answer is for this gate to
+        refuse a section it reads two ways, which it already does for
+        `Evidence Status` -- `split_fenced_blocks` names the opener and the
+        author closes the fence.
+
+        Run over `Mergeability`, that refusal fires on this body, whose fences
+        all close. The cause is the start, not the end: the slice begins inside
+        a closed fence, so the fence's own CLOSING line is the first fence
+        marker in it and reads as an opener with nothing after it. This is a
+        body the factory itself writes, so the refusal would tell an author to
+        close a fence they closed. #1742 owns moving this start onto a parse;
+        until it does, the honest answer is the measurement and not a refusal
+        (#1738).
+        """
+        seeded = self.seeder().seed_mergeability_section(
+            self.FENCED_EXAMPLE_BODY, changed_files=["Sources/Foo.swift"]
+        )
+        # Every fence in the body closes.
+        self.assertIsNone(pr_readiness.split_fenced_blocks(seeded)[1])
+        # The gate's slice of it does not, and what it holds is a closing line.
+        section = pr_readiness.extract_section(seeded, "Mergeability", strip=False)
+        self.assertEqual(section, "\n- Surface: desktop\n```\n")
+        self.assertEqual(pr_readiness.split_fenced_blocks(section)[1], "```")
 
 
 class TheSeedersIdentityIsNoWiderThanThisGatesTests(unittest.TestCase):
@@ -1755,6 +1881,171 @@ class TheSeedersIdentityIsNoWiderThanThisGatesTests(unittest.TestCase):
                 )
         self.assertGreaterEqual(len(found[True]), 3, found)
         self.assertGreaterEqual(len(found[False]), 8, found)
+
+
+class WhatTheGateSLongerReadingCostsTests(unittest.TestCase):
+    """The over-long reading adds a refusal in one place and drops one in two (#1738).
+
+    `SectionBoundaryAgreementBetweenTheGateAndTheSkillTests` says where the two
+    readers part company. This says what it costs, per caller, measured rather
+    than reasoned: the label carried since #1734 read "the gate reads longer,
+    which can add a refusal and cannot drop one", and that is true of one of
+    the three sections this gate reads from a body.
+
+    Which way it goes is decided by the check, not by the section. A NEGATIVE
+    pattern -- `Evidence Status`, where a `[blocked]` line is a failure -- has
+    more text to match on when the read runs long, so the long read can only
+    add. A POSITIVE one has more text to be satisfied by: `Validation`'s
+    release-proof pattern (`pr-readiness.py:773`) and `Mergeability`'s field
+    lines are both answered by text the author wrote under a LATER heading, or
+    by text the page shows as code, and the refusal that was owed is not made.
+
+    Each case is measured at the check itself rather than through `evaluate`,
+    so what moves is the one reading under test and not some other failure.
+    """
+
+    HELPERS_PATH = (
+        REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "_helpers.py"
+    )
+    OPENING = (
+        "Why this exists: the release lane lost its provisioning step, so a signed build never "
+        "reached the appcast and the update check stalled.\n\n"
+    )
+
+    def owner_reader(self):
+        spec = importlib.util.spec_from_file_location("contributor_helpers", self.HELPERS_PATH)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def both_readings(self, body: str, heading: str) -> tuple[str, str]:
+        """This gate's reading of a section and the skill's, on one body."""
+        return (
+            pr_readiness.extract_section(body, heading),
+            self.owner_reader().markdown_section(body, heading),
+        )
+
+    def failures(self, body: str, files: list[str], *, boundary: str = "gate") -> list[str]:
+        """What this gate refuses, reading section ends its own way or the skill's.
+
+        The skill's boundary is put in by patching `extract_section`, not by
+        rewriting the body: a fixture with the fence closed would be a
+        different body and would measure a different thing. Every other part
+        of the gate -- the field reader, the status pattern, the release proof
+        pattern -- is the shipped one, so what moves between the two calls is
+        the boundary and nothing else.
+        """
+        if boundary == "gate":
+            return pr_readiness.evaluate(pr(body), files).failures
+        reader = self.owner_reader()
+
+        def repaired(text: str, heading: str, *, strip: bool = True) -> str:
+            return reader.markdown_section(text, heading)
+
+        with mock.patch.object(pr_readiness, "extract_section", repaired):
+            return pr_readiness.evaluate(pr(body), files).failures
+
+    def moved(self, body: str, files: list[str]) -> tuple[list[str], list[str]]:
+        """What the gate's longer reading adds, and what it drops, against the skill's boundary."""
+        long_read, short_read = self.failures(body, files), self.failures(body, files, boundary="skill")
+        return (
+            [text for text in long_read if text not in short_read],
+            [text for text in short_read if text not in long_read],
+        )
+
+    RELEASE_BODY = OPENING + (
+        "## Mergeability\n\n"
+        "- Surface: infra\n"
+        "- User-facing behavior changed: none\n"
+        "- Non-happy paths considered: unsigned build\n"
+        "- Release/ops preconditions: none\n"
+        "- Residual risk or follow-up: none\n\n"
+        "## Validation\n\n"
+        "- [x] ran the lane\n\n"
+        "```text\n"
+        "a log, never closed\n\n"
+        "## Evidence\n\n"
+        "- ran actionlint\n"
+    )
+
+    def test_the_release_proof_pattern_is_satisfied_by_a_line_the_page_shows_as_code(self) -> None:
+        # `:773`. The author's `- ran actionlint` sits under `## Evidence`,
+        # which the runaway fence above it turns into code -- so the page has
+        # no Evidence section and the line is part of a log. The gate reads
+        # `Validation` to the end of the body and credits it anyway.
+        gate, skill = self.both_readings(self.RELEASE_BODY, "Validation")
+        self.assertIn("- ran actionlint", gate)
+        self.assertNotIn("- ran actionlint", skill)
+        added, dropped = self.moved(self.RELEASE_BODY, ["scripts/release.py"])
+        self.assertEqual(added, [])
+        self.assertEqual(
+            dropped,
+            [
+                "Release-sensitive files changed; validation should include "
+                "validate-release-changes, bash -n, actionlint, or workflow syntax proof."
+            ],
+        )
+
+    MERGEABILITY_BODY = OPENING + (
+        "## Mergeability\n\n"
+        "```text\n"
+        "a log, never closed\n\n"
+        "## Design notes\n\n"
+        "- Surface: infra\n"
+        "- User-facing behavior changed: none\n"
+        "- Non-happy paths considered: unsigned build\n"
+        "- Residual risk or follow-up: none\n\n"
+        "## Evidence Status\n\n"
+        "- [complete] unit tests -- 10 passed\n"
+    )
+
+    def test_the_mergeability_fields_are_answered_from_the_author_s_next_section(self) -> None:
+        # `:712`, and the one the issue did not name. Every field this gate
+        # requires is written under `## Design notes`, which is a heading the
+        # page does not show -- so a reader sees a Mergeability section holding
+        # a log and nothing else, and the gate sees four answered fields.
+        gate, skill = self.both_readings(self.MERGEABILITY_BODY, "Mergeability")
+        required = (
+            "Surface",
+            "User-facing behavior changed",
+            "Non-happy paths considered",
+            "Residual risk or follow-up",
+        )
+        for field in required:
+            with self.subTest(field=field):
+                self.assertIsNotNone(pr_readiness.field_value(gate, field))
+                self.assertIsNone(pr_readiness.field_value(skill, field))
+        added, dropped = self.moved(self.MERGEABILITY_BODY, ["Sources/App.swift"])
+        self.assertEqual(added, [])
+        self.assertEqual(
+            dropped,
+            [f"Mergeability field is empty or still default: {field}." for field in required],
+        )
+
+    STATUS_BODY = OPENING + (
+        "## Mergeability\n\n"
+        "- Surface: infra\n"
+        "- User-facing behavior changed: none\n"
+        "- Non-happy paths considered: unsigned build\n"
+        "- Residual risk or follow-up: none\n\n"
+        "## Evidence Status\n\n"
+        "```text\n"
+        "a log, never closed\n\n"
+        "## Release blockers\n\n"
+        "- [blocked] the signing profile is missing\n"
+    )
+
+    def test_the_status_pattern_reaches_a_blocked_line_the_shorter_read_leaves_out(self) -> None:
+        # The direction the old label described, and the only one it got
+        # right: the check here is a negative pattern, so the extra text is
+        # extra chances to fail.
+        gate, skill = self.both_readings(self.STATUS_BODY, "Evidence Status")
+        self.assertIsNotNone(pr_readiness.PENDING_STATUS_RE.search(gate))
+        self.assertIsNone(pr_readiness.PENDING_STATUS_RE.search(skill))
+        added, dropped = self.moved(self.STATUS_BODY, ["Sources/App.swift"])
+        self.assertEqual(added, ["Requested evidence is blocked or still pending CI."])
+        self.assertEqual(dropped, [])
 
 
 class ReadinessCommentTests(unittest.TestCase):
