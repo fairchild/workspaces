@@ -19,6 +19,7 @@ from _helpers import (
     REPO_ROOT,
     contract_read_refusal,
     has_markdown_section,
+    code_span,
     inline_text,
     insert_markdown_section,
     is_section_boundary,
@@ -27,6 +28,7 @@ from _helpers import (
     markdown_section,
     removed_section_texts,
     placement_refusal,
+    rejected_section_headings,
     reparsed_without_runaway,
     run_optional,
     section_heading_index,
@@ -744,7 +746,43 @@ def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
         and " ".join(inline_text(tokens[index + 1].children).split()).casefold() == "evidence status"
     ]
     if len(headings) != 1:
-        return [], _heading_count_refusal(len(headings))
+        # Naming the rejected one is what turns "delete one" from a coin flip
+        # into an instruction: the extra heading is the machine's repair, and
+        # the author's is the one carrying the tag (#1730).
+        rejected = rejected_section_headings(tokens, EVIDENCE_STATUS_HEADING)
+        named = ""
+        if rejected and len(headings) > 1:
+            # Every tagged heading, not the first: with both of them tagged,
+            # naming one left the other -- still tagged, still not read -- and
+            # the author repaired, re-ran and met this refusal again.
+            #
+            # And what it asks for is the STATE that clears this refusal, not
+            # the result of removing something. Two goes at predicting that
+            # result were wrong in two different ways: subtracting rejections
+            # from headings counted an `# Evidence Status` as though removing
+            # a tag would leave it readable, and counting readable h2s instead
+            # ignored that this refusal counts every heading whose text reads
+            # as this one, at any level and any depth, so a body with one good
+            # h2 and one h1 still refuses. A predicate that decides the repair
+            # and a predicate that judges it have to be the same one, and the
+            # honest way to say that is to describe the body to aim for
+            # (#1730, round 2; the second miss found by codex, gpt-5.6-sol,
+            # xhigh).
+            places = [
+                f"line {span[0] + 1}" if (span := tokens[index].map) else "an unknown line"
+                for index, _ in rejected
+            ]
+            phrases = [
+                f"the one on {place} carries inline HTML ({code_span(tag)})"
+                for place, (_, tag) in zip(places, rejected)
+            ]
+            carries = phrases[0] if len(phrases) == 1 else ", ".join(phrases[:-1]) + f" and {phrases[-1]}"
+            unread = "it is not read" if len(rejected) == 1 else "none of them is read"
+            named = (
+                f"; {carries}, and {unread} as the section. Leave exactly one heading whose "
+                "text reads as `Evidence Status` -- top level, an h2, and carrying no tags"
+            )
+        return [], f"{_heading_count_refusal(len(headings))}{named}"
     start = headings[0]
     if tokens[start].tag != "h2":
         return [], f"the `Evidence Status` heading is an {tokens[start].tag}, not an h2"
@@ -2373,6 +2411,13 @@ def write_evidence_status_section(
         unseen = _placement_a_reader_cannot_see(candidate)
         return (source, unseen) if unseen else (candidate, None)
 
+    # The note about a heading this reader declined is NOT said here. It was,
+    # and it had to be said before the write to see the author's heading alone
+    # -- which meant it announced "a plain heading was written below it" on
+    # bodies the write then refused and returned untouched, one line above the
+    # refusal, in the same log. It also made the note the writer's, and the
+    # writer runs more than once in a turn. It belongs to whatever reports the
+    # turn, composed from the body the write returned (#1730, round 2).
     written = insert_markdown_section(
         strip_markdown_section(body, EVIDENCE_NOTES_HEADING) if kept else body,
         EVIDENCE_STATUS_HEADING,

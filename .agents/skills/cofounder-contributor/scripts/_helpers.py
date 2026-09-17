@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from collections.abc import Callable
 from itertools import groupby
 from pathlib import Path
@@ -164,6 +165,83 @@ def issue_label_presence(issue: dict[str, object]) -> set[str]:
 # arrives as `html_inline` like every other tag, and the tag name is what
 # identifies it, so attributes and a self-closing slash are all one shape.
 HTML_BREAK_TAG_RE = re.compile(r"(?i)^<br\b[^>]*>$")
+def code_span(text: str) -> str:
+    """`text` as a code span nothing inside it can break out of, on one line.
+
+    Somebody else's characters reach three surfaces from a note: the workflow
+    log, the structured record, and a comment on the pull request. Two of those
+    interpret what they are handed. A newline inside a tag's attribute -- which
+    a setext heading allows, and the parser keeps in one `html_inline` token --
+    puts the text after it at column 0, where `::error::owned` is a workflow
+    command the Actions log obeys. A backtick inside an attribute closes the
+    span early, and what follows it is live markdown: an `@name` after one is a
+    mention GitHub delivers to a person who has nothing to do with this
+    (#1730, round 2).
+
+    Four steps, and the ORDER is the escaping.
+
+    1. Every character Unicode files under Cc or Cf goes -- but one that
+       SEPARATES becomes a space rather than nothing. Cc is C0, DEL *and* C1 --
+       U+0080 to U+009F, where the CSI introducer is a single character that
+       opens an escape sequence on a terminal reading the log, and which a
+       `[\x00-\x1f\x7f]` class does not name. Cf is the invisible formatting:
+       a zero-width space, and a right-to-left override that reorders what a
+       reader sees for the rest of the line.
+
+       Deleting them all glues words: `a` tab `b` quoted back as `ab` is text
+       the author never wrote, and a note that misquotes on the accepting side
+       -- nothing refuses it -- is the failure `inline_text` records for `<br>`,
+       where dropping the tag turned `1<br>2 tests passed` into a count nobody
+       wrote (#1730, round 3b). So the test is `str.isspace()`: a tab, a line
+       feed, a carriage return, a form feed, a vertical tab, the C0 separators
+       and U+0085 leave a space behind for step 3 to collapse. NUL and the rest
+       of C1 are not whitespace and leave nothing, because there is no
+       separator there to keep.
+    2. The comment delimiters, to a fixpoint, because one deletion can splice
+       a fresh one together.
+    3. Runs of whitespace, collapsed.
+    4. The fence, one backtick past the longest run inside.
+
+    Step 1 comes before step 2 because a delimiter can be MADE by removing an
+    invisible character: `a<!` ZWSP `--b--` ZWSP `>c` carries no delimiter for
+    the strip to find, and taking the zero-width spaces out afterwards hands
+    the comment a `<!--` the strip had already run (#1730, round 3). Nothing
+    that removes characters may run after the strip, and nothing at all may run
+    after the fence -- a strip applied to a fenced string joins the backtick
+    runs on either side of what it removes and can close the fence (#1730,
+    round 2).
+
+    Step 3 is a bare `.split()` on purpose: U+2028, U+2029 and U+0085 are line
+    breaks downstream, and narrowing it to `.split(" ")` -- which reads like the
+    same thing -- puts all three back.
+    """
+    visible = "".join(
+        character
+        if unicodedata.category(character) not in {"Cc", "Cf"}
+        else (" " if character.isspace() else "")
+        for character in text
+    )
+    while True:
+        stripped = visible.replace("<!--", "").replace("-->", "")
+        if stripped == visible:
+            break
+        visible = stripped
+    return fenced_code_span(" ".join(visible.split()) or " ")
+
+
+def fenced_code_span(text: str) -> str:
+    """`text` in backticks, with a fence one longer than the longest run inside it.
+
+    CommonMark's own rule, and the only one that holds for arbitrary content. A
+    value that starts or ends on a backtick is padded with a space, which is
+    what keeps that backtick inside the span rather than closing it. Shared so
+    that `inline_text`, re-emitting a code span it read, and `code_span`,
+    quoting text from outside, cannot disagree about it.
+    """
+    longest = max((len(list(run)) for char, run in groupby(text) if char == "`"), default=0)
+    ticks = "`" * (longest + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{ticks}{pad}{text}{pad}{ticks}"
 
 
 def inline_text(children: list[Token] | None, *, break_text: str = " ") -> str:
@@ -192,10 +270,7 @@ def inline_text(children: list[Token] | None, *, break_text: str = " ") -> str:
         if kind == "text":
             parts.append(token.content)
         elif kind == "code_inline":
-            longest = max((len(list(run)) for char, run in groupby(token.content) if char == "`"), default=0)
-            ticks = "`" * (longest + 1)
-            pad = " " if token.content.startswith("`") or token.content.endswith("`") else ""
-            parts.append(f"{ticks}{pad}{token.content}{pad}{ticks}")
+            parts.append(fenced_code_span(token.content))
         elif kind in {"softbreak", "hardbreak"} or (
             kind == "html_inline" and HTML_BREAK_TAG_RE.match(token.content.strip())
         ):
@@ -271,12 +346,24 @@ def section_heading_index(tokens: list[Token], heading: str) -> int | None:
     HTML; a second answer here is the disagreement, one function away. The
     alternative needs a set of tags GitHub's sanitizer renders as nothing,
     which is a second renderer built from an allow-list this repo does not
-    hold -- and its only plausible members are `<span>` and a comment. Nothing
-    is lost by refusing them: no shape here was this section before #1730's
-    change, `<span>` included, so the rule declines to widen rather than taking
-    something away. The cost is that `## <span>Evidence Status</span>` gets a
-    second, real heading written below it, where the gate's ambiguity check
-    refuses the body -- fail closed, and visible.
+    hold -- and its only plausible members are `<span>` and a trailing
+    comment. Checked against GitHub's own renderer: `<details>`, `<del>` and
+    `<br>` render as a widget, as struck text and as two lines, so refusing
+    those agrees with the page; `<span>` and a trailing comment render as
+    ordinary headings, so refusing those two disagrees with it. Neither was
+    this section before #1730's change, so the rule declines to widen rather
+    than taking something away -- which is the whole of the argument, and it
+    is about what is lost, not about what a later reader catches.
+
+    What happens to `## <span>Evidence Status</span>` is that a second, real
+    heading is written below it, and the three readers answer differently. The
+    owner read refuses, naming this heading (`_rendered_status_lines`). The
+    factory turn repairs the body first and its errors come back empty, so the
+    turn goes on -- and `rejected_heading_note` is what reaches the run's
+    output and the pull request there, because a body with two headings and
+    nothing said about why is a message that points at the wrong repair
+    (#1730). The readiness gate's own ambiguity check does NOT see it: that
+    check matches raw text and is blind to a heading line carrying a tag.
     """
     wanted = " ".join(heading.split()).casefold()
     return next(
@@ -288,6 +375,83 @@ def section_heading_index(tokens: list[Token], heading: str) -> int | None:
             and " ".join(inline_text(tokens[index + 1].children).split()).casefold() == wanted
         ),
         None,
+    )
+
+
+def rejected_section_headings(tokens: list[Token], heading: str) -> list[tuple[int, str]]:
+    """Every heading a reader sees as this section that carries inline HTML, with its first tag.
+
+    The other half of `section_heading_index`: what it skipped, and why. A
+    heading is here when its text reads as this heading once the tags are
+    dropped -- the same normalisation the acceptance uses -- and it carries at
+    least one `html_inline` token. The token index is the `heading_open`, so a
+    caller has the line through `token.map`.
+    """
+    wanted = " ".join(heading.split()).casefold()
+    found: list[tuple[int, str]] = []
+    for index, token in enumerate(tokens):
+        if not is_section_heading(token):
+            continue
+        children = tokens[index + 1].children or []
+        tag = next((child.content for child in children if child.type == "html_inline"), None)
+        if tag is None:
+            continue
+        if " ".join(inline_text(children).split()).casefold() == wanted:
+            found.append((index, tag))
+    return found
+
+
+def rejected_heading_note(body: str, heading: str) -> str | None:
+    """What to tell an author whose `## <heading>` was not read as the section, or None.
+
+    The rejection is correct and silent, and silence is what makes it cost a
+    round: the body comes back with two headings a reader sees, the owner read
+    says "a reader sees 2 ... headings, not one", and the obvious action --
+    delete one -- is a coin flip. Deleting the written one leaves a body with
+    no readable section and the same refusal (#1730).
+
+    So the message names the line, names the tag, and names both repairs.
+
+    It is asked of the body the write RETURNED, not the one it was handed, and
+    it says what it finds there rather than what the write meant to do. Asked
+    before the write it claimed "a plain `## <heading>` was written below it"
+    on bodies where the write then refused and returned them untouched -- a
+    sentence contradicted by the line above it in the same log (#1730, round
+    2). Both readings are here, decided by what the body holds.
+
+    Every value quoted from the body goes through `code_span`, because this
+    text is posted to a pull request and printed to a workflow log, and both
+    of those read what they are given -- see that function for what the two
+    surfaces do with a newline and a backtick.
+    """
+    tokens = _parsed(body)
+    rejected = rejected_section_headings(tokens, heading)
+    if not rejected:
+        return None
+    lines = MARKDOWN_LINE_ENDING_RE.sub("\n", body).split("\n")
+    index, tag = rejected[0]
+    line = lines[tokens[index].map[0]].strip() if tokens[index].map else f"## {heading}"
+    readable = section_heading_index(tokens, heading)
+    if readable is None:
+        where = f"No readable `{heading}` h2 is in this body, so nothing here is read as that section."
+    else:
+        # Two things this sentence used to say that the body cannot support.
+        # It said "a plain `## {heading}`", where the reader that accepts it
+        # accepts a setext h2 and an emphasised one too, so the note named a
+        # syntax the body need not carry. And it said "was WRITTEN below it",
+        # which is a claim about who put it there -- a body is evidence for
+        # what is in it and for nothing else. It says where it is and that it
+        # is the one being read (codex, gpt-5.6-sol, xhigh).
+        below = (tokens[readable].map or (0, 0))[0] > (tokens[index].map or (0, 0))[0]
+        where = (
+            f"A readable `{heading}` h2 {'below' if below else 'above'} it is the one "
+            "read as that section."
+        )
+    return (
+        f"{code_span(line)} carries inline HTML ({code_span(tag)}), so it is not read as the "
+        f"`{heading}` section -- a tag can strike, hide or fold what follows it, and "
+        f"which one it does is not something this reader decides. {where} "
+        "Remove the tags from yours, or remove yours."
     )
 
 

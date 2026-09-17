@@ -33,6 +33,7 @@ from _helpers import (
     branch_name_for_issue,
     gate_reads_markdown_section,
     has_markdown_section,
+    rejected_heading_note,
     insert_markdown_section,
     issue_label_names,
     issue_label_presence,
@@ -51,6 +52,7 @@ from evidence import (
     _has_unautomatable_evidence,
     _needs_macos_evidence,
     _needs_screenshot_evidence,
+    _rendered_status_lines,
     classify_evidence_errors,
     resolve_named_ci_evidence,
     requested_evidence_contract,
@@ -350,6 +352,149 @@ def compose_revision_escalation_comment(
     ) + "\n"
 
 
+REJECTED_HEADING_CHECKED_PREFIX = "Read from this PR's body at commit"
+
+
+def rejected_heading_checked_line(head_sha: str) -> str:
+    """The line that says which head this note was read from, and dedups it.
+
+    A visible line and not a hidden marker. The markers this runtime writes are
+    the lane's attestation that an outcome happened, validated against live
+    state before they are written; a note about somebody's heading attests
+    nothing, and giving it a marker would put a forgeable token next to model
+    prose for no gain.
+
+    It is forgeable, and the second condition narrowed that without closing it.
+    A copy posted BEFORE the first genuine note suppresses the one that
+    matters, and putting the headline and this line inside a multi-line HTML
+    comment satisfies `_is_prior_rejected_heading_note` while rendering as
+    nothing on the page -- so anyone who can comment on a pull request can
+    silence this note for a pushed head, and leave nothing a reader would see
+    (#1730, round 3).
+
+    What that costs is advice, not a gate: no check depends on this note, and
+    a body with a heading no reader reads is refused by the reads that refuse
+    it whether or not anybody was told why. Closing it needs the guard to ask
+    what the page SHOWS rather than what the text contains.
+    """
+    return f"{REJECTED_HEADING_CHECKED_PREFIX} `{head_sha}`."
+
+
+def compose_rejected_heading_comment(
+    persona: str, note: str, head_sha: str, refusal: str | None = None
+) -> str:
+    """The note on the PR when an author's own heading was not read as the section.
+
+    The write went ahead, so this is not a stand-down: the body now carries a
+    plain `## Evidence Status` below the author's. The author reads the pull
+    request, not the workflow log, so the reason crosses here the way
+    `compose_body_standdown_comment` does.
+
+    What it says about the consequence is measured rather than reasoned. It
+    used to say "every check that reads this section refuses it", which is not
+    true of the checks this repo has: the owner read does refuse, naming the
+    tagged heading, and the readiness gate's ambiguity check does not see it at
+    all, because that check matches the heading line as raw text and a tag
+    hides it there (`scripts/pr-readiness.py`). Saying "every check" made the
+    note the same kind of claim as the refusal it exists to correct -- true
+    sounding, wrongly attributed (#1730, round 2).
+
+    And the refusal is QUOTED rather than restated. The restatement said "a
+    reader sees 2 ... headings" and "while both headings stand" and "remove
+    yours", which is a body with one tagged heading described in a sentence
+    that cannot count: an author with two tagged headings gets a written body
+    with three, and a refusal that names all of them, under a paragraph saying
+    two (#1730, round 3). What the readers say is what the author is shown.
+
+    Nothing here touches the note. Every value it quotes is already fenced by
+    `code_span`, which takes the comment delimiters out BEFORE it measures the
+    backtick runs -- and a strip applied afterwards, which is what this used to
+    do, can join two runs into one long enough to close the fence and put a
+    live `@mention` back in the comment (codex, gpt-5.6-sol, xhigh). A string
+    that has been fenced is finished.
+    """
+    return "\n".join(
+        [
+            f"*{persona}*",
+            "",
+            REJECTED_HEADING_HEADLINE,
+            "",
+            f"- {note}",
+            "",
+            "This turn went ahead and the body was updated. While the body stands as it is, "
+            + (
+                f"the read that collects your evidence refuses it: \"{refusal}\". "
+                if refusal
+                else "the read that collects your evidence refuses it. "
+            )
+            + "The readiness gate does not refuse it for this: its ambiguity check reads the "
+            "heading line as raw text, where a tag hides it.",
+            "",
+            rejected_heading_checked_line(head_sha),
+        ]
+    )
+
+
+def post_rejected_heading_note(
+    pr_number: int,
+    persona: str,
+    written_body: str,
+    head_sha: str,
+    env: dict[str, str],
+) -> bool:
+    """Tell the author about a declined heading, once per head, after the body is written.
+
+    Composed from the body GitHub now holds, not from what the model wrote and
+    not before the write: the note says where the readable heading is, and that
+    sentence is only true of a body it was read from. Asked before the write,
+    it was said on turns whose write then refused and returned the body
+    untouched (#1730, round 2).
+
+    Once per head in the ordinary case, and best-effort about it. Re-running a
+    turn at the same head re-posts nothing; a new commit that still carries the
+    tagged heading says it again, which is right -- the author has pushed since
+    and the heading is still there.
+
+    Three ways it says the note twice, all of them deliberate rather than
+    fixed, and all in the same direction (codex, gpt-5.6-sol, xhigh). The
+    comment read returns a page, so a pull request past that length stops
+    finding the older note. A read that fails returns nothing and the note goes
+    again. And two turns racing at one head can both find no note and both
+    post. The alternative to each is a note that is never said, and the reason
+    this exists is that nothing was said at all.
+
+    And one way it is silenced: a forged copy hidden in an HTML comment
+    satisfies the guard and shows a reader nothing. See
+    `_is_prior_rejected_heading_note` for what that costs and what would close
+    it.
+
+    One way it is quieter than the head suggests: a PR body can be edited
+    without a commit, so a second body-only turn at the same head does not
+    repeat the note even if the author has since written a different tagged
+    heading.
+
+    A comment is the report of the work, never the work, so neither the read
+    nor the post can fail this turn.
+    """
+    note = rejected_heading_note(written_body, "Evidence Status")
+    if note is None:
+        return False
+    # Once on stderr, as the structured record, which carries the note in
+    # `detail`. The plain line beside it was a second copy of the same
+    # sentence in the same stream, and the body claimed one (#1730, round 3).
+    log(json.dumps({"error_class": "rejected_heading", "detail": note, "pr": pr_number}))
+    _, refusal = _rendered_status_lines(written_body)
+    checked = rejected_heading_checked_line(head_sha)
+    if any(
+        _is_prior_rejected_heading_note(body, checked)
+        for body in _pr_comment_bodies(pr_number, env)
+    ):
+        return False
+    return _post_pr_comment(
+        pr_number, compose_rejected_heading_comment(persona, note, head_sha, refusal), env
+    )
+
+
 def compose_body_standdown_comment(persona: str, reasons: list[str]) -> str:
     """April's note on the PR when its body could not be rewritten.
 
@@ -377,15 +522,83 @@ def compose_body_standdown_comment(persona: str, reasons: list[str]) -> str:
 
 
 def _post_pr_comment(pr_number: int, body: str, env: dict[str, str]) -> bool:
+    """Post a comment, and say whether it landed. Never raise.
+
+    The return value is the contract: a caller decides what a failed comment
+    means. `run_optional` already turns a timeout and a non-zero exit into the
+    default, but it does not catch an `OSError` -- `gh` missing from `PATH`
+    raises `FileNotFoundError` out of `subprocess.run` -- so a comment nobody
+    was waiting on could end a turn that had already pushed (#1730, round 2).
+    A comment is never the work; it is the report of the work.
+    """
     sentinel = "__COMMENT_FAILED__"
-    posted = run_optional(
-        ["gh", "pr", "comment", str(pr_number), "--body", body],
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-        default=sentinel,
-    )
+    try:
+        posted = run_optional(
+            ["gh", "pr", "comment", str(pr_number), "--body", body],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+            default=sentinel,
+        )
+    except OSError as error:
+        log(f"could not comment on PR #{pr_number}: {error}")
+        return False
     return posted != sentinel
+
+
+REJECTED_HEADING_HEADLINE = "**Your `## Evidence Status` heading was not read as the section.**"
+
+
+def _is_prior_rejected_heading_note(comment: str, checked: str) -> bool:
+    """Whether this comment is this runtime's note about this head.
+
+    Two conditions, and they narrow the forgery rather than closing it. A
+    substring match on the head line alone was satisfied by that text quoted
+    mid-sentence, which this is not; but a forger who writes the headline and
+    the head line as their own lines still satisfies it, and writing both
+    INSIDE a multi-line HTML comment satisfies it while the page shows nothing
+    at all. A copy posted before the first genuine note suppresses the one that
+    matters (#1730, round 3).
+
+    So this asks what the comment's TEXT contains, and what would close the
+    hole is asking what the page shows -- the reader that answers that is
+    `_rendered_lines`, and putting a rendering in the dedup path is a change to
+    make deliberately rather than inside a round about wording. The cost of
+    leaving it is a note not said: nothing downstream depends on this note, and
+    every reader that refuses a body with an unread heading still refuses it.
+    """
+    return REJECTED_HEADING_HEADLINE in comment and any(
+        line.strip() == checked for line in comment.splitlines()
+    )
+
+
+def _pr_comment_bodies(pr_number: int, env: dict[str, str]) -> list[str]:
+    """The comments `gh` returns for this pull request, or [] when they cannot be read.
+
+    Not every comment: `gh pr view --json comments` asks GraphQL for a page,
+    and a pull request longer than that page hides its oldest comments from
+    this read. Best-effort in the same direction as a failed read -- both end
+    in the note being said again rather than never, which is the failure this
+    is allowed to have.
+    """
+    try:
+        raw = run_optional(
+            ["gh", "pr", "view", str(pr_number), "--json", "comments"],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+            default="",
+        )
+    except OSError:
+        return []
+    try:
+        payload = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        return []
+    comments = payload.get("comments") if isinstance(payload, dict) else None
+    if not isinstance(comments, list):
+        return []
+    return [str(comment.get("body", "")) for comment in comments if isinstance(comment, dict)]
 
 
 # Path-prefix → readiness surface label, first match wins. Feeds the
@@ -537,6 +750,13 @@ def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) ->
     # Dropping either half reintroduces one of the two. The second is the
     # gate's narrowness, not this reader's, and it comes out when #1742 moves
     # the gate's start onto a parse.
+    #
+    # What the second question asks is narrower than "the gate can read this
+    # section": it asks whether the gate can find the section's START. A
+    # `## Mergeability` with another `##` directly below it has a start both
+    # readers find and no content, so seeding is skipped and the gate reports
+    # the section missing -- main's behaviour, unchanged here, and not closed
+    # by this conjunct however the sentence above reads.
     if has_markdown_section(summary_body, "Mergeability") and gate_reads_markdown_section(
         summary_body, "Mergeability"
     ):
@@ -1098,6 +1318,11 @@ def _finish_revision_without_diff(
             cwd=REPO_ROOT,
             env=env,
         )
+        # This path publishes a body too, without committing one, so it owes
+        # the same report as the paths that push. The head is the live one --
+        # nothing was pushed -- and that is the commit this body is attached
+        # to, so it is the right thing to say the note was read from.
+        post_rejected_heading_note(pr_number, persona, pr_body, live_head, env)
         posted = _post_revision_reply(pr_number, persona, model_body, review_id, env)
     else:
         outcome = "needs-owner"
@@ -1451,6 +1676,11 @@ def route_execution_action(
             cwd=REPO_ROOT,
             env=env,
         )
+        # After the body write, and only now: the note says a plain heading was
+        # read as that section, which is a claim about the body GitHub holds. It is also after `validate_evidence_accounting`, which returns
+        # above on failure -- a turn that ends without publishing has nothing
+        # to tell the author about their heading (#1730, round 2).
+        post_rejected_heading_note(pr_number, persona, pr_body, pr_head_sha, env)
         revision_comment_posted = bool(revision_review_id) and _post_revision_reply(
             pr_number, persona, str(data.get("body", "")), revision_review_id, env
         )
@@ -1494,6 +1724,9 @@ def route_execution_action(
         print("error: could not parse created PR number", file=sys.stderr)
         return 1
     pr_number = int(number_match.group("number"))
+    # Same crossing on the path that opens the PR rather than editing one: the
+    # body is on GitHub now, so the note can say what is in it.
+    post_rejected_heading_note(pr_number, persona, pr_body, pr_head_sha, env)
     _write_github_outputs(
         evidence_needed,
         screenshot_evidence_needed,

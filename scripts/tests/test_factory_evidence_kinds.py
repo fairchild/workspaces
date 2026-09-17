@@ -6075,12 +6075,17 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         written, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
         self.assertNotIn(self.AUTHORS_LINE, written)
 
-    def test_the_read_still_says_why_rather_than_saying_nothing_is_there(self) -> None:
-        # A heading the page shows and this reader will not own is not the same
-        # as no heading at all, and the author needs to be told which. The
-        # rendered read's refusal names the HTML; reporting it turns on whether
-        # a reader has a heading to refuse, not on `section_present`, which
-        # this change makes false for exactly these shapes.
+    def test_the_internal_read_says_why_rather_than_saying_nothing_is_there(self) -> None:
+        # Named for what it checks. This is `_rendered_markdown_entries`, an
+        # internal read: a heading the page shows and this reader will not own
+        # is not the same as no heading at all, and the reason has to survive
+        # that distinction. Reporting it turns on whether a reader has a
+        # heading to refuse, not on `section_present`, which the rule above
+        # makes false for exactly these shapes.
+        #
+        # Whether the AUTHOR is told is a different question and a different
+        # surface; `ARejectedHeadingIsToldWhyAtTheRunsOutputTests` is where
+        # that is asserted. An earlier version of this name promised it.
         evidence = self.evidence()
         for name, heading in self.SHAPES.items():
             with self.subTest(shape=name):
@@ -6092,6 +6097,617 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         # refusal that means there is nothing here to read.
         plain = f"Why this exists.\n\n## Validation\n\n- ran\n"
         self.assertIsNone(evidence._rendered_markdown_entries(plain, [self.ITEM])[1])
+
+
+class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
+    """A heading the readers decline is named, on the surfaces the author reads (#1730).
+
+    The rejection is correct and it was silent. A body whose only
+    `## Evidence Status` carries inline HTML comes back from the factory turn
+    with a second, plain heading written below it and `errors == []`, and the
+    read that collects evidence then refuses it: "a reader sees 2
+    `Evidence Status` headings, not one". True, comprehensible, and it points
+    at the wrong repair -- delete one, and deleting the written one leaves a
+    body with no readable section and the same refusal. A round lost before
+    anything is learned.
+
+    Round 2 moved where the note is said and narrowed what it claims. It is
+    composed from the body the write RETURNED rather than from the body it was
+    handed, so it cannot announce a heading that was written on a turn where
+    the write refused; it says what the readers this repo actually has do
+    rather than "every check"; and every value it quotes from the body is
+    escaped, because it goes to a workflow log and to a pull request and both
+    of those read what they are given.
+    """
+
+    ITEM = "`swift test` passes"
+    # Heading, and the tag the note has to name as the reason.
+    SHAPES = {
+        "span": ("## <span>Evidence Status</span>", "<span>"),
+        "del": ("## Evidence <del>Status</del>", "<del>"),
+        "details": ("## <details>Evidence Status</details>", "<details>"),
+        "br": ("## Evidence<br>Status", "<br>"),
+    }
+
+    def helpers(self):
+        return sys.modules["_helpers"]
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    @staticmethod
+    def readiness_gate():
+        """The repo's readiness gate, loaded by path, so a claim about it is measured.
+
+        The note says what this gate does and does not do with a tagged
+        heading, and a sentence about another file's behaviour is worth what
+        the test that runs it is worth.
+        """
+        spec = importlib.util.spec_from_file_location(
+            "pr_readiness_for_heading_claims", REPO_ROOT / "scripts" / "pr-readiness.py"
+        )
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["pr_readiness_for_heading_claims"] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def body(self, heading: str) -> str:
+        return (
+            "Why this exists, at length enough to satisfy the leading paragraph rule.\n\n"
+            f"{heading}\n\n- [pending-ci] {self.ITEM} -- the lane has not run yet\n\n"
+            "## Validation\n\n- ran\n"
+        )
+
+    def written(self, heading: str) -> str:
+        """The body the write returns, which is what the note is asked about."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            body, refusal = self.evidence().write_evidence_status_section(
+                self.body(heading), ["- [complete] the UI lane -- swift test passed"]
+            )
+        self.assertIsNone(refusal)
+        return body
+
+    def test_the_note_names_the_line_the_tag_and_both_repairs(self) -> None:
+        helpers = self.helpers()
+        for name, (heading, tag) in self.SHAPES.items():
+            with self.subTest(shape=name):
+                note = helpers.rejected_heading_note(self.written(heading), "Evidence Status")
+                assert note is not None
+                self.assertIn(heading, note)
+                # The tag in its own right, not merely because the heading line
+                # it came from is quoted above it: an author who has two tags
+                # in one heading needs to know which one this reader stopped
+                # at.
+                self.assertIn(f"carries inline HTML (`{tag}`)", note)
+                self.assertIn("A readable `Evidence Status` h2 below it is the one read as that section", note)
+                self.assertIn("Remove the tags from yours, or remove yours", note)
+        # A body whose heading is plain has nothing to say.
+        self.assertIsNone(
+            helpers.rejected_heading_note(self.body("## Evidence Status"), "Evidence Status")
+        )
+
+    def test_the_note_reports_the_write_s_result_and_not_its_intent(self) -> None:
+        """"A plain heading was written below it" is a claim about a body, checked against one.
+
+        Asked of the body the model wrote -- which is where it was asked, and
+        before the write -- the sentence is a prediction, and on a body the
+        write then refuses it is a false one: the returned body is the
+        author's, untouched, and the log carried "was written below it" one
+        line above "refusing to write" (#1730, round 2).
+        """
+        helpers, evidence = self.helpers(), self.evidence()
+        source = self.body(self.SHAPES["span"][0])
+        # Before the write there is no plain heading, and the note says so.
+        before = helpers.rejected_heading_note(source, "Evidence Status")
+        assert before is not None
+        self.assertIn("No readable `Evidence Status` h2 is in this body", before)
+        self.assertNotIn("was written below it", before)
+        # After a write that went ahead, there is one, and the note says that.
+        after = helpers.rejected_heading_note(self.written(self.SHAPES["span"][0]), "Evidence Status")
+        assert after is not None
+        self.assertIn("A readable `Evidence Status` h2 below it is the one read as that section", after)
+        # And on a body the write refuses, the returned body is the source, so
+        # the note asked of the RESULT makes the true claim about it.
+        refusing = source.replace("## Validation\n\n- ran\n", "<pre>\nnever closed\n")
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            result, refusal = evidence.write_evidence_status_section(
+                refusing, ["- [complete] the UI lane -- swift test passed"]
+            )
+        self.assertIsNotNone(refusal)
+        self.assertEqual(result, refusing)
+        stood_down = helpers.rejected_heading_note(result, "Evidence Status")
+        assert stood_down is not None
+        self.assertIn("No readable `Evidence Status` h2 is in this body", stood_down)
+        # The writer says nothing about the heading at all now, so the log
+        # cannot carry both sentences.
+        self.assertNotIn("carries inline HTML", spoke.getvalue())
+        self.assertIn("refusing to", spoke.getvalue())
+
+    def test_the_writer_is_no_longer_where_the_note_is_said(self) -> None:
+        # It was said here, and this is a writer: it runs more than once in a
+        # turn, and it had to be asked before the write to see the author's
+        # heading alone, which is what made the sentence above false. The write
+        # still goes ahead -- the repair is the point, not a stand-down.
+        for name, (heading, _) in self.SHAPES.items():
+            with self.subTest(shape=name):
+                spoke = io.StringIO()
+                with contextlib.redirect_stderr(spoke):
+                    written, refusal = self.evidence().write_evidence_status_section(
+                        self.body(heading), ["- [complete] the UI lane -- swift test passed"]
+                    )
+                self.assertIsNone(refusal)
+                self.assertEqual(spoke.getvalue(), "")
+                self.assertIn("\n## Evidence Status\n", written)
+                self.assertIn(heading, written)
+
+    def test_the_factory_turn_keeps_its_errors_empty(self) -> None:
+        # Not an error: adding it to the turn's errors would abort a turn that
+        # succeeded, and the repair is what the turn is for.
+        run_contributor = sys.modules["run_contributor_evidence_kinds"]
+        for name, (heading, _) in self.SHAPES.items():
+            with self.subTest(shape=name):
+                rendered, errors = run_contributor.render_execution_summary_body(
+                    self.body(heading),
+                    requested_evidence=[self.ITEM],
+                    evidence_complete=["1 -- 214 tests passed"],
+                    evidence_blocked=None,
+                    evidence_pending_ci=None,
+                )
+                self.assertEqual(errors, [])
+                self.assertIn(heading, rendered)
+                self.assertIsNotNone(
+                    self.helpers().rejected_heading_note(rendered, "Evidence Status")
+                )
+
+    def test_the_two_headings_refusal_names_every_heading_carrying_a_tag(self) -> None:
+        run_contributor = sys.modules["run_contributor_evidence_kinds"]
+        for name, (heading, _) in self.SHAPES.items():
+            with self.subTest(shape=name):
+                rendered, _ = run_contributor.render_execution_summary_body(
+                    self.body(heading),
+                    requested_evidence=[self.ITEM],
+                    evidence_complete=["1 -- 214 tests passed"],
+                    evidence_blocked=None,
+                    evidence_pending_ci=None,
+                )
+                _, unreadable = self.evidence()._rendered_status_lines(rendered)
+                assert unreadable is not None
+                self.assertIn("2 `Evidence Status` headings", unreadable)
+                self.assertIn("carries inline HTML", unreadable)
+                self.assertIn("Leave exactly one heading", unreadable)
+
+    def test_when_every_heading_carries_a_tag_the_refusal_still_names_them_all(self) -> None:
+        """Naming one of two tagged headings is true and useless (#1730, round 2).
+
+        What remains is the other tagged heading, still not read as the
+        section, still refused -- so the author repairs, re-runs, and meets
+        this refusal again. Every tagged heading is named, and the repair the
+        message asks for is the body to end up with rather than the result of
+        taking one thing away.
+        """
+        opening = "Why this exists, at length enough to satisfy the leading paragraph rule.\n\n"
+        both = (
+            opening
+            + "## <span>Evidence Status</span>\n\n- [complete] a -- b\n\n"
+            + "## <del>Evidence Status</del>\n\n- [complete] c -- d\n"
+        )
+        _, unreadable = self.evidence()._rendered_status_lines(both)
+        assert unreadable is not None
+        self.assertIn("(`<span>`)", unreadable)
+        self.assertIn("(`<del>`)", unreadable)
+        self.assertIn("none of them is read as the section", unreadable)
+        self.assertIn(
+            "Leave exactly one heading whose text reads as `Evidence Status` "
+            "-- top level, an h2, and carrying no tags",
+            unreadable,
+        )
+
+    # Text an author wrote, reaching a log that obeys workflow commands and a
+    # comment that renders markdown and delivers mentions. Each is a hazard on
+    # one of those surfaces and inert on the other.
+    HAZARDS = {
+        "an attribute spanning a newline": (
+            '<span title="x\n::error::owned\ny">Evidence Status</span>\n---',
+            "::error::owned",
+        ),
+        "a backtick and a mention in an attribute": (
+            '## <span title="a`b @someone">Evidence Status</span>',
+            "@someone",
+        ),
+        "a terminal escape in an attribute": (
+            '## <span title="\x1b[31mred">Evidence Status</span>',
+            "\x1b",
+        ),
+        "a comment delimiter in an attribute": (
+            '## <span title="<!-- x -->">Evidence Status</span>',
+            "<!--",
+        ),
+    }
+
+    def hazard_note(self, heading: str) -> str:
+        note = self.helpers().rejected_heading_note(self.body(heading), "Evidence Status")
+        assert note is not None, heading
+        return note
+
+    def test_the_note_is_one_line_whatever_the_author_wrote(self) -> None:
+        # The log surface. A workflow command is only a command at column 0, so
+        # one line is the whole of the defence -- and it is also what keeps a
+        # structured record on one line.
+        for name, (heading, _) in self.HAZARDS.items():
+            with self.subTest(hazard=name):
+                note = self.hazard_note(heading)
+                self.assertNotIn("\n", note)
+                self.assertNotIn("\r", note)
+                self.assertNotIn("\x1b", note)
+
+    def test_no_line_of_the_comment_is_a_workflow_command(self) -> None:
+        execution = sys.modules["execution"]
+        heading, _ = self.HAZARDS["an attribute spanning a newline"]
+        note = self.hazard_note(heading)
+        # The hazard is real: the author's text carries it.
+        self.assertIn("::error::owned", heading)
+        # It survives as text and never as a line of its own, on either surface.
+        self.assertIn("::error::owned", note)
+        comment = execution.compose_rejected_heading_comment("April", note, "0" * 40)
+        self.assertEqual([line for line in comment.split("\n") if line.startswith("::")], [])
+        self.assertEqual([line for line in note.split("\n") if line.startswith("::")], [])
+
+    def test_a_backtick_in_a_tag_does_not_let_a_mention_out_of_the_code_span(self) -> None:
+        """The comment surface, asked of the parser rather than of the string.
+
+        A code span fenced with one backtick is closed by the first backtick
+        inside the attribute, and what follows is live markdown -- an
+        `@someone` there is a mention GitHub delivers to a person who has
+        nothing to do with this PR. The fence is one backtick longer than the
+        longest run inside, so there is nothing after the span to be live.
+        """
+        helpers, execution = self.helpers(), sys.modules["execution"]
+        heading, mention = self.HAZARDS["a backtick and a mention in an attribute"]
+        note = self.hazard_note(heading)
+        comment = execution.compose_rejected_heading_comment("April", note, "0" * 40)
+        tokens = helpers.MARKDOWN.parse(comment)
+        spans = [
+            child.content
+            for token in tokens
+            for child in (token.children or [])
+            if child.type == "code_inline"
+        ]
+        plain = "".join(
+            child.content
+            for token in tokens
+            for child in (token.children or [])
+            if child.type == "text"
+        )
+        # The tag is inside a span, and the mention is nowhere outside one.
+        self.assertTrue([span for span in spans if mention in span], spans)
+        self.assertNotIn(mention, plain)
+        self.assertNotIn("a`b", plain)
+
+    def test_nothing_mutates_the_note_after_it_is_fenced(self) -> None:
+        """The order of escaping is the escaping (#1730, round 2).
+
+        The delimiter strip used to run over the composed comment, after
+        `code_span` had chosen a fence. Removing `<!--` JOINS the backtick runs
+        on either side of it, and two runs joined can be long enough to close
+        the fence the note was given -- after which an `@mention` in the same
+        attribute is live markdown in a comment the bot posts. Codex
+        (gpt-5.6-sol, xhigh) found it with this heading; the delimiters come
+        out before the runs are counted now, and nothing touches the result.
+        """
+        helpers, execution = self.helpers(), sys.modules["execution"]
+        heading = '## <span>Evidence Status</span><i title="`<!--``@octocat"></i>'
+        note = helpers.rejected_heading_note(self.body(heading), "Evidence Status")
+        assert note is not None
+        comment = execution.compose_rejected_heading_comment("April", note, "0" * 40)
+        tokens = helpers.MARKDOWN.parse(comment)
+        plain = "".join(
+            child.content
+            for token in tokens
+            for child in (token.children or [])
+            if child.type == "text"
+        )
+        self.assertNotIn("@octocat", plain)
+        self.assertNotIn("<!--", comment)
+        # And the whole heading is inside one span, which is what the fence
+        # length has to be right for.
+        spans = [
+            child.content
+            for token in tokens
+            for child in (token.children or [])
+            if child.type == "code_inline"
+        ]
+        self.assertTrue([span for span in spans if "@octocat" in span], spans)
+
+    def test_an_invisible_character_cannot_splice_a_delimiter_back_together(self) -> None:
+        """The order of the removals is the escaping, not just their presence (#1730, round 3).
+
+        Round 2 put the delimiter strip before the fence, which was the fix it
+        needed, and left the invisible-character removal AFTER it. So an author
+        who writes `a<!` ZWSP `--b--` ZWSP `>c` gets past the strip -- the
+        delimiters are not there yet -- and the removal then splices them
+        together, handing the comment a `<!--` the strip had already run.
+
+        The invisibles go first for that reason: a delimiter can be made by
+        taking a character out, so nothing that removes characters may run
+        after the strip.
+        """
+        helpers = self.helpers()
+        spliced = helpers.code_span("a<!\u200b--b--\u200b>c")
+        self.assertNotIn("<!--", spliced)
+        self.assertNotIn("-->", spliced)
+        # The spliced delimiters go with the strip, brackets and all, and the
+        # author's own letters are what is left: `a<!` ZWSP `--b--` ZWSP `>c`
+        # becomes `a<!--b-->c` once the invisibles are out, and the strip then
+        # takes both delimiters.
+        self.assertEqual(spliced, "`abc`")
+
+    def test_a_whitespace_control_between_two_words_stays_a_space(self) -> None:
+        """A control character that separates is a separator, not nothing (#1730, round 3b).
+
+        Step 1 removes the control and format characters, and removing a tab or
+        a newline from between two words glues them: `a` tab `b` quoted as `ab`
+        is text the author never wrote, on the accepting side -- nothing
+        refuses, the note simply misquotes. It is the failure `inline_text`
+        records for `<br>`, where dropping the tag turned `1<br>2 tests passed`
+        into a count nobody wrote.
+
+        So a Cc or Cf character Python calls whitespace becomes a space, which
+        step 3 then collapses with its neighbours. The ones that are not
+        whitespace -- NUL, and the C1 controls with U+0085 excepted -- are
+        removed, because there is no separator there to keep.
+        """
+        helpers = self.helpers()
+        self.assertEqual(helpers.code_span("a\tb\nc\rd\x0ce"), "`a b c d e`")
+        self.assertEqual(helpers.code_span("a\x0bb\x1fc"), "`a b c`")
+        self.assertEqual(helpers.code_span("a\u0085b"), "`a b`")
+        # Not whitespace, so nothing is kept in their place.
+        self.assertEqual(helpers.code_span("d\x00e"), "`de`")
+        self.assertEqual(helpers.code_span("d\u009be"), "`de`")
+        self.assertEqual(helpers.code_span("d\u200be"), "`de`")
+
+    def test_the_note_keeps_the_gap_a_tag_attribute_wrote(self) -> None:
+        # The same thing where it reaches an author: a setext heading whose
+        # attribute spans a newline quoted the two halves with a space between
+        # them until round 3 removed it.
+        helpers = self.helpers()
+        heading = '<span title="x\n::error::owned">Evidence Status</span>\n---'
+        note = helpers.rejected_heading_note(self.body(heading), "Evidence Status")
+        assert note is not None
+        self.assertIn('<span title="x ::error::owned">', note)
+        self.assertNotIn('<span title="x::error::owned">', note)
+
+    def test_a_c1_control_does_not_survive_into_the_note(self) -> None:
+        # `[\x00-\x1f\x7f]` is C0 and DEL. The C1 range is U+0080-U+009F,
+        # where the CSI introducer lives -- a single character that opens an
+        # escape sequence on a terminal reading the workflow log, and one the
+        # class above does not name (#1730, round 3).
+        helpers = self.helpers()
+        for name, char in (
+            ("CSI introducer", "\u009b"),
+            ("string terminator", "\u009c"),
+            ("next line", "\u0085"),
+        ):
+            with self.subTest(character=name):
+                span = helpers.code_span(f"<span title=\"x{char}y\">")
+                self.assertNotIn(char, span)
+                self.assertIn("<span", span)
+
+    def test_an_invisible_format_character_does_not_survive_into_the_note(self) -> None:
+        # A zero-width space and a right-to-left override are neither control
+        # characters in the C0 sense nor whitespace: the first is invisible and
+        # the second reorders what a reader sees for the rest of the line, in a
+        # comment a person is being asked to act on.
+        helpers = self.helpers()
+        for name, char in (("zero width space", "\u200b"), ("right-to-left override", "\u202e")):
+            with self.subTest(character=name):
+                span = helpers.code_span(f"<span title=\"a{char}b\">")
+                self.assertNotIn(char, span)
+                self.assertIn("<span", span)
+
+    def test_a_comment_delimiter_in_a_tag_cannot_spell_a_marker(self) -> None:
+        # The same strip model prose gets, for the same reason: no line of text
+        # this runtime did not write may parse as one of its markers.
+        execution = sys.modules["execution"]
+        heading, delimiter = self.HAZARDS["a comment delimiter in an attribute"]
+        comment = execution.compose_rejected_heading_comment("April", self.hazard_note(heading), "0" * 40)
+        self.assertNotIn(delimiter, comment)
+        self.assertNotIn("-->", comment)
+
+    def test_the_comment_claims_only_what_the_readers_here_do(self) -> None:
+        """Every sentence about a consequence, measured on this tree (#1730, round 2).
+
+        It used to say "every check that reads this section refuses it". The
+        readiness gate's ambiguity check returns `None` on that body and its
+        `evaluate` reports nothing about the heading -- so the note corrected a
+        wrongly attributed refusal with a wrongly attributed refusal.
+        """
+        execution, evidence = sys.modules["execution"], self.evidence()
+        written = self.written(self.SHAPES["span"][0])
+        note = self.helpers().rejected_heading_note(written, "Evidence Status")
+        assert note is not None
+        _, unreadable = evidence._rendered_status_lines(written)
+        assert unreadable is not None
+        comment = execution.compose_rejected_heading_comment("April", note, "0" * 40, unreadable)
+
+        # Claim 1: the read that collects evidence refuses, and the comment
+        # QUOTES that refusal rather than restating it.
+        self.assertIn("2 `Evidence Status` headings, not one", unreadable)
+        self.assertIn("carries inline HTML", unreadable)
+        self.assertIn(unreadable, comment)
+
+        # Claim 2: the readiness gate does not refuse it for this.
+        gate = self.readiness_gate()
+        self.assertIsNone(gate.evidence_status_heading_failure(written))
+        self.assertEqual(
+            [
+                failure
+                for failure in gate
+                .evaluate({"title": "t", "body": written, "draft": False, "labels": []}, ["Sources/App.swift"])
+                .failures
+                if "heading" in failure.casefold()
+            ],
+            [],
+        )
+        self.assertIn("The readiness gate does not refuse it for this", comment)
+        # And the sentence that was not true of this repo is gone.
+        self.assertNotIn("every check that reads this section refuses it", comment)
+
+    def test_a_break_outside_the_control_range_is_flattened_too(self) -> None:
+        """The half of the flattening that is not obvious (#1730, round 2).
+
+        The Cc and Cf removal covers the control and format characters. A line
+        separator and a paragraph separator are neither -- Unicode files them
+        under Zl and Zp -- and each is a line break to something downstream;
+        what removes them is the bare `.split()`, which splits on every
+        character Python calls whitespace. Narrowing that to `.split(" ")`
+        reads like the same thing and puts them back, so it is pinned here
+        rather than left to the docstring.
+        """
+        helpers = self.helpers()
+        for name, char in (
+            ("line separator", "\u2028"),
+            ("paragraph separator", "\u2029"),
+            ("next line", "\u0085"),
+            ("form feed", "\x0c"),
+            ("vertical tab", "\x0b"),
+        ):
+            with self.subTest(character=name):
+                span = helpers.code_span(f"a{char}::error::owned")
+                self.assertNotIn(char, span)
+                self.assertIn("::error::owned", span)
+
+    def test_the_note_says_where_the_plain_heading_is_and_not_where_it_usually_is(self) -> None:
+        """"Written below it" is a claim about position, checked against the body (#1730, round 2).
+
+        The write puts a plain heading below the author's, which is what makes
+        the sentence useful -- it tells them which of the two headings is which.
+        On a body that already carried a plain heading ABOVE the tagged one it
+        was simply false, and the author looking below for a heading that is
+        above them is the round this note exists to save.
+        """
+        helpers = self.helpers()
+        opening = "Why this exists, at length enough to satisfy the leading paragraph rule.\n\n"
+        tagged = "## <span>Evidence Status</span>\n\n- [complete] a -- b\n\n"
+        plain = "## Evidence Status\n\n- [complete] c -- d\n"
+        below = helpers.rejected_heading_note(opening + tagged + plain, "Evidence Status")
+        above = helpers.rejected_heading_note(opening + plain + "\n" + tagged, "Evidence Status")
+        assert below is not None and above is not None
+        self.assertIn("h2 below it is the one read as that section", below)
+        self.assertIn("h2 above it is the one read as that section", above)
+        self.assertNotIn("below it", above)
+        # And it names what the reader accepts rather than a syntax the body
+        # need not carry: a setext h2 is this section to `section_heading_index`,
+        # so "a plain `## Evidence Status`" was a claim about source text that
+        # such a body does not support (codex, gpt-5.6-sol, xhigh).
+        setext = helpers.rejected_heading_note(
+            opening + tagged + "Evidence Status\n---------------\n\n- [complete] c -- d\n",
+            "Evidence Status",
+        )
+        assert setext is not None
+        self.assertIn("A readable `Evidence Status` h2 below it", setext)
+        self.assertNotIn("`## Evidence Status`", setext.split("carries inline HTML")[1])
+
+    def test_the_refusal_asks_for_the_body_to_aim_for_rather_than_predicting_a_removal(self) -> None:
+        """Two goes at predicting what a removal leaves were wrong two ways (#1730, round 2).
+
+        Subtracting rejections from headings counted an `# Evidence Status` as
+        though taking a tag off would make it readable. Counting readable h2s
+        instead ignored that this refusal counts every heading whose text reads
+        as this one, at any level and any depth -- so a body with one good h2
+        and one h1 clears the readability count and refuses again. A predicate
+        that decides the repair and a predicate that judges it have to be the
+        same one; the message describes the body to aim for instead, which is
+        true of every arrangement.
+        """
+        opening = "Why this exists, at length enough to satisfy the leading paragraph rule.\n\n"
+        tagged = "## <span>Evidence Status</span>\n\n- [complete] a -- b\n\n"
+        target = (
+            "Leave exactly one heading whose text reads as `Evidence Status` "
+            "-- top level, an h2, and carrying no tags"
+        )
+        for name, other in (
+            ("a plain h2 of the same text", "## Evidence Status\n\n- [complete] c -- d\n"),
+            ("an h1 of the same text", "# Evidence Status\n\n- [complete] c -- d\n"),
+            ("an h3 of the same text", "### Evidence Status\n\n- [complete] c -- d\n"),
+            ("one inside a block quote", "> ## Evidence Status\n"),
+            ("a second tagged heading", "## <del>Evidence Status</del>\n\n- [complete] c -- d\n"),
+        ):
+            with self.subTest(other=name):
+                _, unreadable = self.evidence()._rendered_status_lines(opening + tagged + other)
+                assert unreadable is not None
+                self.assertIn("2 `Evidence Status` headings, not one", unreadable)
+                self.assertIn(target, unreadable)
+                # No promise about what a removal leaves, in any arrangement.
+                self.assertNotIn("leaves a body with", unreadable)
+                self.assertNotIn("would leave a body", unreadable)
+        # Every tagged heading is still named, with its line.
+        _, both = self.evidence()._rendered_status_lines(
+            opening + tagged + "## <del>Evidence Status</del>\n\n- [complete] c -- d\n"
+        )
+        assert both is not None
+        self.assertIn("(`<span>`)", both)
+        self.assertIn("(`<del>`)", both)
+        self.assertIn("none of them is read as the section", both)
+
+    def test_the_comment_quotes_the_refusal_rather_than_counting_for_itself(self) -> None:
+        """A sentence that says "2" and "both" on a body with three (#1730, round 3).
+
+        The comment used to restate the refusal: "a reader sees 2
+        `Evidence Status` headings", "while both headings stand", "names yours
+        as the one carrying the tag". An author with TWO tagged headings gets a
+        written body with three and a refusal that names all of them, under a
+        paragraph saying two and pointing at one.
+
+        The readers already compute the count and the names, so the comment
+        quotes what they say. There is no second copy of that sentence to
+        count wrong.
+        """
+        execution, evidence, helpers = sys.modules["execution"], self.evidence(), self.helpers()
+        opening = "Why this exists, at length enough to satisfy the leading paragraph rule.\n\n"
+        two_tagged = (
+            opening
+            + "## <span>Evidence Status</span>\n\n- [pending-ci] a -- b\n\n"
+            + "## <del>Evidence Status</del>\n\n- [pending-ci] c -- d\n\n"
+            + "## Validation\n\n- ran\n"
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            written, refusal = evidence.write_evidence_status_section(
+                two_tagged, ["- [complete] the UI lane -- swift test passed"]
+            )
+        self.assertIsNone(refusal)
+        note = helpers.rejected_heading_note(written, "Evidence Status")
+        assert note is not None
+        _, unreadable = evidence._rendered_status_lines(written)
+        assert unreadable is not None
+        comment = execution.compose_rejected_heading_comment("April", note, "0" * 40, unreadable)
+
+        # Three headings a reader sees, and the comment says three because the
+        # refusal does.
+        self.assertIn("a reader sees 3 `Evidence Status` headings, not one", unreadable)
+        self.assertIn("a reader sees 3 `Evidence Status` headings, not one", comment)
+        self.assertNotIn("a reader sees 2 `Evidence Status` headings", comment)
+        # Both tags named, in the comment, because the refusal names both.
+        self.assertIn("(`<span>`)", comment)
+        self.assertIn("(`<del>`)", comment)
+        # And no sentence that can only count to two.
+        self.assertNotIn("both headings", comment)
+        self.assertNotIn("names yours as the one carrying the tag", comment)
+
+    def test_the_comment_says_which_head_it_was_read_from(self) -> None:
+        # What makes it once per head rather than once per run: the line is
+        # visible, and the next turn at the same commit finds it.
+        execution = sys.modules["execution"]
+        note = self.helpers().rejected_heading_note(
+            self.written(self.SHAPES["span"][0]), "Evidence Status"
+        )
+        assert note is not None
+        head = "0123456789abcdef0123456789abcdef01234567"
+        comment = execution.compose_rejected_heading_comment("April", note, head)
+        self.assertIn(execution.rejected_heading_checked_line(head), comment)
+        self.assertIn(head, comment)
+        self.assertNotIn(execution.rejected_heading_checked_line("f" * 40), comment)
 
 
 class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):

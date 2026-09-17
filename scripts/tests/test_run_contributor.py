@@ -2730,6 +2730,8 @@ class RevisionTurnTests(unittest.TestCase):
         revision: bool = True,
         head_current: bool = True,
         comment_posts: bool = True,
+        existing_comments: list[str] | None = None,
+        comment_raises: bool = False,
     ):
         execution = sys.modules["execution"]
         data = data or self._data()
@@ -2748,8 +2750,19 @@ class RevisionTurnTests(unittest.TestCase):
 
         def fake_run_optional(command, *, default, **_kwargs):
             if command[:3] == ["gh", "pr", "comment"]:
+                if comment_raises:
+                    # `gh` missing from PATH is an OSError out of
+                    # `subprocess.run`, which `run_optional` does not catch.
+                    raise FileNotFoundError(2, "No such file or directory", "gh")
                 comments.append(command[command.index("--body") + 1])
+                # Recorded in `commands` as well, so a test can say where a
+                # comment fell relative to the body write.
+                commands.append(command)
                 return "https://github.com/fairchild/workspaces/pull/77#issuecomment-1" if comment_posts else default
+            if command[:4] == ["gh", "pr", "view", "77"] and "comments" in command:
+                return json.dumps(
+                    {"comments": [{"body": body} for body in (existing_comments or [])]}
+                )
             if command[:2] == ["gh", "api"]:
                 return json.dumps(
                     {
@@ -2826,6 +2839,305 @@ class RevisionTurnTests(unittest.TestCase):
             [comment for comment in comments if "left as written" in comment], []
         )
         self.assertEqual(exit_code, 0)
+
+    # An author's own `## Evidence Status`, carrying a tag, with the evidence
+    # the turn needs so the write and the validation both succeed.
+    TAGGED_HEADING_BODY = (
+        "## Summary\n- Rewrote the sheet's status mapping\n\n"
+        "## <span>Evidence Status</span>\n\n"
+        "- [complete] `swift test` passes -- Test run with 1992 tests passed\n\n"
+        "## Validation\n- `swift test --filter SheetTests`\n"
+    )
+
+    def _route_with_tagged_heading(self, **kwargs):
+        state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        with mock.patch.object(self, "_state", return_value=state):
+            return self._route(
+                dirty=True,
+                live_body="stale body",
+                data=self._data(self.TAGGED_HEADING_BODY),
+                revision=False,
+                **kwargs,
+            )
+
+    def test_a_declined_heading_is_told_to_the_author_on_the_pull_request(self) -> None:
+        """The note reaches the PR, asserted by the comment that was posted (#1730, round 2).
+
+        This was asserted by reading `execution.py` for the call, which is a
+        test of the source and not of the turn: deleting the post left the
+        suite green. The seam is the one #1733's stand-down comment uses --
+        the turn runs against fake commands and the bodies it posts are
+        captured.
+        """
+        exit_code, commands, comments, _ = self._route_with_tagged_heading()
+        self.assertEqual(exit_code, 0)
+        notes = [comment for comment in comments if "was not read as the section" in comment]
+        self.assertEqual(len(notes), 1, comments)
+        self.assertIn("<span>", notes[0])
+        self.assertIn(self.PERSONA, notes[0])
+        self.assertIn("A readable `Evidence Status` h2 below it is the one read", notes[0])
+        # And it names this head, which is what makes it once per head.
+        execution = sys.modules["execution"]
+        self.assertIn(execution.rejected_heading_checked_line(self.LIVE_HEAD), notes[0])
+
+    def test_the_note_is_posted_after_the_body_is_written_and_not_before(self) -> None:
+        # The order is the claim: the note says a plain heading was written
+        # below the author's, which is only true once the body it describes is
+        # on GitHub. Posted first, it announced a write that a failing
+        # validation then made never happen (#1730, round 2).
+        _, commands, comments, _ = self._route_with_tagged_heading()
+        edits = [index for index, command in enumerate(commands) if command[:3] == ["gh", "pr", "edit"]]
+        posts = [
+            index
+            for index, command in enumerate(commands)
+            if command[:3] == ["gh", "pr", "comment"]
+            and "was not read as the section" in command[command.index("--body") + 1]
+        ]
+        self.assertEqual(len(edits), 1, commands)
+        self.assertEqual(len(posts), 1, commands)
+        self.assertLess(edits[0], posts[0])
+
+    def test_a_turn_that_fails_validation_says_nothing_about_the_heading(self) -> None:
+        """The note is a report of a write, so a turn that does not write says nothing.
+
+        `validate_evidence_accounting` is failed directly rather than through a
+        body contrived to fail it: what is under test is the ORDER -- that the
+        note is downstream of the check that can end the turn -- and a fixture
+        body that fails accounting today may stop failing it when the
+        accounting rules change, which would leave this passing for the wrong
+        reason. Posted where it was, the note told an author their body had
+        been updated by a run that returned before updating it (#1730, round 2).
+        """
+        execution = sys.modules["execution"]
+        state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        with (
+            mock.patch.object(self, "_state", return_value=state),
+            mock.patch.object(
+                execution,
+                "validate_evidence_accounting",
+                return_value=("", ["the accounting did not add up"]),
+            ),
+        ):
+            exit_code, commands, comments, _ = self._route(
+                dirty=True,
+                live_body="stale body",
+                data=self._data(self.TAGGED_HEADING_BODY),
+                revision=False,
+            )
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(any(command[:3] == ["gh", "pr", "edit"] for command in commands), commands)
+        self.assertEqual(
+            [comment for comment in comments if "was not read as the section" in comment], []
+        )
+
+    def test_a_second_run_at_the_same_head_says_it_again_to_nobody(self) -> None:
+        # Once per head. A re-run is a normal thing -- a retried workflow, a
+        # re-dispatch -- and each one used to add a copy of the same note to
+        # the same pull request.
+        execution = sys.modules["execution"]
+        _, _, first, _ = self._route_with_tagged_heading()
+        note = next(comment for comment in first if "was not read as the section" in comment)
+        self.assertIn(execution.rejected_heading_checked_line(self.LIVE_HEAD), note)
+        _, _, second, _ = self._route_with_tagged_heading(existing_comments=[note])
+        self.assertEqual(
+            [comment for comment in second if "was not read as the section" in comment], []
+        )
+        # A different head is a body the author has pushed since, and the
+        # heading is still tagged there, so it is said again.
+        _, _, moved, _ = self._route_with_tagged_heading(
+            existing_comments=[note.replace(self.LIVE_HEAD, "f" * 40)]
+        )
+        self.assertEqual(
+            len([comment for comment in moved if "was not read as the section" in comment]), 1
+        )
+
+    def test_a_body_only_revision_that_publishes_a_body_reports_the_heading_too(self) -> None:
+        """Every path that writes a body reports, and this one writes without committing.
+
+        A revision turn with no file changes still edits the PR body when the
+        model rewrote it, which is a publication like any other -- and it went
+        through `_finish_revision_without_diff`, which the note's move to
+        "after the write" did not reach. The author got a body with a plain
+        heading read as that section and nothing said about it (#1730, round 2).
+
+        The head here is the live one rather than a pushed commit, because
+        nothing was pushed; that is the commit the body is attached to, so it
+        is the right thing to dedup on.
+        """
+        execution = sys.modules["execution"]
+        state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        with mock.patch.object(self, "_state", return_value=state):
+            exit_code, commands, comments, outputs = self._route(
+                dirty=False,
+                live_body="stale body",
+                data=self._data(self.TAGGED_HEADING_BODY),
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(outputs["revision_outcome"], "body-only")
+        edits = [index for index, command in enumerate(commands) if command[:3] == ["gh", "pr", "edit"]]
+        self.assertEqual(len(edits), 1, commands)
+        notes = [comment for comment in comments if "was not read as the section" in comment]
+        self.assertEqual(len(notes), 1, comments)
+        self.assertIn(execution.rejected_heading_checked_line(self.LIVE_HEAD), notes[0])
+        posts = [
+            index
+            for index, command in enumerate(commands)
+            if command[:3] == ["gh", "pr", "comment"]
+            and "was not read as the section" in command[command.index("--body") + 1]
+        ]
+        self.assertEqual(len(posts), 1, commands)
+        self.assertLess(edits[0], posts[0])
+
+    def test_a_revision_that_moves_nothing_reports_no_heading(self) -> None:
+        # The other outcome of the same function: an identical body is a turn
+        # that published nothing, so there is nothing to report.
+        state = {**self._state(), "requested_evidence": []}
+        data = self._data(self.TAGGED_HEADING_BODY)
+        with mock.patch.object(self, "_state", return_value=state):
+            exit_code, commands, comments, outputs = self._route(
+                dirty=False, live_body=self._rendered_pr_body(data), data=data
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(outputs["revision_outcome"], "needs-owner")
+        self.assertFalse(any(command[:3] == ["gh", "pr", "edit"] for command in commands))
+        self.assertEqual(
+            [comment for comment in comments if "was not read as the section" in comment], []
+        )
+
+    def test_a_forgery_that_shows_the_reader_nothing_still_suppresses_the_note(self) -> None:
+        """The hole this guard does not close, pinned as what it is (#1749).
+
+        The check asks what a comment's TEXT contains: the note's headline, and
+        the head line as a line of its own. A comment whose whole content is
+        those two lines inside an HTML comment satisfies both and renders as
+        nothing, so anyone who can comment can silence the note for a pushed
+        head and leave a reader no sign of it. A collapsed `<details>` does the
+        same.
+
+        It is asserted here rather than left to be rediscovered, and it is
+        filed rather than fixed because the fix changes what the dedup path
+        reads -- from the comment's text to what the page shows -- which is a
+        decision to make on its own. What it costs is advice: no check depends
+        on this note, and the reads that refuse a body with an unread heading
+        refuse it either way.
+
+        This test flips when #1749 lands.
+        """
+        execution = sys.modules["execution"]
+        checked = execution.rejected_heading_checked_line(self.LIVE_HEAD)
+        headline = execution.REJECTED_HEADING_HEADLINE
+        for name, forged in (
+            ("a multi-line HTML comment", f"<!--\n{headline}\n{checked}\n-->"),
+            (
+                "a collapsed details block",
+                f"<details>\n<summary>nothing here</summary>\n\n{headline}\n\n{checked}\n\n</details>",
+            ),
+        ):
+            with self.subTest(forgery=name):
+                self.assertTrue(
+                    execution._is_prior_rejected_heading_note(forged, checked),
+                    f"{name} no longer satisfies the guard -- if #1749 landed, flip this test",
+                )
+                _, _, comments, _ = self._route_with_tagged_heading(existing_comments=[forged])
+                self.assertEqual(
+                    [c for c in comments if "was not read as the section" in c], [], name
+                )
+        # And the HTML-comment one shows a reader nothing, which is what makes
+        # it a silencing rather than a duplicate.
+        hidden = f"<!--\n{headline}\n{checked}\n-->"
+        rendered = sys.modules["evidence"]._rendered_lines(hidden)
+        self.assertEqual([line for line in rendered if line.strip()], [])
+
+    def test_a_forged_head_line_alone_does_not_suppress_the_note(self) -> None:
+        """What the second condition did narrow (#1730, round 2).
+
+        A substring match on the head line alone was satisfied by that text
+        quoted mid-sentence in anybody's comment. Requiring the headline beside
+        it, and the head line as a line of its own, rules those out -- it does
+        not rule out a forger who writes both, which
+        `test_a_forgery_that_shows_the_reader_nothing_still_suppresses_the_note`
+        pins and #1749 owns.
+        """
+        execution = sys.modules["execution"]
+        checked = execution.rejected_heading_checked_line(self.LIVE_HEAD)
+        for name, forged in (
+            ("the head line alone in an HTML comment", f"<!-- {checked} -->"),
+            ("the head line alone inside a fence", f"```\n{checked}\n```"),
+            ("quoted mid-sentence", f"Someone wrote: {checked} in passing."),
+        ):
+            with self.subTest(forgery=name):
+                _, _, comments, _ = self._route_with_tagged_heading(existing_comments=[forged])
+                self.assertEqual(
+                    len([c for c in comments if "was not read as the section" in c]), 1, name
+                )
+        # The real thing still suppresses it, and a real one at another head
+        # does not.
+        real = execution.compose_rejected_heading_comment(self.PERSONA, "a note", self.LIVE_HEAD)
+        _, _, quiet, _ = self._route_with_tagged_heading(existing_comments=[real])
+        self.assertEqual([c for c in quiet if "was not read as the section" in c], [])
+        other = execution.compose_rejected_heading_comment(self.PERSONA, "a note", "f" * 40)
+        _, _, again, _ = self._route_with_tagged_heading(existing_comments=[other])
+        self.assertEqual(len([c for c in again if "was not read as the section" in c]), 1)
+
+    def test_the_note_reaches_stderr_once(self) -> None:
+        """One emission, and it is the structured record (#1730, round 3).
+
+        There were two: a plain `log(note)` and the JSON record beside it,
+        which is the same sentence twice in the same stream on the same turn,
+        under a body that said once. The record carries the note in `detail`,
+        so it is the one that stays -- a person reading a workflow log gets the
+        sentence, and the telemetry gets its `error_class`.
+        """
+        execution = sys.modules["execution"]
+        state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        spoke = io.StringIO()
+        with mock.patch.object(self, "_state", return_value=state):
+            with contextlib.redirect_stderr(spoke):
+                self._route(
+                    dirty=True,
+                    live_body="stale body",
+                    data=self._data(self.TAGGED_HEADING_BODY),
+                    revision=False,
+                )
+        said = spoke.getvalue()
+        carrying = [line for line in said.splitlines() if "carries inline HTML" in line]
+        self.assertEqual(len(carrying), 1, carrying)
+        self.assertIn('"error_class": "rejected_heading"', carrying[0])
+
+    def test_a_comment_read_that_fails_says_the_note_again_rather_than_never(self) -> None:
+        # The chosen failure direction, pinned: an unreadable comment list ends
+        # in a repeat, not in silence. The reason this exists is that nothing
+        # was said at all.
+        execution = sys.modules["execution"]
+        real = execution.compose_rejected_heading_comment(self.PERSONA, "a note", self.LIVE_HEAD)
+        with mock.patch.object(execution, "_pr_comment_bodies", return_value=[]):
+            _, _, comments, _ = self._route_with_tagged_heading(existing_comments=[real])
+        self.assertEqual(len([c for c in comments if "was not read as the section" in c]), 1)
+
+    def test_a_comment_that_cannot_be_posted_does_not_fail_the_turn(self) -> None:
+        # A comment is the report of the work, never the work. `gh` missing
+        # from PATH raises out of `subprocess.run`, which `run_optional` does
+        # not catch, so the note could end a turn that had already pushed.
+        exit_code, commands, comments, outputs = self._route_with_tagged_heading(comment_raises=True)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(comments, [])
+        self.assertTrue(any(command[:3] == ["gh", "pr", "edit"] for command in commands))
+        self.assertEqual(outputs["pr_head_sha"], self.LIVE_HEAD)
+
+    def test_an_ordinary_turn_says_nothing_about_a_heading(self) -> None:
+        # The control: a plain `## Evidence Status` draws no note.
+        state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        plain = self.TAGGED_HEADING_BODY.replace(
+            "## <span>Evidence Status</span>", "## Evidence Status"
+        )
+        with mock.patch.object(self, "_state", return_value=state):
+            exit_code, _, comments, _ = self._route(
+                dirty=True, live_body="stale body", data=self._data(plain), revision=False
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            [comment for comment in comments if "was not read as the section" in comment], []
+        )
 
     def test_body_only_revision_edits_the_pr_without_committing(self) -> None:
         exit_code, commands, comments, outputs = self._route(dirty=False, live_body="stale body")
