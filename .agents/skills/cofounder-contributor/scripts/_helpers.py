@@ -271,12 +271,24 @@ def section_heading_index(tokens: list[Token], heading: str) -> int | None:
     HTML; a second answer here is the disagreement, one function away. The
     alternative needs a set of tags GitHub's sanitizer renders as nothing,
     which is a second renderer built from an allow-list this repo does not
-    hold -- and its only plausible members are `<span>` and a comment. Nothing
-    is lost by refusing them: no shape here was this section before #1730's
-    change, `<span>` included, so the rule declines to widen rather than taking
-    something away. The cost is that `## <span>Evidence Status</span>` gets a
-    second, real heading written below it, where the gate's ambiguity check
-    refuses the body -- fail closed, and visible.
+    hold -- and its only plausible members are `<span>` and a trailing
+    comment. Checked against GitHub's own renderer: `<details>`, `<del>` and
+    `<br>` render as a widget, as struck text and as two lines, so refusing
+    those agrees with the page; `<span>` and a trailing comment render as
+    ordinary headings, so refusing those two disagrees with it. Neither was
+    this section before #1730's change, so the rule declines to widen rather
+    than taking something away -- which is the whole of the argument, and it
+    is about what is lost, not about what a later reader catches.
+
+    What happens to `## <span>Evidence Status</span>` is that a second, real
+    heading is written below it, and the three readers answer differently. The
+    owner read refuses, naming this heading (`_rendered_status_lines`). The
+    factory turn repairs the body first and its errors come back empty, so the
+    turn goes on -- and `rejected_heading_note` is what reaches the run's
+    output and the pull request there, because a body with two headings and
+    nothing said about why is a message that points at the wrong repair
+    (#1730). The readiness gate's own ambiguity check does NOT see it: that
+    check matches raw text and is blind to a heading line carrying a tag.
     """
     wanted = " ".join(heading.split()).casefold()
     return next(
@@ -288,6 +300,56 @@ def section_heading_index(tokens: list[Token], heading: str) -> int | None:
             and " ".join(inline_text(tokens[index + 1].children).split()).casefold() == wanted
         ),
         None,
+    )
+
+
+def rejected_section_headings(tokens: list[Token], heading: str) -> list[tuple[int, str]]:
+    """Every heading a reader sees as this section that carries inline HTML, with its first tag.
+
+    The other half of `section_heading_index`: what it skipped, and why. A
+    heading is here when its text reads as this heading once the tags are
+    dropped -- the same normalisation the acceptance uses -- and it carries at
+    least one `html_inline` token. The token index is the `heading_open`, so a
+    caller has the line through `token.map`.
+    """
+    wanted = " ".join(heading.split()).casefold()
+    found: list[tuple[int, str]] = []
+    for index, token in enumerate(tokens):
+        if not is_section_heading(token):
+            continue
+        children = tokens[index + 1].children or []
+        tag = next((child.content for child in children if child.type == "html_inline"), None)
+        if tag is None:
+            continue
+        if " ".join(inline_text(children).split()).casefold() == wanted:
+            found.append((index, tag))
+    return found
+
+
+def rejected_heading_note(body: str, heading: str) -> str | None:
+    """What to tell an author whose `## <heading>` was not read as the section, or None.
+
+    The rejection is correct and silent, and silence is what makes it cost a
+    round: the body comes back with two headings a reader sees, the owner read
+    says "a reader sees 2 ... headings, not one", and the obvious action --
+    delete one -- is a coin flip. Deleting the written one leaves a body with
+    no readable section and the same refusal (#1730).
+
+    So the message names the line, names the tag, and names both repairs. It
+    is a note rather than an error: the write is the repair and it goes ahead.
+    """
+    tokens = _parsed(body)
+    rejected = rejected_section_headings(tokens, heading)
+    if not rejected:
+        return None
+    lines = MARKDOWN_LINE_ENDING_RE.sub("\n", body).split("\n")
+    index, tag = rejected[0]
+    line = lines[tokens[index].map[0]].strip() if tokens[index].map else f"## {heading}"
+    return (
+        f"`{line}` carries inline HTML (`{tag}`), so it is not read as the "
+        f"`{heading}` section -- a tag can strike, hide or fold what follows it, and "
+        f"which one it does is not something this reader decides. A plain "
+        f"`## {heading}` was written below it. Remove the tags from yours, or remove yours."
     )
 
 

@@ -27,6 +27,8 @@ from _helpers import (
     markdown_section,
     removed_section_texts,
     placement_refusal,
+    rejected_heading_note,
+    rejected_section_headings,
     reparsed_without_runaway,
     run_optional,
     section_heading_index,
@@ -744,7 +746,19 @@ def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
         and " ".join(inline_text(tokens[index + 1].children).split()).casefold() == "evidence status"
     ]
     if len(headings) != 1:
-        return [], _heading_count_refusal(len(headings))
+        # Naming the rejected one is what turns "delete one" from a coin flip
+        # into an instruction: the extra heading is the machine's repair, and
+        # the author's is the one carrying the tag (#1730).
+        rejected = rejected_section_headings(tokens, EVIDENCE_STATUS_HEADING)
+        named = ""
+        if rejected and len(headings) > 1:
+            line = tokens[rejected[0][0]].map
+            where = f" on line {line[0] + 1}" if line else ""
+            named = (
+                f"; the one{where} carries inline HTML (`{rejected[0][1]}`) and is not read as "
+                "the section, so removing that one is what leaves a body with one heading"
+            )
+        return [], f"{_heading_count_refusal(len(headings))}{named}"
     start = headings[0]
     if tokens[start].tag != "h2":
         return [], f"the `Evidence Status` heading is an {tokens[start].tag}, not an h2"
@@ -2373,6 +2387,11 @@ def write_evidence_status_section(
         unseen = _placement_a_reader_cannot_see(candidate)
         return (source, unseen) if unseen else (candidate, None)
 
+    # Said once, where both writers come through, and before the write rather
+    # than after it: the body about to be returned carries the heading this
+    # wrote, so asking it the question would answer about the repair.
+    if (note := rejected_heading_note(body, EVIDENCE_STATUS_HEADING)) is not None:
+        log(note)
     written = insert_markdown_section(
         strip_markdown_section(body, EVIDENCE_NOTES_HEADING) if kept else body,
         EVIDENCE_STATUS_HEADING,

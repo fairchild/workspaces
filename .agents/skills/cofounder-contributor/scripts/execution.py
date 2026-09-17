@@ -33,6 +33,7 @@ from _helpers import (
     branch_name_for_issue,
     gate_reads_markdown_section,
     has_markdown_section,
+    rejected_heading_note,
     insert_markdown_section,
     issue_label_names,
     issue_label_presence,
@@ -350,6 +351,31 @@ def compose_revision_escalation_comment(
     ) + "\n"
 
 
+def compose_rejected_heading_comment(persona: str, note: str) -> str:
+    """The note on the PR when an author's own heading was not read as the section.
+
+    The write went ahead, so this is not a stand-down: the body now carries a
+    plain `## Evidence Status` below the author's, and every reader downstream
+    refuses it for having two headings a reader sees. That refusal is true and
+    points at the wrong repair -- deleting the written one leaves a body with
+    no readable section and the same refusal, a round lost before anything is
+    learned (#1730). The author reads the pull request, not the workflow log,
+    so the reason crosses here the way `compose_body_standdown_comment` does.
+    """
+    return "\n".join(
+        [
+            f"*{persona}*",
+            "",
+            "**Your `## Evidence Status` heading was not read as the section.**",
+            "",
+            f"- {note}",
+            "",
+            "Until one of those two happens the body carries two headings a reader "
+            "sees, and every check that reads this section refuses it for that.",
+        ]
+    )
+
+
 def compose_body_standdown_comment(persona: str, reasons: list[str]) -> str:
     """April's note on the PR when its body could not be rewritten.
 
@@ -537,6 +563,13 @@ def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) ->
     # Dropping either half reintroduces one of the two. The second is the
     # gate's narrowness, not this reader's, and it comes out when #1742 moves
     # the gate's start onto a parse.
+    #
+    # What the second question asks is narrower than "the gate can read this
+    # section": it asks whether the gate can find the section's START. A
+    # `## Mergeability` with another `##` directly below it has a start both
+    # readers find and no content, so seeding is skipped and the gate reports
+    # the section missing -- main's behaviour, unchanged here, and not closed
+    # by this conjunct however the sentence above reads.
     if has_markdown_section(summary_body, "Mergeability") and gate_reads_markdown_section(
         summary_body, "Mergeability"
     ):
@@ -1270,6 +1303,18 @@ def route_execution_action(
                 int(own_pr["number"]), compose_body_standdown_comment(persona, standdown), env
             )
         return 1
+
+    # The write is the repair and it went ahead, so this is a note rather than
+    # an error: adding it to `summary_errors` would abort a turn that succeeded.
+    # Asked of the body the model wrote, not of `summary_body`, which already
+    # carries the heading the write put there.
+    if (heading_note := rejected_heading_note(str(data.get("body", "")), "Evidence Status")) is not None:
+        print(f"note: {heading_note}", file=sys.stderr)
+        log(json.dumps({"error_class": "rejected_heading", "detail": heading_note, "issue": issue_number}))
+        if own_pr is not None:
+            _post_pr_comment(
+                int(own_pr["number"]), compose_rejected_heading_comment(persona, heading_note), env
+            )
 
     _, evidence_errors = validate_evidence_accounting(summary_body, requested_evidence)
     if evidence_errors:

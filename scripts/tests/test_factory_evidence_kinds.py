@@ -6075,12 +6075,17 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         written, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
         self.assertNotIn(self.AUTHORS_LINE, written)
 
-    def test_the_read_still_says_why_rather_than_saying_nothing_is_there(self) -> None:
-        # A heading the page shows and this reader will not own is not the same
-        # as no heading at all, and the author needs to be told which. The
-        # rendered read's refusal names the HTML; reporting it turns on whether
-        # a reader has a heading to refuse, not on `section_present`, which
-        # this change makes false for exactly these shapes.
+    def test_the_internal_read_says_why_rather_than_saying_nothing_is_there(self) -> None:
+        # Named for what it checks. This is `_rendered_markdown_entries`, an
+        # internal read: a heading the page shows and this reader will not own
+        # is not the same as no heading at all, and the reason has to survive
+        # that distinction. Reporting it turns on whether a reader has a
+        # heading to refuse, not on `section_present`, which the rule above
+        # makes false for exactly these shapes.
+        #
+        # Whether the AUTHOR is told is a different question and a different
+        # surface; `ARejectedHeadingIsToldWhyAtTheRunsOutputTests` is where
+        # that is asserted. An earlier version of this name promised it.
         evidence = self.evidence()
         for name, heading in self.SHAPES.items():
             with self.subTest(shape=name):
@@ -6092,6 +6097,150 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         # refusal that means there is nothing here to read.
         plain = f"Why this exists.\n\n## Validation\n\n- ran\n"
         self.assertIsNone(evidence._rendered_markdown_entries(plain, [self.ITEM])[1])
+
+
+class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
+    """A heading the readers decline is named, on every surface the author reads (#1730).
+
+    The rejection is correct and it was silent. A body whose only
+    `## Evidence Status` carries inline HTML comes back from the factory turn
+    with a second, plain heading written below it and `errors == []`, and every
+    reader downstream then refuses it: "a reader sees 2 `Evidence Status`
+    headings, not one". True, comprehensible, and it points at the wrong
+    repair -- delete one, and deleting the written one leaves a body with no
+    readable section and the same refusal. A round lost before anything is
+    learned. The same class as #1744's "blocked or still pending" on a body
+    with nothing pending: true-sounding, wrongly attributed.
+
+    So the reason reaches three surfaces: `log()` from the one function both
+    writers come through, the turn's stderr and structured log, and a comment
+    on the pull request itself -- the crossing #1733 made for the stand-down,
+    for the same reason, that the author reads the pull request and not the
+    workflow log. And the "2 headings" refusal names which of the two carries
+    the tag, so "delete one" stops being a coin flip.
+    """
+
+    ITEM = "`swift test` passes"
+    # Heading, and the tag the note has to name as the reason.
+    SHAPES = {
+        "span": ("## <span>Evidence Status</span>", "<span>"),
+        "del": ("## Evidence <del>Status</del>", "<del>"),
+        "details": ("## <details>Evidence Status</details>", "<details>"),
+        "br": ("## Evidence<br>Status", "<br>"),
+    }
+
+    def helpers(self):
+        return sys.modules["_helpers"]
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def body(self, heading: str) -> str:
+        return (
+            "Why this exists, at length enough to satisfy the leading paragraph rule.\n\n"
+            f"{heading}\n\n- [pending-ci] {self.ITEM} -- the lane has not run yet\n\n"
+            "## Validation\n\n- ran\n"
+        )
+
+    def test_the_note_names_the_line_the_tag_and_both_repairs(self) -> None:
+        helpers = self.helpers()
+        for name, (heading, tag) in self.SHAPES.items():
+            with self.subTest(shape=name):
+                note = helpers.rejected_heading_note(self.body(heading), "Evidence Status")
+                assert note is not None
+                self.assertIn(heading, note)
+                # The tag in its own right, not merely because the heading line
+                # it came from is quoted above it: an author who has two tags
+                # in one heading needs to know which one this reader stopped
+                # at.
+                self.assertIn(f"carries inline HTML (`{tag}`)", note)
+                self.assertIn("A plain `## Evidence Status` was written below it", note)
+                self.assertIn("Remove the tags from yours, or remove yours", note)
+        # A body whose heading is plain has nothing to say.
+        self.assertIsNone(
+            helpers.rejected_heading_note(self.body("## Evidence Status"), "Evidence Status")
+        )
+
+    def test_the_writer_says_it_on_stderr_and_writes_anyway(self) -> None:
+        # The lane's surface. Both writers come through
+        # `write_evidence_status_section`, so the note is said once, there.
+        for name, (heading, _) in self.SHAPES.items():
+            with self.subTest(shape=name):
+                spoke = io.StringIO()
+                with contextlib.redirect_stderr(spoke):
+                    written, refusal = self.evidence().write_evidence_status_section(
+                        self.body(heading), ["- [complete] the UI lane -- swift test passed"]
+                    )
+                self.assertIsNone(refusal)
+                said = spoke.getvalue()
+                self.assertIn("carries inline HTML", said)
+                self.assertIn(heading, said)
+                # The write went ahead: the repair is the point, not a stand-down.
+                self.assertIn("\n## Evidence Status\n", written)
+                self.assertIn(heading, written)
+
+    def test_the_factory_turn_keeps_its_errors_empty_and_still_says_it(self) -> None:
+        # Not an error: adding it to the turn's errors would abort a turn that
+        # succeeded, and the repair is what the turn is for.
+        run_contributor = sys.modules["run_contributor_evidence_kinds"]
+        for name, (heading, _) in self.SHAPES.items():
+            with self.subTest(shape=name):
+                spoke = io.StringIO()
+                with contextlib.redirect_stderr(spoke):
+                    rendered, errors = run_contributor.render_execution_summary_body(
+                        self.body(heading),
+                        requested_evidence=[self.ITEM],
+                        evidence_complete=["1 -- 214 tests passed"],
+                        evidence_blocked=None,
+                        evidence_pending_ci=None,
+                    )
+                self.assertEqual(errors, [])
+                self.assertIn("carries inline HTML", spoke.getvalue())
+                self.assertIn(heading, rendered)
+
+    def test_the_two_headings_refusal_names_the_one_carrying_the_tag(self) -> None:
+        run_contributor = sys.modules["run_contributor_evidence_kinds"]
+        for name, (heading, _) in self.SHAPES.items():
+            with self.subTest(shape=name):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    rendered, _ = run_contributor.render_execution_summary_body(
+                        self.body(heading),
+                        requested_evidence=[self.ITEM],
+                        evidence_complete=["1 -- 214 tests passed"],
+                        evidence_blocked=None,
+                        evidence_pending_ci=None,
+                    )
+                _, unreadable = self.evidence()._rendered_status_lines(rendered)
+                assert unreadable is not None
+                self.assertIn("2 `Evidence Status` headings", unreadable)
+                self.assertIn("carries inline HTML", unreadable)
+                self.assertIn("removing that one", unreadable)
+
+    def test_the_pull_request_comment_carries_the_note(self) -> None:
+        # The surface the author actually reads. Composed from the same note,
+        # so the wording cannot drift between the log and the pull request.
+        execution = sys.modules["execution"]
+        note = self.helpers().rejected_heading_note(
+            self.body(self.SHAPES["span"][0]), "Evidence Status"
+        )
+        comment = execution.compose_rejected_heading_comment("April", note)
+        self.assertIn("April", comment)
+        self.assertIn("was not read as the section", comment)
+        self.assertIn(note, comment)
+
+    def test_the_turn_posts_that_comment(self) -> None:
+        # The wiring, asserted on the source: the turn function needs a live
+        # PR, an env and a claim to run, and what matters here is that the
+        # note reaches `_post_pr_comment` rather than stopping at the log.
+        source = (
+            REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "execution.py"
+        ).read_text(encoding="utf-8")
+        span = source[source.index("if (heading_note := rejected_heading_note(") :]
+        span = span[: span.index("validate_evidence_accounting")]
+        self.assertIn("file=sys.stderr", span)
+        self.assertIn('"error_class": "rejected_heading"', span)
+        self.assertIn("compose_rejected_heading_comment(persona, heading_note)", span)
+        self.assertIn("_post_pr_comment(", span)
 
 
 class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):

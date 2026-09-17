@@ -1598,41 +1598,102 @@ class TheSeedersIdentityIsNoWiderThanThisGatesTests(unittest.TestCase):
                 self.assertTrue(reader.has_markdown_section(body, "Mergeability"))
                 self.assertFalse(reader.gate_reads_markdown_section(body, "Mergeability"))
 
+    # Every axis on which the gate's pattern and the parser's heading grammar
+    # could disagree, each read off the two rule sets rather than remembered.
+    # The gate's pattern is `(?mi)^## {heading}\n`: a literal `## `, at column
+    # 0, the heading's exact characters, a line ending directly after, matched
+    # case-insensitively. Every branch of that is an axis here, and so is every
+    # way CommonMark makes an h2 that the pattern does not describe.
+    #
+    # Derived rather than listed because a listed set is blind on the axis
+    # nobody thought of: widening the gate to accept a closing hash run
+    # (`## Mergeability ##`, an ordinary ATX heading) left all 153 tests green,
+    # because no fixture carried one.
+    START_AXES = {
+        "the pattern's own shape": ("## Mergeability",),
+        "case": ("## mergeability", "## MERGEABILITY"),
+        # `(?i)` on a str pattern folds the full Unicode table, so the gate
+        # aliases a long s onto an s; the parser's text comparison does too.
+        "unicode case folding": ("## Mergeabilitſ", "## MERGEABILITY"[:-1] + "Y"),
+        "closing hashes": ("## Mergeability ##", "## Mergeability #", "## Mergeability  ###"),
+        "runs of whitespace after the marker": ("##  Mergeability", "##\tMergeability"),
+        "trailing spaces": ("## Mergeability  ", "## Mergeability\t"),
+        "indent": ("   ## Mergeability", "    ## Mergeability", " ## Mergeability"),
+        "setext, both underlines": ("Mergeability\n---", "Mergeability\n==="),
+        "emphasis": ("## **Mergeability**", "## _Mergeability_"),
+        "level": ("### Mergeability", "# Mergeability"),
+        "text that is not the heading": ("## Mergeability extra", "## Merge ability"),
+        "a stray carriage return": ("## Mergeability\r",),
+    }
+    # A floor under the derivation, not a substitute for it: the axes above
+    # are the guard, and this fails when one is dropped wholesale.
+    START_AXIS_COUNT = 12
+    START_SHAPE_COUNT = 24
+
     def test_the_skills_copy_of_this_gates_start_answers_as_this_gate_does(self) -> None:
         # The rule is written twice -- this script is a PEP 723 entry point
         # with its own pin and no package for the skill to import -- so the
         # shapes are enumerated against both readers rather than trusted to
         # stay in step. `extract_section` returning text is this gate finding
         # the start; the skill's predicate has to say the same thing.
+        #
+        # Two axes are stated here rather than fixtured, and for different
+        # reasons.
+        #
+        # A heading on the last line with no line ending after it: the gate's
+        # pattern asks for a `\n` and would not match, and the skill's copy
+        # asks for the same one, so the two agree -- but every body this gate
+        # reads comes from GitHub, which stores a trailing newline, so the
+        # shape is unreachable and a fixture would pin a path no body takes.
+        #
+        # A heading whose section is empty (`## Mergeability` with the next
+        # heading directly below): this oracle cannot see it. `extract_section`
+        # returns "" both for a start it did not find and for one it found with
+        # nothing under it, so a fixture there asserts the oracle's blind spot
+        # rather than the two readers' agreement. Checking it would need a
+        # second copy of the gate's pattern in this file, which is the thing
+        # the oracle exists to avoid. The two readers do agree on it -- the
+        # start is the same literal line to both -- and that is an argument,
+        # not a measurement, which is why it is written here and not asserted.
         reader = self.reader()
-        shapes = (
-            "## Mergeability",
-            "## mergeability",
-            "##  Mergeability",
-            "## Mergeability  ",
-            "## **Mergeability**",
-            "   ## Mergeability",
-            "    ## Mergeability",
-            "Mergeability\n---",
-            "### Mergeability",
-            "## Mergeability extra",
-            "## Mergeability\r",
-        )
-        for shape in shapes:
-            for ending in ("\n", "\r\n"):
-                with self.subTest(shape=shape, ending=ending.encode("unicode_escape").decode()):
-                    body = f"Why this exists.{ending}{ending}{shape}{ending}{ending}- Surface: desktop{ending}"
-                    # This gate itself is the oracle rather than a second copy
-                    # of its pattern. The section has content in every fixture,
-                    # so text back means the start was found and "" means it
-                    # was not.
-                    gate_finds = bool(pr_readiness.extract_section(body, "Mergeability"))
-                    self.assertEqual(
-                        reader.gate_reads_markdown_section(body, "Mergeability"),
-                        gate_finds,
-                        shape,
-                    )
+        self.assertEqual(len(self.START_AXES), self.START_AXIS_COUNT)
+        self.assertEqual(sum(len(v) for v in self.START_AXES.values()), self.START_SHAPE_COUNT)
+        agreed = 0
+        for axis, shapes in self.START_AXES.items():
+            for shape in shapes:
+                for ending in ("\n", "\r\n"):
+                    with self.subTest(axis=axis, shape=shape, ending=ending.encode("unicode_escape").decode()):
+                        body = (
+                            f"Why this exists.{ending}{ending}{shape}{ending}{ending}"
+                            f"- Surface: desktop{ending}"
+                        )
+                        # This gate itself is the oracle rather than a second
+                        # copy of its pattern. The section has content in every
+                        # fixture, so text back means the start was found and
+                        # "" means it was not.
+                        gate_finds = bool(pr_readiness.extract_section(body, "Mergeability"))
+                        self.assertEqual(
+                            reader.gate_reads_markdown_section(body, "Mergeability"),
+                            gate_finds,
+                            f"{axis}: {shape!r}",
+                        )
+                        agreed += 1
+        self.assertEqual(agreed, self.START_SHAPE_COUNT * 2)
 
+    def test_the_axes_are_not_all_one_answer(self) -> None:
+        # A guard whose fixtures all score the same way tests nothing about
+        # where the line is. The set has to carry both answers, and a shape the
+        # gate reads has to sit beside one it does not.
+        reader = self.reader()
+        found = {True: [], False: []}
+        for axis, shapes in self.START_AXES.items():
+            for shape in shapes:
+                body = f"Why this exists.\n\n{shape}\n\n- Surface: desktop\n"
+                found[reader.gate_reads_markdown_section(body, "Mergeability")].append(
+                    f"{axis}: {shape!r}"
+                )
+        self.assertGreaterEqual(len(found[True]), 3, found)
+        self.assertGreaterEqual(len(found[False]), 8, found)
 
 class ReadinessCommentTests(unittest.TestCase):
     def test_failure_comment_names_failures_and_pastes_template(self) -> None:
