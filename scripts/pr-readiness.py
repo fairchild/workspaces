@@ -302,16 +302,30 @@ def rendered_inline_text(children: list[Token] | None) -> str:
 # first `>` inside `<div title="CI result > [blocked] threshold">` and left the
 # attribute's tail as text, where a status then anchored on a line the page
 # never shows (#1736).
-HTML_ATTRIBUTE = r"""[^\s"'>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?"""
+# `<` is excluded from the attribute NAME as well as from an unquoted value.
+# Allowing it let `<div <div <div ...` match one attribute per repetition and
+# then backtrack over all of them at every offset: 50 KB of `<div ` took 13
+# seconds where 1 KB took 0.005, and a gate a body can make hang is a gate an
+# author bypasses by timeout (#1736, round 4). A tag with a `<` in an attribute
+# name is not a tag to GitHub either, so the exclusion narrows nothing real.
+HTML_ATTRIBUTE = r"""[^\s"'>/=<]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?"""
 HTML_TAG_RE = re.compile(rf"</?(?P<name>[A-Za-z][A-Za-z0-9-]*)(?:\s+{HTML_ATTRIBUTE})*\s*/?>")
 
-# The tags that start a line on the page. CommonMark's own list of block tags,
-# which this repo already reads HTML blocks by, plus `br`, which is a line
-# break. Everything else -- `<span>`, `<strong>`, `<code>`, `<a>`, and a tag
-# the sanitizer does not know such as `<T>` -- is inline: it shows nothing of
-# its own and the text on either side of it stays on one line.
+# The tags that start a line on the page: CommonMark's HTML-block conditions 1
+# and 6, plus `br`, which is a line break.
+#
+# Condition 6 is the long list this repo already reads HTML blocks by.
+# Condition 1 is `pre`, `script`, `style` and `textarea` -- four tags that open
+# a block of their own and were missing, so `<div>note<pre>[blocked] x</pre></div>`
+# read as the single run `note[blocked] x` and the status anchored nowhere,
+# while GitHub renders the `<pre>` as its own block (#1736, round 4).
+#
+# Everything else -- `<span>`, `<strong>`, `<code>`, `<a>`, and a tag the
+# sanitizer does not know such as `<T>` -- is inline: it shows nothing of its
+# own and the text on either side of it stays on one line.
 LINE_STARTING_TAGS = frozenset(
-    """address article aside base basefont blockquote body br caption center col
+    """pre script style textarea
+    address article aside base basefont blockquote body br caption center col
     colgroup dd details dialog dir div dl dt fieldset figcaption figure footer
     form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li
     link main menu menuitem nav noframes ol optgroup option p param search
@@ -326,6 +340,19 @@ COMMENT_CLOSERS = ("-->", "--!>")
 # abrupt-closing forms. Read as an opener alone, the text after them stayed
 # inside a comment for this reader and outside it on the page.
 COMMENT_ABRUPT_CLOSERS = (">", "->")
+
+# A `<...>` this grammar does not parse, but which opens the way a tag does.
+# GitHub's parser is more forgiving than this one, and every shape it takes and
+# this does not is a run that reads one way here and another on the page:
+# `<div a="1"b="2">`, `<div title=>`, `<div a/b>`, `<div title=a"b>` and
+# `<x:y>` all render with what follows them on a line of their own, and all
+# were accepted here because the unparsed text sat in front of the status
+# (#1736, round 4). `< b and c >` in prose is not one of these: a name has to
+# follow the bracket.
+AMBIGUOUS_TAG_RE = re.compile(r"</?(?P<name>[A-Za-z][A-Za-z0-9:._-]*)")
+
+# What a character reference can decode to that the page treats as a new line.
+NEWLINE_REFERENCE_RE = re.compile(r"\r\n?")
 
 
 def html_block_text_lines(content: str) -> list[str]:
@@ -368,7 +395,50 @@ def html_block_text_lines(content: str) -> list[str]:
     and the writer places it above this heading rather than under it.
 
     Each run is decoded and then split, in that order, so `&#10;` makes the two
-    lines the page makes and the anchor sees the second.
+    lines the page makes and the anchor sees the second -- and `&#13;` with it,
+    which decodes to a carriage return and is a line break to the page just the
+    same (#1736, round 4).
+
+    Where this grammar cannot parse a `<...>` that opens like a tag, the block
+    is read TWICE: once with that text left as text, and once with it taken for
+    a tag -- removed, and a line start if its name is block-level. The lines of
+    both readings are returned, so a status anchors if EITHER reading puts it
+    at the start of a line. That is the arc's rule made concrete: this model
+    lives on the refusing side, so where its answer is uncertain it refuses
+    under any plausible reading and accepts only when none of them anchors.
+    The over-refusals it brings back land on malformed markup alone, and each
+    names the run it matched.
+    """
+    readings = [_html_block_runs(content, unparsed_as_tag=False)]
+    if _holds_an_unparsed_tag(content):
+        readings.append(_html_block_runs(content, unparsed_as_tag=True))
+    seen, lines = set(), []
+    for runs in readings:
+        for run in runs:
+            for line in NEWLINE_REFERENCE_RE.sub("\n", html.unescape(run)).split("\n"):
+                text = line.strip()
+                if text and text not in seen:
+                    seen.add(text)
+                    lines.append(text)
+    return lines
+
+
+def _holds_an_unparsed_tag(content: str) -> bool:
+    """Whether this block carries a `<...>` that opens like a tag and does not parse as one."""
+    for index, character in enumerate(content):
+        if character != "<" or HTML_TAG_RE.match(content, index) is not None:
+            continue
+        if AMBIGUOUS_TAG_RE.match(content, index) and ">" in content[index:]:
+            return True
+    return False
+
+
+def _html_block_runs(content: str, *, unparsed_as_tag: bool) -> list[str]:
+    """The block's runs under one reading of the `<...>` shapes this grammar cannot parse.
+
+    Linear in the length of the block: the scan walks each character once, and
+    the tag pattern is asked only where a `<` sits and only anchored at that
+    index, never re-scanned from every offset.
     """
     runs: list[str] = []
     current: list[str] = []
@@ -399,15 +469,18 @@ def html_block_text_lines(content: str) -> list[str]:
                 cut()
             index = tag.end()
             continue
+        elif unparsed_as_tag and content[index] == "<":
+            opener = AMBIGUOUS_TAG_RE.match(content, index)
+            closer = content.find(">", index)
+            if opener is not None and closer != -1:
+                if opener["name"].lower() in LINE_STARTING_TAGS:
+                    cut()
+                index = closer + 1
+                continue
         current.append(content[index])
         index += 1
     cut()
-    return [
-        text
-        for run in runs
-        for line in html.unescape(run).split("\n")
-        if (text := line.strip())
-    ]
+    return runs
 
 
 def rendered_status_lines(body: str) -> list[str]:
@@ -456,9 +529,17 @@ def rendered_status_lines(body: str) -> list[str]:
             if section_boundary_token(token):
                 break
             if token.type == "inline":
-                lines.extend(
-                    part.strip() for part in rendered_inline_text(token.children).split("\n")
-                )
+                for part in rendered_inline_text(token.children).split("\n"):
+                    lines.append(part.strip())
+                    # A `<...>` that opens like a tag and parses as none reaches
+                    # here as text, because this parser does not call it a tag
+                    # either -- `<x:y>[blocked] x</x:y>` is one run of prose to
+                    # it. Whether the page shows that bracket or strips it is
+                    # the renderer's answer and not one this model has, so the
+                    # line is read both ways and a status anchors if either
+                    # reading starts a line with it (#1736, round 4).
+                    if _holds_an_unparsed_tag(part):
+                        lines.extend(html_block_text_lines(part))
             elif token.type == "html_block":
                 lines.extend(html_block_text_lines(token.content))
             index += 1

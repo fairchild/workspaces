@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -1575,6 +1576,134 @@ class HtmlBlockStatusLineTests(unittest.TestCase):
         # an indented block renders on the page like any other.
         section = self.COMPLETE + "\n- the UI lane\n\n  <div>\n  [blocked] still waiting\n  </div>\n"
         self.assertEqual(self.failures(self.body(section)), [pending("[blocked] still waiting")])
+
+    # CommonMark's own HTML-block start conditions, kept here as the spec's
+    # text so the set is derived from something a reader can check rather than
+    # from a list somebody typed. Condition 1 opens a block that runs to its
+    # own closer; condition 6 is the long list of block-level names. `br` is
+    # neither and is a line break.
+    COMMONMARK_CONDITION_1 = "pre script style textarea"
+    COMMONMARK_CONDITION_6 = """address article aside base basefont blockquote body caption
+    center col colgroup dd details dialog dir div dl dt fieldset figcaption figure footer form
+    frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link main menu
+    menuitem nav noframes ol optgroup option p param search section summary table tbody td
+    tfoot th thead title tr track ul"""
+
+    def test_the_line_starting_tags_are_conditions_one_and_six_plus_br(self) -> None:
+        """The set's derivation, stated and checked (#1736, round 4).
+
+        It was condition 6 plus `br`, described as "CommonMark's own list of
+        block tags" -- which left out condition 1, four tags that open a block
+        of their own. `<div>note<pre>[blocked] x</pre></div>` read as one run
+        and accepted, where GitHub renders the `<pre>` as its own block.
+        """
+        expected = (
+            set(self.COMMONMARK_CONDITION_1.split())
+            | set(self.COMMONMARK_CONDITION_6.split())
+            | {"br"}
+        )
+        self.assertEqual(set(pr_readiness.LINE_STARTING_TAGS), expected)
+        for tag in self.COMMONMARK_CONDITION_1.split():
+            with self.subTest(tag=tag):
+                self.assertIn(tag, pr_readiness.LINE_STARTING_TAGS)
+
+    def test_a_condition_one_tag_inside_another_block_starts_its_own_line(self) -> None:
+        # The regression: `pre` was not a line start, so the run before it and
+        # the status after it were one line and the anchor missed.
+        self.assertEqual(
+            pr_readiness.html_block_text_lines("<div>note<pre>[blocked] x</pre></div>"),
+            ["note", "[blocked] x"],
+        )
+        self.assertEqual(
+            pr_readiness.html_block_text_lines("<pre>context</pre><pre>[blocked] x</pre>"),
+            ["context", "[blocked] x"],
+        )
+
+    # A `<...>` GitHub's parser takes and this grammar does not. Each renders
+    # with the status on a line of its own, and each was accepted because the
+    # unparsed text sat in front of it.
+    UNPARSED_TAGS = {
+        "two attributes with no space between them": '<div a="1"b="2">[blocked] x</div>',
+        "an attribute with an empty value": "<div title=>[blocked] x</div>",
+        "a slash inside the name": "<div a/b>[blocked] x</div>",
+        "a quote inside an unquoted value": '<div title=a"b>[blocked] x</div>',
+        "a namespaced name": "<x:y>[blocked] x</x:y>",
+    }
+
+    def test_a_tag_this_grammar_cannot_parse_is_read_both_ways(self) -> None:
+        """The arc's rule made concrete: uncertain reads refuse (#1736, round 4).
+
+        This model lives on the refusing side, so where it cannot tell what the
+        page does it reads the body under every plausible reading and refuses
+        if any of them anchors a status. Round 3 put it on the accepting side
+        by mistake -- an unparsed `<...>` stayed as text, the status sat behind
+        it, and nothing refused.
+
+        The over-refusals this brings back land on malformed markup alone, and
+        each names the run it matched, which is the cost the rule accepts.
+        """
+        for name, under in self.UNPARSED_TAGS.items():
+            with self.subTest(shape=name):
+                failures = self.failures(self.body(f"{under}\n"))
+                pending = [text for text in failures if text.startswith(self.PENDING)]
+                self.assertEqual(len(pending), 1, failures)
+                self.assertIn('"[blocked] x"', pending[0])
+
+    def test_well_formed_markup_is_read_once_and_still_accepted(self) -> None:
+        # The bound on the second reading: it fires only where a `<...>` opens
+        # like a tag and parses as none. Round 2's three over-refusals are the
+        # control, and each is a shape this grammar DOES parse or does not take
+        # for a tag at all.
+        for name, under in (
+            ("a generic mid-line", "- [complete] the `Vec<T>` case -- ok, nothing [blocked] here"),
+            ("a bare comment closer", "- [complete] base --> head -- ok, nothing [blocked] here"),
+            (
+                "a status inside a quoted attribute",
+                '<div title="CI result > [blocked] threshold">all good</div>',
+            ),
+        ):
+            with self.subTest(shape=name):
+                self.assertEqual(
+                    [
+                        text
+                        for text in self.failures(self.body(f"{under}\n"))
+                        if text.startswith(self.PENDING)
+                    ],
+                    [],
+                )
+        self.assertFalse(pr_readiness._holds_an_unparsed_tag("<div>ok</div>"))
+        self.assertFalse(pr_readiness._holds_an_unparsed_tag("a < b and c > d"))
+        self.assertTrue(pr_readiness._holds_an_unparsed_tag("<div title=>x</div>"))
+
+    def test_a_carriage_return_reference_is_a_line_break_too(self) -> None:
+        # `&#10;` was split and `&#13;` was not, so a status after one stayed
+        # mid-run for this reader and started a line on the page.
+        self.assertEqual(
+            pr_readiness.html_block_text_lines("<div>a&#13;[blocked] x</div>"),
+            ["a", "[blocked] x"],
+        )
+        self.assertEqual(
+            pr_readiness.html_block_text_lines("<div>a&#13;&#10;[blocked] x</div>"),
+            ["a", "[blocked] x"],
+        )
+        self.assertEqual(
+            pr_readiness.html_block_text_lines("<div>a&#10;[blocked] x</div>"),
+            ["a", "[blocked] x"],
+        )
+
+    def test_the_scan_is_linear_in_the_block(self) -> None:
+        """A gate a body can make hang is a gate an author bypasses by timeout.
+
+        The attribute name allowed a `<`, so `<div <div <div ...` matched one
+        attribute per repetition and then backtracked over all of them at every
+        offset: 50 KB took 13 seconds at `2a0261c6` where 1 KB took 0.005. The
+        bound here is generous on purpose -- what it catches is a return to
+        quadratic time, not a slow machine.
+        """
+        payload = "<div " * (50 * 1024 // 5)
+        started = time.monotonic()
+        pr_readiness.html_block_text_lines(payload)
+        self.assertLess(time.monotonic() - started, 1.0)
 
 class ParserDefinitionTests(unittest.TestCase):
     """The gate and the contributor skill read one section by one definition of markdown.
