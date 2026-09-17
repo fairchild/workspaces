@@ -2730,6 +2730,8 @@ class RevisionTurnTests(unittest.TestCase):
         revision: bool = True,
         head_current: bool = True,
         comment_posts: bool = True,
+        existing_comments: list[str] | None = None,
+        comment_raises: bool = False,
     ):
         execution = sys.modules["execution"]
         data = data or self._data()
@@ -2748,8 +2750,19 @@ class RevisionTurnTests(unittest.TestCase):
 
         def fake_run_optional(command, *, default, **_kwargs):
             if command[:3] == ["gh", "pr", "comment"]:
+                if comment_raises:
+                    # `gh` missing from PATH is an OSError out of
+                    # `subprocess.run`, which `run_optional` does not catch.
+                    raise FileNotFoundError(2, "No such file or directory", "gh")
                 comments.append(command[command.index("--body") + 1])
+                # Recorded in `commands` as well, so a test can say where a
+                # comment fell relative to the body write.
+                commands.append(command)
                 return "https://github.com/fairchild/workspaces/pull/77#issuecomment-1" if comment_posts else default
+            if command[:4] == ["gh", "pr", "view", "77"] and "comments" in command:
+                return json.dumps(
+                    {"comments": [{"body": body} for body in (existing_comments or [])]}
+                )
             if command[:2] == ["gh", "api"]:
                 return json.dumps(
                     {
@@ -2826,6 +2839,142 @@ class RevisionTurnTests(unittest.TestCase):
             [comment for comment in comments if "left as written" in comment], []
         )
         self.assertEqual(exit_code, 0)
+
+    # An author's own `## Evidence Status`, carrying a tag, with the evidence
+    # the turn needs so the write and the validation both succeed.
+    TAGGED_HEADING_BODY = (
+        "## Summary\n- Rewrote the sheet's status mapping\n\n"
+        "## <span>Evidence Status</span>\n\n"
+        "- [complete] `swift test` passes -- Test run with 1992 tests passed\n\n"
+        "## Validation\n- `swift test --filter SheetTests`\n"
+    )
+
+    def _route_with_tagged_heading(self, **kwargs):
+        state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        with mock.patch.object(self, "_state", return_value=state):
+            return self._route(
+                dirty=True,
+                live_body="stale body",
+                data=self._data(self.TAGGED_HEADING_BODY),
+                revision=False,
+                **kwargs,
+            )
+
+    def test_a_declined_heading_is_told_to_the_author_on_the_pull_request(self) -> None:
+        """The note reaches the PR, asserted by the comment that was posted (#1730, round 2).
+
+        This was asserted by reading `execution.py` for the call, which is a
+        test of the source and not of the turn: deleting the post left the
+        suite green. The seam is the one #1733's stand-down comment uses --
+        the turn runs against fake commands and the bodies it posts are
+        captured.
+        """
+        exit_code, commands, comments, _ = self._route_with_tagged_heading()
+        self.assertEqual(exit_code, 0)
+        notes = [comment for comment in comments if "was not read as the section" in comment]
+        self.assertEqual(len(notes), 1, comments)
+        self.assertIn("<span>", notes[0])
+        self.assertIn(self.PERSONA, notes[0])
+        self.assertIn("A plain `## Evidence Status` was written below it", notes[0])
+        # And it names this head, which is what makes it once per head.
+        execution = sys.modules["execution"]
+        self.assertIn(execution.rejected_heading_checked_line(self.LIVE_HEAD), notes[0])
+
+    def test_the_note_is_posted_after_the_body_is_written_and_not_before(self) -> None:
+        # The order is the claim: the note says a plain heading was written
+        # below the author's, which is only true once the body it describes is
+        # on GitHub. Posted first, it announced a write that a failing
+        # validation then made never happen (#1730, round 2).
+        _, commands, comments, _ = self._route_with_tagged_heading()
+        edits = [index for index, command in enumerate(commands) if command[:3] == ["gh", "pr", "edit"]]
+        posts = [
+            index
+            for index, command in enumerate(commands)
+            if command[:3] == ["gh", "pr", "comment"]
+            and "was not read as the section" in command[command.index("--body") + 1]
+        ]
+        self.assertEqual(len(edits), 1, commands)
+        self.assertEqual(len(posts), 1, commands)
+        self.assertLess(edits[0], posts[0])
+
+    def test_a_turn_that_fails_validation_says_nothing_about_the_heading(self) -> None:
+        """The note is a report of a write, so a turn that does not write says nothing.
+
+        `validate_evidence_accounting` is failed directly rather than through a
+        body contrived to fail it: what is under test is the ORDER -- that the
+        note is downstream of the check that can end the turn -- and a fixture
+        body that fails accounting today may stop failing it when the
+        accounting rules change, which would leave this passing for the wrong
+        reason. Posted where it was, the note told an author their body had
+        been updated by a run that returned before updating it (#1730, round 2).
+        """
+        execution = sys.modules["execution"]
+        state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        with (
+            mock.patch.object(self, "_state", return_value=state),
+            mock.patch.object(
+                execution,
+                "validate_evidence_accounting",
+                return_value=("", ["the accounting did not add up"]),
+            ),
+        ):
+            exit_code, commands, comments, _ = self._route(
+                dirty=True,
+                live_body="stale body",
+                data=self._data(self.TAGGED_HEADING_BODY),
+                revision=False,
+            )
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(any(command[:3] == ["gh", "pr", "edit"] for command in commands), commands)
+        self.assertEqual(
+            [comment for comment in comments if "was not read as the section" in comment], []
+        )
+
+    def test_a_second_run_at_the_same_head_says_it_again_to_nobody(self) -> None:
+        # Once per head. A re-run is a normal thing -- a retried workflow, a
+        # re-dispatch -- and each one used to add a copy of the same note to
+        # the same pull request.
+        execution = sys.modules["execution"]
+        _, _, first, _ = self._route_with_tagged_heading()
+        note = next(comment for comment in first if "was not read as the section" in comment)
+        self.assertIn(execution.rejected_heading_checked_line(self.LIVE_HEAD), note)
+        _, _, second, _ = self._route_with_tagged_heading(existing_comments=[note])
+        self.assertEqual(
+            [comment for comment in second if "was not read as the section" in comment], []
+        )
+        # A different head is a body the author has pushed since, and the
+        # heading is still tagged there, so it is said again.
+        _, _, moved, _ = self._route_with_tagged_heading(
+            existing_comments=[note.replace(self.LIVE_HEAD, "f" * 40)]
+        )
+        self.assertEqual(
+            len([comment for comment in moved if "was not read as the section" in comment]), 1
+        )
+
+    def test_a_comment_that_cannot_be_posted_does_not_fail_the_turn(self) -> None:
+        # A comment is the report of the work, never the work. `gh` missing
+        # from PATH raises out of `subprocess.run`, which `run_optional` does
+        # not catch, so the note could end a turn that had already pushed.
+        exit_code, commands, comments, outputs = self._route_with_tagged_heading(comment_raises=True)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(comments, [])
+        self.assertTrue(any(command[:3] == ["gh", "pr", "edit"] for command in commands))
+        self.assertEqual(outputs["pr_head_sha"], self.LIVE_HEAD)
+
+    def test_an_ordinary_turn_says_nothing_about_a_heading(self) -> None:
+        # The control: a plain `## Evidence Status` draws no note.
+        state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        plain = self.TAGGED_HEADING_BODY.replace(
+            "## <span>Evidence Status</span>", "## Evidence Status"
+        )
+        with mock.patch.object(self, "_state", return_value=state):
+            exit_code, _, comments, _ = self._route(
+                dirty=True, live_body="stale body", data=self._data(plain), revision=False
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            [comment for comment in comments if "was not read as the section" in comment], []
+        )
 
     def test_body_only_revision_edits_the_pr_without_committing(self) -> None:
         exit_code, commands, comments, outputs = self._route(dirty=False, live_body="stale body")

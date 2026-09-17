@@ -19,6 +19,7 @@ from _helpers import (
     REPO_ROOT,
     contract_read_refusal,
     has_markdown_section,
+    code_span,
     inline_text,
     insert_markdown_section,
     is_section_boundary,
@@ -27,7 +28,6 @@ from _helpers import (
     markdown_section,
     removed_section_texts,
     placement_refusal,
-    rejected_heading_note,
     rejected_section_headings,
     reparsed_without_runaway,
     run_optional,
@@ -752,12 +752,36 @@ def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
         rejected = rejected_section_headings(tokens, EVIDENCE_STATUS_HEADING)
         named = ""
         if rejected and len(headings) > 1:
-            line = tokens[rejected[0][0]].map
-            where = f" on line {line[0] + 1}" if line else ""
-            named = (
-                f"; the one{where} carries inline HTML (`{rejected[0][1]}`) and is not read as "
-                "the section, so removing that one is what leaves a body with one heading"
-            )
+            # Every tagged heading, not the first. With both of them tagged,
+            # naming one and saying that removing it leaves a body with one
+            # heading is true and useless: what remains is the other tagged
+            # heading, still not read as the section, so the author repairs,
+            # re-runs, and meets this refusal again (#1730, round 2). What is
+            # left after the removal is stated rather than implied.
+            places = [
+                f"line {span[0] + 1}" if (span := tokens[index].map) else "an unknown line"
+                for index, _ in rejected
+            ]
+            phrases = [
+                f"the one on {place} carries inline HTML ({code_span(tag)})"
+                for place, (_, tag) in zip(places, rejected)
+            ]
+            carries = phrases[0] if len(phrases) == 1 else ", ".join(phrases[:-1]) + f" and {phrases[-1]}"
+            unread = "it is not read" if len(rejected) == 1 else "none of them is read"
+            those = "that one" if len(rejected) == 1 else "those"
+            remaining = len(headings) - len(rejected)
+            if remaining:
+                counted = "one heading" if remaining == 1 else f"{remaining} headings"
+                named = (
+                    f"; {carries}, and {unread} as the section, so removing {those} is what "
+                    f"leaves a body with {counted} a reader reads as this section"
+                )
+            else:
+                named = (
+                    f"; {carries}, and {unread} as the section, so removing {those} would leave "
+                    "a body with no heading a reader reads as this section; take the tags off one "
+                    "of them instead"
+                )
         return [], f"{_heading_count_refusal(len(headings))}{named}"
     start = headings[0]
     if tokens[start].tag != "h2":
@@ -2387,11 +2411,13 @@ def write_evidence_status_section(
         unseen = _placement_a_reader_cannot_see(candidate)
         return (source, unseen) if unseen else (candidate, None)
 
-    # Said once, where both writers come through, and before the write rather
-    # than after it: the body about to be returned carries the heading this
-    # wrote, so asking it the question would answer about the repair.
-    if (note := rejected_heading_note(body, EVIDENCE_STATUS_HEADING)) is not None:
-        log(note)
+    # The note about a heading this reader declined is NOT said here. It was,
+    # and it had to be said before the write to see the author's heading alone
+    # -- which meant it announced "a plain heading was written below it" on
+    # bodies the write then refused and returned untouched, one line above the
+    # refusal, in the same log. It also made the note the writer's, and the
+    # writer runs more than once in a turn. It belongs to whatever reports the
+    # turn, composed from the body the write returned (#1730, round 2).
     written = insert_markdown_section(
         strip_markdown_section(body, EVIDENCE_NOTES_HEADING) if kept else body,
         EVIDENCE_STATUS_HEADING,

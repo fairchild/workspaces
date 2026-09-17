@@ -351,16 +351,42 @@ def compose_revision_escalation_comment(
     ) + "\n"
 
 
-def compose_rejected_heading_comment(persona: str, note: str) -> str:
+REJECTED_HEADING_CHECKED_PREFIX = "Read from this PR's body at commit"
+
+
+def rejected_heading_checked_line(head_sha: str) -> str:
+    """The line that says which head this note was read from, and dedups it.
+
+    A visible line and not a hidden marker. The markers this runtime writes are
+    the lane's attestation that an outcome happened, validated against live
+    state before they are written; a note about somebody's heading attests
+    nothing, and giving it a marker would put a forgeable token next to model
+    prose for no gain. The worst a forged copy of this line can do is keep a
+    note from being said twice, which is what it is for.
+    """
+    return f"{REJECTED_HEADING_CHECKED_PREFIX} `{head_sha}`."
+
+
+def compose_rejected_heading_comment(persona: str, note: str, head_sha: str) -> str:
     """The note on the PR when an author's own heading was not read as the section.
 
     The write went ahead, so this is not a stand-down: the body now carries a
-    plain `## Evidence Status` below the author's, and every reader downstream
-    refuses it for having two headings a reader sees. That refusal is true and
-    points at the wrong repair -- deleting the written one leaves a body with
-    no readable section and the same refusal, a round lost before anything is
-    learned (#1730). The author reads the pull request, not the workflow log,
-    so the reason crosses here the way `compose_body_standdown_comment` does.
+    plain `## Evidence Status` below the author's. The author reads the pull
+    request, not the workflow log, so the reason crosses here the way
+    `compose_body_standdown_comment` does.
+
+    What it says about the consequence is measured rather than reasoned. It
+    used to say "every check that reads this section refuses it", which is not
+    true of the checks this repo has: the owner read does refuse, naming the
+    tagged heading, and the readiness gate's ambiguity check does not see it at
+    all, because that check matches the heading line as raw text and a tag
+    hides it there (`scripts/pr-readiness.py`). Saying "every check" made the
+    note the same kind of claim as the refusal it exists to correct -- true
+    sounding, wrongly attributed (#1730, round 2).
+
+    The note itself is already escaped for this surface (`code_span`); the
+    delimiter strip is the same one model prose gets, so no line of quoted text
+    can spell a marker.
     """
     return "\n".join(
         [
@@ -368,11 +394,52 @@ def compose_rejected_heading_comment(persona: str, note: str) -> str:
             "",
             "**Your `## Evidence Status` heading was not read as the section.**",
             "",
-            f"- {note}",
+            f"- {_neutralized_model_text(note)}",
             "",
-            "Until one of those two happens the body carries two headings a reader "
-            "sees, and every check that reads this section refuses it for that.",
+            "This turn went ahead and the body was updated. While both headings stand, "
+            "the read that collects your evidence refuses this body -- \"a reader sees 2 "
+            "`Evidence Status` headings, not one\" -- and names yours as the one carrying "
+            "the tag. The readiness gate does not refuse it for this: its ambiguity check "
+            "reads the heading line as raw text, where a tag hides it.",
+            "",
+            rejected_heading_checked_line(head_sha),
         ]
+    )
+
+
+def post_rejected_heading_note(
+    pr_number: int,
+    persona: str,
+    written_body: str,
+    head_sha: str,
+    env: dict[str, str],
+) -> bool:
+    """Tell the author about a declined heading, once per head, after the body is written.
+
+    Composed from the body GitHub now holds, not from what the model wrote and
+    not before the write: the note says a plain heading was written below
+    theirs, and that sentence is only true of a body where it was. Asked before
+    the write, it was said on turns whose write then refused and returned the
+    body untouched (#1730, round 2).
+
+    Once per head, because the note is about a body and a body has a commit.
+    Re-running a turn at the same head re-posts nothing; a new commit that
+    still carries the tagged heading says it again, which is right -- the
+    author has pushed since and the heading is still there.
+
+    Best-effort at every step. A comment is the report of the work, never the
+    work, so neither the read nor the post can fail this turn.
+    """
+    note = rejected_heading_note(written_body, "Evidence Status")
+    if note is None:
+        return False
+    log(note)
+    log(json.dumps({"error_class": "rejected_heading", "detail": note, "pr": pr_number}))
+    checked = rejected_heading_checked_line(head_sha)
+    if any(checked in body for body in _pr_comment_bodies(pr_number, env)):
+        return False
+    return _post_pr_comment(
+        pr_number, compose_rejected_heading_comment(persona, note, head_sha), env
     )
 
 
@@ -403,15 +470,54 @@ def compose_body_standdown_comment(persona: str, reasons: list[str]) -> str:
 
 
 def _post_pr_comment(pr_number: int, body: str, env: dict[str, str]) -> bool:
+    """Post a comment, and say whether it landed. Never raise.
+
+    The return value is the contract: a caller decides what a failed comment
+    means. `run_optional` already turns a timeout and a non-zero exit into the
+    default, but it does not catch an `OSError` -- `gh` missing from `PATH`
+    raises `FileNotFoundError` out of `subprocess.run` -- so a comment nobody
+    was waiting on could end a turn that had already pushed (#1730, round 2).
+    A comment is never the work; it is the report of the work.
+    """
     sentinel = "__COMMENT_FAILED__"
-    posted = run_optional(
-        ["gh", "pr", "comment", str(pr_number), "--body", body],
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-        default=sentinel,
-    )
+    try:
+        posted = run_optional(
+            ["gh", "pr", "comment", str(pr_number), "--body", body],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+            default=sentinel,
+        )
+    except OSError as error:
+        log(f"could not comment on PR #{pr_number}: {error}")
+        return False
     return posted != sentinel
+
+
+def _pr_comment_bodies(pr_number: int, env: dict[str, str]) -> list[str]:
+    """Every comment already on this pull request, or [] when they cannot be read.
+
+    Best-effort by design: a read that fails must not stop the turn, and the
+    only thing it costs is that a note may be said twice.
+    """
+    try:
+        raw = run_optional(
+            ["gh", "pr", "view", str(pr_number), "--json", "comments"],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+            default="",
+        )
+    except OSError:
+        return []
+    try:
+        payload = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        return []
+    comments = payload.get("comments") if isinstance(payload, dict) else None
+    if not isinstance(comments, list):
+        return []
+    return [str(comment.get("body", "")) for comment in comments if isinstance(comment, dict)]
 
 
 # Path-prefix → readiness surface label, first match wins. Feeds the
@@ -1304,18 +1410,6 @@ def route_execution_action(
             )
         return 1
 
-    # The write is the repair and it went ahead, so this is a note rather than
-    # an error: adding it to `summary_errors` would abort a turn that succeeded.
-    # Asked of the body the model wrote, not of `summary_body`, which already
-    # carries the heading the write put there.
-    if (heading_note := rejected_heading_note(str(data.get("body", "")), "Evidence Status")) is not None:
-        print(f"note: {heading_note}", file=sys.stderr)
-        log(json.dumps({"error_class": "rejected_heading", "detail": heading_note, "issue": issue_number}))
-        if own_pr is not None:
-            _post_pr_comment(
-                int(own_pr["number"]), compose_rejected_heading_comment(persona, heading_note), env
-            )
-
     _, evidence_errors = validate_evidence_accounting(summary_body, requested_evidence)
     if evidence_errors:
         print(
@@ -1496,6 +1590,12 @@ def route_execution_action(
             cwd=REPO_ROOT,
             env=env,
         )
+        # After the body write, and only now: the note says a plain heading was
+        # written below the author's, which is a claim about the body GitHub
+        # holds. It is also after `validate_evidence_accounting`, which returns
+        # above on failure -- a turn that ends without publishing has nothing
+        # to tell the author about their heading (#1730, round 2).
+        post_rejected_heading_note(pr_number, persona, pr_body, pr_head_sha, env)
         revision_comment_posted = bool(revision_review_id) and _post_revision_reply(
             pr_number, persona, str(data.get("body", "")), revision_review_id, env
         )
@@ -1539,6 +1639,9 @@ def route_execution_action(
         print("error: could not parse created PR number", file=sys.stderr)
         return 1
     pr_number = int(number_match.group("number"))
+    # Same crossing on the path that opens the PR rather than editing one: the
+    # body is on GitHub now, so the note can say what is in it.
+    post_rejected_heading_note(pr_number, persona, pr_body, pr_head_sha, env)
     _write_github_outputs(
         evidence_needed,
         screenshot_evidence_needed,

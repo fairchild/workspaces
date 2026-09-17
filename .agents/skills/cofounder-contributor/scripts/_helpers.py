@@ -164,6 +164,46 @@ def issue_label_presence(issue: dict[str, object]) -> set[str]:
 # arrives as `html_inline` like every other tag, and the tag name is what
 # identifies it, so attributes and a self-closing slash are all one shape.
 HTML_BREAK_TAG_RE = re.compile(r"(?i)^<br\b[^>]*>$")
+# Everything a line ending or a terminal escape is made of. A note quotes text
+# somebody else wrote, and it reaches surfaces that read control characters.
+CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def code_span(text: str) -> str:
+    """`text` as a code span nothing inside it can break out of, on one line.
+
+    Somebody else's characters reach three surfaces from a note: the workflow
+    log, the structured record, and a comment on the pull request. Two of those
+    interpret what they are handed. A newline inside a tag's attribute -- which
+    a setext heading allows, and the parser keeps in one `html_inline` token --
+    puts the text after it at column 0, where `::error::owned` is a workflow
+    command the Actions log obeys. A backtick inside an attribute closes the
+    span early, and what follows it is live markdown: an `@name` after one is a
+    mention GitHub delivers to a person who has nothing to do with this
+    (#1730, round 2).
+
+    So the text is flattened to one line with its control characters gone, and
+    fenced with one backtick more than the longest run inside it -- the rule
+    `inline_text` already applies to a code span it re-emits, written here once
+    and called from both. A space pads a value that starts or ends on a
+    backtick, which is what CommonMark requires to keep it inside.
+    """
+    return fenced_code_span(" ".join(CONTROL_CHARACTER_RE.sub(" ", text).split()) or " ")
+
+
+def fenced_code_span(text: str) -> str:
+    """`text` in backticks, with a fence one longer than the longest run inside it.
+
+    CommonMark's own rule, and the only one that holds for arbitrary content. A
+    value that starts or ends on a backtick is padded with a space, which is
+    what keeps that backtick inside the span rather than closing it. Shared so
+    that `inline_text`, re-emitting a code span it read, and `code_span`,
+    quoting text from outside, cannot disagree about it.
+    """
+    longest = max((len(list(run)) for char, run in groupby(text) if char == "`"), default=0)
+    ticks = "`" * (longest + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{ticks}{pad}{text}{pad}{ticks}"
 
 
 def inline_text(children: list[Token] | None, *, break_text: str = " ") -> str:
@@ -192,10 +232,7 @@ def inline_text(children: list[Token] | None, *, break_text: str = " ") -> str:
         if kind == "text":
             parts.append(token.content)
         elif kind == "code_inline":
-            longest = max((len(list(run)) for char, run in groupby(token.content) if char == "`"), default=0)
-            ticks = "`" * (longest + 1)
-            pad = " " if token.content.startswith("`") or token.content.endswith("`") else ""
-            parts.append(f"{ticks}{pad}{token.content}{pad}{ticks}")
+            parts.append(fenced_code_span(token.content))
         elif kind in {"softbreak", "hardbreak"} or (
             kind == "html_inline" and HTML_BREAK_TAG_RE.match(token.content.strip())
         ):
@@ -335,8 +372,19 @@ def rejected_heading_note(body: str, heading: str) -> str | None:
     delete one -- is a coin flip. Deleting the written one leaves a body with
     no readable section and the same refusal (#1730).
 
-    So the message names the line, names the tag, and names both repairs. It
-    is a note rather than an error: the write is the repair and it goes ahead.
+    So the message names the line, names the tag, and names both repairs.
+
+    It is asked of the body the write RETURNED, not the one it was handed, and
+    it says what it finds there rather than what the write meant to do. Asked
+    before the write it claimed "a plain `## <heading>` was written below it"
+    on bodies where the write then refused and returned them untouched -- a
+    sentence contradicted by the line above it in the same log (#1730, round
+    2). Both readings are here, decided by what the body holds.
+
+    Every value quoted from the body goes through `code_span`, because this
+    text is posted to a pull request and printed to a workflow log, and both
+    of those read what they are given -- see that function for what the two
+    surfaces do with a newline and a backtick.
     """
     tokens = _parsed(body)
     rejected = rejected_section_headings(tokens, heading)
@@ -345,11 +393,16 @@ def rejected_heading_note(body: str, heading: str) -> str | None:
     lines = MARKDOWN_LINE_ENDING_RE.sub("\n", body).split("\n")
     index, tag = rejected[0]
     line = lines[tokens[index].map[0]].strip() if tokens[index].map else f"## {heading}"
+    written = (
+        f"A plain `## {heading}` was written below it."
+        if section_heading_index(tokens, heading) is not None
+        else f"No plain `## {heading}` heading is in this body, so nothing here is read as that section."
+    )
     return (
-        f"`{line}` carries inline HTML (`{tag}`), so it is not read as the "
+        f"{code_span(line)} carries inline HTML ({code_span(tag)}), so it is not read as the "
         f"`{heading}` section -- a tag can strike, hide or fold what follows it, and "
-        f"which one it does is not something this reader decides. A plain "
-        f"`## {heading}` was written below it. Remove the tags from yours, or remove yours."
+        f"which one it does is not something this reader decides. {written} "
+        "Remove the tags from yours, or remove yours."
     )
 
 
