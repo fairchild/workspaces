@@ -180,12 +180,23 @@ def code_span(text: str) -> str:
 
     Four steps, and the ORDER is the escaping.
 
-    1. Every character Unicode files under Cc or Cf. Cc is C0, DEL *and* C1 --
+    1. Every character Unicode files under Cc or Cf goes -- but one that
+       SEPARATES becomes a space rather than nothing. Cc is C0, DEL *and* C1 --
        U+0080 to U+009F, where the CSI introducer is a single character that
        opens an escape sequence on a terminal reading the log, and which a
        `[\x00-\x1f\x7f]` class does not name. Cf is the invisible formatting:
        a zero-width space, and a right-to-left override that reorders what a
        reader sees for the rest of the line.
+
+       Deleting them all glues words: `a` tab `b` quoted back as `ab` is text
+       the author never wrote, and a note that misquotes on the accepting side
+       -- nothing refuses it -- is the failure `inline_text` records for `<br>`,
+       where dropping the tag turned `1<br>2 tests passed` into a count nobody
+       wrote (#1730, round 3b). So the test is `str.isspace()`: a tab, a line
+       feed, a carriage return, a form feed, a vertical tab, the C0 separators
+       and U+0085 leave a space behind for step 3 to collapse. NUL and the rest
+       of C1 are not whitespace and leave nothing, because there is no
+       separator there to keep.
     2. The comment delimiters, to a fixpoint, because one deletion can splice
        a fresh one together.
     3. Runs of whitespace, collapsed.
@@ -205,7 +216,10 @@ def code_span(text: str) -> str:
     same thing -- puts all three back.
     """
     visible = "".join(
-        character for character in text if unicodedata.category(character) not in {"Cc", "Cf"}
+        character
+        if unicodedata.category(character) not in {"Cc", "Cf"}
+        else (" " if character.isspace() else "")
+        for character in text
     )
     while True:
         stripped = visible.replace("<!--", "").replace("-->", "")

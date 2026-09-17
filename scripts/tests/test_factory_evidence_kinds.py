@@ -6443,6 +6443,41 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
         # takes both delimiters.
         self.assertEqual(spliced, "`abc`")
 
+    def test_a_whitespace_control_between_two_words_stays_a_space(self) -> None:
+        """A control character that separates is a separator, not nothing (#1730, round 3b).
+
+        Step 1 removes the control and format characters, and removing a tab or
+        a newline from between two words glues them: `a` tab `b` quoted as `ab`
+        is text the author never wrote, on the accepting side -- nothing
+        refuses, the note simply misquotes. It is the failure `inline_text`
+        records for `<br>`, where dropping the tag turned `1<br>2 tests passed`
+        into a count nobody wrote.
+
+        So a Cc or Cf character Python calls whitespace becomes a space, which
+        step 3 then collapses with its neighbours. The ones that are not
+        whitespace -- NUL, and the C1 controls with U+0085 excepted -- are
+        removed, because there is no separator there to keep.
+        """
+        helpers = self.helpers()
+        self.assertEqual(helpers.code_span("a\tb\nc\rd\x0ce"), "`a b c d e`")
+        self.assertEqual(helpers.code_span("a\x0bb\x1fc"), "`a b c`")
+        self.assertEqual(helpers.code_span("a\u0085b"), "`a b`")
+        # Not whitespace, so nothing is kept in their place.
+        self.assertEqual(helpers.code_span("d\x00e"), "`de`")
+        self.assertEqual(helpers.code_span("d\u009be"), "`de`")
+        self.assertEqual(helpers.code_span("d\u200be"), "`de`")
+
+    def test_the_note_keeps_the_gap_a_tag_attribute_wrote(self) -> None:
+        # The same thing where it reaches an author: a setext heading whose
+        # attribute spans a newline quoted the two halves with a space between
+        # them until round 3 removed it.
+        helpers = self.helpers()
+        heading = '<span title="x\n::error::owned">Evidence Status</span>\n---'
+        note = helpers.rejected_heading_note(self.body(heading), "Evidence Status")
+        assert note is not None
+        self.assertIn('<span title="x ::error::owned">', note)
+        self.assertNotIn('<span title="x::error::owned">', note)
+
     def test_a_c1_control_does_not_survive_into_the_note(self) -> None:
         # `[\x00-\x1f\x7f]` is C0 and DEL. The C1 range is U+0080-U+009F,
         # where the CSI introducer lives -- a single character that opens an
