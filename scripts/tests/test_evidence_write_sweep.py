@@ -83,6 +83,12 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
                 self.assertIn("not carried to `## Evidence Notes`", loss["said"][0])
                 self.assertIn("code fence with no closing line", loss["said"][0])
 
+    def test_no_write_closes_a_seam_the_author_wrote(self) -> None:
+        # The other half of the headline. A blank line between two of the
+        # author's blocks is structure a reader sees, and a write that takes
+        # it turns two paragraphs into a heading.
+        self.assertEqual(self.summary["seams_closed"], 0)
+
     def test_the_second_write_changes_nothing(self) -> None:
         # A write that is not a fixed point moves a body every lane run, which
         # is a section travelling one write at a time rather than all at once.
@@ -127,38 +133,73 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         # number is satisfied by a classifier that calls nothing silent, which
         # is how "0 silent losses" becomes a sentence about the reading rather
         # than about the writer.
-        def outcome(lost: tuple[str, ...], announced: tuple[str, ...]) -> sweep_script.Outcome:
+        def outcome(
+            lost: tuple[str, ...],
+            announced: tuple[str, ...],
+            closed: tuple[tuple[str, str], ...] = (),
+        ) -> sweep_script.Outcome:
             return sweep_script.Outcome(
-                label="probe", refused=False, lost=lost, announced=announced, fixed_point=True
+                label="probe",
+                refused=False,
+                lost=lost,
+                closed=closed,
+                announced=announced,
+                fixed_point=True,
             )
 
         self.assertTrue(outcome(("a line",), ()).silent)
         self.assertFalse(outcome(("a line",), ("not carried: ...",)).silent)
         self.assertFalse(outcome((), ()).silent)
+        # A closed seam is a loss on the same terms as a missing line.
+        self.assertTrue(outcome((), (), (("a", "b"),)).silent)
+        self.assertFalse(outcome((), ("not carried: ...",), (("a", "b"),)).silent)
 
-    def test_the_loss_detector_can_see_a_loss(self) -> None:
-        # Anti-vacuity for the headline number. A detector that reported
-        # nothing would report zero losses on every corpus forever.
+    BLOCKED_UNDER_AN_H1 = "- [blocked] release approval -- the signing profile is missing"
+
+    def test_the_loss_detector_can_see_the_loss_it_exists_to_count(self) -> None:
+        """#1734's own loss, which this detector could not see (#1738, round 2).
+
+        The entry filter ran over the WHOLE body, so an author's
+        `- [blocked] release approval -- the signing profile is missing` under
+        their own `# Release blockers` was read as the machine's line and
+        deleting it cost nothing. That is #1734 exactly -- a `[blocked]` bullet
+        outside the section, dropped -- and it is what "0 bodies lose a line
+        silently" was a reading from.
+
+        The check that was here could not catch it: its bullet carried no
+        ` -- `, which is the one shape `ENTRY_LINE_RE` does not match, so the
+        detector saw it whether the filter was scoped or not. This one uses the
+        shape the filter matches, which is the shape #1734 lost.
+        """
         body = sweep_script.body(
             sweep_script.SECTION_TAILS["a plain note"],
             sweep_script.SUCCESSORS["an h1 below"],
             "\n",
         )
+        self.assertIn(self.BLOCKED_UNDER_AN_H1, body)
+        self.assertTrue(
+            sweep_script.ENTRY_LINE_RE.match(self.BLOCKED_UNDER_AN_H1),
+            "the fixture no longer carries the shape the filter matches",
+        )
         self.assertEqual(sweep_script.lines_lost(body, body), [])
-        # A heading, and -- the case a heading-only comparison scored clean --
-        # a bullet under one. #1734's defect took the bullet and left the
-        # heading, so a detector that only counts headings cannot see it.
+        self.assertEqual(
+            sweep_script.lines_lost(body, body.replace(self.BLOCKED_UNDER_AN_H1 + "\n", "")),
+            [self.BLOCKED_UNDER_AN_H1],
+        )
+        # A heading on its own, and the bullet under it stays the author's --
+        # which is what says the detector's frame does not move with the
+        # section. Removing the author's `# Release blockers` widens the
+        # Evidence Status section over their bullet, and a reading that asked
+        # only "is this line inside the section" would then call that bullet
+        # the machine's in both bodies and report nothing.
         self.assertEqual(
             sweep_script.lines_lost(body, body.replace("# Release blockers\n\n", "")),
             ["# Release blockers"],
         )
         self.assertEqual(
-            sweep_script.lines_lost(
-                body, body.replace("- [blocked] the signing profile is missing\n", "")
-            ),
-            ["- [blocked] the signing profile is missing"],
+            sweep_script.lines_lost(body, body.replace("## Validation\n\n", "")),
+            ["## Validation"],
         )
-        # A setext underline, which a `^## ` scan could not see at all.
         setext = sweep_script.body(
             sweep_script.SECTION_TAILS["a plain note"],
             sweep_script.SUCCESSORS["a setext h2 below"],
@@ -174,6 +215,99 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
             "## Validation\n", "## Validation\n\nA note for the reviewer.\n"
         )
         self.assertEqual(sweep_script.lines_lost(body, moved), [])
+
+    def test_an_entry_the_write_owns_is_exempt_only_inside_the_section(self) -> None:
+        # The other direction of the same scoping. A status line under the
+        # heading is the write's to rewrite and its going is not a loss; the
+        # same shape anywhere else is the author's.
+        body = sweep_script.body(
+            sweep_script.SECTION_TAILS["a plain note"],
+            sweep_script.SUCCESSORS["an h1 below"],
+            "\n",
+        )
+        owned = f"- [pending-ci] {sweep_script.ITEM} -- {sweep_script.DETAIL}"
+        self.assertIn(owned, body)
+        self.assertEqual(sweep_script.lines_lost(body, body.replace(owned + "\n", "")), [])
+        self.assertIn(self.BLOCKED_UNDER_AN_H1, sweep_script.author_lines(body))
+        self.assertNotIn(owned, sweep_script.author_lines(body))
+
+    def test_a_line_is_the_write_s_only_when_it_is_both_recorded_and_in_the_section(self) -> None:
+        """Each condition on its own, because each alone lets a loss through.
+
+        SECTION alone reads the section with the same predicate the writer
+        uses, so a defect in that predicate widens the section and the
+        instrument's frame together: under #1734 restored, the author's bullet
+        lands inside the section, is called the machine's in both bodies, and
+        the loss goes unseen. METADATA alone exempts an author's own copy of a
+        recorded item written under their `## Validation`.
+
+        Dropping either condition leaves the sweep reporting zero, which is why
+        neither is pinned by the headline and both are pinned here (#1738,
+        round 2).
+        """
+        recorded = f"- [pending-ci] {sweep_script.ITEM} -- {sweep_script.DETAIL}"
+        unrecorded = self.BLOCKED_UNDER_AN_H1
+
+        # Entry-shaped and inside the section, but naming an item the metadata
+        # does not record: the author's.
+        inside = sweep_script.body(
+            sweep_script.SECTION_TAILS["a plain note"] + unrecorded + "\n",
+            sweep_script.SUCCESSORS["one h2 below"],
+            "\n",
+        )
+        self.assertIn(unrecorded, sweep_script.author_lines(inside))
+        self.assertNotIn(recorded, sweep_script.author_lines(inside))
+        self.assertEqual(
+            sweep_script.lines_lost(inside, inside.replace(unrecorded + "\n", "")), [unrecorded]
+        )
+
+        # Naming a recorded item, but outside the section: also the author's.
+        outside = sweep_script.body(
+            sweep_script.SECTION_TAILS["a plain note"],
+            f"## Validation\n\n{recorded}\n",
+            "\n",
+        )
+        self.assertEqual(outside.count(recorded), 2)
+        self.assertEqual(sweep_script.author_lines(outside).count(recorded), 1)
+        self.assertEqual(
+            sweep_script.lines_lost(
+                outside, outside.replace(f"## Validation\n\n{recorded}\n", "## Validation\n\n")
+            ),
+            [recorded],
+        )
+
+    def test_the_detector_sees_a_seam_a_write_closed(self) -> None:
+        """A blank line is structure, and losing it is losing something (#1738, round 2).
+
+        `A note for the reviewer.` and `===` are two paragraphs with a blank
+        line between them and one setext h1 without it. Both lines survive
+        either way, so a multiset of lines reads the change as nothing --
+        which is the seam the placement fixtures in
+        `test_factory_evidence_kinds.py` pin, and the instrument that counts
+        losses could not see it.
+
+        Pairs rather than blocks, because the writer's own `## Evidence Notes`
+        lands directly above the first carried block and makes a block the
+        source never had: a pair counts only when the author wrote both of its
+        lines.
+        """
+        seam = sweep_script.body(
+            sweep_script.SECTION_TAILS["a note above a line of equals"],
+            sweep_script.SUCCESSORS["one h2 below"],
+            "\n",
+        )
+        closed = seam.replace("A note for the reviewer.\n\n===", "A note for the reviewer.\n===")
+        self.assertNotEqual(closed, seam)
+        self.assertEqual(sweep_script.lines_lost(seam, closed), [], "the lines all survive")
+        self.assertEqual(
+            sweep_script.seams_closed(seam, closed), [("A note for the reviewer.", "===")]
+        )
+        # The real write closes none of them, on this body or any other.
+        written, _, _ = sweep_script.write_once(seam)
+        self.assertEqual(sweep_script.seams_closed(seam, written), [])
+        # And the heading the writer adds above a carried note is not a seam it
+        # closed, which is the false positive a block comparison would report.
+        self.assertIn("## Evidence Notes\nA note for the reviewer.", written)
 
     def test_the_reading_sees_the_lines_a_rendering_of_the_body_would_not(self) -> None:
         """The blind spots the first reading had, each closed by a body in the corpus.

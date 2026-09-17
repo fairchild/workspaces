@@ -1135,7 +1135,12 @@ class ParserDefinitionTests(unittest.TestCase):
 
 
 class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
-    """The gate and the contributor skill end `## Evidence Status` in the same place (#1734).
+    """Where the gate and the contributor skill end `## Evidence Status`, and where they do not (#1734).
+
+    They agree on 1,158 of the 1,596 cells below and part company on 438, all
+    of them under a fence that never closes. "In the same place" is what this
+    line said while the class measured both answers, which is the shape of
+    claim the whole round is about (#1738, round 2).
 
     Two files answer this, and neither can import the other: the gate runs on
     every PR in the repo from its own PEP 723 pin, and the skill's reader is a

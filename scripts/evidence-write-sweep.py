@@ -69,7 +69,12 @@ SECTION_TAILS = {
 SUCCESSORS = {
     "one h2 below": "## Validation\n\n- ran the suite on this head\n",
     "two h2s below": "## Validation\n\n- ran it\n\n## Risks\n\nNone.\n",
-    "an h1 below": "# Release blockers\n\n- [blocked] the signing profile is missing\n\n## Validation\n\n- ran it\n",
+    # The blocked bullet carries a ` -- `, which is what a reader reads as a
+    # status entry -- so it is the shape the write's own entry filter would
+    # have swallowed if that filter ran outside the section, and it is #1734's
+    # own body. Without it the corpus could not see that hazard on a real
+    # write (#1738, round 2).
+    "an h1 below": "# Release blockers\n\n- [blocked] release approval -- the signing profile is missing\n\n## Validation\n\n- ran it\n",
     "a setext h2 below": "Boundary note\n-------------\n\nunder the underline\n",
     "the author's own dash rule below": "---\n\nA closing remark.\n",
     "nothing below": "",
@@ -116,7 +121,75 @@ def body(tail: str, successor: str, ending: str) -> str:
     return text.replace("\n", ending)
 
 
-ENTRY_LINE_RE = re.compile(r"^\s*- \[(?:complete|blocked|pending-ci)\] .+ -- .+$")
+ENTRY_LINE_RE = re.compile(
+    r"^\s*- \[(?:complete|blocked|pending-ci)\] (?P<item>.+?) -- .+$"
+)
+
+
+def _recorded_items(text: str) -> set[str]:
+    """The items this write is rewriting, read from the body's own metadata.
+
+    The write renders its status lines from the recorded entries and from
+    nothing else, so the metadata is what it owns. This is the condition that
+    does not move when the thing being measured moves: scoping by the SECTION
+    alone reads the section with the same predicate the writer uses, and a
+    defect in that predicate widens the section and the instrument's own frame
+    together -- under #1734 restored, the author's bullet lands inside the
+    section, is read as the machine's in both bodies, and the loss this whole
+    instrument exists to count reads as nothing (#1738, round 2).
+    """
+    metadata = evidence._extract_evidence_metadata(text)
+    entries = metadata.get("entries") if isinstance(metadata, dict) else None
+    if not isinstance(entries, list):
+        return set()
+    return {
+        str(entry["item"]).strip()
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("item")
+    }
+
+
+def _entry_line_numbers(lines: list[str], text: str, recorded: set[str]) -> set[int]:
+    """Which lines are the status entries this write owns.
+
+    Three conditions, and each one answers a way the filter was wrong.
+
+    It is entry-SHAPED, rather than carrying the item's text anywhere: a line
+    naming the item in prose is the author's sentence about it.
+
+    It names an item the metadata RECORDS, so the author's own
+    `- [blocked] release approval -- the signing profile is missing` is never
+    the machine's, wherever it sits and however the section is read.
+
+    And it sits INSIDE the section, so an author's copy of a recorded item
+    under their own `## Validation` stays theirs.
+
+    A body with no metadata has no entries the write owns, and a body with no
+    readable section has none either: both are the conservative answer, which
+    is that every line is the author's.
+
+    `recorded` is read from the body BEFORE its metadata comment is stripped,
+    and `text` is the body after -- the comment is not the author's and does
+    not take part in the comparison, but it is where the entries are written
+    down.
+    """
+    if not recorded:
+        return set()
+    bounds = helpers._section_bounds(text, "Evidence Status")
+    if bounds is None:
+        return set()
+    starts, offset = [], 0
+    for line in lines:
+        starts.append(offset)
+        offset += len(line) + 1
+    owned = set()
+    for index, start in enumerate(starts):
+        if not bounds[1] <= start < bounds[2]:
+            continue
+        match = ENTRY_LINE_RE.match(lines[index])
+        if match and match.group("item").strip() in recorded:
+            owned.add(index)
+    return owned
 
 
 def author_lines(text: str) -> list[str]:
@@ -130,17 +203,67 @@ def author_lines(text: str) -> list[str]:
     them, and a fence marker and an indent besides.
 
     Two things come out, and both are this write's to change. The metadata
-    comment is re-rendered on every write, so its lines are not the author's.
-    A status entry is rewritten from the entries in hand, which is what the
-    write is FOR -- matched on the SHAPE a reader reads as an entry rather than
-    on the item's text, because a line naming the item in prose is the author's
-    and a reading that dropped every line naming it could not see that one go.
+    comment is re-rendered on every write. And the status entries -- matched on
+    the SHAPE a reader reads as an entry rather than on the item's text,
+    because a line naming the item in prose is the author's, and matched only
+    where the write owns them, which is inside the section and nowhere else.
     """
-    stripped = evidence._strip_evidence_metadata(MARKDOWN_LINE_ENDING_RE.sub("\n", text))
+    source = MARKDOWN_LINE_ENDING_RE.sub("\n", text)
+    normalized = evidence._strip_evidence_metadata(source)
+    lines = normalized.split("\n")
+    owned = _entry_line_numbers(lines, normalized, _recorded_items(source))
     return [
         line
-        for line in stripped.split("\n")
-        if line.strip() and not ENTRY_LINE_RE.match(line)
+        for index, line in enumerate(lines)
+        if line.strip() and index not in owned
+    ]
+
+
+def author_seams(text: str) -> list[tuple[str, str]]:
+    """Each pair of the author's lines this body puts next to each other with nothing between.
+
+    The other half of what a write can take, and the half a multiset of lines
+    is blind to: `A note for the reviewer.` and `===` are two paragraphs with a
+    blank line between them and one setext h1 without it, and both lines
+    survive either way (#1738, round 2).
+
+    A blank line separates, and so does a status entry: the entries are the
+    write's to add and remove, so whether one sits between two of the author's
+    lines is not a seam the author made.
+
+    Pairs and not blocks. A block multiset reports every carried note, because
+    the writer's own `## Evidence Notes` lands directly above the first one and
+    makes a block the source never had. A PAIR is a seam only when both its
+    lines were already in the source, which `seams_closed` is what asks.
+    """
+    source = MARKDOWN_LINE_ENDING_RE.sub("\n", text)
+    normalized = evidence._strip_evidence_metadata(source)
+    lines = normalized.split("\n")
+    owned = _entry_line_numbers(lines, normalized, _recorded_items(source))
+    seams, previous = [], None
+    for index, line in enumerate(lines):
+        if not line.strip() or index in owned:
+            previous = None
+            continue
+        if previous is not None:
+            seams.append((previous, line))
+        previous = line
+    return seams
+
+
+def seams_closed(before: str, after: str) -> list[tuple[str, str]]:
+    """Every pair of the author's lines the write put next to each other that were not.
+
+    Only pairs whose BOTH lines the author already wrote: the writer adds
+    `## Evidence Notes` directly above the first carried block, and a heading
+    it wrote is not a seam it closed.
+    """
+    source = set(author_lines(before))
+    already = set(author_seams(before))
+    return [
+        pair
+        for pair in author_seams(after)
+        if pair not in already and pair[0] in source and pair[1] in source
     ]
 
 
@@ -169,8 +292,19 @@ class Outcome:
     label: str
     refused: bool
     lost: tuple[str, ...]
+    closed: tuple[tuple[str, str], ...]
     announced: tuple[str, ...]
     fixed_point: bool
+
+    @property
+    def took(self) -> bool:
+        """Whether this write took anything from the page a reader had.
+
+        A line gone and a seam closed are the same kind of loss: one takes a
+        line away, the other takes the blank that kept two blocks two, and the
+        page a reader gets back is not the page they wrote (#1738, round 2).
+        """
+        return bool(self.lost) or bool(self.closed)
 
     @property
     def silent(self) -> bool:
@@ -190,7 +324,7 @@ class Outcome:
         message. The test pins which lines went and which message went with
         them, so the two cases that exist are attributed by hand.
         """
-        return bool(self.lost) and not self.announced
+        return self.took and not self.announced
 
 
 def write_once(text: str) -> tuple[str, bool, tuple[str, ...]]:
@@ -224,6 +358,7 @@ def sweep() -> list[Outcome]:
                         label=f"{tail_name} / {successor_name} / {ending_name}",
                         refused=refused,
                         lost=tuple(lines_lost(source, written)),
+                        closed=tuple(seams_closed(source, written)),
                         announced=tuple(line for line in said if "not carried" in line),
                         fixed_point=again == written,
                     )
@@ -238,17 +373,19 @@ def report(outcomes: list[Outcome]) -> dict[str, object]:
         "refusals": sum(outcome.refused for outcome in outcomes),
         "bodies_losing_a_line_silently": sum(outcome.silent for outcome in outcomes),
         "bodies_losing_a_line_with_a_reason_given": sum(
-            bool(outcome.lost) and bool(outcome.announced) for outcome in outcomes
+            outcome.took and bool(outcome.announced) for outcome in outcomes
         ),
+        "seams_closed": sum(bool(outcome.closed) for outcome in outcomes),
         "bodies_not_a_fixed_point": sum(not outcome.fixed_point for outcome in outcomes),
         "losses": [
             {
                 "body": outcome.label,
                 "lost": list(outcome.lost),
+                "closed": [list(pair) for pair in outcome.closed],
                 "said": list(outcome.announced),
             }
             for outcome in outcomes
-            if outcome.lost
+            if outcome.took
         ],
     }
 
@@ -268,9 +405,13 @@ def main(argv: list[str] | None = None) -> int:
         "  bodies losing a line with a reason given: "
         f"{summary['bodies_losing_a_line_with_a_reason_given']}"
     )
+    print(f"  bodies whose seam a write closed: {summary['seams_closed']}")
     print(f"  bodies not a fixed point on the second write: {summary['bodies_not_a_fixed_point']}")
     for loss in summary["losses"]:
-        print(f"  lost {loss['lost']} from: {loss['body']}")
+        if loss["lost"]:
+            print(f"  lost {loss['lost']} from: {loss['body']}")
+        if loss["closed"]:
+            print(f"  closed {loss['closed']} in: {loss['body']}")
         for said in loss["said"] or ["(nothing said)"]:
             print(f"    {said}")
     return 0
