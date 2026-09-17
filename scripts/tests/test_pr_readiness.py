@@ -1260,6 +1260,13 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         "under a runaway tilde fence": ("~~~\nthe log, never closed\n\n", "", "", ""),
         "under a runaway four backtick fence": ("````\nthe log, never closed\n\n", "", "", ""),
         "under a nested four then three fence": ("````\nthe log\n```\nstill code\n\n", "", "", ""),
+        # Only a BACKTICK fence's info string forbids a backtick. A tilde
+        # fence takes one, so `~~~ a`b` opens a fence where ``` a`b opens
+        # none -- the two contexts read as a matched pair and are opposites.
+        # Found by codex (gpt-5.6-sol, xhigh): with no tilde opener carrying an
+        # info string anywhere in the grid, a skill that skipped the repair for
+        # exactly that shape kept all 160 tests green.
+        "under a runaway tilde fence with a backtick info": ("~~~ a`b\nthe log, never closed\n\n", "", "", ""),
         "after a closed comment": ("<!-- a note -->\n\n", "", "", ""),
         # CommonMark runs an unclosed comment to the end of the document too,
         # and neither reader repairs it -- the skill's repair is fences only.
@@ -1299,6 +1306,7 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         "under a runaway tilde fence": "diverge",
         "under a runaway four backtick fence": "diverge",
         "under a nested four then three fence": "diverge",
+        "under a runaway tilde fence with a backtick info": "diverge",
         "after a closed comment": "agree",
         # CommonMark runs an unclosed comment to the end of the document too,
         # and neither reader repairs it -- the skill's repair is fences only.
@@ -1375,9 +1383,9 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
     )
 
     # Both counts, so the property cannot be satisfied by a grid that stopped
-    # generating. 28 constructs x 18 contexts x 3 line endings.
-    CELL_COUNT = 28 * 18 * 3
-    DIVERGING_CELLS = 354
+    # generating. 28 constructs x 19 contexts x 3 line endings.
+    CELL_COUNT = 28 * 19 * 3
+    DIVERGING_CELLS = 438
     # Every diverging cell in the one context whose answer varies by construct.
     SPLIT_CONTEXT = "under a voided fence opener, above a real one"
     SPLIT_CONTEXT_DIVERGING_CELLS = 18
@@ -1449,6 +1457,17 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         gate = self._lf(pr_readiness.extract_section(body, "Evidence Status"))
         self.assertEqual(gate, self._lf(owner.markdown_section(body, "Evidence Status")))
         self.assertEqual(pr_readiness.split_fenced_blocks(gate)[1], "```")
+        # The other way it comes apart, found by codex (gpt-5.6-sol, xhigh): a
+        # fence opener on the section's last line. The skill DOES repair here
+        # -- the fence is top-level -- and the repaired parse finds no boundary
+        # the unrepaired one missed, because there is nothing below to find. So
+        # the extent is the same to both while the scanner still reports an
+        # opener. The grid cannot reach it: every cell is followed by
+        # `CANDIDATE_TAIL`, so the opener is never the last line.
+        last_line = "## Evidence Status\n```\n"
+        gate = pr_readiness.extract_section(last_line, "Evidence Status")
+        self.assertEqual(gate, owner.markdown_section(last_line, "Evidence Status"))
+        self.assertEqual(pr_readiness.split_fenced_blocks(gate)[1], "```")
 
     def test_the_divergence_is_the_repair_and_not_the_hiding(self) -> None:
         # The verdicts, measured. Every runaway top-level fence form diverges
@@ -1469,8 +1488,8 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
                     "by the fence the section runs into": {True, False},
                 }[verdict]
                 self.assertEqual(measured[context], expected)
-        # And the shape of the table itself: the divergence belongs to four
-        # fence forms and nothing else, so a fifth appearing is a finding.
+        # And the shape of the table itself: the divergence belongs to five
+        # fence forms and nothing else, so a sixth appearing is a finding.
         self.assertEqual(
             {name for name, verdict in self.CONTEXT_VERDICTS.items() if verdict == "diverge"},
             {
@@ -1478,6 +1497,7 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
                 "under a runaway tilde fence",
                 "under a runaway four backtick fence",
                 "under a nested four then three fence",
+                "under a runaway tilde fence with a backtick info",
             },
         )
 
@@ -1991,8 +2011,13 @@ class WhatTheGateSLongerReadingCostsTests(unittest.TestCase):
     lines are both answered by text the author wrote under a LATER heading, or
     by text the page shows as code, and the refusal that was owed is not made.
 
-    Each case is measured at the check itself rather than through `evaluate`,
-    so what moves is the one reading under test and not some other failure.
+    Each case is measured through `evaluate` with the skill's boundary patched
+    in, and the patch reaches all three of its section reads at once, not only
+    the one under test -- so each fixture is written to move exactly one check
+    and the assertion is on the whole set of failures that moved, in both
+    directions. A fixture that disturbed a second check would fail on the
+    failure it did not predict rather than pass quietly (codex, gpt-5.6-sol,
+    xhigh).
     """
 
     HELPERS_PATH = (
@@ -2025,14 +2050,27 @@ class WhatTheGateSLongerReadingCostsTests(unittest.TestCase):
         different body and would measure a different thing. Every other part
         of the gate -- the field reader, the status pattern, the release proof
         pattern -- is the shipped one, so what moves between the two calls is
-        the boundary and nothing else.
+        the boundary.
+
+        `strip` is honoured rather than ignored, and it has to be. The gate
+        asks for `Evidence Status` unstripped and hands the result to
+        `split_fenced_blocks`, which reads lines: a stripped section has the
+        indent off its FIRST line only, so an indented code block holding a
+        ` ``` ` comes back as a fence nothing closes and the gate refuses a
+        body it reads cleanly. That is a second thing moving, and it was
+        moving here until codex (gpt-5.6-sol, xhigh) named it. The unstripped
+        slice comes from `_section_bounds`, which is where `markdown_section`
+        takes its own.
         """
         if boundary == "gate":
             return pr_readiness.evaluate(pr(body), files).failures
         reader = self.owner_reader()
 
         def repaired(text: str, heading: str, *, strip: bool = True) -> str:
-            return reader.markdown_section(text, heading)
+            if strip:
+                return reader.markdown_section(text, heading)
+            bounds = reader._section_bounds(text, heading)
+            return "" if bounds is None else text[bounds[1] : bounds[2]]
 
         with mock.patch.object(pr_readiness, "extract_section", repaired):
             return pr_readiness.evaluate(pr(body), files).failures
@@ -2113,6 +2151,38 @@ class WhatTheGateSLongerReadingCostsTests(unittest.TestCase):
             dropped,
             [f"Mergeability field is empty or still default: {field}." for field in required],
         )
+
+    INDENTED_FENCE_BODY = OPENING + (
+        "## Mergeability\n\n"
+        "- Surface: infra\n"
+        "- User-facing behavior changed: none\n"
+        "- Non-happy paths considered: unsigned build\n"
+        "- Residual risk or follow-up: none\n\n"
+        "## Evidence Status\n\n"
+        "    ```\n"
+        "    harmless\n"
+        "    ```\n\n"
+        "- [complete] unit tests -- 10 passed\n"
+    )
+
+    def test_the_measurement_moves_the_boundary_and_nothing_else(self) -> None:
+        # The harness's own guard. Both readings end this section in the same
+        # place -- there is no runaway fence and nothing to repair -- so every
+        # failure has to match, and any that does not is the apparatus and not
+        # the boundary.
+        #
+        # This body is the one that caught it (codex, gpt-5.6-sol, xhigh). The
+        # section opens with an indented code block holding fence lines; the
+        # gate asks for it unstripped, and a reading that stripped it took the
+        # indent off the FIRST line only, so ` ``` ` became a fence opener and
+        # the four-space line below could not close it. The measurement then
+        # reported a refusal the boundary had nothing to do with.
+        self.assertEqual(
+            self.failures(self.INDENTED_FENCE_BODY, ["Sources/App.swift"]),
+            self.failures(self.INDENTED_FENCE_BODY, ["Sources/App.swift"], boundary="skill"),
+        )
+        added, dropped = self.moved(self.INDENTED_FENCE_BODY, ["Sources/App.swift"])
+        self.assertEqual((added, dropped), ([], []))
 
     STATUS_BODY = OPENING + (
         "## Mergeability\n\n"

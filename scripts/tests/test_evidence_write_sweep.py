@@ -6,10 +6,11 @@
 """Pins the write sweep's figures at this tree, so the safety number in a PR body is checkable.
 
 Protects the claim, not the writer: `scripts/evidence-write-sweep.py` is the
-instrument a reviewer runs to reproduce "N refusals, 0 bodies lose a section",
-and a number nobody can reproduce is a relayed number (#1738). These tests fail
-when the figures move, when the corpus stops generating, or when the loss
-detector stops being able to see a loss.
+instrument a reviewer runs to reproduce "N refusals, and no body loses a line
+the author wrote without the runtime saying so", and a number nobody can
+reproduce is a relayed number (#1738). These tests fail when the figures move,
+when the corpus stops generating, or when the loss detector stops being able to
+see a loss.
 
 Safe to run with no network, no secrets, no GitHub and no UI.
 """
@@ -41,7 +42,7 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
     is the property that was missing.
     """
 
-    BODIES = 156
+    BODIES = 168
     REFUSALS = 22
     ANNOUNCED_LOSSES = 2
 
@@ -78,7 +79,7 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         )
         for loss in self.summary["losses"]:
             with self.subTest(body=loss["body"]):
-                self.assertEqual(loss["lost"], ["a log, never closed"])
+                self.assertEqual(loss["lost"], ["```text", "a log, never closed"])
                 self.assertIn("not carried to `## Evidence Notes`", loss["said"][0])
                 self.assertIn("code fence with no closing line", loss["said"][0])
 
@@ -157,22 +158,55 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
             ),
             ["- [blocked] the signing profile is missing"],
         )
-        # A setext heading and a rule too, which a `^## ` scan could not see.
+        # A setext underline, which a `^## ` scan could not see at all.
         setext = sweep_script.body(
             sweep_script.SECTION_TAILS["a plain note"],
             sweep_script.SUCCESSORS["a setext h2 below"],
             "\n",
         )
-        self.assertIn(
-            "## Boundary note",
-            sweep_script.lines_lost(setext, setext.replace("Boundary note\n-------------\n", "")),
+        self.assertEqual(
+            sweep_script.lines_lost(setext, setext.replace("-------------\n", "")),
+            ["-------------"],
         )
         # And moving a line is not losing it: the write's own job is to move
         # notes, so a detector that scored position would report every write.
-        moved = body.replace(
-            "A note for the reviewer.\n", ""
-        ).replace("## Validation\n", "## Validation\n\nA note for the reviewer.\n")
+        moved = body.replace("A note for the reviewer.\n", "").replace(
+            "## Validation\n", "## Validation\n\nA note for the reviewer.\n"
+        )
         self.assertEqual(sweep_script.lines_lost(body, moved), [])
+
+    def test_the_reading_sees_the_lines_a_rendering_of_the_body_would_not(self) -> None:
+        """The blind spots the first reading had, each closed by a body in the corpus.
+
+        The detector read `_rendered_lines` to begin with, which never
+        interprets HTML by design -- so deleting `<details>`, its `<summary>`
+        or its closer was a change it could not see, on three bodies built out
+        of exactly those lines. And it dropped every line carrying the item's
+        text, which exempted an author's own sentence about the item. Both
+        found by codex (gpt-5.6-sol, xhigh); both are the author's bytes now,
+        and this is the test that says so rather than the docstring.
+        """
+        html = sweep_script.body(
+            sweep_script.SECTION_TAILS["a closed details note"],
+            sweep_script.SUCCESSORS["one h2 below"],
+            "\n",
+        )
+        for line in ("<details>", "<summary>More</summary>", "</details>"):
+            with self.subTest(line=line):
+                self.assertEqual(sweep_script.lines_lost(html, html.replace(line + "\n", "")), [line])
+        prose = sweep_script.body(
+            sweep_script.SECTION_TAILS["a note naming the item in prose"],
+            sweep_script.SUCCESSORS["one h2 below"],
+            "\n",
+        )
+        note = f"Reviewer note: {sweep_script.ITEM} only on this head."
+        self.assertIn(note, prose)
+        self.assertEqual(sweep_script.lines_lost(prose, prose.replace(note + "\n", "")), [note])
+        # And the lines the write really does own stay out of it, or every
+        # write in the corpus would report a loss.
+        written, _, _ = sweep_script.write_once(prose)
+        self.assertNotEqual(written, prose)
+        self.assertEqual(sweep_script.lines_lost(prose, written), [])
 
 
 if __name__ == "__main__":

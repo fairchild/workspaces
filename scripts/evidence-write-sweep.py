@@ -9,7 +9,8 @@ The safety claim behind that rewrite is a count -- how many bodies it declines
 and how many lose a line a reader had -- and a count in a PR body that no
 second party can reproduce is a relayed number (#1738). This is the instrument
 that produces it: the corpus is generated here from a cross product of shapes
-rather than stored, so regenerating the figure needs this file and nothing else.
+rather than stored, so regenerating the figure needs this file and the skill
+modules it writes through, and no stored corpus to go stale beside them.
 
 Run it with `uv run --script scripts/evidence-write-sweep.py`; add `--json` for
 the machine-readable form. It touches no network, no repository state and no
@@ -24,6 +25,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +55,12 @@ SECTION_TAILS = {
     "a fence that never closes": "\n```text\na log, never closed\n",
     "a comment that never closes": "\n<!-- a note the author left\n",
     "a note above a line of equals": "\nA note for the reviewer.\n\n===\n",
+    # A note that NAMES the item the write is rewriting. The first reading
+    # here dropped every line carrying the item's text, so an author's own
+    # sentence about it was exempt from the loss check and could go unseen
+    # (codex, gpt-5.6-sol, xhigh). `author_lines` matches the entry SHAPE now,
+    # and this body is what says so.
+    "a note naming the item in prose": f"\nReviewer note: {ITEM} only on this head.\n",
 }
 
 # What the author wrote after the section. The successor decides where the
@@ -86,6 +94,7 @@ def load(name: str, path: Path):
 
 helpers = load("_helpers", SKILL_SCRIPTS / "_helpers.py")
 evidence = load("evidence", SKILL_SCRIPTS / "evidence.py")
+MARKDOWN_LINE_ENDING_RE = helpers.MARKDOWN_LINE_ENDING_RE
 
 
 def body(tail: str, successor: str, ending: str) -> str:
@@ -107,19 +116,31 @@ def body(tail: str, successor: str, ending: str) -> str:
     return text.replace("\n", ending)
 
 
-def reader_lines(text: str) -> list[str]:
-    """The lines a reader sees, with the entries this write is rewriting left out.
+ENTRY_LINE_RE = re.compile(r"^\s*- \[(?:complete|blocked|pending-ci)\] .+ -- .+$")
 
-    `_rendered_lines` is the runtime's own rendering, so what counts as a line
-    on the page is one answer rather than two. The status entries come out
-    because rewriting them is what the write is FOR -- every other line is one
-    the author put there, and a write that ends with fewer of them has taken
-    something from a page somebody was reading.
+
+def author_lines(text: str) -> list[str]:
+    """Every line of the body the author wrote, with what this write owns taken out.
+
+    The author's own bytes, not a rendering. A rendering was the first reading
+    here and it was a lossy one: `_rendered_lines` never interprets HTML by
+    design, so deleting `<details>`, its `<summary>` or its closer was a change
+    it could not see, and the corpus carries three bodies built out of exactly
+    those lines (codex, gpt-5.6-sol, xhigh). Source lines see every one of
+    them, and a fence marker and an indent besides.
+
+    Two things come out, and both are this write's to change. The metadata
+    comment is re-rendered on every write, so its lines are not the author's.
+    A status entry is rewritten from the entries in hand, which is what the
+    write is FOR -- matched on the SHAPE a reader reads as an entry rather than
+    on the item's text, because a line naming the item in prose is the author's
+    and a reading that dropped every line naming it could not see that one go.
     """
+    stripped = evidence._strip_evidence_metadata(MARKDOWN_LINE_ENDING_RE.sub("\n", text))
     return [
         line
-        for line in evidence._rendered_lines(text)
-        if line.strip() and ITEM not in line
+        for line in stripped.split("\n")
+        if line.strip() and not ENTRY_LINE_RE.match(line)
     ]
 
 
@@ -133,9 +154,9 @@ def lines_lost(before: str, after: str) -> list[str]:
     losing it -- the write moves notes by design -- so the comparison is a
     multiset over the whole body and not a position check.
     """
-    remaining = reader_lines(after)
+    remaining = author_lines(after)
     lost = []
-    for line in reader_lines(before):
+    for line in author_lines(before):
         if line in remaining:
             remaining.remove(line)
         else:
@@ -159,6 +180,15 @@ class Outcome:
         says so about is a decision a reader can see and argue with; a line
         that leaves the page with nothing printed is the failure #1725 and
         #1734 were both instances of.
+
+        Attribution is at the level of the BODY, not the line: a body that
+        printed one "not carried" line has every loss in it counted as
+        announced, so a write that dropped a second line quietly beside an
+        announced one would read as clean here (codex, gpt-5.6-sol, xhigh).
+        Tightening it needs the announcement to carry the lines rather than
+        the block and its line number, which is a change to the runtime's
+        message. The test pins which lines went and which message went with
+        them, so the two cases that exist are attributed by hand.
         """
         return bool(self.lost) and not self.announced
 
