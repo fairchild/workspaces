@@ -27,6 +27,7 @@ import io
 import json
 import re
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -121,9 +122,21 @@ def body(tail: str, successor: str, ending: str) -> str:
     return text.replace("\n", ending)
 
 
-ENTRY_LINE_RE = re.compile(
-    r"^\s*- \[(?:complete|blocked|pending-ci)\] (?P<item>.+?) -- .+$"
-)
+ENTRY_LINE_RE = re.compile(r"^\s*- \[(?:complete|blocked|pending-ci)\] .+ -- .+$")
+
+
+def _entry_line_for(item: str) -> re.Pattern[str]:
+    """The line the write renders for one recorded item, as a pattern.
+
+    Built from the item rather than read out of the line. Reading it out took
+    the text up to the FIRST ` -- `, so a recorded item that itself holds one
+    -- `build -- release` -- was cut to `build`, which no metadata records; the
+    write's own entry then read as the author's, and an ordinary write reported
+    the entry it had just rewritten as a silent loss (#1738, round 3).
+    """
+    return re.compile(
+        rf"^\s*- \[(?:complete|blocked|pending-ci)\] {re.escape(item)} -- .+$"
+    )
 
 
 def _recorded_items(text: str) -> set[str]:
@@ -157,9 +170,12 @@ def _entry_line_numbers(lines: list[str], text: str, recorded: set[str]) -> set[
     It is entry-SHAPED, rather than carrying the item's text anywhere: a line
     naming the item in prose is the author's sentence about it.
 
-    It names an item the metadata RECORDS, so the author's own
-    `- [blocked] release approval -- the signing profile is missing` is never
-    the machine's, wherever it sits and however the section is read.
+    It names an item the metadata RECORDS -- matched whole, escaped, rather
+    than read out of the line up to the first ` -- `, which cut a recorded
+    `build -- release` down to `build` and handed the write's own entry back as
+    the author's (#1738, round 3). So the author's own `- [blocked] release
+    approval -- the signing profile is missing` is never the machine's,
+    wherever it sits and however the section is read.
 
     And it sits INSIDE the section, so an author's copy of a recorded item
     under their own `## Validation` stays theirs.
@@ -182,14 +198,13 @@ def _entry_line_numbers(lines: list[str], text: str, recorded: set[str]) -> set[
     for line in lines:
         starts.append(offset)
         offset += len(line) + 1
-    owned = set()
-    for index, start in enumerate(starts):
-        if not bounds[1] <= start < bounds[2]:
-            continue
-        match = ENTRY_LINE_RE.match(lines[index])
-        if match and match.group("item").strip() in recorded:
-            owned.add(index)
-    return owned
+    patterns = [_entry_line_for(item) for item in recorded]
+    return {
+        index
+        for index, start in enumerate(starts)
+        if bounds[1] <= start < bounds[2]
+        and any(pattern.match(lines[index]) for pattern in patterns)
+    }
 
 
 def author_lines(text: str) -> list[str]:
@@ -227,9 +242,13 @@ def author_seams(text: str) -> list[tuple[str, str]]:
     blank line between them and one setext h1 without it, and both lines
     survive either way (#1738, round 2).
 
-    A blank line separates, and so does a status entry: the entries are the
-    write's to add and remove, so whether one sits between two of the author's
-    lines is not a seam the author made.
+    A blank line separates, and so does a status entry. The author did not make
+    the gap an entry fills -- but this instrument counts what the WRITE did, and
+    a write that takes an entry out from between two of the author's lines has
+    put those lines next to each other. `note above`, an entry, and `===`
+    becomes `note above` over `===`, which is a setext h1 nobody wrote. So the
+    entry separates in the source and its removal is a seam the write made, and
+    `seams_closed` reports it (#1738, round 3).
 
     Pairs and not blocks. A block multiset reports every carried note, because
     the writer's own `## Evidence Notes` lands directly above the first one and
@@ -257,14 +276,21 @@ def seams_closed(before: str, after: str) -> list[tuple[str, str]]:
     Only pairs whose BOTH lines the author already wrote: the writer adds
     `## Evidence Notes` directly above the first carried block, and a heading
     it wrote is not a seam it closed.
+
+    Counted, not collected. Subtracting a SET of the source's seams let a pair
+    that already appeared once anywhere in the body mask the same pair being
+    newly made somewhere else -- `A\nB` once plus `A` and `B` apart becoming
+    `A\nB` twice reported nothing, which is a quiet failure on the half of this
+    instrument that exists to catch a quiet failure (#1738, round 3).
     """
     source = set(author_lines(before))
-    already = set(author_seams(before))
-    return [
+    already = Counter(author_seams(before))
+    closed = Counter(
         pair
         for pair in author_seams(after)
-        if pair not in already and pair[0] in source and pair[1] in source
-    ]
+        if pair[0] in source and pair[1] in source
+    )
+    return sorted((closed - already).elements())
 
 
 def lines_lost(before: str, after: str) -> list[str]:

@@ -18,6 +18,7 @@ Safe to run with no network, no secrets, no GitHub and no UI.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -274,6 +275,109 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
                 outside, outside.replace(f"## Validation\n\n{recorded}\n", "## Validation\n\n")
             ),
             [recorded],
+        )
+
+    @staticmethod
+    def _body_with_item(item: str, detail: str, *, tail: str = "", successor: str = "## Validation\n\n- ran it\n") -> str:
+        """A body whose recorded item is whatever the caller needs, metadata and all."""
+        meta = {
+            "entries": [
+                {"index": 1, "item": item, "status": "pending-ci", "detail": detail, "kind": "test"}
+            ]
+        }
+        section = f"- [pending-ci] {item} -- {detail}\n" + tail
+        return (
+            "<!-- evidence-status:v1\n"
+            + json.dumps(meta)
+            + "\n-->\n\n## Evidence Status\n\n"
+            + section.rstrip("\n")
+            + "\n\n"
+            + successor
+        )
+
+    def test_a_recorded_item_that_holds_a_dash_pair_is_still_the_write_s(self) -> None:
+        """Ownership is decided by the recorded item, not by where a regex splits (#1738, round 3).
+
+        The item was read out of the line with a non-greedy group up to the
+        first ` -- `, so a recorded item that itself holds one -- `build --
+        release` -- was cut to `build`, which no metadata records. The write's
+        own entry then read as the author's, and an ordinary write of that body
+        reported the entry it had just rewritten as a silent loss. A false
+        positive on the headline number, which is the same failure as a false
+        negative for anyone reading it.
+
+        Each recorded item is matched whole now, escaped, against the line.
+        """
+        item, detail = "build -- release", "d"
+        body = self._body_with_item(item, detail)
+        entry = f"- [pending-ci] {item} -- {detail}"
+        self.assertIn(entry, body)
+        self.assertNotIn(entry, sweep_script.author_lines(body))
+        written, refused, said = sweep_script.write_once(body)
+        self.assertFalse(refused)
+        self.assertEqual(sweep_script.lines_lost(body, written), [])
+        self.assertEqual(sweep_script.seams_closed(body, written), [])
+        # And an author's line naming a DIFFERENT item is still the author's,
+        # whatever dashes it carries.
+        theirs = "- [blocked] build -- staging -- someone else's line"
+        with_theirs = self._body_with_item(item, detail, successor=f"## Validation\n\n{theirs}\n")
+        self.assertIn(theirs, sweep_script.author_lines(with_theirs))
+
+    def test_a_seam_closed_beside_one_that_was_already_there_is_still_reported(self) -> None:
+        """Seams are counted, not collected (#1738, round 3).
+
+        The comparison subtracted a SET of the source's seams from the result's,
+        so a pair that already appeared once anywhere in the body masked the
+        same pair being newly made somewhere else. `A\nB` once and `A`, `B`
+        apart becomes `A\nB` twice, and the detector reported nothing -- the
+        quiet failure, on the half of the instrument that exists to catch a
+        quiet failure.
+        """
+        before = "A\nB\n\nA\n\nB"
+        after = "A\nB\n\nA\nB"
+        self.assertEqual(sweep_script.author_seams(before), [("A", "B")])
+        self.assertEqual(sweep_script.author_seams(after), [("A", "B"), ("A", "B")])
+        self.assertEqual(sweep_script.seams_closed(before, after), [("A", "B")])
+        # A pair that was already there and is still there once is not a report.
+        self.assertEqual(sweep_script.seams_closed(before, before), [])
+        self.assertEqual(sweep_script.seams_closed("A\nB\n\nC", "C\n\nA\nB"), [])
+
+    def test_an_entry_the_write_removed_from_between_two_lines_is_a_seam_it_made(self) -> None:
+        """Which of the two readings of an owned entry is right, decided (#1738, round 3).
+
+        `author_seams` treats an owned entry as a separator, so two of the
+        author's lines with one between them are not a pair in the source and
+        are a pair once the write takes it out -- and the detector reports it.
+        The docstring said an entry between two author lines "is not a seam the
+        author made", which is true and is not the question: the author did not
+        make it, and the WRITE made it, which is what this instrument counts.
+
+        It matters because touching is what a seam is. An author who wrote
+        `note above`, an entry, and `===` gets a setext h1 out of the write, and
+        a reading that called that nothing would be the seam blindness this
+        half of the detector was added for.
+        """
+        meta = {"entries": [{"index": 1, "item": "x", "status": "pending-ci", "detail": "d", "kind": "test"}]}
+        source = (
+            "<!-- evidence-status:v1\n"
+            + json.dumps(meta)
+            + "\n-->\n\n## Evidence Status\n\nnote above\n- [pending-ci] x -- d\n===\n\n"
+            "## Validation\n\n- ran\n"
+        )
+        self.assertEqual(sweep_script.author_seams(source), [])
+        removed = source.replace("- [pending-ci] x -- d\n", "")
+        self.assertEqual(sweep_script.author_seams(removed), [("note above", "===")])
+        self.assertEqual(sweep_script.seams_closed(source, removed), [("note above", "===")])
+        # And what it costs the page, which is why it counts: the two lines
+        # that now touch are a setext h1 nobody wrote.
+        helpers = sys.modules["_helpers"]
+        self.assertEqual(
+            [
+                token.tag
+                for token in helpers.MARKDOWN.parse("note above\n===")
+                if token.type == "heading_open"
+            ],
+            ["h1"],
         )
 
     def test_the_detector_sees_a_seam_a_write_closed(self) -> None:
