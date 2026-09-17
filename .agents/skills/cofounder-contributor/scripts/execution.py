@@ -52,6 +52,7 @@ from evidence import (
     _has_unautomatable_evidence,
     _needs_macos_evidence,
     _needs_screenshot_evidence,
+    _rendered_status_lines,
     classify_evidence_errors,
     resolve_named_ci_evidence,
     requested_evidence_contract,
@@ -363,17 +364,25 @@ def rejected_heading_checked_line(head_sha: str) -> str:
     nothing, and giving it a marker would put a forgeable token next to model
     prose for no gain.
 
-    It is forgeable, and the cost is not only a repeat suppressed: a copy
-    posted BEFORE the first genuine note suppresses that one (codex,
-    gpt-5.6-sol, xhigh). `_is_prior_rejected_heading_note` asks for the
-    headline beside it and for this text to be a line of its own, so a forgery
-    has to reproduce the note -- at which point the author has been told, which
-    is the whole point of saying it.
+    It is forgeable, and the second condition narrowed that without closing it.
+    A copy posted BEFORE the first genuine note suppresses the one that
+    matters, and putting the headline and this line inside a multi-line HTML
+    comment satisfies `_is_prior_rejected_heading_note` while rendering as
+    nothing on the page -- so anyone who can comment on a pull request can
+    silence this note for a pushed head, and leave nothing a reader would see
+    (#1730, round 3).
+
+    What that costs is advice, not a gate: no check depends on this note, and
+    a body with a heading no reader reads is refused by the reads that refuse
+    it whether or not anybody was told why. Closing it needs the guard to ask
+    what the page SHOWS rather than what the text contains.
     """
     return f"{REJECTED_HEADING_CHECKED_PREFIX} `{head_sha}`."
 
 
-def compose_rejected_heading_comment(persona: str, note: str, head_sha: str) -> str:
+def compose_rejected_heading_comment(
+    persona: str, note: str, head_sha: str, refusal: str | None = None
+) -> str:
     """The note on the PR when an author's own heading was not read as the section.
 
     The write went ahead, so this is not a stand-down: the body now carries a
@@ -390,6 +399,13 @@ def compose_rejected_heading_comment(persona: str, note: str, head_sha: str) -> 
     note the same kind of claim as the refusal it exists to correct -- true
     sounding, wrongly attributed (#1730, round 2).
 
+    And the refusal is QUOTED rather than restated. The restatement said "a
+    reader sees 2 ... headings" and "while both headings stand" and "remove
+    yours", which is a body with one tagged heading described in a sentence
+    that cannot count: an author with two tagged headings gets a written body
+    with three, and a refusal that names all of them, under a paragraph saying
+    two (#1730, round 3). What the readers say is what the author is shown.
+
     Nothing here touches the note. Every value it quotes is already fenced by
     `code_span`, which takes the comment delimiters out BEFORE it measures the
     backtick runs -- and a strip applied afterwards, which is what this used to
@@ -405,11 +421,14 @@ def compose_rejected_heading_comment(persona: str, note: str, head_sha: str) -> 
             "",
             f"- {note}",
             "",
-            "This turn went ahead and the body was updated. While both headings stand, "
-            "the read that collects your evidence refuses this body -- \"a reader sees 2 "
-            "`Evidence Status` headings, not one\" -- and names yours as the one carrying "
-            "the tag. The readiness gate does not refuse it for this: its ambiguity check "
-            "reads the heading line as raw text, where a tag hides it.",
+            "This turn went ahead and the body was updated. While the body stands as it is, "
+            + (
+                f"the read that collects your evidence refuses it: \"{refusal}\". "
+                if refusal
+                else "the read that collects your evidence refuses it. "
+            )
+            + "The readiness gate does not refuse it for this: its ambiguity check reads the "
+            "heading line as raw text, where a tag hides it.",
             "",
             rejected_heading_checked_line(head_sha),
         ]
@@ -426,10 +445,10 @@ def post_rejected_heading_note(
     """Tell the author about a declined heading, once per head, after the body is written.
 
     Composed from the body GitHub now holds, not from what the model wrote and
-    not before the write: the note says a plain heading was written below
-    theirs, and that sentence is only true of a body where it was. Asked before
-    the write, it was said on turns whose write then refused and returned the
-    body untouched (#1730, round 2).
+    not before the write: the note says where the readable heading is, and that
+    sentence is only true of a body it was read from. Asked before the write,
+    it was said on turns whose write then refused and returned the body
+    untouched (#1730, round 2).
 
     Once per head in the ordinary case, and best-effort about it. Re-running a
     turn at the same head re-posts nothing; a new commit that still carries the
@@ -444,6 +463,11 @@ def post_rejected_heading_note(
     post. The alternative to each is a note that is never said, and the reason
     this exists is that nothing was said at all.
 
+    And one way it is silenced: a forged copy hidden in an HTML comment
+    satisfies the guard and shows a reader nothing. See
+    `_is_prior_rejected_heading_note` for what that costs and what would close
+    it.
+
     One way it is quieter than the head suggests: a PR body can be edited
     without a commit, so a second body-only turn at the same head does not
     repeat the note even if the author has since written a different tagged
@@ -455,8 +479,11 @@ def post_rejected_heading_note(
     note = rejected_heading_note(written_body, "Evidence Status")
     if note is None:
         return False
-    log(note)
+    # Once on stderr, as the structured record, which carries the note in
+    # `detail`. The plain line beside it was a second copy of the same
+    # sentence in the same stream, and the body claimed one (#1730, round 3).
     log(json.dumps({"error_class": "rejected_heading", "detail": note, "pr": pr_number}))
+    _, refusal = _rendered_status_lines(written_body)
     checked = rejected_heading_checked_line(head_sha)
     if any(
         _is_prior_rejected_heading_note(body, checked)
@@ -464,7 +491,7 @@ def post_rejected_heading_note(
     ):
         return False
     return _post_pr_comment(
-        pr_number, compose_rejected_heading_comment(persona, note, head_sha), env
+        pr_number, compose_rejected_heading_comment(persona, note, head_sha, refusal), env
     )
 
 
@@ -525,13 +552,20 @@ REJECTED_HEADING_HEADLINE = "**Your `## Evidence Status` heading was not read as
 def _is_prior_rejected_heading_note(comment: str, checked: str) -> bool:
     """Whether this comment is this runtime's note about this head.
 
-    Two conditions, because one was forgeable in the direction that matters. A
-    substring match on the head line alone is satisfied by that text inside an
-    HTML comment or a fence in somebody else's comment -- and a copy posted
-    before the first genuine note suppresses it, which is worse than a repeat
-    (codex, gpt-5.6-sol, xhigh). So the head line has to be a line of its own,
-    and the note's headline has to be here too. A comment that carries both has
-    said the thing this one would say.
+    Two conditions, and they narrow the forgery rather than closing it. A
+    substring match on the head line alone was satisfied by that text quoted
+    mid-sentence, which this is not; but a forger who writes the headline and
+    the head line as their own lines still satisfies it, and writing both
+    INSIDE a multi-line HTML comment satisfies it while the page shows nothing
+    at all. A copy posted before the first genuine note suppresses the one that
+    matters (#1730, round 3).
+
+    So this asks what the comment's TEXT contains, and what would close the
+    hole is asking what the page shows -- the reader that answers that is
+    `_rendered_lines`, and putting a rendering in the dedup path is a change to
+    make deliberately rather than inside a round about wording. The cost of
+    leaving it is a note not said: nothing downstream depends on this note, and
+    every reader that refuses a body with an unread heading still refuses it.
     """
     return REJECTED_HEADING_HEADLINE in comment and any(
         line.strip() == checked for line in comment.splitlines()
@@ -1643,8 +1677,7 @@ def route_execution_action(
             env=env,
         )
         # After the body write, and only now: the note says a plain heading was
-        # written below the author's, which is a claim about the body GitHub
-        # holds. It is also after `validate_evidence_accounting`, which returns
+        # read as that section, which is a claim about the body GitHub holds. It is also after `validate_evidence_accounting`, which returns
         # above on failure -- a turn that ends without publishing has nothing
         # to tell the author about their heading (#1730, round 2).
         post_rejected_heading_note(pr_number, persona, pr_body, pr_head_sha, env)

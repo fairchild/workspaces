@@ -165,10 +165,6 @@ def issue_label_presence(issue: dict[str, object]) -> set[str]:
 # arrives as `html_inline` like every other tag, and the tag name is what
 # identifies it, so attributes and a self-closing slash are all one shape.
 HTML_BREAK_TAG_RE = re.compile(r"(?i)^<br\b[^>]*>$")
-# Everything a line ending or a terminal escape is made of.
-CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x1f\x7f]")
-
-
 def code_span(text: str) -> str:
     """`text` as a code span nothing inside it can break out of, on one line.
 
@@ -182,35 +178,40 @@ def code_span(text: str) -> str:
     mention GitHub delivers to a person who has nothing to do with this
     (#1730, round 2).
 
-    Three removals, then the fence, and nothing may mutate the result
-    afterwards. Order is the whole of it: a comment delimiter taken out AFTER
-    the fence was measured can JOIN two backtick runs into one long enough to
-    close it -- ``` `<!--`` `` `` `@octocat `` in one attribute becomes ``` ```
-    once `<!--` goes, which ends a three-backtick span and puts the mention
-    back in live markdown. Codex (gpt-5.6-sol, xhigh) found that with the
-    delimiters stripped by the caller; they are stripped here now, before the
-    runs are counted, and the caller mutates nothing.
+    Four steps, and the ORDER is the escaping.
 
-    What goes: the delimiters, to a fixpoint, because one deletion can splice a
-    fresh one together; the C0 range and DEL; every Unicode format character,
-    which is where a zero-width space and a right-to-left override live -- each
-    invisible, and the override reorders what a reader sees for the rest of the
-    line; and every run of whitespace, collapsed to one space. That last step
-    is a bare `.split()` on purpose: U+2028, U+2029 and U+0085 are line breaks
-    downstream and none of them is in the C0 range, so narrowing it to
-    `.split(" ")` -- which reads like the same thing -- puts all three back.
+    1. Every character Unicode files under Cc or Cf. Cc is C0, DEL *and* C1 --
+       U+0080 to U+009F, where the CSI introducer is a single character that
+       opens an escape sequence on a terminal reading the log, and which a
+       `[\x00-\x1f\x7f]` class does not name. Cf is the invisible formatting:
+       a zero-width space, and a right-to-left override that reorders what a
+       reader sees for the rest of the line.
+    2. The comment delimiters, to a fixpoint, because one deletion can splice
+       a fresh one together.
+    3. Runs of whitespace, collapsed.
+    4. The fence, one backtick past the longest run inside.
+
+    Step 1 comes before step 2 because a delimiter can be MADE by removing an
+    invisible character: `a<!` ZWSP `--b--` ZWSP `>c` carries no delimiter for
+    the strip to find, and taking the zero-width spaces out afterwards hands
+    the comment a `<!--` the strip had already run (#1730, round 3). Nothing
+    that removes characters may run after the strip, and nothing at all may run
+    after the fence -- a strip applied to a fenced string joins the backtick
+    runs on either side of what it removes and can close the fence (#1730,
+    round 2).
+
+    Step 3 is a bare `.split()` on purpose: U+2028, U+2029 and U+0085 are line
+    breaks downstream, and narrowing it to `.split(" ")` -- which reads like the
+    same thing -- puts all three back.
     """
-    stripped = text
-    while True:
-        without = stripped.replace("<!--", "").replace("-->", "")
-        if without == stripped:
-            break
-        stripped = without
     visible = "".join(
-        character
-        for character in CONTROL_CHARACTER_RE.sub(" ", stripped)
-        if unicodedata.category(character) != "Cf"
+        character for character in text if unicodedata.category(character) not in {"Cc", "Cf"}
     )
+    while True:
+        stripped = visible.replace("<!--", "").replace("-->", "")
+        if stripped == visible:
+            break
+        visible = stripped
     return fenced_code_span(" ".join(visible.split()) or " ")
 
 

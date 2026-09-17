@@ -2958,7 +2958,7 @@ class RevisionTurnTests(unittest.TestCase):
         model rewrote it, which is a publication like any other -- and it went
         through `_finish_revision_without_diff`, which the note's move to
         "after the write" did not reach. The author got a body with a plain
-        heading written below theirs and nothing said about it (#1730, round 2).
+        heading read as that section and nothing said about it (#1730, round 2).
 
         The head here is the live one rather than a pushed commit, because
         nothing was pushed; that is the commit the body is attached to, so it
@@ -3004,21 +3004,65 @@ class RevisionTurnTests(unittest.TestCase):
             [comment for comment in comments if "was not read as the section" in comment], []
         )
 
-    def test_a_forged_head_line_alone_does_not_suppress_the_note(self) -> None:
-        """The dedup check asks for the note, not for a string (#1730, round 2).
+    def test_a_forgery_that_shows_the_reader_nothing_still_suppresses_the_note(self) -> None:
+        """The hole this guard does not close, pinned as what it is (#1749).
 
-        A substring match on the head line is satisfied by that text inside an
-        HTML comment or a fence in anybody's comment -- and a copy posted
-        BEFORE the first genuine note suppresses the one that matters, which is
-        worse than a repeat (codex, gpt-5.6-sol, xhigh). The headline has to be
-        there too, and the head line has to be a line of its own; a comment
-        carrying both has said what this one would say.
+        The check asks what a comment's TEXT contains: the note's headline, and
+        the head line as a line of its own. A comment whose whole content is
+        those two lines inside an HTML comment satisfies both and renders as
+        nothing, so anyone who can comment can silence the note for a pushed
+        head and leave a reader no sign of it. A collapsed `<details>` does the
+        same.
+
+        It is asserted here rather than left to be rediscovered, and it is
+        filed rather than fixed because the fix changes what the dedup path
+        reads -- from the comment's text to what the page shows -- which is a
+        decision to make on its own. What it costs is advice: no check depends
+        on this note, and the reads that refuse a body with an unread heading
+        refuse it either way.
+
+        This test flips when #1749 lands.
+        """
+        execution = sys.modules["execution"]
+        checked = execution.rejected_heading_checked_line(self.LIVE_HEAD)
+        headline = execution.REJECTED_HEADING_HEADLINE
+        for name, forged in (
+            ("a multi-line HTML comment", f"<!--\n{headline}\n{checked}\n-->"),
+            (
+                "a collapsed details block",
+                f"<details>\n<summary>nothing here</summary>\n\n{headline}\n\n{checked}\n\n</details>",
+            ),
+        ):
+            with self.subTest(forgery=name):
+                self.assertTrue(
+                    execution._is_prior_rejected_heading_note(forged, checked),
+                    f"{name} no longer satisfies the guard -- if #1749 landed, flip this test",
+                )
+                _, _, comments, _ = self._route_with_tagged_heading(existing_comments=[forged])
+                self.assertEqual(
+                    [c for c in comments if "was not read as the section" in c], [], name
+                )
+        # And the HTML-comment one shows a reader nothing, which is what makes
+        # it a silencing rather than a duplicate.
+        hidden = f"<!--\n{headline}\n{checked}\n-->"
+        rendered = sys.modules["evidence"]._rendered_lines(hidden)
+        self.assertEqual([line for line in rendered if line.strip()], [])
+
+    def test_a_forged_head_line_alone_does_not_suppress_the_note(self) -> None:
+        """What the second condition did narrow (#1730, round 2).
+
+        A substring match on the head line alone was satisfied by that text
+        quoted mid-sentence in anybody's comment. Requiring the headline beside
+        it, and the head line as a line of its own, rules those out -- it does
+        not rule out a forger who writes both, which
+        `test_a_forgery_that_shows_the_reader_nothing_still_suppresses_the_note`
+        pins and #1749 owns.
         """
         execution = sys.modules["execution"]
         checked = execution.rejected_heading_checked_line(self.LIVE_HEAD)
         for name, forged in (
-            ("hidden in an HTML comment", f"<!-- {checked} -->"),
-            ("inside a fence", f"```\n{checked}\n```"),
+            ("the head line alone in an HTML comment", f"<!-- {checked} -->"),
+            ("the head line alone inside a fence", f"```\n{checked}\n```"),
             ("quoted mid-sentence", f"Someone wrote: {checked} in passing."),
         ):
             with self.subTest(forgery=name):
@@ -3034,6 +3078,31 @@ class RevisionTurnTests(unittest.TestCase):
         other = execution.compose_rejected_heading_comment(self.PERSONA, "a note", "f" * 40)
         _, _, again, _ = self._route_with_tagged_heading(existing_comments=[other])
         self.assertEqual(len([c for c in again if "was not read as the section" in c]), 1)
+
+    def test_the_note_reaches_stderr_once(self) -> None:
+        """One emission, and it is the structured record (#1730, round 3).
+
+        There were two: a plain `log(note)` and the JSON record beside it,
+        which is the same sentence twice in the same stream on the same turn,
+        under a body that said once. The record carries the note in `detail`,
+        so it is the one that stays -- a person reading a workflow log gets the
+        sentence, and the telemetry gets its `error_class`.
+        """
+        execution = sys.modules["execution"]
+        state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        spoke = io.StringIO()
+        with mock.patch.object(self, "_state", return_value=state):
+            with contextlib.redirect_stderr(spoke):
+                self._route(
+                    dirty=True,
+                    live_body="stale body",
+                    data=self._data(self.TAGGED_HEADING_BODY),
+                    revision=False,
+                )
+        said = spoke.getvalue()
+        carrying = [line for line in said.splitlines() if "carries inline HTML" in line]
+        self.assertEqual(len(carrying), 1, carrying)
+        self.assertIn('"error_class": "rejected_heading"', carrying[0])
 
     def test_a_comment_read_that_fails_says_the_note_again_rather_than_never(self) -> None:
         # The chosen failure direction, pinned: an unreadable comment list ends

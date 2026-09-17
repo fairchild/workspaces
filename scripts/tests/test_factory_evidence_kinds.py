@@ -6420,6 +6420,45 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
         ]
         self.assertTrue([span for span in spans if "@octocat" in span], spans)
 
+    def test_an_invisible_character_cannot_splice_a_delimiter_back_together(self) -> None:
+        """The order of the removals is the escaping, not just their presence (#1730, round 3).
+
+        Round 2 put the delimiter strip before the fence, which was the fix it
+        needed, and left the invisible-character removal AFTER it. So an author
+        who writes `a<!` ZWSP `--b--` ZWSP `>c` gets past the strip -- the
+        delimiters are not there yet -- and the removal then splices them
+        together, handing the comment a `<!--` the strip had already run.
+
+        The invisibles go first for that reason: a delimiter can be made by
+        taking a character out, so nothing that removes characters may run
+        after the strip.
+        """
+        helpers = self.helpers()
+        spliced = helpers.code_span("a<!\u200b--b--\u200b>c")
+        self.assertNotIn("<!--", spliced)
+        self.assertNotIn("-->", spliced)
+        # The spliced delimiters go with the strip, brackets and all, and the
+        # author's own letters are what is left: `a<!` ZWSP `--b--` ZWSP `>c`
+        # becomes `a<!--b-->c` once the invisibles are out, and the strip then
+        # takes both delimiters.
+        self.assertEqual(spliced, "`abc`")
+
+    def test_a_c1_control_does_not_survive_into_the_note(self) -> None:
+        # `[\x00-\x1f\x7f]` is C0 and DEL. The C1 range is U+0080-U+009F,
+        # where the CSI introducer lives -- a single character that opens an
+        # escape sequence on a terminal reading the workflow log, and one the
+        # class above does not name (#1730, round 3).
+        helpers = self.helpers()
+        for name, char in (
+            ("CSI introducer", "\u009b"),
+            ("string terminator", "\u009c"),
+            ("next line", "\u0085"),
+        ):
+            with self.subTest(character=name):
+                span = helpers.code_span(f"<span title=\"x{char}y\">")
+                self.assertNotIn(char, span)
+                self.assertIn("<span", span)
+
     def test_an_invisible_format_character_does_not_survive_into_the_note(self) -> None:
         # A zero-width space and a right-to-left override are neither control
         # characters in the C0 sense nor whitespace: the first is invisible and
@@ -6453,15 +6492,15 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
         written = self.written(self.SHAPES["span"][0])
         note = self.helpers().rejected_heading_note(written, "Evidence Status")
         assert note is not None
-        comment = execution.compose_rejected_heading_comment("April", note, "0" * 40)
-
-        # Claim 1: the read that collects evidence refuses, naming the tag.
         _, unreadable = evidence._rendered_status_lines(written)
         assert unreadable is not None
+        comment = execution.compose_rejected_heading_comment("April", note, "0" * 40, unreadable)
+
+        # Claim 1: the read that collects evidence refuses, and the comment
+        # QUOTES that refusal rather than restating it.
         self.assertIn("2 `Evidence Status` headings, not one", unreadable)
         self.assertIn("carries inline HTML", unreadable)
-        self.assertIn('a reader sees 2 `Evidence Status` headings, not one', comment)
-        self.assertIn("names yours as the one carrying the tag", comment)
+        self.assertIn(unreadable, comment)
 
         # Claim 2: the readiness gate does not refuse it for this.
         gate = self.readiness_gate()
@@ -6483,13 +6522,13 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
     def test_a_break_outside_the_control_range_is_flattened_too(self) -> None:
         """The half of the flattening that is not obvious (#1730, round 2).
 
-        `CONTROL_CHARACTER_RE` covers the C0 range and DEL. A line separator, a
-        paragraph separator and a next-line character are outside it and are
-        each a line break to something downstream; what removes them is the
-        bare `.split()`, which splits on every character Python calls
-        whitespace. Narrowing that to `.split(" ")` reads like the same thing
-        and puts all three back, so it is pinned here rather than left to the
-        docstring.
+        The Cc and Cf removal covers the control and format characters. A line
+        separator and a paragraph separator are neither -- Unicode files them
+        under Zl and Zp -- and each is a line break to something downstream;
+        what removes them is the bare `.split()`, which splits on every
+        character Python calls whitespace. Narrowing that to `.split(" ")`
+        reads like the same thing and puts them back, so it is pinned here
+        rather than left to the docstring.
         """
         helpers = self.helpers()
         for name, char in (
@@ -6576,6 +6615,50 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
         self.assertIn("(`<span>`)", both)
         self.assertIn("(`<del>`)", both)
         self.assertIn("none of them is read as the section", both)
+
+    def test_the_comment_quotes_the_refusal_rather_than_counting_for_itself(self) -> None:
+        """A sentence that says "2" and "both" on a body with three (#1730, round 3).
+
+        The comment used to restate the refusal: "a reader sees 2
+        `Evidence Status` headings", "while both headings stand", "names yours
+        as the one carrying the tag". An author with TWO tagged headings gets a
+        written body with three and a refusal that names all of them, under a
+        paragraph saying two and pointing at one.
+
+        The readers already compute the count and the names, so the comment
+        quotes what they say. There is no second copy of that sentence to
+        count wrong.
+        """
+        execution, evidence, helpers = sys.modules["execution"], self.evidence(), self.helpers()
+        opening = "Why this exists, at length enough to satisfy the leading paragraph rule.\n\n"
+        two_tagged = (
+            opening
+            + "## <span>Evidence Status</span>\n\n- [pending-ci] a -- b\n\n"
+            + "## <del>Evidence Status</del>\n\n- [pending-ci] c -- d\n\n"
+            + "## Validation\n\n- ran\n"
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            written, refusal = evidence.write_evidence_status_section(
+                two_tagged, ["- [complete] the UI lane -- swift test passed"]
+            )
+        self.assertIsNone(refusal)
+        note = helpers.rejected_heading_note(written, "Evidence Status")
+        assert note is not None
+        _, unreadable = evidence._rendered_status_lines(written)
+        assert unreadable is not None
+        comment = execution.compose_rejected_heading_comment("April", note, "0" * 40, unreadable)
+
+        # Three headings a reader sees, and the comment says three because the
+        # refusal does.
+        self.assertIn("a reader sees 3 `Evidence Status` headings, not one", unreadable)
+        self.assertIn("a reader sees 3 `Evidence Status` headings, not one", comment)
+        self.assertNotIn("a reader sees 2 `Evidence Status` headings", comment)
+        # Both tags named, in the comment, because the refusal names both.
+        self.assertIn("(`<span>`)", comment)
+        self.assertIn("(`<del>`)", comment)
+        # And no sentence that can only count to two.
+        self.assertNotIn("both headings", comment)
+        self.assertNotIn("names yours as the one carrying the tag", comment)
 
     def test_the_comment_says_which_head_it_was_read_from(self) -> None:
         # What makes it once per head rather than once per run: the line is
