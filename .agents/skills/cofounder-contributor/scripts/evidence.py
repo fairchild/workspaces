@@ -769,7 +769,20 @@ def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
             carries = phrases[0] if len(phrases) == 1 else ", ".join(phrases[:-1]) + f" and {phrases[-1]}"
             unread = "it is not read" if len(rejected) == 1 else "none of them is read"
             those = "that one" if len(rejected) == 1 else "those"
-            remaining = len(headings) - len(rejected)
+            # What is LEFT that a reader reads as this section, not what is
+            # left of the count. `headings` here is every heading whose text
+            # reads as this one at any level and any depth, and a rejection is
+            # a top-level h2 -- so on a body with a tagged h2 and an `# Evidence
+            # Status` below it, subtracting gave 1 and promised a repair that
+            # leaves a readable heading, where an h1 is not one either and the
+            # author meets this refusal again. `is_section_heading` is the
+            # predicate that decides, so it is the predicate that counts.
+            remaining = sum(
+                1
+                for index in headings
+                if is_section_heading(tokens[index])
+                and not any(child.type == "html_inline" for child in tokens[index + 1].children or [])
+            )
             if remaining:
                 counted = "one heading" if remaining == 1 else f"{remaining} headings"
                 named = (
@@ -779,8 +792,8 @@ def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
             else:
                 named = (
                     f"; {carries}, and {unread} as the section, so removing {those} would leave "
-                    "a body with no heading a reader reads as this section; take the tags off one "
-                    "of them instead"
+                    "a body with no heading a reader reads as this section; take the tags off "
+                    f"{'it' if len(rejected) == 1 else 'one of them'} instead"
                 )
         return [], f"{_heading_count_refusal(len(headings))}{named}"
     start = headings[0]

@@ -6438,6 +6438,83 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
         # And the sentence that was not true of this repo is gone.
         self.assertNotIn("every check that reads this section refuses it", comment)
 
+    def test_a_break_outside_the_control_range_is_flattened_too(self) -> None:
+        """The half of the flattening that is not obvious (#1730, round 2).
+
+        `CONTROL_CHARACTER_RE` covers the C0 range and DEL. A line separator, a
+        paragraph separator and a next-line character are outside it and are
+        each a line break to something downstream; what removes them is the
+        bare `.split()`, which splits on every character Python calls
+        whitespace. Narrowing that to `.split(" ")` reads like the same thing
+        and puts all three back, so it is pinned here rather than left to the
+        docstring.
+        """
+        helpers = self.helpers()
+        for name, char in (
+            ("line separator", "\u2028"),
+            ("paragraph separator", "\u2029"),
+            ("next line", "\u0085"),
+            ("form feed", "\x0c"),
+            ("vertical tab", "\x0b"),
+        ):
+            with self.subTest(character=name):
+                span = helpers.code_span(f"a{char}::error::owned")
+                self.assertNotIn(char, span)
+                self.assertIn("::error::owned", span)
+
+    def test_the_note_says_where_the_plain_heading_is_and_not_where_it_usually_is(self) -> None:
+        """"Written below it" is a claim about position, checked against the body (#1730, round 2).
+
+        The write puts a plain heading below the author's, which is what makes
+        the sentence useful -- it tells them which of the two headings is which.
+        On a body that already carried a plain heading ABOVE the tagged one it
+        was simply false, and the author looking below for a heading that is
+        above them is the round this note exists to save.
+        """
+        helpers = self.helpers()
+        opening = "Why this exists, at length enough to satisfy the leading paragraph rule.\n\n"
+        tagged = "## <span>Evidence Status</span>\n\n- [complete] a -- b\n\n"
+        plain = "## Evidence Status\n\n- [complete] c -- d\n"
+        below = helpers.rejected_heading_note(opening + tagged + plain, "Evidence Status")
+        above = helpers.rejected_heading_note(opening + plain + "\n" + tagged, "Evidence Status")
+        assert below is not None and above is not None
+        self.assertIn("A plain `## Evidence Status` was written below it", below)
+        self.assertIn("A plain `## Evidence Status` above it is the one being read", above)
+        self.assertNotIn("below it", above)
+
+    def test_the_refusal_counts_the_headings_a_reader_reads_and_not_every_heading(self) -> None:
+        """What removal leaves is counted with the predicate that decides it (#1730, round 2).
+
+        The two-headings refusal counts every heading whose text reads as this
+        one, at any level and any depth; a rejection is a top-level h2. On a
+        body with a tagged h2 and an `# Evidence Status` below it, subtracting
+        one from the other gives 1 and promises a repair that leaves a readable
+        heading -- and an h1 is not one, so the author repairs, re-runs and
+        meets this refusal again. That is the same broken promise item 7 was
+        about, reached by a different mismatch.
+        """
+        opening = "Why this exists, at length enough to satisfy the leading paragraph rule.\n\n"
+        tagged = "## <span>Evidence Status</span>\n\n- [complete] a -- b\n\n"
+        for name, other in (
+            ("an h1 of the same text", "# Evidence Status\n\n- [complete] c -- d\n"),
+            ("an h3 of the same text", "### Evidence Status\n\n- [complete] c -- d\n"),
+            ("one inside a block quote", "> ## Evidence Status\n"),
+        ):
+            with self.subTest(other=name):
+                _, unreadable = self.evidence()._rendered_status_lines(opening + tagged + other)
+                assert unreadable is not None
+                self.assertIn("2 `Evidence Status` headings, not one", unreadable)
+                self.assertIn(
+                    "would leave a body with no heading a reader reads as this section", unreadable
+                )
+                self.assertIn("take the tags off it instead", unreadable)
+        # And the control: a real second h2 IS what removal leaves.
+        _, counted = self.evidence()._rendered_status_lines(
+            opening + tagged + "## Evidence Status\n\n- [complete] c -- d\n"
+        )
+        assert counted is not None
+        self.assertIn("leaves a body with one heading a reader reads as this section", counted)
+
     def test_the_comment_says_which_head_it_was_read_from(self) -> None:
         # What makes it once per head rather than once per run: the line is
         # visible, and the next turn at the same commit finds it.

@@ -187,6 +187,13 @@ def code_span(text: str) -> str:
     `inline_text` already applies to a code span it re-emits, written here once
     and called from both. A space pads a value that starts or ends on a
     backtick, which is what CommonMark requires to keep it inside.
+
+    Both halves of the flattening are load-bearing and only one of them is
+    obvious. `CONTROL_CHARACTER_RE` takes the C0 range and DEL; the bare
+    `.split()` takes every other character Python calls whitespace, which is
+    where U+2028, U+2029 and U+0085 are -- each of them a line break to
+    something downstream and none of them in that range. Narrowing the split to
+    `.split(" ")`, which reads like the same thing, puts those three back.
     """
     return fenced_code_span(" ".join(CONTROL_CHARACTER_RE.sub(" ", text).split()) or " ")
 
@@ -393,11 +400,20 @@ def rejected_heading_note(body: str, heading: str) -> str | None:
     lines = MARKDOWN_LINE_ENDING_RE.sub("\n", body).split("\n")
     index, tag = rejected[0]
     line = lines[tokens[index].map[0]].strip() if tokens[index].map else f"## {heading}"
-    written = (
-        f"A plain `## {heading}` was written below it."
-        if section_heading_index(tokens, heading) is not None
-        else f"No plain `## {heading}` heading is in this body, so nothing here is read as that section."
-    )
+    readable = section_heading_index(tokens, heading)
+    if readable is None:
+        written = (
+            f"No plain `## {heading}` heading is in this body, so nothing here is read as "
+            "that section."
+        )
+    elif (tokens[readable].map or (0, 0))[0] > (tokens[index].map or (0, 0))[0]:
+        written = f"A plain `## {heading}` was written below it."
+    else:
+        # The ordinary case is a heading the write put BELOW the author's, and
+        # "below it" is the part that tells them which of the two is which. It
+        # is a claim about position, so on a body that already carried a plain
+        # heading above the tagged one it was simply false.
+        written = f"A plain `## {heading}` above it is the one being read as that section."
     return (
         f"{code_span(line)} carries inline HTML ({code_span(tag)}), so it is not read as the "
         f"`{heading}` section -- a tag can strike, hide or fold what follows it, and "
