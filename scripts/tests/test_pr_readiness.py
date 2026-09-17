@@ -1157,14 +1157,14 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
     were varied together and `h1 under runaway fence` reads as one fixture
     (#1738).
 
-    Which cells diverge is derived here, not declared. The two readers run the
-    same parser over the same body, so a construct alone cannot tell them
-    apart: the whole of the difference is the skill's repair of a fence that
-    never closes (`reparsed_without_runaway`), which the gate does not make. So
-    they diverge on exactly the cells where the gate's own reading comes back
-    holding an open fence -- and `split_fenced_blocks`, this gate's own line
-    scanner, already says which those are. A cell that breaks that equivalence
-    in either direction goes red here, including one nobody named.
+    Where they diverge is declared per CONTEXT and never per cell, because the
+    context is where the cause lives. The two readers run the same parser over
+    the same body, so a construct alone cannot tell them apart: the whole of
+    the difference is the skill's repair of a top-level fence that never closes
+    (`reparsed_without_runaway`), which the gate does not make. `CONTEXT_VERDICTS`
+    is that statement, one line per context, and a context added without one
+    goes red -- which is the guard the old per-shape list did not have, since a
+    shape could be added to it and simply not be named a divergence.
     """
 
     HELPERS_PATH = (
@@ -1270,6 +1270,48 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         "in a list item": ("", "", "- ", "  "),
         "in a block quote": ("", "", "> ", "> "),
         "in an indented code block": ("", "\ntext\n", "    ", "    "),
+        # A fence that never closes but is not TOP-LEVEL. The skill's
+        # `runaway_fence` asks `token.level == 0`, so it does not repair one
+        # nested in a list item or a quote, and neither reader is looking past
+        # it -- these are the contexts that say the divergence is about the
+        # repair's own condition and not about a fence anywhere in the body.
+        "under a runaway fence nested in a list item": ("- an item\n  ```\n  a log\n\n", "", "", ""),
+        "under a runaway fence nested in a block quote": ("> quoted\n> ```\n> a log\n\n", "", "", ""),
+        # Four spaces in is an indented code block and not a fence at all, so
+        # nothing runs away and nothing is hidden.
+        "under a fence opener indented four": ("    ```\n    a log\n\n", "", "", ""),
+    }
+
+    # Whether the two readers part company in each context, and nothing per
+    # cell. `by the fence the section runs into` is the single context whose
+    # answer depends on the construct written into it: the line that was meant
+    # to close the voided opener opens a fence of its own, so a construct that
+    # ends the section ends it ABOVE that fence and the two agree, and one that
+    # does not leaves both readers looking at it and they do not.
+    CONTEXT_VERDICTS = {
+        "bare": "agree",
+        "in a closed backtick fence": "agree",
+        "in a closed tilde fence": "agree",
+        "in a closed fence indented three": "agree",
+        "in a closed four backtick fence": "agree",
+        "under a voided fence opener, above a real one": "by the fence the section runs into",
+        "under a runaway backtick fence": "diverge",
+        "under a runaway tilde fence": "diverge",
+        "under a runaway four backtick fence": "diverge",
+        "under a nested four then three fence": "diverge",
+        "after a closed comment": "agree",
+        # CommonMark runs an unclosed comment to the end of the document too,
+        # and neither reader repairs it -- the skill's repair is fences only.
+        # So this hides as much as a runaway fence and costs no divergence,
+        # which is the control saying the divergence is about the repair rather
+        # than about hiding.
+        "under an unclosed comment": "agree",
+        "in a list item": "agree",
+        "in a block quote": "agree",
+        "in an indented code block": "agree",
+        "under a runaway fence nested in a list item": "agree",
+        "under a runaway fence nested in a block quote": "agree",
+        "under a fence opener indented four": "agree",
     }
     CANDIDATE_TAIL = "- [blocked] the signing profile is missing\n\n## Validation\n- ran it\n"
 
@@ -1324,8 +1366,8 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
     # thing that causes it rather than as a list of shapes it shows up on.
     DIVERGENCE = (
         "the skill ends the section at the first boundary the REPAIRED parse finds -- it blanks "
-        "the opener of a fence that never closes and asks the parser again, so it reads the "
-        "heading the author wrote -- and the gate ends it at the next boundary the unrepaired "
+        "the opener of a top-level fence that never closes and asks the parser again, so it reads "
+        "the heading the author wrote -- and the gate ends it at the next boundary the unrepaired "
         "parse finds, which is the end of the body, because CommonMark runs an unclosed fence to "
         "the last line and every heading below it is code. The page is on the gate's side and "
         "the author on the skill's. What the longer reading costs is measured in "
@@ -1333,28 +1375,49 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
     )
 
     # Both counts, so the property cannot be satisfied by a grid that stopped
-    # generating. 28 constructs x 15 contexts x 3 line endings.
-    CELL_COUNT = 28 * 15 * 3
+    # generating. 28 constructs x 18 contexts x 3 line endings.
+    CELL_COUNT = 28 * 18 * 3
     DIVERGING_CELLS = 354
+    # Every diverging cell in the one context whose answer varies by construct.
+    SPLIT_CONTEXT = "under a voided fence opener, above a real one"
+    SPLIT_CONTEXT_DIVERGING_CELLS = 18
+
+    def test_every_context_says_whether_the_two_readers_part_company_in_it(self) -> None:
+        # The guard the old list did not have. A shape could be added to
+        # `BOUNDARY_CANDIDATES` and simply not be named in `DIVERGE`, which
+        # reads as "they agree" whether or not anyone checked -- and that is
+        # how `h1 under runaway fence` came to stand for eighteen cells nobody
+        # had looked at (#1738). A context with no verdict fails here.
+        self.assertEqual(set(self.CONTEXT_VERDICTS), set(self.BOUNDARY_CONTEXTS))
+        self.assertEqual(
+            set(self.CONTEXT_VERDICTS.values()),
+            {"agree", "diverge", "by the fence the section runs into"},
+        )
 
     def test_the_two_rules_agree_on_every_shape_that_could_end_a_section(self) -> None:
         # The derived property. Each cell is read by both files and the extents
         # have to match -- on one kind of line ending rather than on the
-        # author's bytes -- unless the gate's own reading came back holding a
-        # fence nothing closes, which is the one thing the skill repairs and
-        # the gate does not.
+        # author's bytes -- unless its context says otherwise.
         owner = self.owner_reader()
-        agreed = diverged = 0
+        agreed = diverged = split_diverged = 0
         for construct, context, ending, body in self.candidate_bodies():
             label = {"\n": "lf", "\r\n": "crlf", "\r": "cr"}[ending]
             with self.subTest(shape=construct, context=context, ending=label):
                 gate = self._lf(pr_readiness.extract_section(body, "Evidence Status"))
                 skill = self._lf(owner.markdown_section(body, "Evidence Status"))
-                # The predictor is this gate's own line scanner, not a second
-                # copy of either boundary rule, so it cannot drift into
-                # agreeing with the thing it is predicting.
-                left_open = pr_readiness.split_fenced_blocks(gate)[1] is not None
-                if left_open:
+                verdict = self.CONTEXT_VERDICTS[context]
+                if verdict == "by the fence the section runs into":
+                    # Whether the section ran INTO that fence, asked of this
+                    # gate's own line scanner. It is an oracle for this one
+                    # context, where the fence is top-level and the slice
+                    # starts above it -- not a general rule, which
+                    # `test_the_line_scanner_is_an_oracle_here_and_not_a_law`
+                    # is the fixture for.
+                    expected = pr_readiness.split_fenced_blocks(gate)[1] is not None
+                    split_diverged += expected
+                else:
+                    expected = verdict == "diverge"
+                if expected:
                     self.assertNotEqual(gate, skill, self.DIVERGENCE)
                     diverged += 1
                 else:
@@ -1362,24 +1425,54 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
                     agreed += 1
         self.assertEqual(agreed + diverged, self.CELL_COUNT)
         self.assertEqual(diverged, self.DIVERGING_CELLS)
+        # The oracle's own share, pinned, so it cannot quietly answer for every
+        # cell of its context or for none of them.
+        self.assertEqual(split_diverged, self.SPLIT_CONTEXT_DIVERGING_CELLS)
+
+    def test_the_line_scanner_is_an_oracle_here_and_not_a_law(self) -> None:
+        # `split_fenced_blocks` reads lines and knows nothing about nesting, so
+        # "the gate's reading holds an unclosed fence" is not the same sentence
+        # as "the two readers disagree". A fence that never closes inside a
+        # list item is the counterexample: the skill's repair asks for a
+        # TOP-LEVEL fence and this is not one, so neither reader looks past it
+        # and they agree -- while the scanner reports an opener with nothing
+        # closing it. Written as a fixture because the grid passing is what
+        # would otherwise make the coincidence look like a rule.
+        owner = self.owner_reader()
+        nested = self.BOUNDARY_CONTEXTS["under a runaway fence nested in a list item"]
+        body = (
+            self.STATUS
+            + self.in_context(self.BOUNDARY_CONSTRUCTS["atx h1"], nested)
+            + "\n"
+            + self.CANDIDATE_TAIL
+        )
+        gate = self._lf(pr_readiness.extract_section(body, "Evidence Status"))
+        self.assertEqual(gate, self._lf(owner.markdown_section(body, "Evidence Status")))
+        self.assertEqual(pr_readiness.split_fenced_blocks(gate)[1], "```")
 
     def test_the_divergence_is_the_repair_and_not_the_hiding(self) -> None:
-        # Which cells diverge, named by context, so the count above cannot be
-        # met by the wrong cells. Every runaway fence form diverges on every
-        # construct; the one context that hides as much and is not a fence --
-        # an unclosed comment, which CommonMark also runs to the last line --
-        # diverges on none, because neither reader repairs it. And one context
-        # splits, which is the cell the old one-axis list could not express.
+        # The verdicts, measured. Every runaway top-level fence form diverges
+        # on every construct; the contexts that hide as much without being a
+        # top-level fence -- an unclosed comment, and a runaway fence nested in
+        # a list item or a quote -- diverge on none. And one context splits,
+        # which is the cell the old one-axis list could not express.
         owner = self.owner_reader()
-        by_context: dict[str, set[bool]] = {name: set() for name in self.BOUNDARY_CONTEXTS}
+        measured: dict[str, set[bool]] = {name: set() for name in self.BOUNDARY_CONTEXTS}
         for _, context, _, body in self.candidate_bodies():
             gate = self._lf(pr_readiness.extract_section(body, "Evidence Status"))
-            by_context[context].add(gate != self._lf(owner.markdown_section(body, "Evidence Status")))
-        always = {name for name, answers in by_context.items() if answers == {True}}
-        never = {name for name, answers in by_context.items() if answers == {False}}
-        split = {name for name, answers in by_context.items() if answers == {True, False}}
+            measured[context].add(gate != self._lf(owner.markdown_section(body, "Evidence Status")))
+        for context, verdict in self.CONTEXT_VERDICTS.items():
+            with self.subTest(context=context):
+                expected = {
+                    "agree": {False},
+                    "diverge": {True},
+                    "by the fence the section runs into": {True, False},
+                }[verdict]
+                self.assertEqual(measured[context], expected)
+        # And the shape of the table itself: the divergence belongs to four
+        # fence forms and nothing else, so a fifth appearing is a finding.
         self.assertEqual(
-            always,
+            {name for name, verdict in self.CONTEXT_VERDICTS.items() if verdict == "diverge"},
             {
                 "under a runaway backtick fence",
                 "under a runaway tilde fence",
@@ -1387,8 +1480,6 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
                 "under a nested four then three fence",
             },
         )
-        self.assertIn("under an unclosed comment", never)
-        self.assertEqual(split, {"under a voided fence opener, above a real one"})
 
     def test_the_agreement_is_not_vacuous(self) -> None:
         # Two readers that both returned "" would agree on everything. The
