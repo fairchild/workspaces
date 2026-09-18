@@ -143,6 +143,14 @@ jobs:
       # find (not a glob) so a future nested scripts/tests/**/test_*.py — which
       # the paths filter above already covers — isn't silently skipped.
       - name: Run scripts/tests/*.py
+        # `test_pr_readiness.py` checks its recorded GitHub-renderer responses
+        # against the live renderer, and skips when no token is there to ask
+        # with -- which meant the drift detector for those fixtures ran
+        # nowhere automated. `POST /markdown` needs no permission beyond a
+        # token that authenticates; the cost is one call per recorded fixture
+        # on this leg. Every other suite here refuses the renderer outright.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           failed=()
           while IFS= read -r -d '' test_file; do

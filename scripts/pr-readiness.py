@@ -785,13 +785,35 @@ def render_markdown(text: str) -> str:
         raise RendererUnavailable(f"the renderer was unreachable ({error})") from error
 
 
-# What ends the section in the rendered HTML. `extract_section` ends at a top-level
-# h1, h2 or dash rule; a rule of asterisks reaches the page as the same `<hr>` a
-# dash rule does, so this reader ends there too and its section is the shorter of
-# the two. Ending early can only drop a line from this reader, and a dropped line
-# is a refusal the model still makes; ending late would refuse on a line outside
-# the section, which is a failure an author cannot act on.
-SECTION_END_ELEMENTS = frozenset({"h1", "h2", "hr"})
+# What ends the section in the rendered HTML: a heading, and nothing else.
+#
+# `<hr>` used to end it too, on the argument that `extract_section` ends at a
+# dash rule. It does -- but a rule of asterisks reaches the page as the same
+# `<hr>`, and the source model runs past that one on purpose, so ending here
+# meant `## Evidence Status`, `***`, then a status the page shows at a line
+# start was read by neither view and the body passed. That is the one failure
+# this reader may not have. A rule is decoration to a reader anyway: what
+# starts a new section on the page is a heading.
+#
+# The cost is the mirror case, and it is the tolerated one: after a DASH rule
+# the written view stops and this reader does not, so a status below `---`
+# under this heading draws a refusal from the page that the source alone would
+# not make. It fails closed and the message quotes the line (#1745, round 2).
+SECTION_END_ELEMENTS = frozenset({"h1", "h2"})
+
+# Elements whose contents are not the document's own top level: a heading
+# inside one is a heading in someone else's structure -- a quotation, a list
+# item -- and neither opens this section nor ends it. `> ## Note` inside the
+# section ended it, and a `> ## Evidence Status` example quoted in another
+# section opened one and refused a body every other reader accepts.
+#
+# `<details>` is deliberately NOT here. Part B's rule is that folded text is
+# text a reader opens, so a `## Evidence Status` written below an unclosed
+# `<details>` renders inside the collapsed element and is still this section.
+# The distinction is whether the container changes what the text MEANS: a
+# quotation and a list item say "this is someone else's heading", a fold says
+# only "click to see it".
+OPAQUE_CONTAINERS = frozenset({"blockquote", "li"})
 
 
 class PageLineReader(HTMLParser):
@@ -817,13 +839,14 @@ class PageLineReader(HTMLParser):
     section may be placed inside a fold at all is the writer's question and
     stays with the contributor skill's placement check.
 
-    `<code>` is not read. A fenced block, an indented block and a code span
-    all reach the page inside a `<code>` element, and the written view already
-    drops fenced code, so reading it here would refuse a documentation example
-    that quotes a status. A raw `<pre>` an author wrote holds no `<code>`, so
-    its text is read -- that is one of the four shapes this reader exists for.
-    Dropping a code span costs no refusal: the source model reads it, and one
-    reader seeing a line is enough.
+    A code BLOCK is not read; a code SPAN is. Both reach the page inside a
+    `<code>` element, and the difference on the page is the `<pre>` around the
+    block: a fenced or indented block is an example someone is quoting, which
+    the written view already drops, and a span is ordinary text in a sentence.
+    Dropping both meant `Context <br>` + `` `[blocked]` `` -- a status the page
+    prints at the start of its own line -- was read as `Context` and `x`, and
+    the body passed. A raw `<pre>` an author wrote holds no `<code>`, so its
+    text is read: that is one of the four shapes this reader exists for.
 
     A newline inside `<pre>` starts a line. Anywhere else it is whitespace,
     because that is what the page does with it.
@@ -837,6 +860,7 @@ class PageLineReader(HTMLParser):
         self._heading: list[str] | None = None
         self._code_depth = 0
         self._pre_depth = 0
+        self._nesting = 0
 
     def _cut(self) -> None:
         text = " ".join("".join(self._current).split())
@@ -846,7 +870,9 @@ class PageLineReader(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         name = tag.lower()
-        if name in SECTION_END_ELEMENTS:
+        if name in OPAQUE_CONTAINERS:
+            self._nesting += 1
+        elif name in SECTION_END_ELEMENTS and not self._nesting:
             self._cut()
             self._in_section = False
             if name == "h2":
@@ -863,8 +889,18 @@ class PageLineReader(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         name = tag.lower()
+        if name in OPAQUE_CONTAINERS:
+            self._nesting = max(0, self._nesting - 1)
         if name == "h2" and self._heading is not None:
-            heading = " ".join("".join(self._heading).split()).casefold()
+            # `lower()`, not `casefold()`: full folding maps characters that
+            # are not case variants of anything -- a printer's long s in
+            # `Statuſ` folds onto `s` -- and no other reader in this repo
+            # takes that for this section. #1759 replaces the same call in
+            # `rendered_status_lines` and gives both a shared
+            # `heading_identity`; this line becomes a call to it when that
+            # lands. Until then the source model takes one heading this
+            # reader does not, which costs a refusal the model still makes.
+            heading = " ".join("".join(self._heading).split()).lower()
             self._heading = None
             self._current.clear()
             self._in_section = heading == "evidence status"
@@ -882,7 +918,7 @@ class PageLineReader(HTMLParser):
         if self._heading is not None:
             self._heading.append(data)
             return
-        if not self._in_section or self._code_depth:
+        if not self._in_section or (self._code_depth and self._pre_depth):
             return
         if not self._pre_depth:
             self._current.append(data)

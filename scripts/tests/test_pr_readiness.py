@@ -1938,7 +1938,7 @@ class ThePageSaysWhereALineStartsTests(unittest.TestCase):
         with recorded_page():
             self.assertEqual(self.failures(self.body("```\n- [blocked] x\n```")), [])
 
-    def test_code_on_the_page_contributes_no_line_to_this_reader(self) -> None:
+    def test_a_code_block_contributes_no_line_to_this_reader(self) -> None:
         # Asserted on the lines rather than on the verdict, because an
         # INDENTED block is still refused by the written view: that view reads
         # the section as typed and strips only fenced blocks. Unchanged here,
@@ -1946,7 +1946,6 @@ class ThePageSaysWhereALineStartsTests(unittest.TestCase):
         for shape, section in {
             "a fence": "```\n- [blocked] x\n```",
             "an indented block": "    - [blocked] x",
-            "a code span": "- `[blocked]` x",
         }.items():
             with self.subTest(shape=shape), recorded_page():
                 page = pr_readiness.page_view(self.body(section))
@@ -1956,11 +1955,120 @@ class ThePageSaysWhereALineStartsTests(unittest.TestCase):
                     [],
                 )
 
+    def test_a_code_span_is_text_the_page_shows(self) -> None:
+        # The other half of the same distinction: a span is ordinary text in a
+        # sentence, and the `<pre>` around a block is what marks the block as
+        # someone's example. Dropping both let a status the page prints at the
+        # start of its own line through (#1745, round 2).
+        with recorded_page():
+            page = pr_readiness.page_view(self.body("- `[blocked]` x"))
+        self.assertEqual(page.unverified, None)
+        self.assertIn("[blocked] x", page.lines)
+
     def test_a_code_span_status_is_still_refused_by_the_model(self) -> None:
         # The page reader drops it with the rest of `<code>`; the source model
         # reads a code span as the text it shows, and one reader is enough.
         with recorded_page():
             self.assertTrue(self.failures(self.body("- `[blocked]` x")))
+
+
+class ThePageReaderMayOnlyAddRefusalsTests(unittest.TestCase):
+    """Three ways the page reader answered a smaller question than it claimed (#1745, round 2).
+
+    Each is the same failure: the reader stopped reading somewhere the page
+    keeps showing text, so a status at the start of a line reached neither
+    view and the body passed. A reader that may only ADD refusals cannot
+    afford to stop early anywhere, and the mirror -- reading further than the
+    written view does -- costs a refusal that names its line.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+    BR_STATUS = "Context <br>[blocked] x"
+
+    def body(self, section: str) -> str:
+        return GOOD_BODY + f"\n## Evidence Status\n\n{section}\n"
+
+    def failures(self, body: str) -> list[str]:
+        return pr_readiness.evaluate(pr(body), self.FILES).failures
+
+    def test_a_rule_does_not_end_the_section_on_the_page(self) -> None:
+        # A rule of asterisks reaches the page as the same `<hr>` a dash rule
+        # does, and the source model runs past that one on purpose -- so
+        # ending here meant the status below it was read by nobody.
+        for shape, rule in {"asterisks": "***", "underscores": "___"}.items():
+            with self.subTest(rule=shape), recorded_page():
+                failures = self.failures(self.body(f"{rule}\n\n{self.BR_STATUS}"))
+                self.assertTrue(
+                    any(pr_readiness.PENDING_FAILURE in failure for failure in failures), failures
+                )
+
+    def test_a_dash_rule_is_the_mirror_and_refuses_too(self) -> None:
+        # The cost of the line above, stated rather than left to be found: the
+        # written view stops at a dash rule and this reader does not, so a
+        # status below `---` under this heading draws a refusal from the page
+        # alone. It fails closed and the message quotes the line.
+        with recorded_page():
+            failures = self.failures(self.body(f"---\n\n{self.BR_STATUS}"))
+        self.assertTrue(any(pr_readiness.PENDING_FAILURE in failure for failure in failures), failures)
+        self.assertIn(pr_readiness.matched_line_note("[blocked] x"), failures[0])
+
+    def test_a_code_span_at_a_line_start_is_a_status(self) -> None:
+        with recorded_page():
+            failures = self.failures(self.body("Context <br>`[blocked]` x"))
+        self.assertTrue(any(pr_readiness.PENDING_FAILURE in failure for failure in failures), failures)
+
+    def test_a_quoted_heading_inside_the_section_does_not_end_it(self) -> None:
+        # `> ## Note` is a heading in a quotation, not one of this document's.
+        with recorded_page():
+            failures = self.failures(self.body(f"> ## Note\n\n{self.BR_STATUS}"))
+        self.assertTrue(any(pr_readiness.PENDING_FAILURE in failure for failure in failures), failures)
+
+    def test_a_quoted_heading_elsewhere_does_not_open_a_section(self) -> None:
+        # The over-refusal the same blindness caused: an example of this
+        # section quoted under another heading was read as this section, and
+        # the gate refused a body every other reader accepts.
+        body = (
+            GOOD_BODY
+            + "\n## Notes\n\n> ## Evidence Status\n> - [blocked] an example\n"
+            + "\n## Evidence Status\n\n- [complete] ran it -- 1992 tests passed\n"
+        )
+        with recorded_page():
+            self.assertEqual(self.failures(body), [])
+
+    def test_a_heading_inside_a_list_item_is_not_this_section_either(self) -> None:
+        # The same rule, the other container CommonMark lets hold a heading.
+        section = "- outer\n  - ## Note\n\n" + self.BR_STATUS
+        with recorded_page():
+            failures = self.failures(self.body(section))
+        self.assertTrue(any(pr_readiness.PENDING_FAILURE in failure for failure in failures), failures)
+
+    def test_a_long_s_heading_is_not_this_section_to_the_page_reader(self) -> None:
+        # The ride-along: this reader folded with `casefold()`, which maps a
+        # printer's long s onto `s`, so `## Evidence Statuſ` opened the
+        # section here and opens it for no other reader in the repo. Asserted
+        # on the page's lines rather than on the verdict, because the source
+        # model still takes that heading until #1759 lands and would refuse
+        # the body either way.
+        body = GOOD_BODY + "\n## Evidence Statu\u017f\n\n- [blocked] x\n"
+        with recorded_page():
+            page = pr_readiness.page_view(body)
+        self.assertEqual(page.unverified, None)
+        self.assertEqual(page.lines, ())
+
+    def test_a_fold_stays_transparent(self) -> None:
+        # `<details>` is not an opaque container: part B's rule is that folded
+        # text is text a reader opens, so a heading inside one is still this
+        # section's. Pinned here because the nesting rule is what could have
+        # taken it away.
+        body = (
+            "<details>\n<summary>notes</summary>\n\n"
+            + GOOD_BODY
+            + "\n## Evidence Status\n\n- [blocked] x\n"
+        )
+        with recorded_page():
+            page = pr_readiness.page_view(body)
+        self.assertEqual(page.unverified, None)
+        self.assertIn("[blocked] x", page.lines)
 
 
 class ThePageSeesThroughAFoldTests(unittest.TestCase):
