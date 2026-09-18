@@ -8235,6 +8235,18 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
             with self.subTest(shape=shape):
                 self.assertEqual(len(self.posted([forged], notes)), 1)
 
+    def test_a_note_said_below_a_closed_disclosure_still_silences_it(self) -> None:
+        # The strip ends at the LAST `</details>`, not at the end of the
+        # comment. `(?:</details>|\Z)` after a greedy `.*` never reached the
+        # closer -- `.*` ran to the end and `\Z` matched there -- so a comment
+        # that folded a log away and then said the note in the open read as
+        # nothing shown, and the author was told the same thing twice (#1740,
+        # round 4).
+        notes = self.notes()
+        real = self.posted([], notes)[0]
+        shown = f"<details><summary>log</summary>\nnothing to see\n</details>\n\n{real}"
+        self.assertEqual(self.posted([shown], notes), [])
+
     def test_a_note_a_reader_was_actually_shown_still_silences_it(self) -> None:
         # The control the strip must not cost: a plain comment carrying the
         # note is a comment the author read, and the run stays quiet.

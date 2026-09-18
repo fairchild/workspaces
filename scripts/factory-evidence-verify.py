@@ -311,6 +311,12 @@ def _apply_ci_updates(
     match check and the write call. Returns the body now live on the PR
     (written, or already up to date), or None if the caller should stop
     without further evidence-state changes.
+
+    The live read guards what this says as well as what it writes. A write
+    that stands down leaves the body byte-identical and still owes the author
+    a note, and that note is posted only while the head it names is still the
+    head: when it has moved the note goes unsaid, and the next event says it
+    against the head it belongs to.
     """
     for attempt in range(1, MAX_WRITE_ATTEMPTS + 1):
         safe_updates = _updates_targeting_unchanged_entries(body, updates)
@@ -318,18 +324,23 @@ def _apply_ci_updates(
             return body
         uncarried: list[str] = []
         new_body = update_evidence_entries(body, safe_updates, announcements=uncarried)
+        current = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
+        current_head = current.get("head") if isinstance(current, dict) else None
+        current_sha = str(current_head.get("sha", "")) if isinstance(current_head, dict) else ""
         if new_body == body:
             # Same reason as the review-time completion: the write stands down
             # whole on a block whose closer never came, which returns the body
             # byte-identical, and returning here said it on stderr alone. A
             # stand-down is the case the author most needs telling about --
             # the section stands AND the status this run resolved is unwritten
-            # (#1740, round 3).
-            post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
+            # (#1740, round 3). Read the live PR before saying so, the way the
+            # writing path below does: a push in between would file the note
+            # under a head the author has already left (#1740, round 4).
+            if current_sha == head_sha:
+                post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
+            else:
+                log(f"PR #{pr_number} advanced during verification; leaving the stand-down unsaid")
             return body
-        current = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
-        current_head = current.get("head") if isinstance(current, dict) else None
-        current_sha = str(current_head.get("sha", "")) if isinstance(current_head, dict) else ""
         if current_sha != head_sha:
             log(f"PR #{pr_number} advanced during verification; skipping write")
             return None

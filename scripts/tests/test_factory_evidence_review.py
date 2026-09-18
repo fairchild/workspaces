@@ -515,7 +515,7 @@ class TheApprovalCompletionSaysWhatItCouldNotCarryTests(unittest.TestCase):
 
     STOOD_DOWN_BODY_TAIL = "\n<!--\nan aside whose closer never came\n"
 
-    def completed_on(self, body: str, *, prior: list[str] | None = None):
+    def completed_on(self, body: str, *, prior: list[str] | None = None, head_current: bool = True):
         """One approval completion over a body this test supplies."""
         edited: list[str] = []
         posted: list[str] = []
@@ -524,7 +524,9 @@ class TheApprovalCompletionSaysWhatItCouldNotCarryTests(unittest.TestCase):
             mock.patch.object(
                 execution, "_latest_approving_review", return_value={"html_url": "https://github.test/r/1"}
             ),
-            mock.patch.object(execution, "_factory_expected_pr_head_is_current", return_value=True),
+            mock.patch.object(
+                execution, "_factory_expected_pr_head_is_current", return_value=head_current
+            ),
             mock.patch.object(execution, "_edit_pr_body", side_effect=lambda *a, **k: edited.append(a[1])),
             mock.patch.object(execution, "_pr_comment_bodies", return_value=prior or []),
             mock.patch.object(
@@ -547,6 +549,17 @@ class TheApprovalCompletionSaysWhatItCouldNotCarryTests(unittest.TestCase):
         self.assertEqual(len(posted), 1, posted)
         self.assertIn("left as written", posted[0])
         self.assertIn(HEAD, posted[0])
+
+    def test_a_stand_down_at_a_head_that_has_moved_is_not_said(self) -> None:
+        # The stand-down post returned before the head guard the body write is
+        # behind, so a push between reading the body and saying what the write
+        # dropped filed the note under a head the author had already left. A
+        # head that moved is silence; the next run says it against the head it
+        # belongs to (#1740, round 4).
+        body = self.body() + self.STOOD_DOWN_BODY_TAIL
+        edited, posted = self.completed_on(body, head_current=False)
+        self.assertEqual(edited, [])
+        self.assertEqual(posted, [])
 
     def test_a_run_that_changed_nothing_and_lost_nothing_says_nothing(self) -> None:
         # The control the guard is: an unchanged body with an empty

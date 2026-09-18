@@ -665,7 +665,14 @@ def _as_the_page_shows_it(text: str) -> str:
 # openers and closers would be more precise and would be a small HTML parser
 # in a dedup path; the standing rule here is that a guard on advice may repeat
 # and may not go silent, and only the greedy read has that failure direction.
-COLLAPSED_BLOCK_RE = re.compile(r"(?is)<details\b.*(?:</details>|\Z)")
+#
+# The two readings are separate alternatives because `(?:</details>|\Z)` after
+# a greedy `.*` never reaches the closer: `.*` runs to the end of the string,
+# `\Z` matches there, and the match stops backtracking -- so the strip ran from
+# the first `<details` to the end of every comment, and a note said in the open
+# BELOW a closed disclosure was read as folded away and posted again (#1740,
+# round 4).
+COLLAPSED_BLOCK_RE = re.compile(r"(?is)<details\b.*</details>|<details\b.*\Z")
 
 
 def _notes_a_reader_has_been_shown(comment: str, checked: str) -> set[str]:
@@ -1312,7 +1319,13 @@ def _complete_diff_evidence_after_approval(pr_number: int, env: dict[str, str]) 
     bind the completion to the review URL and the exact reviewed head.
 
     Best-effort by design — if anything here fails, the entries stay
-    pending-ci and the readiness gate stays red (fail-closed)."""
+    pending-ci and the readiness gate stays red (fail-closed).
+
+    Every comment this makes, including the stand-down one that follows an
+    unchanged body, is behind the head guard the body write is behind. A head
+    that moved means silence: the note goes unsaid and the next run says it
+    against the head it belongs to, where posting anyway would tell the author
+    about a body they have already replaced."""
     body, head_sha = _pr_body_and_head(pr_number, env)
     if not head_sha:
         return
@@ -1358,10 +1371,11 @@ def _complete_diff_evidence_after_approval(pr_number: int, env: dict[str, str]) 
         # body -- by design, and with the status this run resolved unwritten as
         # well. Returning here posted nothing and left the reason on stderr,
         # which is the channel this issue exists to leave (#1740, round 3).
-        # No head re-read: nothing was written, so the note is about the body
-        # as it stands, and the window between sampling the head and saying so
-        # is the same one the lane's note has (#1760).
-        post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
+        # Behind the same head guard the writing path uses: a push between the
+        # read and the post would file this note under a head the author has
+        # already left (#1740, round 4).
+        if _factory_expected_pr_head_is_current(pr_number, env):
+            post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
         return
     if not _factory_expected_pr_head_is_current(pr_number, env):
         return

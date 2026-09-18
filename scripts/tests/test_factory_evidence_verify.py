@@ -825,8 +825,12 @@ class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
         # did not happen: the section is still whole on the pull request.
         self.assertEqual(self.carried_note(write_succeeds=False), [])
 
-    def stood_down_note(self) -> list[list[str]]:
-        """The notes the verifier posted on a body whose write stands down."""
+    def stood_down_note(self, *, head_moves: bool = False) -> list[list[str]]:
+        """The notes the verifier posted on a body whose write stands down.
+
+        `head_moves` answers the live read inside `_apply_ci_updates` with a
+        head the author pushed after the body was sampled.
+        """
         # A raw HTML block of kinds 1 to 5 under the heading: CommonMark runs
         # it to the end of the document, so the write cannot say where the
         # section ends, stands the whole body down, and returns it
@@ -837,13 +841,19 @@ class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
             1,
         )
         pr = pr_payload(body, labels=[])
+        moved = pr_payload(body, head_sha=OTHER_HEAD, labels=[])
         posted: list[list[str]] = []
         written: list[str] = []
+        reads: list[str] = []
+
+        def read_pr(args, env):
+            if not any("pulls/321" in a for a in args):
+                return None
+            reads.append("pr")
+            return moved if head_moves and len(reads) > 1 else pr
 
         with (
-            mock.patch.object(
-                verify, "_gh_json", side_effect=lambda args, env: pr if any("pulls/321" in a for a in args) else None
-            ),
+            mock.patch.object(verify, "_gh_json", side_effect=read_pr),
             mock.patch.object(
                 verify,
                 "check_runs_for",
@@ -880,6 +890,16 @@ class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
         self.assertEqual(len(posted), 1, posted)
         self.assertEqual(len(posted[0]), 1, posted[0])
         self.assertIn("left as written", posted[0][0])
+
+    def test_a_stand_down_at_a_head_that_has_moved_is_not_said(self) -> None:
+        # The stand-down post returned before the live read the writing path
+        # makes, so a push between sampling the body and saying what the write
+        # dropped filed the note under a stale head. A head that moved is
+        # silence, and the next check_suite event says it against the head it
+        # belongs to (#1740, round 4).
+        posted, written = self.stood_down_note(head_moves=True)
+        self.assertEqual(written, [])
+        self.assertEqual(posted, [])
 
 
 if __name__ == "__main__":
