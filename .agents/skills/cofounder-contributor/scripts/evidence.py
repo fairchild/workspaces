@@ -21,6 +21,7 @@ from _helpers import (
     contract_read_refusal,
     has_markdown_section,
     code_span,
+    heading_identity,
     inline_text,
     insert_markdown_section,
     is_section_boundary,
@@ -744,7 +745,8 @@ def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
         index
         for index, token in enumerate(tokens)
         if token.type == "heading_open"
-        and " ".join(inline_text(tokens[index + 1].children).split()).casefold() == "evidence status"
+        and heading_identity(inline_text(tokens[index + 1].children))
+        == heading_identity(EVIDENCE_STATUS_HEADING)
     ]
     if len(headings) != 1:
         # Naming the rejected one is what turns "delete one" from a coin flip

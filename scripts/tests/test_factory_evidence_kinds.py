@@ -5986,6 +5986,72 @@ class ASectionStartsAtAHeadingThePageShowsTests(unittest.TestCase):
                 )
 
 
+class ALongSHeadingIsAnotherHeadingTests(unittest.TestCase):
+    """Two headings a reader sees as different words are two sections (#1742).
+
+    Heading identity was compared after `casefold()`, and full case folding
+    maps characters that are not case variants of anything. U+017F, the long s
+    a printer sets in `Statu\u017f`, folds to `s`, so `## Evidence Statu\u017f`
+    written above the real `## Evidence Status` was the same heading to this
+    reader: the first one won the identity, and the cut -- which takes every
+    section under that name -- removed both, handing back a body with neither
+    section's contents. The page showed two visibly different headings the
+    whole time.
+
+    The fold is `lower()` now, which accepts every single-character case pair
+    Unicode records and declines a fold that changes the letters. The harm is
+    fixtured here, beside the writer it protects, and the cross-file agreement
+    with the readiness gate is pinned in `test_pr_readiness.py`.
+    """
+
+    ITEM = "the UI lane"
+    AUTHORS_LINE = f"- [pending-ci] {ITEM} -- waiting"
+    ENTRIES = {ITEM: {"status": "complete", "detail": "swift test passed"}}
+    LONG_S = "## Evidence Statu\u017f"
+    BODY = (
+        "Why this exists.\n\n"
+        f"{LONG_S}\n\n"
+        "- [complete] the printer's item -- not this section\n\n"
+        "## Evidence Status\n\n"
+        f"{AUTHORS_LINE}\n\n"
+        "## Validation\n\n- ran\n"
+    )
+
+    def helpers(self):
+        return sys.modules["_helpers"]
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def test_the_fold_accepts_case_and_declines_a_changed_letter(self) -> None:
+        helpers = self.helpers()
+        self.assertEqual(
+            helpers.heading_identity("EVIDENCE STATUS"), helpers.heading_identity("Evidence Status")
+        )
+        self.assertNotEqual(
+            helpers.heading_identity("Evidence Statu\u017f"),
+            helpers.heading_identity("Evidence Status"),
+        )
+
+    def test_the_section_is_the_heading_that_reads_as_it(self) -> None:
+        helpers = self.helpers()
+        self.assertEqual(helpers.markdown_section(self.BODY, "Evidence Status"), self.AUTHORS_LINE)
+
+    def test_a_rewrite_leaves_the_long_s_section_where_it_is(self) -> None:
+        # The harm as the author sees it: their long-s section survives, and
+        # the real one is the one rewritten.
+        written, stood_down = self.evidence().write_evidence_status_section(self.BODY, self.ENTRIES)
+        self.assertIn(self.LONG_S, written, stood_down)
+        self.assertIn("- [complete] the printer's item -- not this section", written)
+        self.assertNotIn(self.AUTHORS_LINE, written)
+        self.assertEqual(written.count("## Evidence Status"), 1)
+
+    def test_the_owner_read_sees_one_section_and_does_not_refuse_for_two(self) -> None:
+        lines, reason = self.evidence()._rendered_status_lines(self.BODY)
+        self.assertIsNone(reason)
+        self.assertEqual(lines, [f"[pending-ci] {self.ITEM} -- waiting"])
+
+
 class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
     """A heading is this section only if the page shows it as this heading (#1730).
 

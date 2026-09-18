@@ -299,6 +299,32 @@ def _parsed(body: str) -> list[Token]:
     return MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", body))
 
 
+def heading_identity(text: str) -> str:
+    """One heading's text reduced to what decides whether two headings are one.
+
+    Runs of whitespace collapse, and case folds with `lower()` rather than
+    `casefold()`. Full case folding maps characters that are not case variants
+    of anything: U+017F, the long s a printer sets in `Statuſ`, folds to `s`,
+    so `## Evidence Statuſ` above the real `## Evidence Status` was the SAME
+    heading to every reader here and two visibly different headings on the
+    page. The first one won the identity and the rewrite's cut, which takes
+    every section under that name, removed both -- returning a body holding
+    neither section's contents (#1742). `ß` -> `ss` and `ﬁ` -> `fi` are the
+    same shape.
+
+    What `lower()` accepts is every single-character case pair Unicode
+    records, `Ω`/`ω` and `É`/`é` with `S`/`s`, so a heading shouted in any
+    alphabet is still its heading. What it declines is a fold that changes the
+    letters rather than their case, which is the set a reader reads as a
+    different word.
+
+    NFKC was the other candidate and it goes the wrong way: it maps a
+    fullwidth `Ｓ` onto `s` as well, so `## Evidence StatuＳ` would alias too,
+    and the page shows that as a different word.
+    """
+    return " ".join(text.split()).lower()
+
+
 def is_section_heading(token: Token) -> bool:
     """Whether a parsed token opens a heading at the level a section is addressed by.
 
@@ -365,14 +391,14 @@ def section_heading_index(tokens: list[Token], heading: str) -> int | None:
     (#1730). The readiness gate's own ambiguity check does NOT see it: that
     check matches raw text and is blind to a heading line carrying a tag.
     """
-    wanted = " ".join(heading.split()).casefold()
+    wanted = heading_identity(heading)
     return next(
         (
             index
             for index, token in enumerate(tokens)
             if is_section_heading(token)
             and not any(child.type == "html_inline" for child in tokens[index + 1].children or [])
-            and " ".join(inline_text(tokens[index + 1].children).split()).casefold() == wanted
+            and heading_identity(inline_text(tokens[index + 1].children)) == wanted
         ),
         None,
     )
@@ -387,7 +413,7 @@ def rejected_section_headings(tokens: list[Token], heading: str) -> list[tuple[i
     least one `html_inline` token. The token index is the `heading_open`, so a
     caller has the line through `token.map`.
     """
-    wanted = " ".join(heading.split()).casefold()
+    wanted = heading_identity(heading)
     found: list[tuple[int, str]] = []
     for index, token in enumerate(tokens):
         if not is_section_heading(token):
@@ -396,7 +422,7 @@ def rejected_section_headings(tokens: list[Token], heading: str) -> list[tuple[i
         tag = next((child.content for child in children if child.type == "html_inline"), None)
         if tag is None:
             continue
-        if " ".join(inline_text(children).split()).casefold() == wanted:
+        if heading_identity(inline_text(children)) == wanted:
             found.append((index, tag))
     return found
 
@@ -835,30 +861,12 @@ def has_markdown_section(body: str, heading: str) -> bool:
     section the runtime believed it had seeded (#1730). One reader, so a
     caller cannot be told a section is there and then handed an example's
     text when it asks for one.
+
+    The readiness gate asks the same question of the same parser since #1742,
+    so this is no longer wider than the section that gate can read: a writer
+    whose output the gate must be able to read asks this and nothing else.
     """
     return section_heading_index(_parsed(body), heading) is not None
-
-
-# How the readiness gate finds a section's START: a literal `## <heading>` line
-# at column 0 with the line ending directly after it (`extract_section` in
-# `scripts/pr-readiness.py`). It is written here rather than imported because
-# that script is a PEP 723 entry point with its own pin and no package to
-# import from -- the same reason `MARKDOWN` is written in both files -- and
-# `SectionStartAgreementBetweenTheGateAndTheSkillTests` fails when the two
-# answer differently on any shape.
-#
-# It is narrower than `has_markdown_section`, which asks the parser: emphasis,
-# an indent of up to three spaces and a setext underline all make a heading the
-# page shows and this pattern does not find. #1742 owns moving the gate onto a
-# parse; until it does, a writer whose output the gate must be able to read
-# asks this as well.
-GATE_SECTION_START_RE = r"(?mi)^## {heading}\n"
-
-
-def gate_reads_markdown_section(body: str, heading: str) -> bool:
-    """Whether the readiness gate's literal reader finds this section's start."""
-    normalized = MARKDOWN_LINE_ENDING_RE.sub("\n", body)
-    return re.search(GATE_SECTION_START_RE.format(heading=re.escape(heading)), normalized) is not None
 
 
 def _section_removed(body: str, heading: str) -> tuple[str, str | None, list[str]]:
