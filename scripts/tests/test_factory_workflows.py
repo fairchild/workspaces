@@ -1741,6 +1741,124 @@ class EvidenceReconcileContractTests(unittest.TestCase):
         self.assertIn("permission-issues: write", reconcile_job)
 
 
+class TheMacosLaneSaysWhatItCouldNotCarryTests(unittest.TestCase):
+    """The re-render's losses cross from the step that computes them to the step that says them (#1740).
+
+    The reconcile step rewrites the author's `## Evidence Status` section and
+    then writes the body with `gh pr edit` in the shell below its heredoc, so
+    the python that knows what was dropped cannot announce it: a note about a
+    body that is not published yet is a claim the run cannot make. It hands
+    the announcements to `$GITHUB_OUTPUT` instead and a following step posts
+    them, which is the crossing `emit_refused_privileged_paths` makes for
+    refused paths (#1548).
+    """
+
+    EVIDENCE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "_evidence.yml"
+
+    RECONCILE_MARKER = "\n      - name: Reconcile pending-ci evidence\n"
+    ANNOUNCE_MARKER = "\n      - name: Say what the re-render could not carry\n"
+    PR_MARKER = "\n      - name: Resolve PR number\n"
+
+    def step(self, marker: str) -> str:
+        """One step's executable lines, comments removed, required to appear once."""
+        workflow = self.EVIDENCE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(workflow.count(marker), 1, f"{marker.strip()} must appear exactly once")
+        step = workflow.split(marker, 1)[1].split("\n      - name: ", 1)[0]
+        return "\n".join(line for line in step.split("\n") if not line.lstrip().startswith("#"))
+
+    def test_the_reconcile_step_collects_what_the_re_render_could_not_carry(self) -> None:
+        step = self.step(self.RECONCILE_MARKER)
+        self.assertIn('kwargs["announcements"] = uncarried', step)
+        self.assertIn('module.emit_uncarried_notes(uncarried, "uncarried-notes.json")', step)
+        # After the call that rewrites the section, which is the only thing
+        # that fills the sink.
+        self.assertLess(
+            step.index("module.reconcile_pending_ci_evidence"),
+            step.index("module.emit_uncarried_notes("),
+        )
+        # And the file is truncated first, so a previous run's losses in this
+        # workspace are not read as this run's.
+        self.assertIn(": > uncarried-notes.json", step)
+        self.assertLess(
+            step.index(": > uncarried-notes.json"), step.index("module.emit_uncarried_notes(")
+        )
+
+    def test_the_announcement_is_posted_by_a_step_of_its_own(self) -> None:
+        step = self.step(self.ANNOUNCE_MARKER)
+        self.assertIn("steps.reconcile.outputs.uncarried_notes", step)
+        self.assertIn("module.post_uncarried_notes(", step)
+        # Nothing to say, nothing posted: the gate is on the output itself.
+        self.assertIn("steps.reconcile.outputs.uncarried_notes != ''", step)
+
+    def test_a_failed_body_write_says_nothing_to_the_author(self) -> None:
+        # The note names a commit and says text is missing from that body, so
+        # it is only true of a body GitHub received. Under `always()` a failed
+        # `gh pr edit` still ran the poster -- the step had failed, the output
+        # was already set, and the author was told about a loss on a body that
+        # was never written. The class #1730 round 2 closed for the factory
+        # turn, on the lane.
+        condition = self.step(self.ANNOUNCE_MARKER).split("\n", 1)[0]
+        self.assertIn("if:", condition)
+        self.assertNotIn("always()", condition)
+        self.assertIn("steps.reconcile.outcome == 'success'", condition)
+        # And the half round 2 left implicit. A condition naming no status
+        # function is one GitHub prepends `success()` to, and `success()` is
+        # about the JOB: after any earlier step fails hard -- the `always()`
+        # artifact download with nothing to fetch is the reachable one -- the
+        # reconcile step still runs under its own `always()`, writes the body,
+        # publishes the output, and this step is skipped with the note never
+        # said. `!cancelled()` is the status function that says "run unless the
+        # run was cancelled" and leaves the outcome gate above as the only
+        # condition that decides (#1740, round 3).
+        self.assertIn("!cancelled()", condition)
+
+    def test_the_note_survives_an_earlier_step_failing(self) -> None:
+        # The scenario stated as itself rather than as a token: a job where an
+        # earlier step failed, the reconcile step succeeded, and the output is
+        # set. The condition has to evaluate that combination to true, which no
+        # implicit `success()` does.
+        condition = self.step(self.ANNOUNCE_MARKER).split("\n", 1)[0]
+        expression = condition.split("if:", 1)[1].strip().removeprefix("${{").removesuffix("}}").strip()
+        self.assertTrue(expression.startswith("!cancelled()"), expression)
+        for gate in ("steps.reconcile.outcome == 'success'", "steps.reconcile.outputs.uncarried_notes != ''"):
+            self.assertIn(gate, expression)
+
+    def test_the_output_is_written_after_the_body_lands(self) -> None:
+        # The other half: a condition on the step's outcome is not enough on
+        # its own, because a later change could set the output before the edit
+        # and reach a poster gated on something else. `set -e` is what makes
+        # this hold -- the write below the edit is not reached when it fails.
+        step = self.step(self.RECONCILE_MARKER)
+        self.assertIn('gh pr edit "$PR_NUMBER" --body-file pr-body.md', step)
+        self.assertIn("uncarried_notes=", step)
+        self.assertLess(
+            step.index('gh pr edit "$PR_NUMBER" --body-file pr-body.md'),
+            step.index("uncarried_notes="),
+        )
+        # And the python writes a file rather than the output itself, so the
+        # ordering is the shell's to enforce.
+        self.assertNotIn("$GITHUB_OUTPUT", step.split('gh pr edit "$PR_NUMBER"', 1)[0])
+        self.assertIn("set -euo pipefail", step)
+
+    def test_the_note_names_the_head_the_run_reconciled(self) -> None:
+        # Once per loss per HEAD, which the poster can only honour if it is
+        # told which head this is. The resolve step reads it from the PR and
+        # publishes it whether or not the dispatch bound one.
+        pr_step = self.step(self.PR_MARKER)
+        self.assertIn('echo "head_sha=$CURRENT_HEAD_SHA" >> "$GITHUB_OUTPUT"', pr_step)
+        self.assertLess(
+            pr_step.index("CURRENT_HEAD_SHA=$("), pr_step.index('if [ -n "$EXPECTED_HEAD_SHA" ]')
+        )
+        self.assertIn("HEAD_SHA: ${{ steps.pr.outputs.head_sha }}", self.step(self.ANNOUNCE_MARKER))
+
+    def test_the_author_is_told_after_the_body_is_written(self) -> None:
+        # Order is the claim: the note says text is missing from the body on
+        # the pull request, which is only true once the edit has landed.
+        workflow = self.EVIDENCE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertLess(workflow.index(self.RECONCILE_MARKER), workflow.index(self.ANNOUNCE_MARKER))
+        self.assertIn('gh pr edit "$PR_NUMBER" --body-file pr-body.md', self.step(self.RECONCILE_MARKER))
+
+
 class ReusableWorkflowPermissionTests(unittest.TestCase):
     """A job calling a local reusable workflow must hold every permission the
     callee declares. GitHub validates that at run creation: a shortfall fails

@@ -9,6 +9,7 @@ import shlex
 import sys
 from collections.abc import Iterable, Iterator
 from itertools import islice
+from typing import NamedTuple
 
 from markdown_it.token import Token
 
@@ -2233,8 +2234,37 @@ def _list_item_spans(
     return index + 1
 
 
-def _section_notes(section: str) -> list[str]:
-    """The blocks of one Evidence Status section that are not status lines, as written.
+def _uncarried_note(detail: str, line: int, went: str = "") -> str:
+    """The one sentence every writer says about text the section could not keep.
+
+    One composer because the two writers have to say the same thing about the
+    same body: a lane run and a factory turn that word this differently read
+    as two losses to the author and to the dedup that keeps them from being
+    said twice (#1740).
+
+    `went` is the first line of the text that went, and it is what makes the
+    sentence about a LOSS rather than about a line number. Without it, a
+    continuation under the status line at line 7, an edit, and a different
+    continuation at line 7 composed the identical sentence, and the dedup --
+    which keys on what a reader was shown -- suppressed the second: two pieces
+    of the author's text gone and one of them never mentioned (#1740, round 3).
+
+    Carrying the text rather than keying the dedup on a hash of the body: a
+    hash is a key no reader can check, and it re-posts every note whenever any
+    part of the body changes. The author's own words are the thing they need
+    in order to put the line back, so the key and the usefulness are the same
+    addition. Quoted through `code_span`, because they are somebody else's
+    characters reaching a comment, a log and a workflow output.
+    """
+    quoted = f", starting {code_span(went)}" if went.strip() else ""
+    return (
+        f"not carried to `## {EVIDENCE_NOTES_HEADING}`: {detail} at line {line} "
+        f"of the `{EVIDENCE_STATUS_HEADING}` section{quoted}"
+    )
+
+
+def _section_notes(section: str) -> tuple[list[str], list[str]]:
+    """The blocks of one Evidence Status section that are not status lines, and what went.
 
     Parsed as CommonMark rather than matched line by line, for the reason
     every read of this section is: a line matched by pattern is not always a
@@ -2249,10 +2279,12 @@ def _section_notes(section: str) -> list[str]:
 
     A block the parser cannot end is not carried (`unmovable_block`): it is
     left where the rewrite finds it and deleted there, as at the merge base,
-    and the run's output says so and names the line. Refusing the write
-    instead would strand a body the runaway repair already rewrites (#1723
-    round 3), and carrying the opener alone would fold every section below it
-    into a block nobody opened there.
+    and the run's output says so and names the line. Said, and also returned:
+    the second list is every such sentence, so a caller can put it where the
+    author who wrote the text reads it rather than only in a step log (#1740).
+    Refusing the write instead would strand a body the runaway repair already
+    rewrites (#1723 round 3), and carrying the opener alone would fold every
+    section below it into a block nobody opened there.
 
     Every span is carried byte for byte -- the source lines, with their
     indentation, their fence markers and their trailing spaces. A mover that
@@ -2288,12 +2320,18 @@ def _section_notes(section: str) -> list[str]:
     # entries in hand, so the continuation goes with it. Carrying half a
     # sentence into a section of its own would be alteration, not carriage --
     # but the loss is still a loss, and it is said.
+    losses: list[tuple[int, str]] = []
     for start, stop in machine:
         if stop - start > 1:
-            log(
-                f"not carried to `## {EVIDENCE_NOTES_HEADING}`: {stop - start - 1} line(s) "
-                f"continuing the status line at line {start + 1} of the "
-                f"`{EVIDENCE_STATUS_HEADING}` section"
+            losses.append(
+                (
+                    start,
+                    _uncarried_note(
+                        f"{stop - start - 1} line(s) continuing the status line",
+                        start + 1,
+                        lines[start + 1],
+                    ),
+                )
             )
     covered = {line for start, stop in machine for line in range(start, stop)}.union(
         line for start, stop in spans for line in range(start, stop)
@@ -2320,13 +2358,17 @@ def _section_notes(section: str) -> list[str]:
             # Said, because a loss nobody can see is the failure this file
             # keeps paying for. The line is the one inside this section, which
             # is the only frame this function has.
-            log(
-                f"not carried to `## {EVIDENCE_NOTES_HEADING}`: {reason} at line {start + 1} "
-                f"of the `{EVIDENCE_STATUS_HEADING}` section"
-            )
+            losses.append((start, _uncarried_note(reason, start + 1, lines[start])))
             continue
         carried.append(block)
-    return carried
+    # Said last and all at once, in the order of the section rather than in the
+    # order the two passes above happen to find them: the author reads this as
+    # a list about their own text, and a list that jumps around the section is
+    # harder to act on than one that does not.
+    announcements = [note for _, note in sorted(losses)]
+    for announcement in announcements:
+        log(announcement)
+    return carried, announcements
 
 
 def _placement_a_reader_cannot_see(written: str) -> str | None:
@@ -2358,9 +2400,51 @@ def _placement_a_reader_cannot_see(written: str) -> str | None:
     return placement_refusal(written, written, EVIDENCE_STATUS_HEADING)
 
 
+class SectionWrite(NamedTuple):
+    """What one write of `## Evidence Status` produced.
+
+    Three things, and a caller needs all three: the body to publish, why the
+    write stood down if it did, and every sentence the author is owed about
+    their own text. The third is a field rather than a log line because the
+    two callers that reach a surface the author reads cannot forward what they
+    were never handed -- which is how a note about a deleted note lived in a
+    step log nobody opens (#1740).
+    """
+
+    body: str
+    refusal: str | None
+    announcements: list[str]
+
+
+# How a stand-down announces itself, named rather than spelled twice: the
+# surface that posts these sentences has to tell a stand-down from a deletion,
+# because the two are opposite claims about the body. A deletion says text is
+# gone from the body GitHub now holds; a stand-down says the body was not
+# written at all (#1740, round 3).
+STOOD_DOWN_ANNOUNCEMENT_PREFIX = f"`## {EVIDENCE_STATUS_HEADING}` was left as written: "
+
+
+def is_stood_down_announcement(announcement: str) -> bool:
+    """Whether this sentence is a stand-down rather than a piece of text that went."""
+    return announcement.startswith(STOOD_DOWN_ANNOUNCEMENT_PREFIX)
+
+
+def _stood_down(source: str, refusal: str) -> SectionWrite:
+    """The body standing whole, with the reason said as the author's to act on.
+
+    A stand-down is a loss of the same kind as a deleted note and larger: the
+    status this run resolved is not written either. It travels in the same
+    list so one surface says both, and so a caller cannot forward one and
+    drop the other -- which is a claim about the callers, and was false at two
+    of them until #1740 round 3: both returned on an unchanged body before
+    they posted, and an unchanged body is exactly what a stand-down produces.
+    """
+    return SectionWrite(source, refusal, [f"{STOOD_DOWN_ANNOUNCEMENT_PREFIX}{refusal}"])
+
+
 def write_evidence_status_section(
     body: str, status_lines: Iterable[str]
-) -> tuple[str, str | None]:
+) -> SectionWrite:
     """The one write of `## Evidence Status`, or the body unchanged and why it stands.
 
     Both writers of the section come through here -- the structured re-render
@@ -2394,22 +2478,29 @@ def write_evidence_status_section(
     source = body
     sections, refusal = removed_section_texts(body, EVIDENCE_STATUS_HEADING)
     if refusal is not None:
-        return source, refusal
-    notes = [block for section in sections for block in _section_notes(section)]
+        return _stood_down(source, refusal)
+    notes: list[str] = []
+    announcements: list[str] = []
+    for section in sections:
+        carried, said = _section_notes(section)
+        notes.extend(carried)
+        announcements.extend(said)
     # The notes section comes out before the status section goes in, so that
     # neither is standing when the other is placed and both land by the same
     # rule. Placing the status around a notes section still in the body put
     # the two in one order on the first write and the other on the second.
     kept, notes_refusal = removed_section_texts(body, EVIDENCE_NOTES_HEADING)
     if notes_refusal is not None:
-        return source, notes_refusal
+        return _stood_down(source, notes_refusal)
     # Appended to what that section already held rather than replacing it.
     blocks = [kept_text for text in kept if (kept_text := _without_edge_blank_lines(text))] + notes
 
-    def placed(candidate: str) -> tuple[str, str | None]:
+    def placed(candidate: str) -> SectionWrite:
         """The rewritten body, or the source standing whole and why."""
         unseen = _placement_a_reader_cannot_see(candidate)
-        return (source, unseen) if unseen else (candidate, None)
+        if unseen:
+            return _stood_down(source, unseen)
+        return SectionWrite(candidate, None, announcements)
 
     # The note about a heading this reader declined is NOT said here. It was,
     # and it had to be said before the write to see the author's heading alone
@@ -2438,11 +2529,15 @@ def write_evidence_status_section(
         # resolved still gets written. Where the status alone is already past
         # the limit, dropping them buys nothing and the text is kept -- the
         # edit fails either way, as it does at the merge base.
-        log(
+        dropped = (
             f"`## {EVIDENCE_NOTES_HEADING}` not written: carrying "
             f"{len(blocks)} block(s) would take the body to {len(with_notes)} characters, "
             f"past the {PR_BODY_LIMIT} GitHub stores"
         )
+        log(dropped)
+        # Announced with the rest: text dropped for length is text the author
+        # loses, and the size is the one reason they can do something about.
+        announcements.append(dropped)
         return placed(written)
     return placed(with_notes)
 
@@ -2455,6 +2550,7 @@ def render_execution_summary_body(
     evidence_blocked: object,
     evidence_pending_ci: object,
     published_body: str = "",
+    announcements: list[str] | None = None,
 ) -> tuple[str, list[str]]:
     if not _explicit_evidence_contract(requested_evidence):
         return summary_body, []
@@ -2512,7 +2608,10 @@ def render_execution_summary_body(
     # Untrimmed, because that is the text the writer cuts and the text the
     # reason answers about; trimming here and not there is what once let the
     # guard name a refusal while the write went ahead.
-    rendered, write_refusal = write_evidence_status_section(stripped_body, evidence_lines)
+    write = write_evidence_status_section(stripped_body, evidence_lines)
+    rendered, write_refusal = write.body, write.refusal
+    if announcements is not None:
+        announcements.extend(write.announcements)
     if write_refusal is not None:
         # The body stands rather than losing the sections below the fence, and
         # the author is told which line to close.
@@ -3510,8 +3609,16 @@ def _encodable(text: str) -> str:
     return text.encode("utf-8", "replace").decode("utf-8")
 
 
-def _render_structured_entries(body: str, updated_entries: list[object]) -> str:
-    """Re-render the Evidence Status section and hidden metadata from entries."""
+def _render_structured_entries(
+    body: str, updated_entries: list[object], announcements: list[str] | None = None
+) -> str:
+    """Re-render the Evidence Status section and hidden metadata from entries.
+
+    `announcements` is the lane's way out of a step log: this path returns a
+    body and nothing else, so every sentence the write owes the author had
+    nowhere to go (#1740). A caller that passes a list gets them and posts
+    them; a caller that does not is unchanged.
+    """
     rendered_entries: list[dict[str, object]] = []
     for entry in updated_entries:
         if not isinstance(entry, dict):
@@ -3535,13 +3642,16 @@ def _render_structured_entries(body: str, updated_entries: list[object]) -> str:
         )
 
     if rendered_entries:
-        reconciled, refusal = write_evidence_status_section(
+        write = write_evidence_status_section(
             _strip_evidence_metadata(body),
             [
                 f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
                 for entry in sorted(rendered_entries, key=lambda entry: int(entry["index"]))
             ],
         )
+        reconciled, refusal = write.body, write.refusal
+        if announcements is not None:
+            announcements.extend(write.announcements)
         if refusal is not None:
             # The body stands whole, metadata included: recording entries the
             # section does not show would leave the record saying one thing
@@ -3562,7 +3672,12 @@ def _render_structured_entries(body: str, updated_entries: list[object]) -> str:
     return reconciled
 
 
-def update_evidence_entries(body: str, updates: dict[int, dict[str, object]]) -> str:
+def update_evidence_entries(
+    body: str,
+    updates: dict[int, dict[str, object]],
+    *,
+    announcements: list[str] | None = None,
+) -> str:
     """Apply per-index status/detail updates to structured evidence entries.
 
     Trusted-lane writers (the CI evidence verifier, review-time completion)
@@ -3599,7 +3714,7 @@ def update_evidence_entries(body: str, updates: dict[int, dict[str, object]]) ->
         updated_entries.append(entry)
     if not changed:
         return body
-    return _render_structured_entries(body, updated_entries)
+    return _render_structured_entries(body, updated_entries, announcements)
 
 
 def checks_api_env(env: dict[str, str]) -> dict[str, str]:
@@ -3917,6 +4032,7 @@ def reconcile_pending_ci_evidence(
     text_upload_required: bool = False,
     text_upload_succeeded: bool = False,
     text_urls: list[tuple[str, str]] | None = None,
+    announcements: list[str] | None = None,
 ) -> str:
     """Resolve pending-ci evidence lines after the macOS evidence job finishes.
 
@@ -3971,7 +4087,7 @@ def reconcile_pending_ci_evidence(
                 entry["status"] = status
                 entry["detail"] = detail
             updated_entries.append(entry)
-        return _render_structured_entries(body, updated_entries)
+        return _render_structured_entries(body, updated_entries, announcements)
 
     lines = body.splitlines()
     updated: list[str] = []

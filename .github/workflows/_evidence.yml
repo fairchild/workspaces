@@ -221,8 +221,11 @@ jobs:
             exit 1
           fi
           echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          CURRENT_HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')
+          # The head this run reconciled against, which is what a note to the
+          # author has to name: it says which body their text went missing from.
+          echo "head_sha=$CURRENT_HEAD_SHA" >> "$GITHUB_OUTPUT"
           if [ -n "$EXPECTED_HEAD_SHA" ]; then
-            CURRENT_HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')
             if [ "$CURRENT_HEAD_SHA" != "$EXPECTED_HEAD_SHA" ]; then
               echo "PR #$PR_NUMBER advanced after evidence dispatch" >&2
               exit 1
@@ -318,6 +321,9 @@ jobs:
              | .number]
             | if length == 1 then .[0] else empty end')
           : > issue-body.md
+          # Truncated for the same reason as the issue body: a file left by a
+          # previous run in this workspace would be read as this run's losses.
+          : > uncarried-notes.json
           if [ -n "$ISSUE_NUMBER" ]; then
             gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' > issue-body.md
           else
@@ -382,10 +388,67 @@ jobs:
                   uploaded_text_urls.append((label, url))
           kwargs["text_urls"] = uploaded_text_urls
 
+          # What the re-render could not carry out of the author's own section.
+          # Written to a file rather than posted or published here: the body
+          # is written by the shell below, and a note saying text is missing
+          # from this PR's body is only true of a body GitHub received.
+          uncarried = []
+          kwargs["announcements"] = uncarried
           reconciled = module.reconcile_pending_ci_evidence(body_path.read_text(), **kwargs)
           body_path.write_text(reconciled)
+          module.emit_uncarried_notes(uncarried, "uncarried-notes.json")
           PY
           gh pr edit "$PR_NUMBER" --body-file pr-body.md
+          # Only now, and only under `set -e`: a failed edit above ends the
+          # step with the output unset, so the poster has nothing to say about
+          # a body that was never written.
+          if [ -s uncarried-notes.json ]; then
+            echo "uncarried_notes=$(cat uncarried-notes.json)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Say what the re-render could not carry
+        # `!cancelled()` rather than no status function at all: a condition
+        # naming none is one GitHub prepends `success()` to, and `success()`
+        # asks about the JOB. An earlier step failing hard -- the `always()`
+        # artifact upload with nothing to fetch is the reachable one -- then
+        # skipped this step while the reconcile step, under its own `always()`,
+        # had written the body and published the output, and the note was never
+        # said (#1740, round 3). The outcome gate below is what decides; this
+        # only keeps an implicit one from deciding first.
+        if: ${{ !cancelled() && steps.reconcile.outcome == 'success' && steps.reconcile.outputs.uncarried_notes != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          UNCARRIED_NOTES: ${{ steps.reconcile.outputs.uncarried_notes }}
+        run: |
+          set -euo pipefail
+          uv run --python 3.12 --with markdown-it-py==4.2.0 python3 - <<'PY'
+          import importlib.util
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          module_path = Path(".agents/skills/cofounder-contributor/scripts/run-contributor.py")
+          spec = importlib.util.spec_from_file_location("run_contributor", module_path)
+          module = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+
+          # No persona: this lane is the runtime, not a character. Once per
+          # loss per head -- the poster reads what the pull request already
+          # shows before it says anything.
+          module.post_uncarried_notes(
+              int(os.environ["PR_NUMBER"]),
+              None,
+              json.loads(os.environ["UNCARRIED_NOTES"]),
+              os.environ["HEAD_SHA"],
+              dict(os.environ),
+          )
+          PY
 
       - name: Fail on evidence errors
         if: always()

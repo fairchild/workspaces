@@ -34,7 +34,7 @@ from evidence import (  # noqa: E402
     check_runs_for,
     update_evidence_entries,
 )
-from execution import APP_BOT_GIT_IDENTITIES  # noqa: E402
+from execution import APP_BOT_GIT_IDENTITIES, post_uncarried_notes  # noqa: E402
 
 FACTORY_PR_MARKER = "<!-- contributor:issue="
 BLOCKED_EVIDENCE_LABEL = "blocked:evidence"
@@ -311,17 +311,36 @@ def _apply_ci_updates(
     match check and the write call. Returns the body now live on the PR
     (written, or already up to date), or None if the caller should stop
     without further evidence-state changes.
+
+    The live read guards what this says as well as what it writes. A write
+    that stands down leaves the body byte-identical and still owes the author
+    a note, and that note is posted only while the head it names is still the
+    head: when it has moved the note goes unsaid, and the next event says it
+    against the head it belongs to.
     """
     for attempt in range(1, MAX_WRITE_ATTEMPTS + 1):
         safe_updates = _updates_targeting_unchanged_entries(body, updates)
         if not safe_updates:
             return body
-        new_body = update_evidence_entries(body, safe_updates)
-        if new_body == body:
-            return body
+        uncarried: list[str] = []
+        new_body = update_evidence_entries(body, safe_updates, announcements=uncarried)
         current = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
         current_head = current.get("head") if isinstance(current, dict) else None
         current_sha = str(current_head.get("sha", "")) if isinstance(current_head, dict) else ""
+        if new_body == body:
+            # Same reason as the review-time completion: the write stands down
+            # whole on a block whose closer never came, which returns the body
+            # byte-identical, and returning here said it on stderr alone. A
+            # stand-down is the case the author most needs telling about --
+            # the section stands AND the status this run resolved is unwritten
+            # (#1740, round 3). Read the live PR before saying so, the way the
+            # writing path below does: a push in between would file the note
+            # under a head the author has already left (#1740, round 4).
+            if current_sha == head_sha:
+                post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
+            else:
+                log(f"PR #{pr_number} advanced during verification; leaving the stand-down unsaid")
+            return body
         if current_sha != head_sha:
             log(f"PR #{pr_number} advanced during verification; skipping write")
             return None
@@ -337,6 +356,12 @@ def _apply_ci_updates(
             log(f"PR #{pr_number} body update failed")
             return None
         log(f"PR #{pr_number}: updated {len(safe_updates)} ci evidence entries")
+        # This lane rewrites the author's section, so it drops the same text
+        # the factory turn drops, and a step log is not where the author who
+        # wrote that text is looking (#1740). Said after the write, because
+        # the sentence is about a body GitHub now holds; without a persona,
+        # because the verifier is not a character.
+        post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
         return new_body
     log(f"PR #{pr_number} body kept changing during verification; giving up without writing")
     return None

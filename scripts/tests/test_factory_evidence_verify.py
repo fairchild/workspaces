@@ -765,5 +765,142 @@ class HostileIndexTests(unittest.TestCase):
         )
 
 
+class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
+    """This lane rewrites the author's section too, so it owes them the same note (#1740).
+
+    `update_evidence_entries` returns a body and nothing else, so what the
+    re-render dropped was said through `log()` -- the Actions step log, which
+    the author of the dropped text does not read. The verifier now carries the
+    announcements out of the write and says them on the pull request it just
+    wrote, after the write and never before it.
+    """
+
+    def carried_note(self, *, write_succeeds: bool = True) -> list[list[str]]:
+        """The notes the verifier posted while completing one green check."""
+        # A continuation under the status line: the re-render replaces the line
+        # from the entries in hand, and the author's second line goes with it.
+        body = body_with_entries([ci_entry()]).replace(
+            "-- waiting for checks\n",
+            "-- waiting for checks\n  and the rest of what the author wrote\n",
+        )
+        pr = pr_payload(body, labels=[])
+        posted: list[list[str]] = []
+
+        with (
+            mock.patch.object(
+                verify, "_gh_json", side_effect=lambda args, env: pr if any("pulls/321" in a for a in args) else None
+            ),
+            mock.patch.object(
+                verify,
+                "check_runs_for",
+                return_value=[
+                    {
+                        "status": "completed",
+                        "conclusion": "success",
+                        "completed_at": "2026-08-27T00:00:00Z",
+                        "html_url": "https://example.invalid/run/1",
+                    }
+                ],
+            ),
+            mock.patch.object(verify, "_write_pr_body", return_value=write_succeeds),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(verify, "_gh", return_value=True),
+            mock.patch.object(
+                verify,
+                "post_uncarried_notes",
+                side_effect=lambda pr_number, persona, notes, head, env: posted.append(list(notes)) or True,
+            ),
+        ):
+            verify.process_pr(321, {})
+        return posted
+
+    def test_the_author_is_told_on_the_pull_request_what_the_write_dropped(self) -> None:
+        posted = self.carried_note()
+        self.assertEqual(len(posted), 1, posted)
+        self.assertEqual(len(posted[0]), 1, posted[0])
+        self.assertIn("continuing the status line", posted[0][0])
+
+    def test_nothing_is_said_when_the_body_write_did_not_land(self) -> None:
+        # A note about text missing from a body nobody wrote names a loss that
+        # did not happen: the section is still whole on the pull request.
+        self.assertEqual(self.carried_note(write_succeeds=False), [])
+
+    def stood_down_note(self, *, head_moves: bool = False) -> list[list[str]]:
+        """The notes the verifier posted on a body whose write stands down.
+
+        `head_moves` answers the live read inside `_apply_ci_updates` with a
+        head the author pushed after the body was sampled.
+        """
+        # A raw HTML block of kinds 1 to 5 under the heading: CommonMark runs
+        # it to the end of the document, so the write cannot say where the
+        # section ends, stands the whole body down, and returns it
+        # byte-identical.
+        body = body_with_entries([ci_entry()]).replace(
+            "\n\n## Validation\n",
+            "\n\n<pre>\nthe run log nobody closed\n\n## Validation\n",
+            1,
+        )
+        pr = pr_payload(body, labels=[])
+        moved = pr_payload(body, head_sha=OTHER_HEAD, labels=[])
+        posted: list[list[str]] = []
+        written: list[str] = []
+        reads: list[str] = []
+
+        def read_pr(args, env):
+            if not any("pulls/321" in a for a in args):
+                return None
+            reads.append("pr")
+            return moved if head_moves and len(reads) > 1 else pr
+
+        with (
+            mock.patch.object(verify, "_gh_json", side_effect=read_pr),
+            mock.patch.object(
+                verify,
+                "check_runs_for",
+                return_value=[
+                    {
+                        "status": "completed",
+                        "conclusion": "success",
+                        "completed_at": "2026-08-27T00:00:00Z",
+                        "html_url": "https://example.invalid/run/1",
+                    }
+                ],
+            ),
+            mock.patch.object(
+                verify, "_write_pr_body", side_effect=lambda *a, **k: written.append(a[1]) or True
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(verify, "_gh", return_value=True),
+            mock.patch.object(
+                verify,
+                "post_uncarried_notes",
+                side_effect=lambda pr_number, persona, notes, head, env: posted.append(list(notes)) or True,
+            ),
+        ):
+            verify.process_pr(321, {})
+        return posted, written
+
+    def test_a_stand_down_is_said_even_though_the_body_did_not_change(self) -> None:
+        # `_apply_ci_updates` returned on `new_body == body` before it posted.
+        # A stand-down IS an unchanged body -- the status this run resolved is
+        # not written either -- so the one case the author most needs telling
+        # about was the one case that said nothing (#1740, round 3).
+        posted, written = self.stood_down_note()
+        self.assertEqual(written, [])
+        self.assertEqual(len(posted), 1, posted)
+        self.assertEqual(len(posted[0]), 1, posted[0])
+        self.assertIn("left as written", posted[0][0])
+
+    def test_a_stand_down_at_a_head_that_has_moved_is_not_said(self) -> None:
+        # The stand-down post returned before the live read the writing path
+        # makes, so a push between sampling the body and saying what the write
+        # dropped filed the note under a stale head. A head that moved is
+        # silence, and the next check_suite event says it against the head it
+        # belongs to (#1740, round 4).
+        posted, written = self.stood_down_note(head_moves=True)
+        self.assertEqual(written, [])
+        self.assertEqual(posted, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -95,9 +95,13 @@ class EvidenceLoaderTests(unittest.TestCase):
         self.assertIn(PIN, script_dependencies(REPO_ROOT / "scripts" / "factory-sweep.py"))
         self.assert_loads(self.run_loader(["uv", "run", "--no-cache", "--script", "scripts/factory-sweep.py", "--help"]))
 
-    def test_both_evidence_workflow_steps_load_evidence(self) -> None:
+    def test_every_evidence_workflow_step_loads_evidence(self) -> None:
+        # The count is exact rather than a floor: a step added without the pin
+        # would otherwise be a loader nobody checked, and this file exists
+        # because that failure lands in CI rather than here. Three since #1740
+        # gave the lane's uncarried-note announcement a posting step of its own.
         loaders = heredoc_loaders()
-        self.assertEqual(len(loaders), 2, loaders)
+        self.assertEqual(len(loaders), 3, loaders)
         for command, prologue in loaders:
             with self.subTest(command=command):
                 # The runner's own python3 has no markdown-it-py, so the pin has

@@ -6051,7 +6051,7 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         for name, heading in self.SHAPES.items():
             with self.subTest(shape=name):
                 body = self.body(heading)
-                written, stood_down = self.evidence().write_evidence_status_section(body, self.ENTRIES)
+                written, stood_down, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
                 self.assertIn(self.AUTHORS_LINE, written, stood_down)
 
     def test_a_plain_heading_is_still_the_section_and_still_rewritten(self) -> None:
@@ -6060,7 +6060,7 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         helpers = self.helpers()
         body = self.body("## Evidence Status")
         self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
-        written, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
+        written, _, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
         self.assertNotIn(self.AUTHORS_LINE, written)
 
     def test_emphasis_is_markdown_rather_than_a_tag_and_stays_this_section(self) -> None:
@@ -6072,7 +6072,7 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         helpers = self.helpers()
         body = self.body("## **Evidence Status**")
         self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
-        written, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
+        written, _, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
         self.assertNotIn(self.AUTHORS_LINE, written)
 
     def test_the_internal_read_says_why_rather_than_saying_nothing_is_there(self) -> None:
@@ -6162,7 +6162,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
     def written(self, heading: str) -> str:
         """The body the write returns, which is what the note is asked about."""
         with contextlib.redirect_stderr(io.StringIO()):
-            body, refusal = self.evidence().write_evidence_status_section(
+            body, refusal, _ = self.evidence().write_evidence_status_section(
                 self.body(heading), ["- [complete] the UI lane -- swift test passed"]
             )
         self.assertIsNone(refusal)
@@ -6212,7 +6212,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
         refusing = source.replace("## Validation\n\n- ran\n", "<pre>\nnever closed\n")
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
-            result, refusal = evidence.write_evidence_status_section(
+            result, refusal, _ = evidence.write_evidence_status_section(
                 refusing, ["- [complete] the UI lane -- swift test passed"]
             )
         self.assertIsNotNone(refusal)
@@ -6234,7 +6234,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
             with self.subTest(shape=name):
                 spoke = io.StringIO()
                 with contextlib.redirect_stderr(spoke):
-                    written, refusal = self.evidence().write_evidence_status_section(
+                    written, refusal, _ = self.evidence().write_evidence_status_section(
                         self.body(heading), ["- [complete] the UI lane -- swift test passed"]
                     )
                 self.assertIsNone(refusal)
@@ -6695,7 +6695,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
             + "## Validation\n\n- ran\n"
         )
         with contextlib.redirect_stderr(io.StringIO()):
-            written, refusal = evidence.write_evidence_status_section(
+            written, refusal, _ = evidence.write_evidence_status_section(
                 two_tagged, ["- [complete] the UI lane -- swift test passed"]
             )
         self.assertIsNone(refusal)
@@ -7211,7 +7211,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertLessEqual(len(body), evidence.PR_BODY_LIMIT)
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
-            written, refusal = evidence.write_evidence_status_section(body, [status])
+            written, refusal, _ = evidence.write_evidence_status_section(body, [status])
         self.assertIsNone(refusal)
         self.assertLessEqual(len(written), evidence.PR_BODY_LIMIT)
         self.assertIn(status, written)
@@ -7219,14 +7219,39 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertIn("not written", spoke.getvalue())
         # The control: the same body one block shorter does carry it.
         shorter = body.replace(note, note[:-32], 1)
-        carried, _ = evidence.write_evidence_status_section(shorter, [status])
+        carried, _, _ = evidence.write_evidence_status_section(shorter, [status])
         self.assertIn("## Evidence Notes", carried)
         # And where the status alone is already past the limit, dropping the
         # notes buys nothing: the edit fails either way, so the text is kept
         # rather than traded for a body that still cannot be stored.
         huge = f"- [complete] {self.ITEM} -- " + "x" * evidence.PR_BODY_LIMIT
-        kept, _ = evidence.write_evidence_status_section(body, [huge])
+        kept, _, _ = evidence.write_evidence_status_section(body, [huge])
         self.assertIn("## Evidence Notes", kept)
+
+    def test_a_body_at_the_limit_announces_the_notes_it_dropped(self) -> None:
+        # Said on the run's output AND handed back, like every other loss: the
+        # author whose text was dropped for length reads the pull request, and
+        # the size is the one reason for a drop they can act on (#1740).
+        evidence = sys.modules["evidence"]
+        status = f"- [complete] {self.ITEM} -- 214 tests passed"
+        shell = f"## Evidence Status\n\n{status}\n\n\n\n## Validation\n\n- ran it\n"
+        note = "n" * (evidence.PR_BODY_LIMIT - len(shell))
+        body = f"## Evidence Status\n\n{status}\n\n{note}\n\n## Validation\n\n- ran it\n"
+        with contextlib.redirect_stderr(io.StringIO()):
+            written = evidence.write_evidence_status_section(body, [status])
+        self.assertIsNone(written.refusal)
+        self.assertNotIn("Evidence Notes", written.body)
+        self.assertEqual(len(written.announcements), 1, written.announcements)
+        announcement = written.announcements[0]
+        self.assertIn("not written", announcement)
+        self.assertIn(str(evidence.PR_BODY_LIMIT), announcement)
+        self.assertIn("1 block(s)", announcement)
+        # The control: one block shorter carries the note and announces nothing.
+        shorter = body.replace(note, note[:-32], 1)
+        with contextlib.redirect_stderr(io.StringIO()):
+            carried = evidence.write_evidence_status_section(shorter, [status])
+        self.assertIn("## Evidence Notes", carried.body)
+        self.assertEqual(carried.announcements, [])
 
     def test_a_block_indented_under_a_status_bullet_moves_whole(self) -> None:
         # The bullet's own line is the machine's; a log pasted beneath it
@@ -7952,6 +7977,391 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
                 self.assertEqual(self.notes_lines(resolved), before)
                 carried += len(before)
         self.assertGreaterEqual(carried, 10, "the bodies carried no non-entry text to move")
+
+
+class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
+    """What the write could not carry reaches the pull request (#1740).
+
+    Two kinds of the author's text leave the `## Evidence Status` section
+    without their consent: the continuation of a status line the write is
+    about to replace, and a block whose end the body never states -- dropped
+    where it stands, or the whole write stood down. Both were said through
+    `log()` alone, which is the Actions step log, and the person who wrote
+    the text is the pull request's author, who reads the pull request.
+
+    So the write returns what it announced, the lane writers carry it to
+    their callers, and the surface posts it once per loss per head. What is
+    and is not carried does not change here (#1732, #1737 decided that);
+    this is the reporting.
+    """
+
+    ENTRIES = ["- [complete] a test -- ran it"]
+    ITEM = "a test"
+    HEAD = "b6fdd45ab02090d9ccfbbec50329849bdd9ba817"
+    OTHER_HEAD = "0" * 40
+    STATUS = "- [pending-ci] a test -- waiting"
+
+    # Every shape below leaves the section last in the body, which is what
+    # separates an announced loss from a stand-down: with a heading under it a
+    # block that never closes hides the section's end and the write refuses
+    # outright (#1734). At the end of the body there is no end to guess, so
+    # the block is deleted where it stands -- and that deletion is the one
+    # nobody was told about.
+    LOSSES = {
+        "a continuation line": (
+            f"{STATUS}\n  the rest of the sentence the author wrote",
+            "continuing the status line",
+        ),
+        "an unclosed fence": (
+            f"{STATUS}\n\n```text\nan excerpt nobody closed",
+            "code fence with no closing line",
+        ),
+    }
+    # A raw HTML block of kinds 1 to 5 never reaches the loss channel: it runs
+    # to the end of the document, so the write stands the whole body down
+    # instead -- and on the lane path that was said on stderr and nowhere else.
+    UNCLOSED_HTML = f"{STATUS}\n\n<!--\nan aside nobody closed"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def execution(self):
+        return sys.modules["execution"]
+
+    def body(self, tail: str) -> str:
+        return f"## Summary\n\nA change.\n\n## Evidence Status\n\n{tail}\n"
+
+    def write(self, tail: str):
+        """The write, and everything it printed while making it."""
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            result = self.evidence().write_evidence_status_section(self.body(tail), self.ENTRIES)
+        return result, err.getvalue()
+
+    def metadata_body(self, tail: str) -> str:
+        payload = json.dumps(
+            {
+                "entries": [
+                    {
+                        "index": 1,
+                        "item": self.ITEM,
+                        "status": "pending-ci",
+                        "detail": "waiting",
+                        "kind": "test-attested",
+                    }
+                ]
+            },
+            indent=2,
+        )
+        return (
+            "## Summary\n\nA change.\n\n"
+            f"<!-- evidence-status:v1\n{payload}\n-->\n\n"
+            f"## Evidence Status\n\n{tail}\n"
+        )
+
+    def test_every_loss_the_write_announces_comes_back_in_its_result(self) -> None:
+        for shape, (tail, phrase) in self.LOSSES.items():
+            with self.subTest(shape=shape):
+                result, _ = self.write(tail)
+                self.assertIsNone(result.refusal)
+                self.assertEqual(len(result.announcements), 1, result.announcements)
+                announcement = result.announcements[0]
+                self.assertIn(phrase, announcement)
+                # The line the author has to look at, which is the only part of
+                # this a person can act on.
+                self.assertRegex(announcement, r"at line \d+")
+
+    def test_the_step_log_still_says_every_announcement(self) -> None:
+        # A channel added, not moved: the Actions log is where a run is
+        # debugged, and nothing here takes that away.
+        for shape, (tail, _) in self.LOSSES.items():
+            with self.subTest(shape=shape):
+                result, printed = self.write(tail)
+                for announcement in result.announcements:
+                    self.assertIn(announcement, printed)
+
+    def test_a_stand_down_is_announced_through_the_same_channel(self) -> None:
+        # The kind-1-to-5 block: nothing is written, and the reason has to
+        # reach the author through the one channel the callers forward.
+        result, _ = self.write(self.UNCLOSED_HTML)
+        self.assertIsNotNone(result.refusal)
+        self.assertEqual(result.body, self.body(self.UNCLOSED_HTML))
+        self.assertEqual(len(result.announcements), 1, result.announcements)
+        self.assertIn(result.refusal, result.announcements[0])
+
+    def test_both_writers_announce_the_same_text(self) -> None:
+        # The pair that has to agree about what a body carries has to agree
+        # about what it dropped, or the author is told two different things
+        # depending on which run got there first (#1729).
+        for shape, (tail, _) in {**self.LOSSES, "the HTML block": (self.UNCLOSED_HTML, "")}.items():
+            with self.subTest(shape=shape):
+                body = self.metadata_body(tail)
+                lane: list[str] = []
+                factory: list[str] = []
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.evidence().update_evidence_entries(
+                        body,
+                        {1: {"status": "complete", "detail": "ran it"}},
+                        announcements=lane,
+                    )
+                    self.evidence().render_execution_summary_body(
+                        body,
+                        requested_evidence=[self.ITEM],
+                        evidence_complete=["1 -- ran it"],
+                        evidence_blocked=[],
+                        evidence_pending_ci=[],
+                        announcements=factory,
+                    )
+                self.assertNotEqual(lane, [])
+                self.assertEqual(lane, factory)
+
+    def test_a_second_write_over_the_first_announces_nothing_new(self) -> None:
+        # Once per loss, not once per run: the section is rewritten on every
+        # lane run and every factory turn, and a sentence repeated on each is
+        # its own noise. The first write is what makes the second silent --
+        # the text it could not carry is gone from the section by then.
+        for shape, (tail, _) in self.LOSSES.items():
+            with self.subTest(shape=shape):
+                first, _ = self.write(tail)
+                self.assertNotEqual(first.announcements, [])
+                with contextlib.redirect_stderr(io.StringIO()):
+                    second = self.evidence().write_evidence_status_section(
+                        first.body, self.ENTRIES
+                    )
+                self.assertEqual(second.announcements, [])
+
+    def test_the_lane_writer_hands_its_announcements_to_its_caller(self) -> None:
+        # `update_evidence_entries` returns a body, not errors, so the lane had
+        # nowhere to put this. The sink is that somewhere.
+        for shape, (tail, _) in self.LOSSES.items():
+            with self.subTest(shape=shape):
+                sink: list[str] = []
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.evidence().update_evidence_entries(
+                        self.metadata_body(tail),
+                        {1: {"status": "complete", "detail": "ran it"}},
+                        announcements=sink,
+                    )
+                self.assertNotEqual(sink, [])
+
+    def test_the_macos_lane_reconciler_hands_its_announcements_to_its_caller(self) -> None:
+        for shape, (tail, _) in self.LOSSES.items():
+            with self.subTest(shape=shape):
+                sink: list[str] = []
+                with contextlib.redirect_stderr(io.StringIO()):
+                    sys.modules["run_contributor_evidence_kinds"].reconcile_pending_ci_evidence(
+                        self.metadata_body(tail),
+                        requested_evidence=[self.ITEM],
+                        build_succeeded=True,
+                        tests_succeeded=True,
+                        smoke_succeeded=True,
+                        test_output="Ran 1 test\nOK",
+                        announcements=sink,
+                    )
+                self.assertNotEqual(sink, [])
+
+    def notes(self) -> list[str]:
+        result, _ = self.write(self.LOSSES["an unclosed fence"][0])
+        return list(result.announcements)
+
+    def posted(self, prior: list[str], notes: list[str], head: str | None = None):
+        """What the poster would say on a PR whose comments are `prior`."""
+        execution = self.execution()
+        sent: list[str] = []
+        with mock.patch.object(execution, "_pr_comment_bodies", return_value=prior), \
+             mock.patch.object(
+                 execution, "_post_pr_comment", side_effect=lambda *a, **k: sent.append(a[1]) or True
+             ):
+            execution.post_uncarried_notes(7, "April Clearwater", notes, head or self.HEAD, {})
+        return sent
+
+    def test_the_turn_names_the_block_and_the_line_on_the_pull_request(self) -> None:
+        notes = self.notes()
+        sent = self.posted([], notes)
+        self.assertEqual(len(sent), 1, sent)
+        self.assertIn(notes[0], sent[0])
+        self.assertIn(self.HEAD, sent[0])
+
+    def test_nothing_is_posted_when_the_write_announced_nothing(self) -> None:
+        self.assertEqual(self.posted([], []), [])
+
+    def test_a_loss_already_announced_at_this_head_is_not_announced_again(self) -> None:
+        notes = self.notes()
+        prior = self.posted([], notes)
+        self.assertEqual(self.posted(prior, notes), [])
+
+    def test_the_same_loss_at_a_new_head_is_announced_again(self) -> None:
+        # The author has pushed since and the text is still going: saying it
+        # again is right, the same way the rejected-heading note is.
+        notes = self.notes()
+        prior = self.posted([], notes, head=self.OTHER_HEAD)
+        self.assertEqual(len(self.posted(prior, notes)), 1)
+
+    def test_a_loss_not_yet_announced_is_said_even_at_an_announced_head(self) -> None:
+        # Per loss, not per head: a body edited between two writes at one head
+        # can lose a line the first write never saw.
+        notes = self.notes()
+        second = "not carried to `## Evidence Notes`: 2 line(s) continuing the status line at line 9 of the `Evidence Status` section"
+        prior = self.posted([], notes)
+        sent = self.posted(prior, notes + [second])
+        self.assertEqual(len(sent), 1, sent)
+        self.assertIn(second, sent[0])
+        self.assertNotIn(notes[0], sent[0])
+
+    def test_a_copy_nobody_can_see_does_not_silence_the_note(self) -> None:
+        # The hole #1749 documents in the rejected-heading guard, refused here
+        # rather than widened: the dedup asks what the page shows, so a copy
+        # inside an HTML comment or a collapsed block counts as nothing said.
+        notes = self.notes()
+        real = self.posted([], notes)[0]
+        for shape, forged in {
+            "an HTML comment": f"<!--\n{real}\n-->",
+            "a collapsed block": f"<details><summary>nothing to see</summary>\n{real}\n</details>",
+            # The strip was non-greedy to the FIRST `</details>`, so a copy
+            # placed after an inner closer and before the outer one survived it
+            # and read as visible -- the one placement that silenced the note
+            # (#1740, round 3).
+            "a nested collapsed block": (
+                "<details><summary>outer</summary>\n"
+                "<details><summary>inner</summary>\nnothing\n</details>\n"
+                f"{real}\n</details>"
+            ),
+            "two collapsed blocks with the copy between them": (
+                "<details><summary>one</summary>\nnothing\n</details>\n"
+                f"{real}\n"
+                "<details><summary>two</summary>\nnothing\n</details>"
+            ),
+        }.items():
+            with self.subTest(shape=shape):
+                self.assertEqual(len(self.posted([forged], notes)), 1)
+
+    def test_a_note_said_below_a_closed_disclosure_still_silences_it(self) -> None:
+        # The strip ends at the LAST `</details>`, not at the end of the
+        # comment. `(?:</details>|\Z)` after a greedy `.*` never reached the
+        # closer -- `.*` ran to the end and `\Z` matched there -- so a comment
+        # that folded a log away and then said the note in the open read as
+        # nothing shown, and the author was told the same thing twice (#1740,
+        # round 4).
+        notes = self.notes()
+        real = self.posted([], notes)[0]
+        shown = f"<details><summary>log</summary>\nnothing to see\n</details>\n\n{real}"
+        self.assertEqual(self.posted([shown], notes), [])
+
+    def test_a_note_a_reader_was_actually_shown_still_silences_it(self) -> None:
+        # The control the strip must not cost: a plain comment carrying the
+        # note is a comment the author read, and the run stays quiet.
+        notes = self.notes()
+        real = self.posted([], notes)[0]
+        self.assertEqual(self.posted([real], notes), [])
+
+    def test_two_losses_at_one_line_are_two_notes(self) -> None:
+        # The dedup key was the sentence, and a sentence that names only the
+        # line and the kind is the same sentence for two different pieces of
+        # the author's text: a continuation at line 7, the author edits the
+        # body, another continuation at line 7, and the second loss is
+        # suppressed by the first. The note carries the text that went, so two
+        # losses read as two (#1740, round 3).
+        first, _ = self.write(f"{self.STATUS}\n  the first sentence I wrote under it")
+        second, _ = self.write(f"{self.STATUS}\n  a different sentence, same line")
+        self.assertEqual(len(first.announcements), 1, first.announcements)
+        self.assertEqual(len(second.announcements), 1, second.announcements)
+        self.assertNotEqual(first.announcements[0], second.announcements[0])
+        prior = self.posted([], list(first.announcements))
+        self.assertEqual(len(self.posted(prior, list(second.announcements))), 1)
+
+    def test_the_note_quotes_the_line_that_went(self) -> None:
+        # What makes the two distinguishable is also what makes the note
+        # actionable: the author's own words, in a code span so nothing in
+        # them reaches the page as markup.
+        result, _ = self.write(f"{self.STATUS}\n  the first sentence I wrote under it")
+        self.assertIn("the first sentence I wrote under it", result.announcements[0])
+        self.assertIn("`", result.announcements[0])
+
+    def test_the_fence_marker_is_one_code_span_on_the_page(self) -> None:
+        # `unmovable_block` wrote the marker between backticks of its own, so
+        # ``` inside ` ` was five backticks in a row and the page showed the
+        # marker as text rather than as code (#1740, round 3).
+        result, _ = self.write(self.LOSSES["an unclosed fence"][0])
+        note = result.announcements[0]
+        # Five backticks in a row is the bug's signature: a three-backtick
+        # marker wrapped in one backtick each side.
+        self.assertNotIn("`````", note)
+        # And the marker is a code span to the parser, with the marker itself
+        # as its content -- asked of the parser rather than of the characters,
+        # because "it has backticks around it" is what the bug had too.
+        spans = [
+            child.content
+            for token in self.evidence().MARKDOWN.parse(note)
+            for child in (token.children or [])
+            if child.type == "code_inline"
+        ]
+        self.assertIn("```", spans, spans)
+
+    def test_a_note_list_too_long_for_one_comment_is_still_said(self) -> None:
+        # Every fresh note went in one comment, and GitHub stores 65,536
+        # characters: a body with enough multi-line entries composed a comment
+        # past the limit, `gh` refused it, the False was ignored, and every
+        # loss went unsaid -- the direction this is not allowed to fail in.
+        execution = self.execution()
+        notes = [
+            f"not carried to `## Evidence Notes`: 1 line(s) continuing the status line "
+            f"at line {index} of the `Evidence Status` section, starting "
+            f"`{'x' * 400}`"
+            for index in range(300)
+        ]
+        sent = self.posted([], notes)
+        self.assertGreater(len(sent), 1, [len(comment) for comment in sent])
+        for comment in sent:
+            self.assertLessEqual(len(comment), execution.PR_COMMENT_LIMIT)
+            # Each chunk stands on its own to the guard: the headline it reads
+            # and the head line it keys on.
+            self.assertIn(execution.uncarried_notes_checked_line(self.HEAD), comment)
+        # And every note is in exactly one of them.
+        for note in notes:
+            self.assertEqual(sum(note in comment for comment in sent), 1, note[:60])
+
+    def test_a_chunked_list_is_read_back_by_the_guard(self) -> None:
+        # The chunks are only worth posting if the next run can see them: each
+        # one has to satisfy the same read that decides what was already said.
+        notes = [
+            f"not carried to `## Evidence Notes`: 1 line(s) continuing the status line "
+            f"at line {index} of the `Evidence Status` section, starting `{'y' * 400}`"
+            for index in range(300)
+        ]
+        prior = self.posted([], notes)
+        self.assertGreater(len(prior), 1)
+        self.assertEqual(self.posted(prior, notes), [])
+
+    def test_a_comment_that_did_not_land_is_logged(self) -> None:
+        # The `False` was ignored, so a failed post looked like a quiet run.
+        execution = self.execution()
+        err = io.StringIO()
+        with mock.patch.object(execution, "_pr_comment_bodies", return_value=[]), \
+             mock.patch.object(execution, "_post_pr_comment", return_value=False), \
+             contextlib.redirect_stderr(err):
+            posted = execution.post_uncarried_notes(7, None, self.notes(), self.HEAD, {})
+        self.assertFalse(posted)
+        self.assertIn("could not", err.getvalue().casefold())
+
+    def test_a_stand_down_comment_does_not_claim_text_was_not_carried(self) -> None:
+        # A stand-down is the section left exactly as its author wrote it, so
+        # a headline saying text "was not carried" and a sentence saying the
+        # list "is rewritten on every run" are both false of it (#1740,
+        # round 3).
+        execution = self.execution()
+        result, _ = self.write(self.UNCLOSED_HTML)
+        sent = self.posted([], list(result.announcements))
+        self.assertEqual(len(sent), 1, sent)
+        self.assertNotIn(execution.UNCARRIED_NOTES_HEADLINE, sent[0])
+        self.assertNotIn("could not be moved", sent[0])
+        self.assertIn(result.refusal, sent[0])
+        self.assertIn(self.HEAD, sent[0])
+
+    def test_an_uncarried_comment_still_says_what_it_always_said(self) -> None:
+        # The control: nothing above changes the comment a deletion gets.
+        execution = self.execution()
+        sent = self.posted([], self.notes())
+        self.assertIn(execution.UNCARRIED_NOTES_HEADLINE, sent[0])
 
 
 if __name__ == "__main__":
