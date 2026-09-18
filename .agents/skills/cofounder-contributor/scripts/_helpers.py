@@ -580,8 +580,19 @@ def unmovable_block(text: str) -> str | None:
     """
     for token in MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", text)):
         if token.type == "fence" and _fence_never_closed(token):
-            return f"a `{token.markup}` code fence with no closing line"
+            # Through `code_span`, because the marker comes from the body and
+            # is made of the character that delimits a code span: written as
+            # `` f"`{markup}`" `` a ``` fence reached the page as five
+            # backticks in a row, which renders as text rather than as the
+            # marker the author has to find (#1740, round 3). `code_span`
+            # fences one backtick past the longest run inside.
+            return f"a {code_span(token.markup)} code fence with no closing line"
         if token.type == "html_block" and (missing := _missing_html_closer(token)) is not None:
+            # Backticks and not `code_span` here, and it is not an oversight:
+            # the closer is this runtime's own word for what is missing, drawn
+            # from a fixed table and never from the body, and `code_span`
+            # strips comment delimiters -- so `-->`, the one closer an author
+            # most needs named, came back as an empty span (#1740, round 3).
             return f"a raw HTML block with no `{missing}`"
     return None
 

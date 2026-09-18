@@ -55,6 +55,7 @@ from evidence import (
     _rendered_lines,
     _rendered_status_lines,
     classify_evidence_errors,
+    is_stood_down_announcement,
     resolve_named_ci_evidence,
     requested_evidence_contract,
     render_execution_summary_body,
@@ -523,6 +524,24 @@ def compose_body_standdown_comment(persona: str, reasons: list[str]) -> str:
 
 
 UNCARRIED_NOTES_HEADLINE = "**Text under your `## Evidence Status` heading was not carried.**"
+# A stand-down is the opposite claim about the same body: nothing was written,
+# so nothing was carried away either, and the section stands exactly as its
+# author left it. Said under the deletion headline it told authors their text
+# had been removed from a body that still holds every line of it (#1740,
+# round 3).
+STOOD_DOWN_NOTES_HEADLINE = "**Your `## Evidence Status` section was left as written.**"
+# Both in one list is not a shape one write produces -- a stand-down returns
+# before any block is read -- but the list is a list, and a composer that
+# assumes otherwise says one of the two and drops the other, which is the
+# failure this whole issue is about.
+MIXED_NOTES_HEADLINE = "**Part of your `## Evidence Status` section did not survive this run.**"
+
+# What GitHub stores for one issue comment. A body past it is refused whole,
+# so the notes are chunked under it rather than posted and lost (#1740,
+# round 3). Held a little under the limit so the headline, the framing
+# sentence and the checked line every chunk repeats have room.
+PR_COMMENT_LIMIT = 65_536
+_COMMENT_FRAME_ALLOWANCE = 2_000
 
 
 def uncarried_notes_checked_line(head_sha: str) -> str:
@@ -547,27 +566,84 @@ def compose_uncarried_notes_comment(
     is the crossing `emit_refused_privileged_paths` makes for the same gap on
     the issue side.
 
+    Composed from what the list HOLDS rather than from one shape it might
+    have. Two claims travel in it and they are opposites: a deletion says text
+    is gone from the body GitHub now holds, and a stand-down says the body was
+    not written at all and every line of it is still there. Said under one
+    headline, the stand-down told authors their text had been removed from a
+    body that still carried it (#1740, round 3).
+
     The byline is optional because a lane run has no persona: the macOS
     reconciler and the CI verifier write this too, and a name they made up
     would be worse than none.
     """
-    listed = "\n".join(f"- {note}" for note in notes)
-    return "\n".join(
-        [
-            *([f"*{persona}*", ""] if persona else []),
-            UNCARRIED_NOTES_HEADLINE,
-            "",
+    stood_down = [note for note in notes if is_stood_down_announcement(note)]
+    uncarried = [note for note in notes if not is_stood_down_announcement(note)]
+    if stood_down and uncarried:
+        headline = MIXED_NOTES_HEADLINE
+    elif stood_down:
+        headline = STOOD_DOWN_NOTES_HEADLINE
+    else:
+        headline = UNCARRIED_NOTES_HEADLINE
+    parts: list[str] = [*([f"*{persona}*", ""] if persona else []), headline, ""]
+    if uncarried:
+        parts += [
             "The status list is rewritten from the evidence contract on every run, and "
             "these lines could not be moved to `## Evidence Notes` with the rest:",
             "",
-            listed,
+            "\n".join(f"- {note}" for note in uncarried),
             "",
             "Rewriting them below the status section, or closing the block named above, "
             "keeps them in the body the next run writes.",
             "",
-            uncarried_notes_checked_line(head_sha),
         ]
-    ) + "\n"
+    if stood_down:
+        parts += [
+            "The section was not rewritten at all, so it stands exactly as it was written "
+            "— and the status this run resolved is not recorded in it either:",
+            "",
+            "\n".join(f"- {note}" for note in stood_down),
+            "",
+            "Closing the block named above lets the next run write the section.",
+            "",
+        ]
+    return "\n".join([*parts, uncarried_notes_checked_line(head_sha)]) + "\n"
+
+
+def _uncarried_notes_comments(
+    persona: str | None, notes: list[str], head_sha: str
+) -> list[str]:
+    """One comment per chunk of the notes, each under what GitHub stores.
+
+    Every fresh note went in one comment, and a body past 65,536 characters is
+    refused whole: a section with enough multi-line entries composed a comment
+    `gh` would not take, the `False` came back, and every loss went unsaid
+    (#1740, round 3). The direction this note is allowed to fail in is saying
+    something twice, never saying nothing.
+
+    Each chunk is a comment in its own right -- its own headline, its own
+    framing, and the checked line the guard keys on -- so the next run reads
+    every chunk back and stays quiet about the notes already in them, rather
+    than seeing the first comment and re-posting the rest.
+
+    A single note longer than the limit on its own still goes in a comment of
+    its own and is refused by GitHub; it is one note rather than all of them,
+    and a note that long is `code_span` quoting a line an author wrote, which
+    has no smaller unit to split on.
+    """
+    budget = PR_COMMENT_LIMIT - _COMMENT_FRAME_ALLOWANCE
+    chunks: list[list[str]] = [[]]
+    length = 0
+    for note in notes:
+        cost = len(note) + 3
+        if chunks[-1] and length + cost > budget:
+            chunks.append([])
+            length = 0
+        chunks[-1].append(note)
+        length += cost
+    return [
+        compose_uncarried_notes_comment(persona, chunk, head_sha) for chunk in chunks if chunk
+    ]
 
 
 def _as_the_page_shows_it(text: str) -> str:
@@ -579,7 +655,17 @@ def _as_the_page_shows_it(text: str) -> str:
     return " ".join(" ".join(_rendered_lines(text)).split())
 
 
-COLLAPSED_BLOCK_RE = re.compile(r"(?is)<details\b.*?(?:</details>|\Z)")
+# From the FIRST `<details` to the LAST `</details>`, greedily, or to the end
+# of the comment when nothing closes it. Non-greedy -- to the first closer --
+# left a copy placed between an inner `</details>` and the outer one standing,
+# where it read as visible text and silenced the genuine note (#1740, round 3).
+#
+# What greedy over-strips is text between two unrelated collapsed blocks, and
+# a note stripped from a comment is a note this run says again. Counting
+# openers and closers would be more precise and would be a small HTML parser
+# in a dedup path; the standing rule here is that a guard on advice may repeat
+# and may not go silent, and only the greedy read has that failure direction.
+COLLAPSED_BLOCK_RE = re.compile(r"(?is)<details\b.*(?:</details>|\Z)")
 
 
 def _notes_a_reader_has_been_shown(comment: str, checked: str) -> set[str]:
@@ -634,9 +720,14 @@ def post_uncarried_notes(
     fresh = [note for note in fresh if _as_the_page_shows_it(note) not in said]
     if not fresh:
         return False
-    return _post_pr_comment(
-        pr_number, compose_uncarried_notes_comment(persona, fresh, head_sha), env
-    )
+    posted = True
+    for comment in _uncarried_notes_comments(persona, fresh, head_sha):
+        if not _post_pr_comment(pr_number, comment, env):
+            # Said, because the `False` was dropped and a run that told the
+            # author nothing looked exactly like a run with nothing to say.
+            log(f"could not tell PR #{pr_number} what the write did not carry")
+            posted = False
+    return posted
 
 
 def _post_pr_comment(pr_number: int, body: str, env: dict[str, str]) -> bool:
@@ -1262,6 +1353,15 @@ def _complete_diff_evidence_after_approval(pr_number: int, env: dict[str, str]) 
     uncarried: list[str] = []
     new_body = update_evidence_entries(body, updates, announcements=uncarried)
     if new_body == body:
+        # An unchanged body is not a quiet run. The write stands down whole on
+        # a block whose closer never came, and a stand-down IS an unchanged
+        # body -- by design, and with the status this run resolved unwritten as
+        # well. Returning here posted nothing and left the reason on stderr,
+        # which is the channel this issue exists to leave (#1740, round 3).
+        # No head re-read: nothing was written, so the note is about the body
+        # as it stands, and the window between sampling the head and saying so
+        # is the same one the lane's note has (#1760).
+        post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
         return
     if not _factory_expected_pr_head_is_current(pr_number, env):
         return

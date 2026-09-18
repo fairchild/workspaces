@@ -319,6 +319,13 @@ def _apply_ci_updates(
         uncarried: list[str] = []
         new_body = update_evidence_entries(body, safe_updates, announcements=uncarried)
         if new_body == body:
+            # Same reason as the review-time completion: the write stands down
+            # whole on a block whose closer never came, which returns the body
+            # byte-identical, and returning here said it on stderr alone. A
+            # stand-down is the case the author most needs telling about --
+            # the section stands AND the status this run resolved is unwritten
+            # (#1740, round 3).
+            post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
             return body
         current = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
         current_head = current.get("head") if isinstance(current, dict) else None

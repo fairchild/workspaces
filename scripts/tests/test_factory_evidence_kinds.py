@@ -8217,9 +8217,139 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
         for shape, forged in {
             "an HTML comment": f"<!--\n{real}\n-->",
             "a collapsed block": f"<details><summary>nothing to see</summary>\n{real}\n</details>",
+            # The strip was non-greedy to the FIRST `</details>`, so a copy
+            # placed after an inner closer and before the outer one survived it
+            # and read as visible -- the one placement that silenced the note
+            # (#1740, round 3).
+            "a nested collapsed block": (
+                "<details><summary>outer</summary>\n"
+                "<details><summary>inner</summary>\nnothing\n</details>\n"
+                f"{real}\n</details>"
+            ),
+            "two collapsed blocks with the copy between them": (
+                "<details><summary>one</summary>\nnothing\n</details>\n"
+                f"{real}\n"
+                "<details><summary>two</summary>\nnothing\n</details>"
+            ),
         }.items():
             with self.subTest(shape=shape):
                 self.assertEqual(len(self.posted([forged], notes)), 1)
+
+    def test_a_note_a_reader_was_actually_shown_still_silences_it(self) -> None:
+        # The control the strip must not cost: a plain comment carrying the
+        # note is a comment the author read, and the run stays quiet.
+        notes = self.notes()
+        real = self.posted([], notes)[0]
+        self.assertEqual(self.posted([real], notes), [])
+
+    def test_two_losses_at_one_line_are_two_notes(self) -> None:
+        # The dedup key was the sentence, and a sentence that names only the
+        # line and the kind is the same sentence for two different pieces of
+        # the author's text: a continuation at line 7, the author edits the
+        # body, another continuation at line 7, and the second loss is
+        # suppressed by the first. The note carries the text that went, so two
+        # losses read as two (#1740, round 3).
+        first, _ = self.write(f"{self.STATUS}\n  the first sentence I wrote under it")
+        second, _ = self.write(f"{self.STATUS}\n  a different sentence, same line")
+        self.assertEqual(len(first.announcements), 1, first.announcements)
+        self.assertEqual(len(second.announcements), 1, second.announcements)
+        self.assertNotEqual(first.announcements[0], second.announcements[0])
+        prior = self.posted([], list(first.announcements))
+        self.assertEqual(len(self.posted(prior, list(second.announcements))), 1)
+
+    def test_the_note_quotes_the_line_that_went(self) -> None:
+        # What makes the two distinguishable is also what makes the note
+        # actionable: the author's own words, in a code span so nothing in
+        # them reaches the page as markup.
+        result, _ = self.write(f"{self.STATUS}\n  the first sentence I wrote under it")
+        self.assertIn("the first sentence I wrote under it", result.announcements[0])
+        self.assertIn("`", result.announcements[0])
+
+    def test_the_fence_marker_is_one_code_span_on_the_page(self) -> None:
+        # `unmovable_block` wrote the marker between backticks of its own, so
+        # ``` inside ` ` was five backticks in a row and the page showed the
+        # marker as text rather than as code (#1740, round 3).
+        result, _ = self.write(self.LOSSES["an unclosed fence"][0])
+        note = result.announcements[0]
+        # Five backticks in a row is the bug's signature: a three-backtick
+        # marker wrapped in one backtick each side.
+        self.assertNotIn("`````", note)
+        # And the marker is a code span to the parser, with the marker itself
+        # as its content -- asked of the parser rather than of the characters,
+        # because "it has backticks around it" is what the bug had too.
+        spans = [
+            child.content
+            for token in self.evidence().MARKDOWN.parse(note)
+            for child in (token.children or [])
+            if child.type == "code_inline"
+        ]
+        self.assertIn("```", spans, spans)
+
+    def test_a_note_list_too_long_for_one_comment_is_still_said(self) -> None:
+        # Every fresh note went in one comment, and GitHub stores 65,536
+        # characters: a body with enough multi-line entries composed a comment
+        # past the limit, `gh` refused it, the False was ignored, and every
+        # loss went unsaid -- the direction this is not allowed to fail in.
+        execution = self.execution()
+        notes = [
+            f"not carried to `## Evidence Notes`: 1 line(s) continuing the status line "
+            f"at line {index} of the `Evidence Status` section, starting "
+            f"`{'x' * 400}`"
+            for index in range(300)
+        ]
+        sent = self.posted([], notes)
+        self.assertGreater(len(sent), 1, [len(comment) for comment in sent])
+        for comment in sent:
+            self.assertLessEqual(len(comment), execution.PR_COMMENT_LIMIT)
+            # Each chunk stands on its own to the guard: the headline it reads
+            # and the head line it keys on.
+            self.assertIn(execution.uncarried_notes_checked_line(self.HEAD), comment)
+        # And every note is in exactly one of them.
+        for note in notes:
+            self.assertEqual(sum(note in comment for comment in sent), 1, note[:60])
+
+    def test_a_chunked_list_is_read_back_by_the_guard(self) -> None:
+        # The chunks are only worth posting if the next run can see them: each
+        # one has to satisfy the same read that decides what was already said.
+        notes = [
+            f"not carried to `## Evidence Notes`: 1 line(s) continuing the status line "
+            f"at line {index} of the `Evidence Status` section, starting `{'y' * 400}`"
+            for index in range(300)
+        ]
+        prior = self.posted([], notes)
+        self.assertGreater(len(prior), 1)
+        self.assertEqual(self.posted(prior, notes), [])
+
+    def test_a_comment_that_did_not_land_is_logged(self) -> None:
+        # The `False` was ignored, so a failed post looked like a quiet run.
+        execution = self.execution()
+        err = io.StringIO()
+        with mock.patch.object(execution, "_pr_comment_bodies", return_value=[]), \
+             mock.patch.object(execution, "_post_pr_comment", return_value=False), \
+             contextlib.redirect_stderr(err):
+            posted = execution.post_uncarried_notes(7, None, self.notes(), self.HEAD, {})
+        self.assertFalse(posted)
+        self.assertIn("could not", err.getvalue().casefold())
+
+    def test_a_stand_down_comment_does_not_claim_text_was_not_carried(self) -> None:
+        # A stand-down is the section left exactly as its author wrote it, so
+        # a headline saying text "was not carried" and a sentence saying the
+        # list "is rewritten on every run" are both false of it (#1740,
+        # round 3).
+        execution = self.execution()
+        result, _ = self.write(self.UNCLOSED_HTML)
+        sent = self.posted([], list(result.announcements))
+        self.assertEqual(len(sent), 1, sent)
+        self.assertNotIn(execution.UNCARRIED_NOTES_HEADLINE, sent[0])
+        self.assertNotIn("could not be moved", sent[0])
+        self.assertIn(result.refusal, sent[0])
+        self.assertIn(self.HEAD, sent[0])
+
+    def test_an_uncarried_comment_still_says_what_it_always_said(self) -> None:
+        # The control: nothing above changes the comment a deletion gets.
+        execution = self.execution()
+        sent = self.posted([], self.notes())
+        self.assertIn(execution.UNCARRIED_NOTES_HEADLINE, sent[0])
 
 
 if __name__ == "__main__":

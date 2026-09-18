@@ -407,7 +407,15 @@ jobs:
           fi
 
       - name: Say what the re-render could not carry
-        if: steps.reconcile.outcome == 'success' && steps.reconcile.outputs.uncarried_notes != ''
+        # `!cancelled()` rather than no status function at all: a condition
+        # naming none is one GitHub prepends `success()` to, and `success()`
+        # asks about the JOB. An earlier step failing hard -- the `always()`
+        # artifact upload with nothing to fetch is the reachable one -- then
+        # skipped this step while the reconcile step, under its own `always()`,
+        # had written the body and published the output, and the note was never
+        # said (#1740, round 3). The outcome gate below is what decides; this
+        # only keeps an implicit one from deciding first.
+        if: ${{ !cancelled() && steps.reconcile.outcome == 'success' && steps.reconcile.outputs.uncarried_notes != '' }}
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}

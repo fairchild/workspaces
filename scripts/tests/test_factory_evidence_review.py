@@ -513,6 +513,55 @@ class TheApprovalCompletionSaysWhatItCouldNotCarryTests(unittest.TestCase):
             execution._complete_diff_evidence_after_approval(42, {})
         return edited, posted
 
+    STOOD_DOWN_BODY_TAIL = "\n<!--\nan aside whose closer never came\n"
+
+    def completed_on(self, body: str, *, prior: list[str] | None = None):
+        """One approval completion over a body this test supplies."""
+        edited: list[str] = []
+        posted: list[str] = []
+        with (
+            mock.patch.object(execution, "_pr_body_and_head", return_value=(body, HEAD)),
+            mock.patch.object(
+                execution, "_latest_approving_review", return_value={"html_url": "https://github.test/r/1"}
+            ),
+            mock.patch.object(execution, "_factory_expected_pr_head_is_current", return_value=True),
+            mock.patch.object(execution, "_edit_pr_body", side_effect=lambda *a, **k: edited.append(a[1])),
+            mock.patch.object(execution, "_pr_comment_bodies", return_value=prior or []),
+            mock.patch.object(
+                execution, "_post_pr_comment", side_effect=lambda *a, **k: posted.append(a[1]) or True
+            ),
+        ):
+            execution._complete_diff_evidence_after_approval(42, {})
+        return edited, posted
+
+    def test_a_stand_down_is_said_even_though_the_body_did_not_change(self) -> None:
+        # The whole write stands down on a raw HTML block whose closer never
+        # came: `update_evidence_entries` returns the body unchanged, and this
+        # caller returned on `new_body == body` before it posted anything. A
+        # stand-down is a body that did not change BY DESIGN -- the status this
+        # run resolved is not written either -- so "unchanged" is exactly when
+        # the author most needs telling (#1740, round 3).
+        body = self.body() + self.STOOD_DOWN_BODY_TAIL
+        edited, posted = self.completed_on(body)
+        self.assertEqual(edited, [])
+        self.assertEqual(len(posted), 1, posted)
+        self.assertIn("left as written", posted[0])
+        self.assertIn(HEAD, posted[0])
+
+    def test_a_run_that_changed_nothing_and_lost_nothing_says_nothing(self) -> None:
+        # The control the guard is: an unchanged body with an empty
+        # announcement list posts no comment.
+        block = "<!-- evidence-status:v1\n" + json.dumps(
+            {"entries": [{"index": 1, "item": DIFF_ITEM, "status": "complete", "detail": "already done"}]}
+        ) + "\n-->\n"
+        body = (
+            "*Persona*\n\n## Summary\n- change\n\n"
+            f"{block}\n## Evidence Status\n- [complete] {DIFF_ITEM} -- already done\n"
+        )
+        edited, posted = self.completed_on(body)
+        self.assertEqual(edited, [])
+        self.assertEqual(posted, [])
+
     def test_the_author_is_told_which_line_the_completion_could_not_carry(self) -> None:
         edited, posted = self.completed()
         self.assertEqual(len(edited), 1, edited)

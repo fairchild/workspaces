@@ -825,6 +825,62 @@ class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
         # did not happen: the section is still whole on the pull request.
         self.assertEqual(self.carried_note(write_succeeds=False), [])
 
+    def stood_down_note(self) -> list[list[str]]:
+        """The notes the verifier posted on a body whose write stands down."""
+        # A raw HTML block of kinds 1 to 5 under the heading: CommonMark runs
+        # it to the end of the document, so the write cannot say where the
+        # section ends, stands the whole body down, and returns it
+        # byte-identical.
+        body = body_with_entries([ci_entry()]).replace(
+            "\n\n## Validation\n",
+            "\n\n<pre>\nthe run log nobody closed\n\n## Validation\n",
+            1,
+        )
+        pr = pr_payload(body, labels=[])
+        posted: list[list[str]] = []
+        written: list[str] = []
+
+        with (
+            mock.patch.object(
+                verify, "_gh_json", side_effect=lambda args, env: pr if any("pulls/321" in a for a in args) else None
+            ),
+            mock.patch.object(
+                verify,
+                "check_runs_for",
+                return_value=[
+                    {
+                        "status": "completed",
+                        "conclusion": "success",
+                        "completed_at": "2026-08-27T00:00:00Z",
+                        "html_url": "https://example.invalid/run/1",
+                    }
+                ],
+            ),
+            mock.patch.object(
+                verify, "_write_pr_body", side_effect=lambda *a, **k: written.append(a[1]) or True
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(verify, "_gh", return_value=True),
+            mock.patch.object(
+                verify,
+                "post_uncarried_notes",
+                side_effect=lambda pr_number, persona, notes, head, env: posted.append(list(notes)) or True,
+            ),
+        ):
+            verify.process_pr(321, {})
+        return posted, written
+
+    def test_a_stand_down_is_said_even_though_the_body_did_not_change(self) -> None:
+        # `_apply_ci_updates` returned on `new_body == body` before it posted.
+        # A stand-down IS an unchanged body -- the status this run resolved is
+        # not written either -- so the one case the author most needs telling
+        # about was the one case that said nothing (#1740, round 3).
+        posted, written = self.stood_down_note()
+        self.assertEqual(written, [])
+        self.assertEqual(len(posted), 1, posted)
+        self.assertEqual(len(posted[0]), 1, posted[0])
+        self.assertIn("left as written", posted[0][0])
+
 
 if __name__ == "__main__":
     unittest.main()

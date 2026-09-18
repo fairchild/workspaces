@@ -1801,6 +1801,27 @@ class TheMacosLaneSaysWhatItCouldNotCarryTests(unittest.TestCase):
         self.assertIn("if:", condition)
         self.assertNotIn("always()", condition)
         self.assertIn("steps.reconcile.outcome == 'success'", condition)
+        # And the half round 2 left implicit. A condition naming no status
+        # function is one GitHub prepends `success()` to, and `success()` is
+        # about the JOB: after any earlier step fails hard -- the `always()`
+        # artifact download with nothing to fetch is the reachable one -- the
+        # reconcile step still runs under its own `always()`, writes the body,
+        # publishes the output, and this step is skipped with the note never
+        # said. `!cancelled()` is the status function that says "run unless the
+        # run was cancelled" and leaves the outcome gate above as the only
+        # condition that decides (#1740, round 3).
+        self.assertIn("!cancelled()", condition)
+
+    def test_the_note_survives_an_earlier_step_failing(self) -> None:
+        # The scenario stated as itself rather than as a token: a job where an
+        # earlier step failed, the reconcile step succeeded, and the output is
+        # set. The condition has to evaluate that combination to true, which no
+        # implicit `success()` does.
+        condition = self.step(self.ANNOUNCE_MARKER).split("\n", 1)[0]
+        expression = condition.split("if:", 1)[1].strip().removeprefix("${{").removesuffix("}}").strip()
+        self.assertTrue(expression.startswith("!cancelled()"), expression)
+        for gate in ("steps.reconcile.outcome == 'success'", "steps.reconcile.outputs.uncarried_notes != ''"):
+            self.assertIn(gate, expression)
 
     def test_the_output_is_written_after_the_body_lands(self) -> None:
         # The other half: a condition on the step's outcome is not enough on

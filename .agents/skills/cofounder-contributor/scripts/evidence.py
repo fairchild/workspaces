@@ -2234,17 +2234,32 @@ def _list_item_spans(
     return index + 1
 
 
-def _uncarried_note(detail: str, line: int) -> str:
+def _uncarried_note(detail: str, line: int, went: str = "") -> str:
     """The one sentence every writer says about text the section could not keep.
 
     One composer because the two writers have to say the same thing about the
     same body: a lane run and a factory turn that word this differently read
     as two losses to the author and to the dedup that keeps them from being
     said twice (#1740).
+
+    `went` is the first line of the text that went, and it is what makes the
+    sentence about a LOSS rather than about a line number. Without it, a
+    continuation under the status line at line 7, an edit, and a different
+    continuation at line 7 composed the identical sentence, and the dedup --
+    which keys on what a reader was shown -- suppressed the second: two pieces
+    of the author's text gone and one of them never mentioned (#1740, round 3).
+
+    Carrying the text rather than keying the dedup on a hash of the body: a
+    hash is a key no reader can check, and it re-posts every note whenever any
+    part of the body changes. The author's own words are the thing they need
+    in order to put the line back, so the key and the usefulness are the same
+    addition. Quoted through `code_span`, because they are somebody else's
+    characters reaching a comment, a log and a workflow output.
     """
+    quoted = f", starting {code_span(went)}" if went.strip() else ""
     return (
         f"not carried to `## {EVIDENCE_NOTES_HEADING}`: {detail} at line {line} "
-        f"of the `{EVIDENCE_STATUS_HEADING}` section"
+        f"of the `{EVIDENCE_STATUS_HEADING}` section{quoted}"
     )
 
 
@@ -2312,7 +2327,9 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
                 (
                     start,
                     _uncarried_note(
-                        f"{stop - start - 1} line(s) continuing the status line", start + 1
+                        f"{stop - start - 1} line(s) continuing the status line",
+                        start + 1,
+                        lines[start + 1],
                     ),
                 )
             )
@@ -2341,7 +2358,7 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
             # Said, because a loss nobody can see is the failure this file
             # keeps paying for. The line is the one inside this section, which
             # is the only frame this function has.
-            losses.append((start, _uncarried_note(reason, start + 1)))
+            losses.append((start, _uncarried_note(reason, start + 1, lines[start])))
             continue
         carried.append(block)
     # Said last and all at once, in the order of the section rather than in the
@@ -2399,17 +2416,30 @@ class SectionWrite(NamedTuple):
     announcements: list[str]
 
 
+# How a stand-down announces itself, named rather than spelled twice: the
+# surface that posts these sentences has to tell a stand-down from a deletion,
+# because the two are opposite claims about the body. A deletion says text is
+# gone from the body GitHub now holds; a stand-down says the body was not
+# written at all (#1740, round 3).
+STOOD_DOWN_ANNOUNCEMENT_PREFIX = f"`## {EVIDENCE_STATUS_HEADING}` was left as written: "
+
+
+def is_stood_down_announcement(announcement: str) -> bool:
+    """Whether this sentence is a stand-down rather than a piece of text that went."""
+    return announcement.startswith(STOOD_DOWN_ANNOUNCEMENT_PREFIX)
+
+
 def _stood_down(source: str, refusal: str) -> SectionWrite:
     """The body standing whole, with the reason said as the author's to act on.
 
     A stand-down is a loss of the same kind as a deleted note and larger: the
     status this run resolved is not written either. It travels in the same
     list so one surface says both, and so a caller cannot forward one and
-    drop the other.
+    drop the other -- which is a claim about the callers, and was false at two
+    of them until #1740 round 3: both returned on an unchanged body before
+    they posted, and an unchanged body is exactly what a stand-down produces.
     """
-    return SectionWrite(
-        source, refusal, [f"`## {EVIDENCE_STATUS_HEADING}` was left as written: {refusal}"]
-    )
+    return SectionWrite(source, refusal, [f"{STOOD_DOWN_ANNOUNCEMENT_PREFIX}{refusal}"])
 
 
 def write_evidence_status_section(
