@@ -3100,7 +3100,22 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
 # here is adding a test.
 HEADING_LINE_PREFIX = "The heading at line"
 INSIDE_A_BLOCK = "inside a raw HTML block"
+AMBIGUOUS_TEXT = (
+    "Ambiguous Evidence Status headings; use at most one exact "
+    "'## Evidence Status' heading and no variants."
+)
 BLOCKED_LINE = "- [blocked] the UI lane -- waiting"
+
+# Round 6's axis: the same swallowed heading with a real section elsewhere in
+# the body, written each of the three ways a reader sees one. The point of the
+# axis is that none of them rescues the status under the swallowed heading --
+# both views start their section at the real heading, so the `[blocked]` line
+# above it is read by neither (#1767).
+SWALLOWED_BLOCKED = f"<div>\n## Evidence Status\n{BLOCKED_LINE}\n</div>\n\n"
+SWALLOWED_COMPLETE = "<div>\n## Evidence Status\n- [complete] the UI lane -- ran\n</div>\n\n"
+REAL_EMPHASISED = "## **Evidence Status**\n\n- [complete] swift test -- ok\n\n"
+REAL_SETEXT = "Evidence Status\n---------------\n\n- [complete] swift test -- ok\n\n"
+REAL_PLAIN = "## Evidence Status\n\n- [complete] swift test -- ok\n\n"
 
 SWALLOWED_HEADING_TABLE = (
     # Round 2: the heading is swallowed by an opener a line above it and the
@@ -3136,6 +3151,23 @@ SWALLOWED_HEADING_TABLE = (
     ("the blank line the message asks for", f"</details>\n\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, PENDING_TEXT),
     ("a fenced example of the heading", "```markdown\n## Evidence Status\n\n- [blocked] an example\n```\n\n", False, None),
     ("an indented example of the heading", "    ## Evidence Status\n\n    - [blocked] an example\n\n", False, None),
+    # Round 6: a real section below the swallowed heading. The check was asked
+    # only where the parse found NO candidate, so a real section written with
+    # emphasis or over a setext underline left one candidate and the question
+    # went unasked -- the whole class passed while the shape above it, alone
+    # in the body, refused (#1767).
+    ("swallowed blocked above an emphasised section", SWALLOWED_BLOCKED + REAL_EMPHASISED, True, INSIDE_A_BLOCK),
+    ("swallowed blocked above a setext section", SWALLOWED_BLOCKED + REAL_SETEXT, True, INSIDE_A_BLOCK),
+    ("swallowed blocked above a plain section", SWALLOWED_BLOCKED + REAL_PLAIN, True, INSIDE_A_BLOCK),
+    (
+        "swallowed blocked above an emphasised section, CRLF",
+        (SWALLOWED_BLOCKED + REAL_EMPHASISED).replace("\n", "\r\n"),
+        True,
+        INSIDE_A_BLOCK,
+    ),
+    # The control the widening must not cost: nothing is being kept out, so
+    # the block is an author's own markup and the body passes as it did.
+    ("swallowed complete above an emphasised section", SWALLOWED_COMPLETE + REAL_EMPHASISED, False, None),
 )
 
 
@@ -3182,6 +3214,47 @@ class TheSwallowedHeadingTableTests(unittest.TestCase):
                 self.assertIn(f"{HEADING_LINE_PREFIX} {heading_line}", failure)
                 self.assertIn("blank line", failure)
 
+    def test_a_real_section_does_not_make_the_swallowed_status_readable(self) -> None:
+        # The class #1767 names, stated as the claim rather than as rows: for
+        # each way a reader sees a real Evidence Status heading, the gate reads
+        # that section and still refuses the `[blocked]` line hidden above it.
+        for name, real in (
+            ("emphasised", REAL_EMPHASISED),
+            ("setext", REAL_SETEXT),
+            ("plain", REAL_PLAIN),
+        ):
+            with self.subTest(section=name):
+                body = self.body(SWALLOWED_BLOCKED + real)
+                # The real section IS read: its complete line is the section's.
+                self.assertEqual(
+                    pr_readiness.extract_section(body, "Evidence Status"),
+                    "- [complete] swift test -- ok",
+                )
+                failure = pr_readiness.unread_status_heading_failure(body)
+                self.assertIsNotNone(failure, name)
+                self.assertIn(INSIDE_A_BLOCK, failure)
+
+    def test_both_heading_failures_are_said_where_both_apply(self) -> None:
+        # What an author reads when the line scan and the swallowed check both
+        # speak: both messages. They are about different lines -- the count
+        # says how many spellings to keep, the other says where a status the
+        # page prints is hidden -- and deleting a heading on the count's advice
+        # leaves the hidden status in place.
+        body = self.body(SWALLOWED_BLOCKED + REAL_PLAIN)
+        failures = pr_readiness.evaluate(pr(body), self.FILES).failures
+        self.assertEqual(failures[0], AMBIGUOUS_TEXT)
+        self.assertIn(INSIDE_A_BLOCK, failures[1])
+        self.assertEqual(len(failures), 2, failures)
+
+    def test_the_swallowed_check_is_not_gated_on_the_candidate_count(self) -> None:
+        # The condition the fix removed, stated where a reader of the table
+        # will find it: a body with one candidate, and one exact heading line
+        # the parse reads as no heading at all.
+        body = self.body(SWALLOWED_BLOCKED + REAL_EMPHASISED)
+        self.assertEqual(len(pr_readiness.status_heading_candidates(body)), 1)
+        self.assertIsNone(pr_readiness.evidence_status_heading_failure(body))
+        self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok)
+
     def test_the_table_covers_both_status_tokens_and_every_wrapper(self) -> None:
         # A table nobody checks the shape of grows lopsided. These are the
         # axes the four passes actually moved along.
@@ -3192,6 +3265,10 @@ class TheSwallowedHeadingTableTests(unittest.TestCase):
             self.assertIn(wrapper, rows)
         for container in ("<!--", "<pre>", "<div>", "</details>", "<img"):
             self.assertIn(container, rows)
+        # And round 6's axis: a real section below the swallowed heading, in
+        # each of the three spellings a reader sees as one.
+        for real in ("## **Evidence Status**", "---------------", "\r\n"):
+            self.assertIn(real, rows)
 
 
 class HeadingIdentityFoldsCaseAndNotLettersTests(unittest.TestCase):

@@ -1236,15 +1236,26 @@ def unread_status_heading_failure(body: str) -> str | None:
     a heading reading as this section, spelled with a character that is not a
     case variant of anything, and no reader here takes it.
 
-    No candidate at all, where the line scan found an exact heading line, is
-    the third and it is this branch's own fail-open (#1742, round 2). A
-    `## Evidence Status` line with no blank line above it, under `</details>`,
-    an `<img>` tag, an opening `<div>` or a comment a browser ends at `--!>`,
-    is inside a raw HTML block to CommonMark: the old literal start matched it
-    wherever it sat, this parse finds no heading, and the `[blocked]` line the
-    page plainly shows went from a refusal to a pass. The refusal names the
+    A heading line the parse puts inside a raw HTML block is the third, and it
+    is this branch's own fail-open (#1742, round 2). A `## Evidence Status`
+    line with no blank line above it, under `</details>`, an `<img>` tag, an
+    opening `<div>` or a comment a browser ends at `--!>`, is inside a raw
+    HTML block to CommonMark: the old literal start matched it wherever it
+    sat, this parse finds no heading, and the `[blocked]` line the page
+    plainly shows went from a refusal to a pass. The refusal names the
     heading's line and the block's, because the repair is one blank line and
     an author cannot see a block boundary.
+
+    That third one is asked first, and whatever the candidate count. Gating it
+    on an empty candidate list made it a refusal about a whole body rather
+    than about a line: the same swallowed heading placed above a real section
+    written with emphasis or over a setext underline leaves one candidate, the
+    question was never asked, and the `[blocked]` line under the swallowed one
+    passed. A section elsewhere in the body does not make that status readable
+    -- the section read starts at the real heading and so does the page
+    reader's (#1767). First, because a line no reader takes for a heading at
+    all is a wider disagreement than which of several visible headings is
+    read, and its message is the one naming where the hidden status sits.
 
     Where the covering block is CODE rather than raw HTML, this stays silent:
     a fenced or indented `## Evidence Status` is an example, the page shows it
@@ -1257,9 +1268,11 @@ def unread_status_heading_failure(body: str) -> str | None:
     because an author cannot see a long s.
     """
     normalized = LINE_ENDING_RE.sub("\n", body)
+    if swallowed := _swallowed_status_heading_failure(normalized):
+        return swallowed
     headings = status_heading_candidates(normalized)
     if not headings:
-        return _swallowed_status_heading_failure(normalized)
+        return None
     if len(headings) > 1:
         places = ", ".join(f"line {line}" for line, _ in headings)
         tokens = MARKDOWN.parse(normalized)
@@ -1332,11 +1345,11 @@ def _a_status_is_kept_out(normalized: str, block: Token) -> bool:
 def _swallowed_status_heading_failure(normalized: str) -> str | None:
     """Why a heading line the page shows is no heading at all, or None.
 
-    Asked only where the parse found no candidate. A line the scan calls an
-    exact heading and the parser puts inside a raw HTML block is the shape
-    this branch exists for; a line inside a fenced or indented code block is
-    not, because there the page shows an example and no section is the honest
-    answer.
+    Asked for every exact heading line the scan finds, whatever the parse made
+    of the rest of the body. A line the scan calls an exact heading and the
+    parser puts inside a raw HTML block is the shape this branch exists for; a
+    line inside a fenced or indented code block is not, because there the page
+    shows an example and no section is the honest answer.
 
     And only where a status is being kept out by it (`_a_status_is_kept_out`).
     A body may carry an exact heading line inside a comment it closed or a
@@ -1676,6 +1689,13 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
     # does not draw two failures about the same heading.
     if heading_failure := evidence_status_heading_failure(body):
         failures.append(heading_failure)
+        # The swallowed heading is the exception, because it is a different
+        # fact about a different line: the count says how many spellings to
+        # keep, and this says a status the page prints sits inside a block no
+        # reader's section reaches. An author who deletes a heading on the
+        # count's advice still has the hidden status, so both are said (#1767).
+        if swallowed := _swallowed_status_heading_failure(body):
+            failures.append(swallowed)
     elif unread_heading := unread_status_heading_failure(body):
         failures.append(unread_heading)
     status_section = extract_section(body, EVIDENCE_STATUS_HEADING, strip=False)
