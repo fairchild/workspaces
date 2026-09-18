@@ -44,6 +44,22 @@ run_contributor = load_module("run_contributor", SCRIPT_PATH)
 pr_readiness = load_module("pr_readiness", REPO_ROOT / "scripts" / "pr-readiness.py")
 
 
+def setUpModule() -> None:
+    """The readiness gate asks GitHub to render a body; this suite does not.
+
+    `evaluate` reads line starts off the HTML GitHub returns for the body
+    (#1745), and a test run that let that call out would be slow, would spend
+    a rate limit, and would answer one way on a machine with a token and
+    another way without one. Refused here, so the gate takes the fallback it
+    takes offline and the tests measure what they were written to measure.
+    """
+
+    def refuse(text: str) -> str:
+        raise pr_readiness.RendererUnavailable("this suite does not reach the renderer")
+
+    pr_readiness.render_markdown = refuse
+
+
 class RunContributorEvidenceTests(unittest.TestCase):
     maxDiff = None
 

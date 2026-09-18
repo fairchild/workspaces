@@ -19,10 +19,15 @@ reads every line the page shows -- a list item, a paragraph, a table cell, a
 sub-heading, the text of a raw HTML block -- so an escape, a character
 reference or inline HTML around the status token is resolved rather than hiding
 it (#1706), a status outside a list item is still a status (#1727), and one the
-page prints from raw HTML is one too (#1736). The two are combined as a conjunction of
-refusals, never a vote: the rendered view can only add failures, so it cannot
-pass a body the written view fails, and a shape only one of them sees is still
-a shape the gate catches.
+page prints from raw HTML is one too (#1736). The rendered view asks GitHub
+itself where a line starts -- `POST /markdown` returns the HTML the pull
+request page shows -- and keeps its own source model of that question as a
+second reader beside the answer (#1745). Offline, tokenless or rate-limited,
+the renderer goes unasked and the gate says so rather than passing quietly.
+
+All of them are combined as a conjunction of refusals, never a vote: a reader
+can only add failures, so none of them can pass a body another one fails, and
+a shape only one of them sees is still a shape the gate catches.
 """
 
 from __future__ import annotations
@@ -34,7 +39,10 @@ import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -699,6 +707,240 @@ def rendered_status_lines(body: str) -> list[str]:
     return lines
 
 
+# GitHub's own answer to the one question the model above asks: where does a
+# line start on the page? `POST /markdown` in `gfm` mode returns the HTML the
+# pull request page shows, and a line start read off that HTML needs no tag
+# grammar, no comment state and no block-element list (#1745).
+#
+# The two readers combine the way the written and rendered views already do --
+# a conjunction of refusals, never a vote. A status either of them puts at the
+# start of a line fails the gate, so the renderer can only ever ADD refusals
+# and the model is never the sole accepter when the renderer answered. The
+# model's over-refusals survive on purpose: `<x:y>[blocked] x</x:y>` renders
+# as one literal line the page starts with `<x:y>`, so the renderer would
+# accept it and the model still refuses, which is the standing rule that a
+# reader on the refusing side may add refusals and may never remove them
+# (#1729).
+MARKDOWN_API_URL = "https://api.github.com/markdown"
+MARKDOWN_API_VERSION = "2022-11-28"
+# One call per gate run against a body GitHub caps at 65,536 characters. Ten
+# seconds is far past the ~0.2 s the call takes from a laptop and short enough
+# that a gate waiting on an unreachable renderer still finishes well inside
+# the workflow's ten-minute timeout.
+RENDER_TIMEOUT_SECONDS = 10
+DEFAULT_REPOSITORY = "fairchild/workspaces"
+
+
+class RendererUnavailable(Exception):
+    """GitHub did not render the body. The message is why, in one clause."""
+
+
+def repository_context() -> str:
+    """The repository the renderer resolves `#123` and `@name` against."""
+    return os.environ.get("GITHUB_REPOSITORY") or DEFAULT_REPOSITORY
+
+
+def http_failure_reason(error: urllib.error.HTTPError) -> str:
+    """Why a non-2xx answer arrived, naming the rate limit when that is the cause."""
+    headers = error.headers or {}
+    if error.code in {403, 429} and headers.get("x-ratelimit-remaining") == "0":
+        reset = headers.get("x-ratelimit-reset") or "the next window"
+        return f"the renderer's rate limit is spent (it resets at {reset})"
+    return f"the renderer answered HTTP {error.code}"
+
+
+def render_markdown(text: str) -> str:
+    """The HTML GitHub shows for `text`, or `RendererUnavailable` saying why not.
+
+    `POST /markdown` needs no permission beyond a token that authenticates: it
+    reads nothing of the repository except the `context` it resolves
+    references against, so CI passes `github.token` and a laptop passes
+    whatever `gh` already exported. An unauthenticated call is not attempted,
+    because the anonymous allowance is 60 an hour shared across the whole
+    host, and a gate spending it would pass for one author and fail for the
+    next with no change in the body.
+    """
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if not token:
+        raise RendererUnavailable("no GH_TOKEN or GITHUB_TOKEN in the environment")
+    payload = json.dumps({"text": text, "mode": "gfm", "context": repository_context()})
+    request = urllib.request.Request(
+        MARKDOWN_API_URL,
+        data=payload.encode("utf-8"),
+        method="POST",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "X-GitHub-Api-Version": MARKDOWN_API_VERSION,
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "workspaces-pr-readiness",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=RENDER_TIMEOUT_SECONDS) as response:
+            return response.read().decode("utf-8")
+    except urllib.error.HTTPError as error:
+        raise RendererUnavailable(http_failure_reason(error)) from error
+    except (urllib.error.URLError, OSError) as error:
+        raise RendererUnavailable(f"the renderer was unreachable ({error})") from error
+
+
+# What ends the section in the rendered HTML. `extract_section` ends at a top-level
+# h1, h2 or dash rule; a rule of asterisks reaches the page as the same `<hr>` a
+# dash rule does, so this reader ends there too and its section is the shorter of
+# the two. Ending early can only drop a line from this reader, and a dropped line
+# is a refusal the model still makes; ending late would refuse on a line outside
+# the section, which is a failure an author cannot act on.
+SECTION_END_ELEMENTS = frozenset({"h1", "h2", "hr"})
+
+
+class PageLineReader(HTMLParser):
+    """The lines a reader sees under `## Evidence Status` on the rendered page.
+
+    A line ends where the page ends one: at the boundary of an element laid
+    out as a block -- read off `LINE_STARTING_TAGS`, the list the source model
+    already keeps, so the two readers cannot drift on what a block is -- and
+    at `<br>`, which breaks a line wherever it appears, including inside a
+    paragraph. That last case is the one the source model cannot see: it drops
+    a parsed inline tag and keeps the text either side on one line, so
+    `Context <br>[blocked] x` read as a single run there and reads as two
+    lines here (#1755).
+
+    Three decisions about what the page shows.
+
+    `<details>` is read. Its text is folded and a reader opens the fold, so a
+    status that appears on a click is a status, and refusing is the side this
+    reader errs on. A `## Evidence Status` section written below an unclosed
+    `<details>` renders inside the collapsed element, and the section is read
+    there like any other -- which is why the heading is taken wherever it
+    appears rather than only at the top level (#1742, item 3). Whether a
+    section may be placed inside a fold at all is the writer's question and
+    stays with the contributor skill's placement check.
+
+    `<code>` is not read. A fenced block, an indented block and a code span
+    all reach the page inside a `<code>` element, and the written view already
+    drops fenced code, so reading it here would refuse a documentation example
+    that quotes a status. A raw `<pre>` an author wrote holds no `<code>`, so
+    its text is read -- that is one of the four shapes this reader exists for.
+    Dropping a code span costs no refusal: the source model reads it, and one
+    reader seeing a line is enough.
+
+    A newline inside `<pre>` starts a line. Anywhere else it is whitespace,
+    because that is what the page does with it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.lines: list[str] = []
+        self._current: list[str] = []
+        self._in_section = False
+        self._heading: list[str] | None = None
+        self._code_depth = 0
+        self._pre_depth = 0
+
+    def _cut(self) -> None:
+        text = " ".join("".join(self._current).split())
+        if text:
+            self.lines.append(text)
+        self._current.clear()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        name = tag.lower()
+        if name in SECTION_END_ELEMENTS:
+            self._cut()
+            self._in_section = False
+            if name == "h2":
+                self._heading = []
+            return
+        if not self._in_section:
+            return
+        if name in LINE_STARTING_TAGS:
+            self._cut()
+        if name == "code":
+            self._code_depth += 1
+        elif name == "pre":
+            self._pre_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        name = tag.lower()
+        if name == "h2" and self._heading is not None:
+            heading = " ".join("".join(self._heading).split()).casefold()
+            self._heading = None
+            self._current.clear()
+            self._in_section = heading == "evidence status"
+            return
+        if not self._in_section:
+            return
+        if name in LINE_STARTING_TAGS:
+            self._cut()
+        if name == "code":
+            self._code_depth = max(0, self._code_depth - 1)
+        elif name == "pre":
+            self._pre_depth = max(0, self._pre_depth - 1)
+
+    def handle_data(self, data: str) -> None:
+        if self._heading is not None:
+            self._heading.append(data)
+            return
+        if not self._in_section or self._code_depth:
+            return
+        if not self._pre_depth:
+            self._current.append(data)
+            return
+        head, *rest = data.split("\n")
+        self._current.append(head)
+        for part in rest:
+            self._cut()
+            self._current.append(part)
+
+    def finish(self) -> list[str]:
+        self.close()
+        self._cut()
+        return self.lines
+
+
+def page_status_lines(rendered: str) -> list[str]:
+    """Every line the rendered page shows under `## Evidence Status`."""
+    reader = PageLineReader()
+    reader.feed(rendered)
+    return reader.finish()
+
+
+@dataclass(frozen=True)
+class PageView:
+    """What the renderer said about a body, or why it said nothing.
+
+    `unverified` is the whole fallback contract in one field: when it is set
+    the gate saw no page at all and stands on the source model's refusals, and
+    it says so in its output and in the comment it leaves, because an author
+    who cleared a gate that could not reach the renderer cleared a different
+    gate from the one CI runs.
+    """
+
+    lines: tuple[str, ...] = ()
+    unverified: str | None = None
+
+
+_PAGE_VIEWS: dict[str, PageView] = {}
+
+
+def page_view(body: str) -> PageView:
+    """The page's answer for this body, asked of GitHub once per run.
+
+    Cached on the body text: the Factory review lane evaluates the same body
+    through this same `evaluate`, and the gate's cost should be one request
+    however many times a caller asks.
+    """
+    if body not in _PAGE_VIEWS:
+        try:
+            rendered = render_markdown(body)
+        except RendererUnavailable as unavailable:
+            _PAGE_VIEWS[body] = PageView(unverified=str(unavailable))
+        else:
+            _PAGE_VIEWS[body] = PageView(lines=tuple(page_status_lines(rendered)))
+    return _PAGE_VIEWS[body]
+
+
 def split_fenced_blocks(text: str) -> tuple[str, str | None]:
     """The text without its fenced code blocks, and the opening line of a fence left unclosed.
 
@@ -1334,8 +1576,22 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
             "Close it so the status lines after it are read."
         )
     written_pending = PENDING_STATUS_RE.search(evidence_status)
+    # The page first, then the source model. Both are refusers and either one
+    # is enough, so the order decides only which line the failure names -- and
+    # the page's line is the one an author can go and look at.
+    page = page_view(body)
+    if page.unverified:
+        notices.append(
+            f"Rendered view unverified: {page.unverified}. The gate read this body with its "
+            "source model alone, which refuses on the page's behalf but never accepts for it."
+        )
     rendered_pending = next(
-        (line for line in rendered_status_lines(body) if RENDERED_PENDING_RE.match(line)), None
+        (
+            line
+            for line in (*page.lines, *rendered_status_lines(body))
+            if RENDERED_PENDING_RE.match(line)
+        ),
+        None,
     )
     if written_pending or rendered_pending is not None:
         # The written view's match is a line the author typed and can find by
@@ -1402,9 +1658,17 @@ def guidance_markdown(result: Result) -> str:
     missing pieces, on the PR itself in CI and on stdout in preflight.
     """
     if result.ok:
-        return "✅ **PR readiness gate passed.**\n"
-    lines = ["⚠️ **PR readiness gate failed** — this PR body is missing readiness signals:", ""]
-    lines += [f"- {failure}" for failure in result.failures]
+        lines = ["✅ **PR readiness gate passed.**"]
+    else:
+        lines = ["⚠️ **PR readiness gate failed** — this PR body is missing readiness signals:", ""]
+        lines += [f"- {failure}" for failure in result.failures]
+    # Notices belong on the PR, not only in the Actions log: the one that
+    # matters here says the rendered view went unread, and a run that passed
+    # without it passed a different gate from the one CI runs (#1745).
+    if result.notices:
+        lines += ["", *[f"- _{notice}_" for notice in result.notices]]
+    if result.ok:
+        return "\n".join(lines) + "\n"
     if any("paragraph" in failure for failure in result.failures):
         lines += [
             "",

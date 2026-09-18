@@ -35,6 +35,22 @@ def load_module(name: str, path: Path):
 factory_review = load_module("factory_review", SCRIPT_PATH)
 
 
+def setUpModule() -> None:
+    """The readiness gate asks GitHub to render a body; this suite does not.
+
+    `evaluate` reads line starts off the HTML GitHub returns for the body
+    (#1745), and a test run that let that call out would be slow, would spend
+    a rate limit, and would answer one way on a machine with a token and
+    another way without one. Refused here, so the gate takes the fallback it
+    takes offline and the tests measure what they were written to measure.
+    """
+
+    def refuse(text: str) -> str:
+        raise factory_review.pr_readiness.RendererUnavailable("this suite does not reach the renderer")
+
+    factory_review.pr_readiness.render_markdown = refuse
+
+
 class FactoryReviewTests(unittest.TestCase):
     REPOSITORY = "fairchild/workspaces"
 
