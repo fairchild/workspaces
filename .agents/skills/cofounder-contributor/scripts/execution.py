@@ -31,7 +31,6 @@ from _helpers import (
     VALIDATOR_SCRIPT,
     _normalize_login,
     branch_name_for_issue,
-    gate_reads_markdown_section,
     has_markdown_section,
     rejected_heading_note,
     insert_markdown_section,
@@ -957,25 +956,25 @@ def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) ->
     structural checks pass at PR-open time without inventing claims. An
     agent-authored Mergeability section is kept verbatim.
     """
-    # Two questions, and seeding is skipped only when both say yes. The page
-    # has to show the heading, or a `## Mergeability` line inside a fenced
-    # example counts and the body goes out with no section at all (#1730); and
-    # the gate has to be able to read it, or a heading the page shows but the
-    # gate's literal start misses -- emphasis, an indent, a setext underline --
-    # leaves the runtime believing it healed a body the gate then blocks.
-    # Dropping either half reintroduces one of the two. The second is the
-    # gate's narrowness, not this reader's, and it comes out when #1742 moves
-    # the gate's start onto a parse.
+    # One question, asked of the parser: does it read a plain heading the page
+    # shows? Narrower than "does the page show the heading", and deliberately:
+    # `## <span>Mergeability</span>` is an ordinary h2 on GitHub, and this
+    # read declines it because a heading carrying a tag is not this section
+    # and the repair writes a plain one below it (#1730). A presence check
+    # that matched a pattern instead said yes to a `## Mergeability` line
+    # inside a fenced example, so the body went out with no section at all. It was two questions for as long as the readiness gate
+    # found a section's START with a literal `## <heading>` line: a heading the
+    # page showed and that pattern missed -- emphasis, an indent, a setext
+    # underline -- left the runtime believing it had healed a body the gate
+    # then blocked. That gate asks the parser now, by this same identity rule,
+    # so the second question had the same answer as the first and is gone
+    # (#1742).
     #
-    # What the second question asks is narrower than "the gate can read this
-    # section": it asks whether the gate can find the section's START. A
-    # `## Mergeability` with another `##` directly below it has a start both
-    # readers find and no content, so seeding is skipped and the gate reports
-    # the section missing -- main's behaviour, unchanged here, and not closed
-    # by this conjunct however the sentence above reads.
-    if has_markdown_section(summary_body, "Mergeability") and gate_reads_markdown_section(
-        summary_body, "Mergeability"
-    ):
+    # What neither question asks is whether the section has CONTENT. A
+    # `## Mergeability` with another `##` directly below it is a heading both
+    # readers find and an empty section, so seeding is skipped and the gate
+    # reports the section missing -- main's behaviour, unchanged here.
+    if has_markdown_section(summary_body, "Mergeability"):
         return summary_body
 
     what_line = _mergeability_clip(_first_content_line(what_section(summary_body)))

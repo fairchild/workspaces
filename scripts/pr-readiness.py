@@ -199,17 +199,149 @@ def section_boundary_token(token: Token) -> bool:
     return token.type == "heading_open" and token.tag in {"h1", "h2"}
 
 
+# The one section this gate reads two ways, named once so the written read's
+# heading and the rendered read's cannot drift apart. The contributor skill
+# spells it in `evidence.py`.
+EVIDENCE_STATUS_HEADING = "Evidence Status"
+
+
+def heading_identity(text: str) -> str:
+    """One heading's text reduced to what decides whether two headings are one.
+
+    Runs of whitespace collapse, and case folds with `lower()` rather than
+    `casefold()`. Full case folding maps characters that are not case variants
+    of anything: U+017F, the long s a printer sets in `Statuſ`, folds to `s`,
+    so `## Evidence Statuſ` written above the real `## Evidence Status`
+    matched it -- for this gate's old `(?i)` pattern as well as for the
+    contributor skill's reader -- and the rewrite then removed both sections
+    (#1742). `ß` -> `ss` and `ﬁ` -> `fi` are the same shape.
+
+    What `lower()` accepts is Unicode's own lowercase mapping, including the
+    context rule that makes a shouted Greek word end in a final sigma; what it
+    declines is a fold that changes the letters rather than their case. Of the
+    297 codepoints the two folds disagree on, exactly one folds onto an ASCII
+    letter -- U+017F onto `s` -- and every section this repo addresses is
+    spelled in ASCII, which is the whole of the argument for the narrower
+    fold.
+
+    It declines two pairs a reader might not: `ß`/`SS`, and `İ`/`i`, which no
+    Python fold joins either -- `casefold()` maps U+0130 to `i` plus a
+    combining dot, not to `i`. A heading spelled with one of them is refused
+    by name rather than read past: `unread_status_heading_failure` is that
+    refusal. Normalising first was the other candidate and NFKC goes the wrong
+    way, mapping a fullwidth `Ｓ` onto `s`.
+
+    Written here and in the skill's `_helpers` for the reason `MARKDOWN` is,
+    and pinned by `HeadingIdentityFoldsCaseAndNotLettersTests`.
+    """
+    return " ".join(text.split()).lower()
+
+
+def heading_identity_text(children: list[Token] | None) -> str | None:
+    """A heading's text for identity, or None when the heading shows something else.
+
+    Text and emphasis, and nothing else. A heading is a section's heading when
+    the page shows it AS that heading, so every inline construct that puts
+    something of its own there disqualifies it: a code span shows the word in
+    code font, a link shows a link, an image an image, strikethrough withdraws
+    it, and inline HTML is a widget, a struck run or two lines
+    (`## <details>Mergeability</details>`, `## Merge<del>ability</del>`,
+    `## Merge<br>ability`). Each of those became this section for a rewrite
+    that then replaced an author's text, which is why the skill's rule is any
+    tag rather than a list of the ones that show something (#1730).
+
+    Returning None rather than the text is how "shows something else" and "is
+    a different heading" stay distinguishable at the call site. For a heading
+    ARGUMENT that is a plain word -- `Mergeability`, `Validation`,
+    `Performance`, `Evidence Status`, every section this repo addresses -- it
+    is the same answer the skill's `section_heading_index` gives: each
+    construct None is returned for carries its own markup into `inline_text`'s
+    output (backticks, brackets, a target, tildes), so the text no longer
+    reads as the heading, or is the inline HTML that rule refuses outright.
+
+    For an argument that itself holds markup the two part company, and this
+    one is the stricter: asked for `` `Mergeability` ``, the skill matches
+    `## `Mergeability`` because its `inline_text` re-emits the backticks, and
+    this returns None. No caller asks that, and the narrowing fails closed --
+    the section reads as missing -- so the divergence is written down here and
+    fixtured rather than closed. `TheSeederAndThisGateAskOneQuestionTests`
+    measures the agreement over the plain-word headings and carries that
+    fixture.
+
+    A line break is a space here, which is `inline_text`'s own default. A
+    setext heading may run over two lines, so `Evidence` over `Status` with a
+    `---` under them is this section to both readers -- the page shows one
+    heading reading `Evidence Status`. A single word split across the two
+    lines is not: `Eviden` over `ce Status` reads with a space in it, which is
+    what the page shows too.
+    """
+    parts: list[str] = []
+    for token in children or []:
+        if token.type == "text":
+            parts.append(token.content)
+        elif token.type in {"softbreak", "hardbreak"}:
+            parts.append(" ")
+        elif token.type not in {"em_open", "em_close", "strong_open", "strong_close"}:
+            return None
+    return "".join(parts)
+
+
+def section_heading_index(tokens: list[Token], heading: str) -> int | None:
+    """Where `## <heading>` opens in a parsed body, as a token index, or None.
+
+    A parse rather than a pattern, and the same question the contributor
+    skill's `section_heading_index` answers. A literal `^## <heading>` line
+    read a `## Mergeability` block inside a fenced example as the body's own
+    section: where that example was complete, this gate returned `ok=True` on
+    a pull request whose page showed no section at all (#1742). It also missed
+    every heading the page shows and the pattern does not describe -- emphasis,
+    an indent of up to three spaces, a setext underline, trailing whitespace,
+    a closing hash run -- so a body the factory had healed was one this gate
+    then blocked, and the runtime carried a copy of this pattern to predict it.
+
+    The first such heading wins, which is what the rendered read already did:
+    a body with two is a body whose second one no reader is reading, and
+    `unread_status_heading_failure` is the refusal that says so.
+
+    Two fail-opens downstream of this read are main's and not closed here,
+    and reading more heading spellings enlarges the set of bodies that reach
+    each. `field_value` searches the section's raw text, so the four
+    Mergeability fields and Validation's release proof are credited to text
+    the page shows as CODE -- true under a literal `## Mergeability` on main
+    and now true under the seven spellings this read adds. And a section below
+    an unclosed `<details>` is folded on the page and a heading to this parse
+    either way, which is #1742's third item, blocked on the renderer decision
+    in #1745. Both are measured in `WhatTheParsedStartCostsTheEvidenceRefusalTests`
+    and filed rather than carried as prose.
+    """
+    wanted = heading_identity(heading)
+    return next(
+        (
+            index
+            for index, token in enumerate(tokens)
+            if token.level == 0
+            and token.type == "heading_open"
+            and token.tag == "h2"
+            and (text := heading_identity_text(tokens[index + 1].children)) is not None
+            and heading_identity(text) == wanted
+        ),
+        None,
+    )
+
+
 def extract_section(body: str, heading: str, *, strip: bool = True) -> str:
     """The body text under `## <heading>`, as written, up to where the section ends.
 
-    The end is asked of the parser rather than matched line by line. A scanner
-    reading `---` as a rule and nothing else took `----`, `- - -` and a line
-    of dashes with trailing spaces for ordinary text, kept the text line of a
-    setext heading inside the section it ends, read past a heading indented
-    one space, and stopped at a heading the page shows inside an unterminated
-    HTML block -- five shapes on which the gate and the contributor skill read
-    different sections of the same body, each found by enumerating the two
-    rules against each other rather than by a body that failed (#1734).
+    Both ends are asked of the parser rather than matched line by line. A
+    scanner reading `---` as a rule and nothing else took `----`, `- - -` and a
+    line of dashes with trailing spaces for ordinary text, kept the text line
+    of a setext heading inside the section it ends, read past a heading
+    indented one space, and stopped at a heading the page shows inside an
+    unterminated HTML block -- five shapes on which the gate and the
+    contributor skill read different sections of the same body, each found by
+    enumerating the two rules against each other rather than by a body that
+    failed (#1734). The START was a literal line for one release longer, and
+    `section_heading_index` is what it asks now (#1742).
 
     Stripping takes the first line's indent along with the blank lines around
     the section, so a reader that cares about indentation asks for it
@@ -219,21 +351,26 @@ def extract_section(body: str, heading: str, *, strip: bool = True) -> str:
     # reads; this repeats it because the function is called directly too, and
     # a CRLF body read here without it has no sections at all.
     normalized = LINE_ENDING_RE.sub("\n", body)
-    start = re.search(rf"(?mi)^## {re.escape(heading)}\n", normalized)
-    if not start:
+    tokens = MARKDOWN.parse(normalized)
+    index = section_heading_index(tokens, heading)
+    if index is None:
         return ""
     lines = normalized.split("\n")
-    heading_line = normalized[: start.start()].count("\n")
-    tokens = MARKDOWN.parse(normalized)
+    # A setext heading is two lines, its underline included, so the section's
+    # text starts where the heading BLOCK stops rather than one line below the
+    # line the heading starts on -- the arithmetic `_section_bounds` does on
+    # the skill's side, and the reason a `---` underline is not read as the
+    # section's own first line.
+    content_start = tokens[index].map[1]
     stop = next(
         (
             token.map[0]
             for token in tokens
-            if token.map and token.map[0] > heading_line and section_boundary_token(token)
+            if token.map and token.map[0] >= content_start and section_boundary_token(token)
         ),
         len(lines),
     )
-    section = "\n".join(lines[heading_line + 1 : stop])
+    section = "\n".join(lines[content_start:stop])
     return section.strip() if strip else section
 
 
@@ -264,6 +401,22 @@ MARKDOWN = MarkdownIt("commonmark").enable(["table", "strikethrough"])
 # reader's view of that cell and the gate's the same (#1727).
 RENDERED_PENDING_RE = re.compile(
     rf"(?i)^(?:{LIST_MARKER}\s*)?(?:\[[ x]\]\s*)?\[(?:blocked|pending-ci)\](?:\s|$)"
+)
+
+# The same line, in text no markdown parser ever touched. A raw HTML block
+# prints its contents as characters, so `**[blocked]**` inside one is a status
+# a reader sees with two literal asterisks either side of it, where in ordinary
+# markdown the parser resolves the emphasis away long before the pattern above
+# reads the line. So the wrappers the written view tolerates are tolerated
+# here, and the list marker stays optional the way the rendered view has it.
+#
+# Neither existing pattern covers that pair: `RENDERED_PENDING_RE` makes the
+# marker optional and allows no wrapper, and `PENDING_STATUS_RE` allows the
+# wrappers and REQUIRES a marker -- so `` `[blocked]` waiting `` on a line of
+# its own inside a `<pre>` matched neither, and the page prints it (#1742,
+# round 5).
+RAW_HTML_PENDING_RE = re.compile(
+    rf"(?i)^(?:{LIST_MARKER}\s*)?(?:\[[ x]\]\s*)?[`*_]*\[(?:blocked|pending-ci)\][`*_]*(?:\s|$)"
 )
 
 
@@ -518,8 +671,8 @@ def rendered_status_lines(body: str) -> list[str]:
             token.type == "heading_open"
             and token.tag == "h2"
             and token.level == 0
-            and " ".join(rendered_inline_text(tokens[index + 1].children).split()).casefold()
-            == "evidence status"
+            and heading_identity(rendered_inline_text(tokens[index + 1].children))
+            == heading_identity(EVIDENCE_STATUS_HEADING)
         ):
             index += 1
             continue
@@ -631,10 +784,19 @@ def leading_paragraph_failure(body: str) -> str | None:
 
 
 def evidence_status_heading_failure(body: str) -> str | None:
-    # Exact is `## Evidence Status` at column 0, in any letter case: the only
-    # heading `extract_section` reads and the factory's writer can replace. One
-    # indented up to three spaces renders the same and counts as a variant, so a
-    # status line under it fails the gate instead of going unread.
+    # Exact is `## Evidence Status` at column 0, in any letter case: the shape
+    # the factory's writer produces and replaces. One indented up to three
+    # spaces renders the same and counts as a variant, so a status line under
+    # it fails the gate instead of going unread.
+    #
+    # A line scan, and narrower than the section `extract_section` reads since
+    # #1742: a heading written with emphasis or over a setext underline is a
+    # section to that reader and not a heading to this count, so a body with
+    # one of those above the real heading reads as ONE exact heading here while
+    # the page shows two. `unread_status_heading_failure` is the parse-backed
+    # half that sees them, and `evaluate` asks it where this check is
+    # satisfied. This one keeps the line scan because its message names the
+    # exact spelling to write, which is the repair an author can act on.
     headings = re.findall(
         rf"(?im)^{HEADING_INDENT}#+[ \t]+Evidence[ \t]+Status(?:[ \t]+#+)?[ \t]*$",
         body,
@@ -647,6 +809,222 @@ def evidence_status_heading_failure(body: str) -> str | None:
         return (
             "Ambiguous Evidence Status headings; use at most one exact "
             "'## Evidence Status' heading and no variants."
+        )
+    return None
+
+
+def status_heading_candidates(body: str) -> list[tuple[int, str]]:
+    """Every heading this gate's start considers for `## Evidence Status`, with its line and text.
+
+    The candidates, not the section: a top-level h2 whose text
+    `heading_identity_text` reads -- so emphasis is transparent and a heading
+    carrying a tag, a code span, a link or strikethrough is not here at all --
+    and whose text matches the heading case-insensitively the way `re` matches
+    it.
+
+    Two folds, on purpose. `re`'s IGNORECASE is the loosest in reach and not
+    an arbitrary choice: it is the fold this gate's own literal start used
+    until #1742. It is NOT the set that reader would have taken -- a heading
+    written with emphasis, one indented up to three spaces, a setext one and
+    one with a closing hash run are candidates here and were never matched by
+    that literal line, and a heading the parser puts inside a raw HTML block
+    was matched by it and is not a candidate here. The overlap is the fold,
+    not the set. `heading_identity` is the tight one that decides which
+    candidate IS the section, and the gap between the two folds is part of
+    what `unread_status_heading_failure` reports; reading the loose side wider
+    can only add a refusal (#1729).
+
+    What is excluded is excluded because this repo already decided it: a
+    heading carrying inline HTML is not this section and the factory's repair
+    writes a plain one BELOW it, leaving both on the page (#1730). Counting
+    the rejected one here would refuse the body that repair produces -- a body
+    the factory heals and the gate then blocks, which is the failure this lane
+    exists to prevent.
+    """
+    tokens = MARKDOWN.parse(LINE_ENDING_RE.sub("\n", body))
+    loose = re.compile(rf"(?i){re.escape(' '.join(EVIDENCE_STATUS_HEADING.split()))}")
+    found: list[tuple[int, str]] = []
+    for index, token in enumerate(tokens):
+        if not (token.type == "heading_open" and token.tag == "h2" and token.level == 0):
+            continue
+        text = heading_identity_text(tokens[index + 1].children)
+        if text is None:
+            continue
+        collapsed = " ".join(text.split())
+        if loose.fullmatch(collapsed):
+            found.append(((token.map or [0])[0] + 1, collapsed))
+    return found
+
+
+def unread_status_heading_failure(body: str) -> str | None:
+    """Why the heading a reader sees is not the section this gate reads, or None.
+
+    The check that keeps this gate's narrowing from being silent. Its section
+    START is a parse now, and its identity fold declines a fold that changes
+    letters (#1742) -- both correct, and both turn a heading the gate used to
+    read into a heading it reads past. Where the section carries a `[blocked]`
+    line, a section nobody reads is a refusal nobody makes: the old literal
+    `(?mi)^## Evidence Status` matched `## EVİDENCE STATUS`, because `re`'s
+    IGNORECASE folds the whole Unicode table, and `## Evidence Statuſ` with it.
+
+    Three shapes, and what they have in common is a disagreement this gate
+    already holds and used to keep to itself: the line scan and the parse
+    answer differently about whether this body has the section, and the author
+    hears neither answer.
+
+    More than one candidate is the shape `evidence_status_heading_failure`
+    cannot see -- that check is a line scan, so `## **Evidence Status**` above
+    the real heading counts as one exact heading while the page shows two, and
+    a `[blocked]` line or an unclosed fence under the wrong one is not this
+    section's. The message names the heading this gate actually reads, which
+    is not always the first candidate: the candidate list uses the loose fold,
+    so a long-s heading above the real one is in it and is not the section.
+
+    One candidate this gate's identity declines is the second: the page shows
+    a heading reading as this section, spelled with a character that is not a
+    case variant of anything, and no reader here takes it.
+
+    No candidate at all, where the line scan found an exact heading line, is
+    the third and it is this branch's own fail-open (#1742, round 2). A
+    `## Evidence Status` line with no blank line above it, under `</details>`,
+    an `<img>` tag, an opening `<div>` or a comment a browser ends at `--!>`,
+    is inside a raw HTML block to CommonMark: the old literal start matched it
+    wherever it sat, this parse finds no heading, and the `[blocked]` line the
+    page plainly shows went from a refusal to a pass. The refusal names the
+    heading's line and the block's, because the repair is one blank line and
+    an author cannot see a block boundary.
+
+    Where the covering block is CODE rather than raw HTML, this stays silent:
+    a fenced or indented `## Evidence Status` is an example, the page shows it
+    as code, and "no section" is the right answer for an optional section.
+    That is the one line this refusal must not cross, and it has a fixture.
+
+    The contributor skill's owner read already fails closed on the first two
+    -- it refuses for any heading count but one -- so this is the readiness
+    gate saying the same thing rather than a new rule. It names the line,
+    because an author cannot see a long s.
+    """
+    normalized = LINE_ENDING_RE.sub("\n", body)
+    headings = status_heading_candidates(normalized)
+    if not headings:
+        return _swallowed_status_heading_failure(normalized)
+    if len(headings) > 1:
+        places = ", ".join(f"line {line}" for line, _ in headings)
+        tokens = MARKDOWN.parse(normalized)
+        index = section_heading_index(tokens, EVIDENCE_STATUS_HEADING)
+        read = (
+            f"this gate reads the one at line {(tokens[index].map or [0])[0] + 1}"
+            if index is not None
+            else "none of them is the section to this gate"
+        )
+        return (
+            f"A reader sees {len(headings)} headings that read as "
+            f"'## {EVIDENCE_STATUS_HEADING}' ({places}); {read}, so a status under the "
+            "others is not this section's. Keep one."
+        )
+    line, text = headings[0]
+    if heading_identity(text) == heading_identity(EVIDENCE_STATUS_HEADING):
+        return None
+    return (
+        f"The heading at line {line} reads as '## {EVIDENCE_STATUS_HEADING}' but is spelled "
+        f"'{text}', which differs by more than letter case, so no reader takes it as that "
+        f"section. Write '## {EVIDENCE_STATUS_HEADING}'."
+    )
+
+
+# The heading line this gate's line scan calls exact: `## Evidence Status` at
+# column 0, in any letter case. `evidence_status_heading_failure` matches the
+# same shape and reports only a count; this one keeps the line number, which
+# is what a refusal an author can act on needs.
+EXACT_STATUS_HEADING_RE = re.compile(
+    rf"(?im)^## {re.escape(EVIDENCE_STATUS_HEADING)}[ \t]*$"
+)
+
+
+def _a_status_is_kept_out(normalized: str, block: Token) -> bool:
+    """Whether a swallowed heading is keeping a pending status out of the gate's reach.
+
+    Two places one can be. Inside the block itself, where an author wrote the
+    heading and the status in one comment or one `<pre>`; and below the block,
+    where the heading was swallowed by an opener a line above it and the
+    status sits in ordinary markdown underneath -- which is the shape all four
+    of the refusal's own cases have.
+
+    The second is asked by giving the text a real heading and handing it to the
+    gate's own two views. Nothing new reads anything here: the question "would
+    this have refused, had the line been a heading?" is answered by the readers
+    that would have answered it.
+
+    That text starts after the BLOCK, not after the heading. A block prints its
+    contents as characters, so a `## Notes` line inside it is text to every
+    reader -- but handed to a markdown parser it is a heading, and it closed
+    the synthetic section before the status below the block was reached. The
+    block's own contents are the first half's job and are read there as text,
+    which is the reading the page agrees with.
+
+    Read as text, and therefore through `RAW_HTML_PENDING_RE`: markup inside a
+    raw block is characters, so a status wrapped in backticks, asterisks or
+    underscores there is a status the page prints wrapped, not one a parser
+    unwraps.
+    """
+    if any(RAW_HTML_PENDING_RE.match(text) for text in html_block_text_lines(block.content)):
+        return True
+    below = "\n".join(normalized.split("\n")[(block.map or [0, 0])[1] :])
+    probe = f"## {EVIDENCE_STATUS_HEADING}\n{below}"
+    written, _ = split_fenced_blocks(extract_section(probe, EVIDENCE_STATUS_HEADING, strip=False))
+    return bool(PENDING_STATUS_RE.search(written)) or any(
+        RENDERED_PENDING_RE.match(text) for text in rendered_status_lines(probe)
+    )
+
+
+def _swallowed_status_heading_failure(normalized: str) -> str | None:
+    """Why a heading line the page shows is no heading at all, or None.
+
+    Asked only where the parse found no candidate. A line the scan calls an
+    exact heading and the parser puts inside a raw HTML block is the shape
+    this branch exists for; a line inside a fenced or indented code block is
+    not, because there the page shows an example and no section is the honest
+    answer.
+
+    And only where a status is being kept out by it (`_a_status_is_kept_out`).
+    A body may carry an exact heading line inside a comment it closed or a
+    `<pre>` it wrote, with nothing pending under it, and that body has no
+    Evidence Status section -- which is allowed, since the section is
+    optional. Refusing it said an author had hidden something they had not
+    hidden. The failure this branch exists to prevent is a pending line a
+    swallowed heading keeps out of the section, and where there is no pending
+    line there is nothing to keep out.
+
+    The whole block is read rather than the part of it below the heading:
+    slicing a block's runs by source line is the modelling this reader is
+    written to avoid, and reading the whole of it errs toward refusing. Text
+    inside a comment counts, the way it does everywhere else in this gate --
+    a `[blocked]` under a commented-out heading refuses and names it, because
+    a run this gate cannot see on the page may refuse and may never accept
+    (#1729, #1744).
+
+    The block is found by its own token rather than by re-deriving where HTML
+    starts: `html_block`'s map covers the lines CommonMark gave it, which is
+    the same answer `extract_section` and `rendered_status_lines` read.
+    """
+    tokens = MARKDOWN.parse(normalized)
+    for match in EXACT_STATUS_HEADING_RE.finditer(normalized):
+        line = normalized[: match.start()].count("\n")
+        block = next(
+            (
+                token
+                for token in tokens
+                if token.type == "html_block" and token.map and token.map[0] <= line < token.map[1]
+            ),
+            None,
+        )
+        if block is None or not _a_status_is_kept_out(normalized, block):
+            continue
+        return (
+            f"The heading at line {line + 1} is inside a raw HTML block (opened at line "
+            f"{(block.map or [0])[0] + 1}), so no reader takes it as the section and the "
+            "status under it is never read. Put a blank line between the block and the "
+            "heading."
         )
     return None
 
@@ -941,9 +1319,14 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
     if has_checked_box(body, "Blocked on evidence"):
         failures.append("PR is checked as blocked on evidence.")
 
+    # The line scan first, since its message names the exact spelling to use;
+    # the parse-backed one only where that check is satisfied, so one body
+    # does not draw two failures about the same heading.
     if heading_failure := evidence_status_heading_failure(body):
         failures.append(heading_failure)
-    status_section = extract_section(body, "Evidence Status", strip=False)
+    elif unread_heading := unread_status_heading_failure(body):
+        failures.append(unread_heading)
+    status_section = extract_section(body, EVIDENCE_STATUS_HEADING, strip=False)
     evidence_status, unclosed_fence = split_fenced_blocks(status_section)
     if unclosed_fence:
         failures.append(
