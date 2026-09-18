@@ -808,10 +808,15 @@ def status_heading_candidates(body: str) -> list[tuple[int, str]]:
 
     Two folds, on purpose. `re`'s IGNORECASE is the loosest in reach and not
     an arbitrary choice: it is the fold this gate's own literal start used
-    until #1742, so this list is exactly the set that reader would have taken.
-    `heading_identity` is the tight one that decides which candidate IS the
-    section. The gap between them is what `unread_status_heading_failure`
-    reports, and reading the loose side wider can only add a refusal (#1729).
+    until #1742. It is NOT the set that reader would have taken -- a heading
+    written with emphasis, one indented up to three spaces, a setext one and
+    one with a closing hash run are candidates here and were never matched by
+    that literal line, and a heading the parser puts inside a raw HTML block
+    was matched by it and is not a candidate here. The overlap is the fold,
+    not the set. `heading_identity` is the tight one that decides which
+    candidate IS the section, and the gap between the two folds is part of
+    what `unread_status_heading_failure` reports; reading the loose side wider
+    can only add a refusal (#1729).
 
     What is excluded is excluded because this repo already decided it: a
     heading carrying inline HTML is not this section and the factory's repair
@@ -846,31 +851,60 @@ def unread_status_heading_failure(body: str) -> str | None:
     `(?mi)^## Evidence Status` matched `## EVİDENCE STATUS`, because `re`'s
     IGNORECASE folds the whole Unicode table, and `## Evidence Statuſ` with it.
 
-    Two shapes, one property: the headings a reader could take for this
-    section are exactly the one this gate reads.
+    Three shapes, and what they have in common is a disagreement this gate
+    already holds and used to keep to itself: the line scan and the parse
+    answer differently about whether this body has the section, and the author
+    hears neither answer.
 
-    More than one is the shape `evidence_status_heading_failure` cannot see --
-    that check is a line scan, so `## **Evidence Status**` above the real
-    heading counts as one exact heading while the page shows two, and the
-    section's own `[blocked]` line or unclosed fence then sits under a heading
-    neither view reads. One that this gate's identity declines is the other:
-    the page shows a heading reading as this section, spelled with a character
-    that is not a case variant of anything, and no reader here takes it.
+    More than one candidate is the shape `evidence_status_heading_failure`
+    cannot see -- that check is a line scan, so `## **Evidence Status**` above
+    the real heading counts as one exact heading while the page shows two, and
+    a `[blocked]` line or an unclosed fence under the wrong one is not this
+    section's. The message names the heading this gate actually reads, which
+    is not always the first candidate: the candidate list uses the loose fold,
+    so a long-s heading above the real one is in it and is not the section.
 
-    The contributor skill's owner read already fails closed on both -- it
-    refuses for any heading count but one -- so this is the readiness gate
-    saying the same thing rather than a new rule. It names the line, because
-    an author cannot see a long s.
+    One candidate this gate's identity declines is the second: the page shows
+    a heading reading as this section, spelled with a character that is not a
+    case variant of anything, and no reader here takes it.
+
+    No candidate at all, where the line scan found an exact heading line, is
+    the third and it is this branch's own fail-open (#1742, round 2). A
+    `## Evidence Status` line with no blank line above it, under `</details>`,
+    an `<img>` tag, an opening `<div>` or a comment a browser ends at `--!>`,
+    is inside a raw HTML block to CommonMark: the old literal start matched it
+    wherever it sat, this parse finds no heading, and the `[blocked]` line the
+    page plainly shows went from a refusal to a pass. The refusal names the
+    heading's line and the block's, because the repair is one blank line and
+    an author cannot see a block boundary.
+
+    Where the covering block is CODE rather than raw HTML, this stays silent:
+    a fenced or indented `## Evidence Status` is an example, the page shows it
+    as code, and "no section" is the right answer for an optional section.
+    That is the one line this refusal must not cross, and it has a fixture.
+
+    The contributor skill's owner read already fails closed on the first two
+    -- it refuses for any heading count but one -- so this is the readiness
+    gate saying the same thing rather than a new rule. It names the line,
+    because an author cannot see a long s.
     """
-    headings = status_heading_candidates(body)
+    normalized = LINE_ENDING_RE.sub("\n", body)
+    headings = status_heading_candidates(normalized)
     if not headings:
-        return None
+        return _swallowed_status_heading_failure(normalized)
     if len(headings) > 1:
         places = ", ".join(f"line {line}" for line, _ in headings)
+        tokens = MARKDOWN.parse(normalized)
+        index = section_heading_index(tokens, EVIDENCE_STATUS_HEADING)
+        read = (
+            f"this gate reads the one at line {(tokens[index].map or [0])[0] + 1}"
+            if index is not None
+            else "none of them is the section to this gate"
+        )
         return (
             f"A reader sees {len(headings)} headings that read as "
-            f"'## {EVIDENCE_STATUS_HEADING}' ({places}); this gate reads the first, so any "
-            "status under the others goes unread. Keep one."
+            f"'## {EVIDENCE_STATUS_HEADING}' ({places}); {read}, so a status under the "
+            "others is not this section's. Keep one."
         )
     line, text = headings[0]
     if heading_identity(text) == heading_identity(EVIDENCE_STATUS_HEADING):
@@ -880,6 +914,50 @@ def unread_status_heading_failure(body: str) -> str | None:
         f"'{text}', which differs by more than letter case, so no reader takes it as that "
         f"section. Write '## {EVIDENCE_STATUS_HEADING}'."
     )
+
+
+# The heading line this gate's line scan calls exact: `## Evidence Status` at
+# column 0, in any letter case. `evidence_status_heading_failure` matches the
+# same shape and reports only a count; this one keeps the line number, which
+# is what a refusal an author can act on needs.
+EXACT_STATUS_HEADING_RE = re.compile(
+    rf"(?im)^## {re.escape(EVIDENCE_STATUS_HEADING)}[ \t]*$"
+)
+
+
+def _swallowed_status_heading_failure(normalized: str) -> str | None:
+    """Why a heading line the page shows is no heading at all, or None.
+
+    Asked only where the parse found no candidate. A line the scan calls an
+    exact heading and the parser puts inside a raw HTML block is the shape
+    this branch exists for; a line inside a fenced or indented code block is
+    not, because there the page shows an example and no section is the honest
+    answer.
+
+    The block is found by its own token rather than by re-deriving where HTML
+    starts: `html_block`'s map covers the lines CommonMark gave it, which is
+    the same answer `extract_section` and `rendered_status_lines` read.
+    """
+    tokens = MARKDOWN.parse(normalized)
+    for match in EXACT_STATUS_HEADING_RE.finditer(normalized):
+        line = normalized[: match.start()].count("\n")
+        block = next(
+            (
+                token
+                for token in tokens
+                if token.type == "html_block" and token.map and token.map[0] <= line < token.map[1]
+            ),
+            None,
+        )
+        if block is None:
+            continue
+        return (
+            f"The heading at line {line + 1} is inside a raw HTML block (opened at line "
+            f"{(block.map or [0])[0] + 1}), so no reader takes it as the section and the "
+            "status under it is never read. Put a blank line between the block and the "
+            "heading."
+        )
+    return None
 
 
 def field_value(section: str, label: str) -> str | None:

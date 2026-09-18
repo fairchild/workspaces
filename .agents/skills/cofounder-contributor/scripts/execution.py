@@ -956,10 +956,13 @@ def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) ->
     structural checks pass at PR-open time without inventing claims. An
     agent-authored Mergeability section is kept verbatim.
     """
-    # One question, asked of the parser: does the page show the heading? A
-    # presence check that matched a pattern said yes to a `## Mergeability`
-    # line inside a fenced example, so the body went out with no section at
-    # all (#1730). It was two questions for as long as the readiness gate
+    # One question, asked of the parser: does it read a plain heading the page
+    # shows? Narrower than "does the page show the heading", and deliberately:
+    # `## <span>Mergeability</span>` is an ordinary h2 on GitHub, and this
+    # read declines it because a heading carrying a tag is not this section
+    # and the repair writes a plain one below it (#1730). A presence check
+    # that matched a pattern instead said yes to a `## Mergeability` line
+    # inside a fenced example, so the body went out with no section at all. It was two questions for as long as the readiness gate
     # found a section's START with a literal `## <heading>` line: a heading the
     # page showed and that pattern missed -- emphasis, an indent, a setext
     # underline -- left the runtime believing it had healed a body the gate

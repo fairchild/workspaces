@@ -2296,6 +2296,109 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
         self.assertIsNone(pr_readiness.unread_status_heading_failure(body))
         self.assertEqual(self.failures(body), [])
 
+    # A heading line CommonMark puts INSIDE a raw HTML block. Each of these is
+    # a section on main -- its literal start matched the line wherever it sat
+    # -- and a section to no reader here, so the `[blocked]` under it turned
+    # from a refusal into a pass: the one fail-open this branch introduced.
+    # GitHub's renderer shows the literal `## Evidence Status` text and the
+    # status line under it for all four, so the loss is visible on the page.
+    SWALLOWED = {
+        "a details closer with no blank line after it": "</details>\n## Evidence Status",
+        "an img tag": '<img src="https://example.invalid/a.png">\n## Evidence Status',
+        "a div around the heading and the status": "<div>\n## Evidence Status",
+        "a comment a browser closes at --!>": "<!-- note --!>\n\n## Evidence Status",
+    }
+
+    def test_a_heading_inside_an_html_block_is_refused_by_name(self) -> None:
+        for name, opener in self.SWALLOWED.items():
+            with self.subTest(shape=name):
+                body = self.body(f"{opener}\n\n{self.BLOCKED}\n\n")
+                # No candidate: the parse does not see a heading at all.
+                self.assertEqual(pr_readiness.status_heading_candidates(body), [])
+                # And the line scan is satisfied, which is the disagreement
+                # this refusal exists to name.
+                self.assertIsNone(pr_readiness.evidence_status_heading_failure(body))
+                failure = pr_readiness.unread_status_heading_failure(body)
+                self.assertIsNotNone(failure, name)
+                self.assertIn("inside a raw HTML block", failure)
+                heading_line = body[: body.index("## Evidence Status")].count("\n") + 1
+                self.assertIn(f"line {heading_line}", failure)
+                self.assertIn("blank line", failure)
+                self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok)
+
+    def test_the_blank_line_control_is_the_section_and_still_refuses_its_status(self) -> None:
+        # The repair the message asks for, and the proof the refusal is about
+        # the swallowing rather than about the block: one blank line and the
+        # heading is the section, whose `[blocked]` line refuses as it always
+        # did -- main's verdict, kept.
+        body = self.body(f"</details>\n\n## Evidence Status\n\n{self.BLOCKED}\n\n")
+        self.assertEqual(len(pr_readiness.status_heading_candidates(body)), 1)
+        self.assertIsNone(pr_readiness.unread_status_heading_failure(body))
+        self.assertEqual(pr_readiness.evaluate(pr(body), self.FILES).failures, [PENDING_TEXT])
+
+    def test_a_heading_the_page_shows_as_code_is_still_silent(self) -> None:
+        # The line the refusal must NOT cross. A fenced or indented example
+        # matches the line scan too, and there the page shows code: no section
+        # is the right answer and the section is optional, so a body
+        # documenting the format is not a body to refuse.
+        for name, example in {
+            "a fenced example": "```markdown\n## Evidence Status\n\n- [blocked] an example\n```",
+            "an indented example": "    ## Evidence Status\n\n    - [blocked] an example",
+        }.items():
+            with self.subTest(shape=name):
+                body = self.body(f"{example}\n\n")
+                self.assertEqual(pr_readiness.status_heading_candidates(body), [])
+                self.assertIsNone(pr_readiness.unread_status_heading_failure(body))
+                self.assertEqual(self.failures(body), [])
+
+    def test_the_two_heading_message_names_the_heading_this_gate_reads(self) -> None:
+        # It said "this gate reads the first", and the first CANDIDATE is not
+        # always the one read: the candidate list uses the loose fold, so a
+        # long-s heading above the real one is in it and is not the section.
+        # The message measures which one is read and says that (#1742,
+        # round 2).
+        body = self.body(
+            "## **Evidence Statuſ**\n\n- [complete] the printer's item -- proof\n\n"
+            f"## Evidence Status\n\n{self.BLOCKED}\n\n"
+        )
+        candidates = pr_readiness.status_heading_candidates(body)
+        self.assertEqual(len(candidates), 2, candidates)
+        failure = pr_readiness.unread_status_heading_failure(body)
+        self.assertIsNotNone(failure)
+        read_line = candidates[1][0]
+        self.assertIn(f"reads the one at line {read_line}", failure)
+        self.assertNotIn("reads the first", failure)
+
+    def test_the_two_heading_message_does_not_say_a_named_line_goes_unread(self) -> None:
+        # The other half: the rendered view reads every matching heading, so
+        # the same run that said a status "goes unread" then quoted it. What
+        # is true of it is that it is not this section's.
+        body = self.body(
+            "## **Evidence Status**\n\n- [complete] the first -- proof\n\n"
+            f"## Evidence Status\n\n{self.BLOCKED}\n\n"
+        )
+        failure = pr_readiness.unread_status_heading_failure(body)
+        self.assertIsNotNone(failure)
+        self.assertNotIn("goes unread", failure)
+        self.assertIn("is not this section's", failure)
+        # And the run does name that status, from the rendered view.
+        self.assertTrue(
+            any(text.startswith(PENDING_TEXT) for text in self.failures(body)),
+            self.failures(body),
+        )
+
+    def test_no_candidate_is_read_and_the_message_says_so(self) -> None:
+        # Two candidates and neither is the section: the message cannot name a
+        # line this gate reads, so it says there is none rather than naming
+        # one.
+        body = self.body(
+            "## Evidence Statuſ\n\n- [complete] one -- proof\n\n"
+            f"## Evidence Statuſ\n\n{self.BLOCKED}\n\n"
+        )
+        failure = pr_readiness.unread_status_heading_failure(body)
+        self.assertIsNotNone(failure)
+        self.assertIn("none of them is", failure)
+
 class HeadingIdentityFoldsCaseAndNotLettersTests(unittest.TestCase):
     """Which two heading texts are one heading, and which are two (#1742).
 
