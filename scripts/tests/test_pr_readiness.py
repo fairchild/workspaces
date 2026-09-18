@@ -2160,6 +2160,9 @@ PAGE_READER_TABLE = (
     ("a break inside a quoted heading", '## Evidence Status\n\n> ## Context<br>[blocked] x\n', ('Context', '[blocked] x'), False),
     ("a sibling heading after a top-level section", '## Evidence Status\n\n## Notes\n\nContext <br>[blocked] x\n', (), True),
     ("a sibling heading after a nested section", '<blockquote>\n\n## Evidence Status\n\n## Notes\n\nContext <br>[blocked] x\n', (), True),
+    ("a shallower heading after a quoted section", '> ## Evidence Status\n> - [complete] ran it\n\n## Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
+    ("a shallower heading after a blockquote section", '<blockquote>\n\n## Evidence Status\n\n- [complete] ran it\n\n</blockquote>\n\n## Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
+    ("a shallower h1 after a quoted section", '> ## Evidence Status\n> - [complete] ran it\n\n# Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
     ("a raw pre holding the status", '## Evidence Status\n\n<pre>\nnote\n[blocked] x\n</pre>\n', ('note', '[blocked] x'), False),
 )
 

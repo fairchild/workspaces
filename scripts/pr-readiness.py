@@ -866,8 +866,11 @@ class PageLineReader(HTMLParser):
 
         The depth the section was opened at, so a section the second pass
         found inside a container ends at that container's next heading rather
-        than at the container's end. Zero before anything opens: a top-level
-        heading is what a first pass is looking for.
+        than at the container's end. A heading shallower than this one ends it
+        too: the callers compare with `<=`, because a section inside a
+        quotation is over once the document has left the quotation. Zero
+        before anything opens: a top-level heading is what a first pass is
+        looking for.
         """
         return 0 if self._section_depth is None else self._section_depth
 
@@ -895,7 +898,7 @@ class PageLineReader(HTMLParser):
             self._cut()
             self._heading = []
             return
-        elif name == "h1" and self._nesting == self._boundary_depth():
+        elif name == "h1" and self._nesting <= self._boundary_depth():
             self._cut()
             self._in_section = False
             return
@@ -931,11 +934,18 @@ class PageLineReader(HTMLParser):
                 self.opened = True
                 self._section_depth = self._nesting
                 return
-            if self._nesting == self._boundary_depth():
-                # A heading of the section's own kind at its own depth ends
-                # it -- including a section the second pass opened inside a
-                # container, which otherwise ran to the end of that container
-                # and refused on lines under a sibling heading (#1745, round 4).
+            if self._nesting <= self._boundary_depth():
+                # A heading at the section's own depth ends it -- including a
+                # section the second pass opened inside a container, which
+                # otherwise ran to the end of that container and refused on
+                # lines under a sibling heading (#1745, round 4).
+                #
+                # Or SHALLOWER than it. A section found inside a quotation
+                # ends at the top-level heading that follows the quotation as
+                # surely as at a sibling inside it: leaving the document is
+                # leaving the section, and `==` alone kept reading past
+                # `## Notes` written after the quotation closed (#1745,
+                # round 5).
                 self._current.clear()
                 self._in_section = False
                 return
