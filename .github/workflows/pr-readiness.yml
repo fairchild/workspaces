@@ -48,6 +48,11 @@ jobs:
         id: validate
         env:
           READINESS_COMMENT_PATH: ${{ runner.temp }}/readiness-comment.md
+          # The gate reads line starts off the HTML GitHub renders for the body
+          # (`POST /markdown`). That endpoint needs a token that authenticates
+          # and no permission beyond it; without one the gate falls back to its
+          # source model and says the rendered view went unread.
+          GH_TOKEN: ${{ github.token }}
         run: uv run --script scripts/pr-readiness.py --event "$GITHUB_EVENT_PATH" --changed-files "$RUNNER_TEMP/changed-files.json"
 
       # Surface the verdict on the PR itself: upsert one marker-keyed comment

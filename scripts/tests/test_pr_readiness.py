@@ -13,6 +13,7 @@ sections in a form GitHub Actions can surface cleanly.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -22,6 +23,7 @@ import sys
 import tempfile
 import time
 import unittest
+import urllib.error
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -1715,6 +1717,636 @@ class HtmlBlockStatusLineTests(unittest.TestCase):
         started = time.monotonic()
         pr_readiness.html_block_text_lines(payload)
         self.assertLess(time.monotonic() - started, 1.0)
+
+RENDERED_FIXTURES = REPO_ROOT / "scripts" / "tests" / "fixtures" / "rendered"
+RENDERED_INDEX = RENDERED_FIXTURES / "index.json"
+RECORD_ENV = "WORKSPACES_RECORD_RENDERED"
+RECORD_COMMAND = (
+    f"{RECORD_ENV}=1 GH_TOKEN=$(gh auth token) "
+    "uv run --script scripts/tests/test_pr_readiness.py"
+)
+
+
+# Captured before `setUpModule` refuses the renderer for the whole file: the
+# recorder and the staleness check are the two places that DO ask GitHub, and
+# they ask the real function rather than the suite's refusal of it.
+#
+# Absent on a tree whose gate has no renderer, which is the red-at-base
+# measurement: the suite is run with an older `pr-readiness.py` swapped in to
+# say which shapes are new, and refusing a function that is not there would
+# error the whole file instead of failing the tests being measured.
+_LIVE_RENDER = getattr(pr_readiness, "render_markdown", None)
+
+
+def rendered_fixture_path(text: str) -> Path:
+    """Where the recorded answer for one body lives: its sha256, as HTML."""
+    return RENDERED_FIXTURES / f"{hashlib.sha256(text.encode('utf-8')).hexdigest()}.html"
+
+
+def rendered_index() -> dict[str, str]:
+    """Which body each recording answers, so a stale one can be re-asked.
+
+    The file name is a hash and a hash goes one way, so the source text is kept
+    beside the recordings. Without it nothing could re-render what was recorded
+    and the fixtures would age against the renderer with no way to notice.
+    """
+    if not RENDERED_INDEX.is_file():
+        return {}
+    return json.loads(RENDERED_INDEX.read_text(encoding="utf-8"))
+
+
+def record_rendered(text: str) -> str:
+    """Ask the live renderer once and store what it said under this body's hash."""
+    rendered = _LIVE_RENDER(text)
+    RENDERED_FIXTURES.mkdir(parents=True, exist_ok=True)
+    rendered_fixture_path(text).write_text(rendered, encoding="utf-8")
+    index = rendered_index()
+    index[hashlib.sha256(text.encode("utf-8")).hexdigest()] = text
+    RENDERED_INDEX.write_text(
+        json.dumps(index, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    return rendered
+
+
+@contextlib.contextmanager
+def recorded_page():
+    """Answer the gate from checked-in renderer responses instead of the network.
+
+    Every other test in this file runs with the renderer refused outright
+    (`setUpModule`), so the suite reaches no network whether or not a token is
+    in the environment, and the gate takes the same fallback a laptop takes.
+    A test that needs the page's own answer wraps itself in this.
+
+    A body with no recording fails naming the command that records it: a
+    recording is a file someone committed after reading it, not something a
+    test run invents, and a run that quietly recorded its own fixtures would
+    assert whatever the renderer did that day.
+    """
+
+    if _LIVE_RENDER is None:
+        yield
+        return
+
+    def answer(text: str) -> str:
+        path = rendered_fixture_path(text)
+        if path.is_file():
+            return path.read_text(encoding="utf-8")
+        if os.environ.get(RECORD_ENV):
+            return record_rendered(text)
+        raise AssertionError(
+            f"No recorded renderer response for this body ({path.name}). Record it with:\n"
+            f"  {RECORD_COMMAND}"
+        )
+
+    with (
+        mock.patch.object(pr_readiness, "render_markdown", side_effect=answer),
+        mock.patch.dict(pr_readiness._PAGE_VIEWS, {}, clear=True),
+    ):
+        yield
+
+
+_RENDERER_REFUSED = None
+SUITE_UNVERIFIED = "the suite does not reach the renderer"
+
+
+def setUpModule() -> None:
+    """No test in this file reaches the network.
+
+    The gate asks GitHub to render a body, and a suite that let that call out
+    would be slow, would spend a rate limit, and would answer differently on a
+    laptop with a token and in a sandbox without one. So the renderer is
+    refused for the whole file and the tests that need its answer opt back in
+    through `recorded_page`, which reads what was recorded.
+    """
+    global _RENDERER_REFUSED
+    if _LIVE_RENDER is None:
+        return
+
+    def refuse(text: str) -> str:
+        raise pr_readiness.RendererUnavailable(SUITE_UNVERIFIED)
+
+    _RENDERER_REFUSED = mock.patch.object(pr_readiness, "render_markdown", side_effect=refuse)
+    _RENDERER_REFUSED.start()
+
+
+def tearDownModule() -> None:
+    if _RENDERER_REFUSED is not None:
+        _RENDERER_REFUSED.stop()
+
+
+class ThePageSaysWhereALineStartsTests(unittest.TestCase):
+    """The rendered view asks GitHub where a line starts instead of modelling it (#1745).
+
+    The source model answers one question -- where does a line start on the
+    page? -- with a tag grammar, a block-element list and comment state, and
+    every round of #1736 added a fixture to it. `POST /markdown` answers the
+    same question with the HTML the pull request page will show, and a line
+    start read off that HTML needs none of the three.
+
+    The two are a conjunction of refusals, so the renderer only ever ADDS
+    refusals. That is the whole safety argument and it has a consequence worth
+    stating: the model's over-refusals survive. `<x:y>[blocked] x</x:y>`
+    renders as one literal line the page opens with `<x:y>`, so the page would
+    accept it and the gate still refuses, because a reader on the refusing side
+    may add refusals and may never take one away (#1729).
+
+    What the renderer brings are the four shapes of #1755, where a block-level
+    tag sits after prose inside one paragraph: the source model drops the
+    parsed tag and keeps the text either side on one line, and the page starts
+    a new line at the tag.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+
+    # Each accepts on `main` while the page shows the status at a line start.
+    SHAPES = {
+        "a div after prose": "Context <div>[blocked] x</div>",
+        "a pre after prose": "Context <pre>[blocked] x</pre>",
+        "a break after prose": "Context <br>[blocked] x",
+        "a break inside a list item": "- complete <br>[blocked] x",
+    }
+
+    def body(self, section: str) -> str:
+        return GOOD_BODY + f"\n## Evidence Status\n\n{section}\n"
+
+    def failures(self, body: str) -> list[str]:
+        return pr_readiness.evaluate(pr(body), self.FILES).failures
+
+    def result(self, body: str):
+        return pr_readiness.evaluate(pr(body), self.FILES)
+
+    def test_a_block_tag_after_prose_starts_a_line_the_page_shows(self) -> None:
+        for shape, section in self.SHAPES.items():
+            with self.subTest(shape=shape), recorded_page():
+                failures = self.failures(self.body(section))
+                self.assertTrue(
+                    any(pr_readiness.PENDING_FAILURE in failure for failure in failures),
+                    f"{shape}: {failures}",
+                )
+
+    def test_the_refusal_names_the_line_as_the_page_shows_it(self) -> None:
+        with recorded_page():
+            failures = self.failures(self.body(self.SHAPES["a div after prose"]))
+        self.assertIn(pr_readiness.matched_line_note("[blocked] x"), failures[0])
+
+    def test_the_same_shapes_are_accepted_when_the_page_went_unread(self) -> None:
+        # The fallback, stated as the cost it is: with no renderer the gate
+        # stands on the source model, which does not see these, and it says so
+        # rather than passing quietly.
+        for shape, section in self.SHAPES.items():
+            with self.subTest(shape=shape):
+                result = self.result(self.body(section))
+                self.assertEqual(result.failures, [])
+                self.assertTrue(
+                    any("rendered view unverified" in notice.lower() for notice in result.notices),
+                    result.notices,
+                )
+
+    def test_a_status_the_model_over_refuses_stays_refused(self) -> None:
+        # `<x:y>` is not a tag this grammar parses, so the model reads the
+        # block both ways and refuses under the reading where it is one. The
+        # page shows the whole thing as one literal line and would accept.
+        # The model is a refuser, so the refusal stands (#1755, #1729).
+        section = "<x:y>[blocked] x</x:y>"
+        with recorded_page():
+            failures = self.failures(self.body(section))
+        self.assertTrue(any(pr_readiness.PENDING_FAILURE in failure for failure in failures))
+
+    def test_a_status_neither_reader_anchors_stays_accepted(self) -> None:
+        # Part A's three over-refusals, closed in round 4 of #1736 and left
+        # closed: the page agrees with the model that each of these is one
+        # line with the token in the middle of it.
+        for shape, section in {
+            "a type parameter mid-line": "<div>API note: Vec<T> [blocked] names an enum case</div>",
+            "a bare arrow in prose": "<div>base --> [blocked] head is the merge</div>",
+            "a status inside an attribute": (
+                '<div title="CI result > [blocked] threshold">All checks complete</div>'
+            ),
+        }.items():
+            with self.subTest(shape=shape), recorded_page():
+                self.assertEqual(self.failures(self.body(section)), [])
+
+    def test_a_plain_status_line_is_refused_by_both(self) -> None:
+        with recorded_page():
+            self.assertTrue(self.failures(self.body("- [blocked] the UI lane")))
+
+    def test_a_fenced_example_is_not_a_status_on_the_page_either(self) -> None:
+        # A fenced block, an indented block and a code span all reach the page
+        # inside `<code>`, which this reader does not read: the written view
+        # already drops fenced code, and reading it here would refuse a
+        # documentation example that quotes a status (#1742, item 1).
+        with recorded_page():
+            self.assertEqual(self.failures(self.body("```\n- [blocked] x\n```")), [])
+
+    def test_a_code_block_contributes_no_line_to_this_reader(self) -> None:
+        # Asserted on the lines rather than on the verdict, because an
+        # INDENTED block is still refused by the written view: that view reads
+        # the section as typed and strips only fenced blocks. Unchanged here,
+        # and the page adds no refusal of its own to it either way.
+        for shape, section in {
+            "a fence": "```\n- [blocked] x\n```",
+            "an indented block": "    - [blocked] x",
+        }.items():
+            with self.subTest(shape=shape), recorded_page():
+                page = pr_readiness.page_view(self.body(section))
+                self.assertEqual(page.unverified, None)
+                self.assertEqual(
+                    [line for line in page.lines if pr_readiness.RENDERED_PENDING_RE.match(line)],
+                    [],
+                )
+
+    def test_a_code_span_is_text_the_page_shows(self) -> None:
+        # The other half of the same distinction: a span is ordinary text in a
+        # sentence, and the `<pre>` around a block is what marks the block as
+        # someone's example. Dropping both let a status the page prints at the
+        # start of its own line through (#1745, round 2).
+        with recorded_page():
+            page = pr_readiness.page_view(self.body("- `[blocked]` x"))
+        self.assertEqual(page.unverified, None)
+        self.assertIn("[blocked] x", page.lines)
+
+    def test_a_code_span_status_is_still_refused_by_the_model(self) -> None:
+        # The page reader drops it with the rest of `<code>`; the source model
+        # reads a code span as the text it shows, and one reader is enough.
+        with recorded_page():
+            self.assertTrue(self.failures(self.body("- `[blocked]` x")))
+
+
+class ThePageReaderMayOnlyAddRefusalsTests(unittest.TestCase):
+    """Three ways the page reader answered a smaller question than it claimed (#1745, round 2).
+
+    Each is the same failure: the reader stopped reading somewhere the page
+    keeps showing text, so a status at the start of a line reached neither
+    view and the body passed. A reader that may only ADD refusals cannot
+    afford to stop early anywhere, and the mirror -- reading further than the
+    written view does -- costs a refusal that names its line.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+    BR_STATUS = "Context <br>[blocked] x"
+
+    def body(self, section: str) -> str:
+        return GOOD_BODY + f"\n## Evidence Status\n\n{section}\n"
+
+    def failures(self, body: str) -> list[str]:
+        return pr_readiness.evaluate(pr(body), self.FILES).failures
+
+    def test_a_rule_does_not_end_the_section_on_the_page(self) -> None:
+        # A rule of asterisks reaches the page as the same `<hr>` a dash rule
+        # does, and the source model runs past that one on purpose -- so
+        # ending here meant the status below it was read by nobody.
+        for shape, rule in {"asterisks": "***", "underscores": "___"}.items():
+            with self.subTest(rule=shape), recorded_page():
+                failures = self.failures(self.body(f"{rule}\n\n{self.BR_STATUS}"))
+                self.assertTrue(
+                    any(pr_readiness.PENDING_FAILURE in failure for failure in failures), failures
+                )
+
+    def test_a_dash_rule_is_the_mirror_and_refuses_too(self) -> None:
+        # The cost of the line above, stated rather than left to be found: the
+        # written view stops at a dash rule and this reader does not, so a
+        # status below `---` under this heading draws a refusal from the page
+        # alone. It fails closed and the message quotes the line.
+        with recorded_page():
+            failures = self.failures(self.body(f"---\n\n{self.BR_STATUS}"))
+        self.assertTrue(any(pr_readiness.PENDING_FAILURE in failure for failure in failures), failures)
+        self.assertIn(pr_readiness.matched_line_note("[blocked] x"), failures[0])
+
+    def test_a_code_span_at_a_line_start_is_a_status(self) -> None:
+        with recorded_page():
+            failures = self.failures(self.body("Context <br>`[blocked]` x"))
+        self.assertTrue(any(pr_readiness.PENDING_FAILURE in failure for failure in failures), failures)
+
+    def test_a_quoted_heading_inside_the_section_does_not_end_it(self) -> None:
+        # `> ## Note` is a heading in a quotation, not one of this document's.
+        with recorded_page():
+            failures = self.failures(self.body(f"> ## Note\n\n{self.BR_STATUS}"))
+        self.assertTrue(any(pr_readiness.PENDING_FAILURE in failure for failure in failures), failures)
+
+    def test_a_quoted_heading_elsewhere_does_not_open_a_section(self) -> None:
+        # The over-refusal the same blindness caused: an example of this
+        # section quoted under another heading was read as this section, and
+        # the gate refused a body every other reader accepts.
+        body = (
+            GOOD_BODY
+            + "\n## Notes\n\n> ## Evidence Status\n> - [blocked] an example\n"
+            + "\n## Evidence Status\n\n- [complete] ran it -- 1992 tests passed\n"
+        )
+        with recorded_page():
+            self.assertEqual(self.failures(body), [])
+
+    def test_a_heading_inside_a_list_item_is_not_this_section_either(self) -> None:
+        # The same rule, the other container CommonMark lets hold a heading.
+        section = "- outer\n  - ## Note\n\n" + self.BR_STATUS
+        with recorded_page():
+            failures = self.failures(self.body(section))
+        self.assertTrue(any(pr_readiness.PENDING_FAILURE in failure for failure in failures), failures)
+
+    def test_a_long_s_heading_is_not_this_section_to_the_page_reader(self) -> None:
+        # The ride-along: this reader folded with `casefold()`, which maps a
+        # printer's long s onto `s`, so `## Evidence Statuſ` opened the
+        # section here and opens it for no other reader in the repo. Asserted
+        # on the page's lines rather than on the verdict, because the source
+        # model still takes that heading until #1759 lands and would refuse
+        # the body either way.
+        body = GOOD_BODY + "\n## Evidence Statu\u017f\n\n- [blocked] x\n"
+        with recorded_page():
+            page = pr_readiness.page_view(body)
+        self.assertEqual(page.unverified, None)
+        self.assertEqual(page.lines, ())
+
+    # An opaque container an author opened and never closed. GitHub's
+    # sanitizer balances it around the rest of the document, so the body's one
+    # `## Evidence Status` renders inside a `<blockquote>` or an `<li>` it was
+    # never meant to be in -- and a heading in someone else's structure is not
+    # this section, so the reader opened nothing and the status below it
+    # reached neither view (#1745, round 3).
+    UNCLOSED_BEFORE_THE_HEADING = {
+        "a blockquote": "<blockquote>",
+        "a list item": "<ul><li>",
+    }
+
+    def test_an_unclosed_container_before_the_heading_hides_nothing(self) -> None:
+        for shape, container in self.UNCLOSED_BEFORE_THE_HEADING.items():
+            with self.subTest(shape=shape), recorded_page():
+                body = GOOD_BODY + f"\n{container}\n\n## Evidence Status\n\n{self.BR_STATUS}\n"
+                failures = self.failures(body)
+                self.assertTrue(
+                    any(pr_readiness.PENDING_FAILURE in failure for failure in failures),
+                    (shape, failures),
+                )
+
+    def test_an_unclosed_container_inside_the_section_still_refuses(self) -> None:
+        # The control the second read must not cost: the heading is already at
+        # the top level here, so the first read finds it and the second never
+        # runs.
+        with recorded_page():
+            body = self.body(f"<blockquote>\n\n{self.BR_STATUS}")
+            failures = self.failures(body)
+        self.assertTrue(any(pr_readiness.PENDING_FAILURE in failure for failure in failures), failures)
+
+    def test_a_quoted_heading_inside_a_fold_still_does_not_end_the_section(self) -> None:
+        # `<details>` stays transparent and `> ## Note` stays opaque, together.
+        with recorded_page():
+            failures = self.failures(
+                self.body(f"<details>\n<summary>s</summary>\n\n> ## Note\n\n{self.BR_STATUS}")
+            )
+        self.assertTrue(any(pr_readiness.PENDING_FAILURE in failure for failure in failures), failures)
+
+    def test_a_fold_stays_transparent(self) -> None:
+        # `<details>` is not an opaque container: part B's rule is that folded
+        # text is text a reader opens, so a heading inside one is still this
+        # section's. Pinned here because the nesting rule is what could have
+        # taken it away.
+        body = (
+            "<details>\n<summary>notes</summary>\n\n"
+            + GOOD_BODY
+            + "\n## Evidence Status\n\n- [blocked] x\n"
+        )
+        with recorded_page():
+            page = pr_readiness.page_view(body)
+        self.assertEqual(page.unverified, None)
+        self.assertIn("[blocked] x", page.lines)
+
+
+# The page reader's two rules, and every shape four rounds have probed them
+# on. Three times a fix here moved the failure to a neighbouring shape, each
+# found by someone reading the code; this is so the next pass reads a list.
+#
+# LINE-SPLITTING -- what starts a line:
+#   a boundary of any element in `LINE_STARTING_TAGS`; `<br>` anywhere,
+#   including inside a heading; a newline inside a raw `<pre>`.
+# and what does not:
+#   a newline anywhere else (the page collapses it); an inline tag; the
+#   boundaries of a code span.
+#
+# SECTION-BOUNDING -- what opens it:
+#   a top-level `<h2>` whose text reads as `Evidence Status` by
+#   `heading_identity`; a nested one only when no top-level one did.
+# what closes it:
+#   the next `<h1>` or `<h2>` at the depth the section was opened at.
+# what is transparent (a heading inside it is still the document's):
+#   `<details>`.
+# what is opaque (a heading inside it is someone else's):
+#   `<blockquote>`, `<li>`.
+# what is not read: text inside `<pre><code>`.
+# what is read: a bare `<code>`, a raw `<pre>`, and the text of a `<details>`.
+#
+# A row is (name, middle, lines, ok): the text placed after a passing body's
+# opening, every line the page shows under the heading, and the gate's
+# verdict. Adding a shape here is adding a test.
+PAGE_READER_TABLE = (
+    ("a block tag after prose", '## Evidence Status\n\nContext <div>[blocked] x</div>\n', ('Context', '[blocked] x'), False),
+    ("a pre after prose", '## Evidence Status\n\nContext <pre>[blocked] x</pre>\n', ('Context', '[blocked] x'), False),
+    ("a break after prose", '## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    ("a break inside a list item", '## Evidence Status\n\n- complete <br>[blocked] x\n', ('complete', '[blocked] x'), False),
+    ("an unparsed tag the page prints", '## Evidence Status\n\n<x:y>[blocked] x</x:y>\n', ('<x:y>[blocked] x</x:y>',), False),
+    ("a type parameter mid-line", '## Evidence Status\n\n<div>API note: Vec<T> [blocked] names an enum case</div>\n', ('API note: Vec [blocked] names an enum case',), True),
+    ("a fenced example", '## Evidence Status\n\n```\n- [blocked] x\n```\n', (), True),
+    ("an indented example", '## Evidence Status\n\n    - [blocked] x\n', (), False),
+    ("a code span", '## Evidence Status\n\n- `[blocked]` x\n', ('[blocked] x',), False),
+    ("a code span after a break", '## Evidence Status\n\nContext <br>`[blocked]` x\n', ('Context', '[blocked] x'), False),
+    ("a rule of asterisks", '## Evidence Status\n\n***\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    ("a dash rule", '## Evidence Status\n\n---\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    ("a quoted heading inside", '## Evidence Status\n\n> ## Note\n\nContext <br>[blocked] x\n', ('Note', 'Context', '[blocked] x'), False),
+    ("a heading inside a list item", '## Evidence Status\n\n- outer\n  - ## Note\n\nContext <br>[blocked] x\n', ('outer', 'Note', 'Context', '[blocked] x'), False),
+    ("a quoted example elsewhere", '## Notes\n\n> ## Evidence Status\n> - [blocked] an example\n\n## Evidence Status\n\n- [complete] ran it -- 1992 tests passed\n', ('[complete] ran it -- 1992 tests passed',), True),
+    ("a long-s heading", '## Evidence Statuſ\n\n- [blocked] x\n', (), False),
+    ("a fold holding the section", '<details>\n<summary>notes</summary>\n\n## Evidence Status\n\n- [blocked] x\n', ('[blocked] x',), False),
+    ("a fold holding a quoted heading", '## Evidence Status\n\n<details>\n<summary>s</summary>\n\n> ## Note\n\nContext <br>[blocked] x\n', ('s', 'Note', 'Context', '[blocked] x'), False),
+    ("an unclosed blockquote before", '<blockquote>\n\n## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    ("an unclosed list item before", '<ul><li>\n\n## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    ("an unclosed blockquote inside", '## Evidence Status\n\n<blockquote>\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    ("a break inside a quoted heading", '## Evidence Status\n\n> ## Context<br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    ("a sibling heading after a top-level section", '## Evidence Status\n\n## Notes\n\nContext <br>[blocked] x\n', (), True),
+    ("a sibling heading after a nested section", '<blockquote>\n\n## Evidence Status\n\n## Notes\n\nContext <br>[blocked] x\n', (), True),
+    ("a shallower heading after a quoted section", '> ## Evidence Status\n> - [complete] ran it\n\n## Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
+    ("a shallower heading after a blockquote section", '<blockquote>\n\n## Evidence Status\n\n- [complete] ran it\n\n</blockquote>\n\n## Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
+    ("a shallower h1 after a quoted section", '> ## Evidence Status\n> - [complete] ran it\n\n# Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
+    ("a raw pre holding the status", '## Evidence Status\n\n<pre>\nnote\n[blocked] x\n</pre>\n', ('note', '[blocked] x'), False),
+)
+
+
+class ThePageReaderTableTests(unittest.TestCase):
+    """The table, run.
+
+    Two assertions per row rather than one: the lines are what this reader
+    exists to produce, and the verdict is what an author sees. A fix that
+    keeps a verdict by reading different lines -- which is how round 4's
+    swallowed `<br>` hid -- fails the first.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+
+    def body(self, middle: str) -> str:
+        return GOOD_BODY + f"\n{middle}"
+
+    def test_every_probed_shape_shows_the_lines_the_table_says(self) -> None:
+        for name, middle, lines, _ in PAGE_READER_TABLE:
+            with self.subTest(shape=name), recorded_page():
+                page = pr_readiness.page_view(self.body(middle))
+                self.assertIsNone(page.unverified, name)
+                self.assertEqual(page.lines, lines, name)
+
+    def test_every_probed_shape_gets_the_verdict_the_table_says(self) -> None:
+        for name, middle, _, ok in PAGE_READER_TABLE:
+            with self.subTest(shape=name), recorded_page():
+                result = pr_readiness.evaluate(pr(self.body(middle)), self.FILES)
+                self.assertEqual(result.ok, ok, (name, result.failures))
+
+    def test_the_table_exercises_both_rules(self) -> None:
+        # A table nobody checks the shape of grows lopsided. These are the
+        # axes the four rounds actually moved along.
+        shapes = "\n".join(middle for _, middle, _, _ in PAGE_READER_TABLE)
+        for splitter in ("<br>", "<div>", "<pre>", "```", "`[blocked]`", "    - [blocked]"):
+            self.assertIn(splitter, shapes)
+        for bound in ("***", "---", "> ##", "<details>", "<blockquote>", "<ul><li>", "## Notes"):
+            self.assertIn(bound, shapes)
+        self.assertIn("Statu\u017f", shapes)
+
+
+class ThePageSeesThroughAFoldTests(unittest.TestCase):
+    """A section inside a collapsed block is a section a reader can open (#1742, item 3).
+
+    An unclosed `<details>` above the heading renders the whole section inside
+    the collapsed element. Folded text is shown on a click, so the status
+    question is answered there like anywhere else: the heading is taken
+    wherever the rendered HTML puts it rather than only at the top level, and
+    refusing is the side this reader errs on.
+
+    Whether a section may be PLACED inside a fold is a different question, and
+    it stays with the contributor skill's placement check. This says only that
+    folding does not hide a status from the gate.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+
+    def test_a_status_under_a_folded_heading_is_read(self) -> None:
+        body = f"<details>\n<summary>notes</summary>\n\n{GOOD_BODY}\n## Evidence Status\n\n- [blocked] x\n"
+        with recorded_page():
+            page = pr_readiness.page_view(body)
+        self.assertEqual(page.unverified, None)
+        self.assertIn("[blocked] x", page.lines)
+
+
+class TheGateSaysWhenThePageWentUnreadTests(unittest.TestCase):
+    """Offline is a state the gate reports, never one it passes quietly.
+
+    A laptop preflight with no token, a network that is down, a non-2xx, a
+    spent rate limit: each leaves the gate standing on the source model, which
+    refuses on the page's behalf and never accepts for it. An author who
+    cleared a gate that could not reach the renderer cleared a different gate
+    from the one CI runs, so the note goes in the output AND in the comment
+    the workflow posts.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+
+    def test_no_token_is_a_reason_not_an_error(self) -> None:
+        # With no token it makes no call at all. The anonymous allowance is 60
+        # an hour shared across the host, and a gate spending it would pass for
+        # one author and fail for the next with no change in the body.
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(pr_readiness.RendererUnavailable) as raised:
+                _LIVE_RENDER("x")
+        self.assertIn("GH_TOKEN", str(raised.exception))
+
+    def test_a_spent_rate_limit_is_named(self) -> None:
+        error = urllib.error.HTTPError(
+            pr_readiness.MARKDOWN_API_URL, 403, "rate limited", {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1789759202"}, None
+        )
+        self.assertIn("rate limit", pr_readiness.http_failure_reason(error))
+
+    def test_another_non_2xx_is_named_by_its_code(self) -> None:
+        error = urllib.error.HTTPError(pr_readiness.MARKDOWN_API_URL, 502, "bad gateway", {}, None)
+        self.assertIn("502", pr_readiness.http_failure_reason(error))
+
+    def test_the_readiness_comment_carries_the_note(self) -> None:
+        result = pr_readiness.evaluate(pr(GOOD_BODY), self.FILES)
+        comment = pr_readiness.comment_markdown(result)
+        self.assertIn("passed", comment)
+        self.assertIn("Rendered view unverified", comment)
+
+    def test_a_failing_body_keeps_both_the_failures_and_the_note(self) -> None:
+        result = pr_readiness.evaluate(pr(GOOD_BODY.replace("## Mergeability", "## Notes")), self.FILES)
+        comment = pr_readiness.comment_markdown(result)
+        self.assertIn("Missing ## Mergeability section", comment)
+        self.assertIn("Rendered view unverified", comment)
+
+    def test_preflight_with_no_token_prints_the_note_and_the_models_verdict(self) -> None:
+        # `preflight` clears the environment, so this is the laptop case: the
+        # note is printed and the exit code is the source model's answer.
+        code, output = preflight(GOOD_BODY, files=["Sources/WorkspaceManager/Foo.swift"])
+        self.assertEqual(code, 0)
+        self.assertIn("PR readiness passed.", output)
+        self.assertIn("Rendered view unverified", output)
+
+    def test_the_page_is_asked_once_per_body(self) -> None:
+        # One request per gate run, whatever the caller does: the Factory
+        # review lane evaluates the same body through this same `evaluate`.
+        asked: list[str] = []
+        body = GOOD_BODY + "\n## Evidence Status\n\n- [complete] swift test -- 1992 tests passed\n"
+        with recorded_page():
+            recorded = pr_readiness.render_markdown
+            with mock.patch.object(
+                pr_readiness,
+                "render_markdown",
+                side_effect=lambda text: asked.append(text) or recorded(text),
+            ):
+                for _ in range(3):
+                    pr_readiness.evaluate(pr(body), self.FILES)
+        self.assertEqual(len(asked), 1, asked)
+
+
+class RecordedRendererResponseTests(unittest.TestCase):
+    """The recordings, and what keeps them honest.
+
+    A recorded response is a claim about what GitHub does today. The renderer's
+    output format is not a contract -- attributes, class names and wrapping can
+    change -- so the recordings are checked against the live renderer whenever
+    a token is there to check them with, and that check is the detector for the
+    one risk this design adds. With no token it skips, because a suite that
+    failed for want of a network would fail in every sandbox in the repo.
+    """
+
+    def test_a_body_with_no_recording_names_the_command_that_records_it(self) -> None:
+        # Recording off and the recordings out of reach, so this says what a
+        # contributor sees when a test asks for a body nobody has recorded --
+        # not what the one invocation that refreshes the fixtures sees.
+        module = sys.modules[__name__]
+        with tempfile.TemporaryDirectory() as empty:
+            with (
+                mock.patch.dict(os.environ, {RECORD_ENV: ""}),
+                mock.patch.object(module, "RENDERED_FIXTURES", Path(empty)),
+                recorded_page(),
+            ):
+                with self.assertRaises(AssertionError) as raised:
+                    pr_readiness.page_view(GOOD_BODY)
+        self.assertIn(RECORD_COMMAND, str(raised.exception))
+
+    def test_every_recording_names_the_body_it_answers(self) -> None:
+        for digest, text in rendered_index().items():
+            with self.subTest(digest=digest[:12]):
+                self.assertEqual(hashlib.sha256(text.encode("utf-8")).hexdigest(), digest)
+                self.assertTrue(rendered_fixture_path(text).is_file())
+
+    def test_every_recorded_file_is_named_in_the_index(self) -> None:
+        index = rendered_index()
+        for path in sorted(RENDERED_FIXTURES.glob("*.html")):
+            with self.subTest(name=path.name):
+                self.assertIn(path.stem, index)
+
+    def test_the_recordings_still_match_the_live_renderer(self) -> None:
+        if not (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")):
+            self.skipTest("no GH_TOKEN or GITHUB_TOKEN: the live renderer cannot be asked")
+        for digest, text in rendered_index().items():
+            with self.subTest(digest=digest[:12]):
+                self.assertEqual(
+                    _LIVE_RENDER(text),
+                    rendered_fixture_path(text).read_text(encoding="utf-8"),
+                    f"the renderer's output changed; re-record with {RECORD_COMMAND}",
+                )
+
 
 class ParserDefinitionTests(unittest.TestCase):
     """The gate and the contributor skill read one section by one definition of markdown.

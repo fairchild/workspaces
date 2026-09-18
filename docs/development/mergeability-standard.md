@@ -45,6 +45,15 @@ against the file before publishing — `uv run --script scripts/pr-readiness.py
 earlier. Producers that generate bodies read their field list out of that same
 template, so a field added there reaches generated PRs without a second edit.
 
+One half of that verdict needs a token. To decide where a line starts under
+`## Evidence Status`, the gate asks GitHub to render the body (`POST
+/markdown`); CI passes the workflow token, and a laptop passes whatever `gh`
+exported. With no token, no network or a spent rate limit, the run prints
+`Rendered view unverified: <why>` and falls back to reading the body's source,
+which refuses on the page's behalf and never accepts for it — so a preflight
+that passed unverified can still fail in CI. Export `GH_TOKEN=$(gh auth
+token)` to get CI's answer locally.
+
 PR summary style: prefer concise Markdown links for completed checks and
 artifacts — link the check name, e.g. `Web CI passed`, to the run URL.
 Readability preference, not a merge gate.
