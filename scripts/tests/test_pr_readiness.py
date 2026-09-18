@@ -2326,6 +2326,40 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
                 self.assertIn("blank line", failure)
                 self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok)
 
+    # A heading line the same scan calls exact, inside a block that carries no
+    # status at all: a comment the author closed, a `<pre>` they wrote. These
+    # bodies have no Evidence Status section, which is allowed -- the section
+    # is optional -- and the round-2 refusal told their authors they had
+    # hidden a status they had not written (#1742, round 3).
+    SWALLOWED_WITH_NOTHING_PENDING = {
+        "a closed comment holding only the heading": "<!--\n## Evidence Status\n-->",
+        "a closed comment holding a complete item": (
+            "<!--\n## Evidence Status\n- [complete] ran it -- 1992 tests passed\n-->"
+        ),
+        "a pre block holding a complete item": (
+            "<pre>\n## Evidence Status\n- [complete] ran it -- 1992 tests passed\n</pre>"
+        ),
+    }
+
+    def test_a_swallowed_heading_with_no_pending_status_under_it_is_silent(self) -> None:
+        for name, block in self.SWALLOWED_WITH_NOTHING_PENDING.items():
+            with self.subTest(shape=name):
+                body = self.body(f"{block}\n\n")
+                self.assertEqual(pr_readiness.status_heading_candidates(body), [])
+                self.assertIsNone(pr_readiness.unread_status_heading_failure(body), name)
+                self.assertEqual(self.failures(body), [])
+
+    def test_a_pending_status_inside_the_same_comment_is_still_refused(self) -> None:
+        # The choice the comment case forces, made the way #1744 made it: a
+        # run this gate cannot see on the page may refuse and may never
+        # accept, so a `[blocked]` under a commented-out heading is named
+        # rather than waved through. The author reads one message; the hole
+        # the other way is a pending status nobody sees.
+        body = self.body(f"<!--\n## Evidence Status\n{self.BLOCKED}\n-->\n\n")
+        failure = pr_readiness.unread_status_heading_failure(body)
+        self.assertIsNotNone(failure)
+        self.assertIn("inside a raw HTML block", failure)
+
     def test_the_blank_line_control_is_the_section_and_still_refuses_its_status(self) -> None:
         # The repair the message asks for, and the proof the refusal is about
         # the swallowing rather than about the block: one blank line and the

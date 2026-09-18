@@ -925,6 +925,29 @@ EXACT_STATUS_HEADING_RE = re.compile(
 )
 
 
+def _a_status_is_kept_out(normalized: str, heading_end: int, block: Token) -> bool:
+    """Whether a swallowed heading is keeping a pending status out of the gate's reach.
+
+    Two places one can be. Inside the block itself, where an author wrote the
+    heading and the status in one comment or one `<pre>`; and below the block,
+    where the heading was swallowed by an opener a line above it and the
+    status sits in ordinary markdown underneath -- which is the shape all four
+    of the refusal's own cases have.
+
+    The second is asked by giving the text below the heading a real heading and
+    handing it to the gate's own two views. Nothing new reads anything here:
+    the question "would this have refused, had the line been a heading?" is
+    answered by the readers that would have answered it.
+    """
+    if any(RENDERED_PENDING_RE.match(text) for text in html_block_text_lines(block.content)):
+        return True
+    probe = f"## {EVIDENCE_STATUS_HEADING}\n{normalized[heading_end:]}"
+    written, _ = split_fenced_blocks(extract_section(probe, EVIDENCE_STATUS_HEADING, strip=False))
+    return bool(PENDING_STATUS_RE.search(written)) or any(
+        RENDERED_PENDING_RE.match(text) for text in rendered_status_lines(probe)
+    )
+
+
 def _swallowed_status_heading_failure(normalized: str) -> str | None:
     """Why a heading line the page shows is no heading at all, or None.
 
@@ -933,6 +956,23 @@ def _swallowed_status_heading_failure(normalized: str) -> str | None:
     this branch exists for; a line inside a fenced or indented code block is
     not, because there the page shows an example and no section is the honest
     answer.
+
+    And only where a status is being kept out by it (`_a_status_is_kept_out`).
+    A body may carry an exact heading line inside a comment it closed or a
+    `<pre>` it wrote, with nothing pending under it, and that body has no
+    Evidence Status section -- which is allowed, since the section is
+    optional. Refusing it said an author had hidden something they had not
+    hidden. The failure this branch exists to prevent is a pending line a
+    swallowed heading keeps out of the section, and where there is no pending
+    line there is nothing to keep out.
+
+    The whole block is read rather than the part of it below the heading:
+    slicing a block's runs by source line is the modelling this reader is
+    written to avoid, and reading the whole of it errs toward refusing. Text
+    inside a comment counts, the way it does everywhere else in this gate --
+    a `[blocked]` under a commented-out heading refuses and names it, because
+    a run this gate cannot see on the page may refuse and may never accept
+    (#1729, #1744).
 
     The block is found by its own token rather than by re-deriving where HTML
     starts: `html_block`'s map covers the lines CommonMark gave it, which is
@@ -949,7 +989,7 @@ def _swallowed_status_heading_failure(normalized: str) -> str | None:
             ),
             None,
         )
-        if block is None:
+        if block is None or not _a_status_is_kept_out(normalized, match.end(), block):
             continue
         return (
             f"The heading at line {line + 1} is inside a raw HTML block (opened at line "
