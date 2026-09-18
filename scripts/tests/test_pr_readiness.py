@@ -2055,6 +2055,44 @@ class ThePageReaderMayOnlyAddRefusalsTests(unittest.TestCase):
         self.assertEqual(page.unverified, None)
         self.assertEqual(page.lines, ())
 
+    # An opaque container an author opened and never closed. GitHub's
+    # sanitizer balances it around the rest of the document, so the body's one
+    # `## Evidence Status` renders inside a `<blockquote>` or an `<li>` it was
+    # never meant to be in -- and a heading in someone else's structure is not
+    # this section, so the reader opened nothing and the status below it
+    # reached neither view (#1745, round 3).
+    UNCLOSED_BEFORE_THE_HEADING = {
+        "a blockquote": "<blockquote>",
+        "a list item": "<ul><li>",
+    }
+
+    def test_an_unclosed_container_before_the_heading_hides_nothing(self) -> None:
+        for shape, container in self.UNCLOSED_BEFORE_THE_HEADING.items():
+            with self.subTest(shape=shape), recorded_page():
+                body = GOOD_BODY + f"\n{container}\n\n## Evidence Status\n\n{self.BR_STATUS}\n"
+                failures = self.failures(body)
+                self.assertTrue(
+                    any(pr_readiness.PENDING_FAILURE in failure for failure in failures),
+                    (shape, failures),
+                )
+
+    def test_an_unclosed_container_inside_the_section_still_refuses(self) -> None:
+        # The control the second read must not cost: the heading is already at
+        # the top level here, so the first read finds it and the second never
+        # runs.
+        with recorded_page():
+            body = self.body(f"<blockquote>\n\n{self.BR_STATUS}")
+            failures = self.failures(body)
+        self.assertTrue(any(pr_readiness.PENDING_FAILURE in failure for failure in failures), failures)
+
+    def test_a_quoted_heading_inside_a_fold_still_does_not_end_the_section(self) -> None:
+        # `<details>` stays transparent and `> ## Note` stays opaque, together.
+        with recorded_page():
+            failures = self.failures(
+                self.body(f"<details>\n<summary>s</summary>\n\n> ## Note\n\n{self.BR_STATUS}")
+            )
+        self.assertTrue(any(pr_readiness.PENDING_FAILURE in failure for failure in failures), failures)
+
     def test_a_fold_stays_transparent(self) -> None:
         # `<details>` is not an opaque container: part B's rule is that folded
         # text is text a reader opens, so a heading inside one is still this

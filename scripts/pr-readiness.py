@@ -785,22 +785,6 @@ def render_markdown(text: str) -> str:
         raise RendererUnavailable(f"the renderer was unreachable ({error})") from error
 
 
-# What ends the section in the rendered HTML: a heading, and nothing else.
-#
-# `<hr>` used to end it too, on the argument that `extract_section` ends at a
-# dash rule. It does -- but a rule of asterisks reaches the page as the same
-# `<hr>`, and the source model runs past that one on purpose, so ending here
-# meant `## Evidence Status`, `***`, then a status the page shows at a line
-# start was read by neither view and the body passed. That is the one failure
-# this reader may not have. A rule is decoration to a reader anyway: what
-# starts a new section on the page is a heading.
-#
-# The cost is the mirror case, and it is the tolerated one: after a DASH rule
-# the written view stops and this reader does not, so a status below `---`
-# under this heading draws a refusal from the page that the source alone would
-# not make. It fails closed and the message quotes the line (#1745, round 2).
-SECTION_END_ELEMENTS = frozenset({"h1", "h2"})
-
 # Elements whose contents are not the document's own top level: a heading
 # inside one is a heading in someone else's structure -- a quotation, a list
 # item -- and neither opens this section nor ends it. `> ## Note` inside the
@@ -828,6 +812,18 @@ class PageLineReader(HTMLParser):
     `Context <br>[blocked] x` read as a single run there and reads as two
     lines here (#1755).
 
+    The section ends at a heading and at nothing else. `<hr>` used to end it
+    too, on the argument that `extract_section` ends at a dash rule. It does
+    -- but a rule of asterisks reaches the page as the same `<hr>`, and the
+    source model runs past that one on purpose, so ending here meant
+    `## Evidence Status`, `***`, then a status the page shows at a line start
+    was read by neither view. A rule is decoration to a reader anyway: what
+    starts a new section on a page is a heading. The cost is the mirror and it
+    is the tolerated one -- after a DASH rule the written view stops and this
+    reader does not, so a status below `---` under this heading draws a
+    refusal the source alone would not make, which fails closed and quotes the
+    line (#1745, round 2).
+
     Three decisions about what the page shows.
 
     `<details>` is read. Its text is folded and a reader opens the fold, so a
@@ -852,15 +848,17 @@ class PageLineReader(HTMLParser):
     because that is what the page does with it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, a_nested_heading_may_open_it: bool = False) -> None:
         super().__init__(convert_charrefs=True)
         self.lines: list[str] = []
+        self.opened = False
         self._current: list[str] = []
         self._in_section = False
         self._heading: list[str] | None = None
         self._code_depth = 0
         self._pre_depth = 0
         self._nesting = 0
+        self._a_nested_heading_may_open_it = a_nested_heading_may_open_it
 
     def _cut(self) -> None:
         text = " ".join("".join(self._current).split())
@@ -872,11 +870,16 @@ class PageLineReader(HTMLParser):
         name = tag.lower()
         if name in OPAQUE_CONTAINERS:
             self._nesting += 1
-        elif name in SECTION_END_ELEMENTS and not self._nesting:
+        elif name == "h2":
+            # Every h2 is read, at any depth: whether it is this section's,
+            # someone else's, or a line of text depends on its own words and
+            # on where it sits, and only `handle_endtag` knows both.
+            self._cut()
+            self._heading = []
+            return
+        elif name == "h1" and not self._nesting:
             self._cut()
             self._in_section = False
-            if name == "h2":
-                self._heading = []
             return
         if not self._in_section:
             return
@@ -892,18 +895,28 @@ class PageLineReader(HTMLParser):
         if name in OPAQUE_CONTAINERS:
             self._nesting = max(0, self._nesting - 1)
         if name == "h2" and self._heading is not None:
-            # `lower()`, not `casefold()`: full folding maps characters that
-            # are not case variants of anything -- a printer's long s in
-            # `Statuſ` folds onto `s` -- and no other reader in this repo
-            # takes that for this section. #1759 replaces the same call in
-            # `rendered_status_lines` and gives both a shared
-            # `heading_identity`; this line becomes a call to it when that
-            # lands. Until then the source model takes one heading this
-            # reader does not, which costs a refusal the model still makes.
-            heading = " ".join("".join(self._heading).split()).lower()
+            text = "".join(self._heading)
             self._heading = None
-            self._current.clear()
-            self._in_section = heading == "evidence status"
+            # `heading_identity` is the repo's one rule for when two headings
+            # are one, shared with the written view and the contributor skill
+            # (#1759), so a printer's long s in `Statuſ` is not this
+            # section to any reader.
+            is_section = heading_identity(text) == heading_identity(EVIDENCE_STATUS_HEADING)
+            if not self._nesting:
+                self._current.clear()
+                self._in_section = is_section
+                self.opened = self.opened or is_section
+                return
+            if is_section and self._a_nested_heading_may_open_it:
+                self._current.clear()
+                self._in_section = True
+                self.opened = True
+                return
+            # A heading in someone else's structure, on a pass that will not
+            # open on one: it is a line the page shows like any other.
+            if self._in_section:
+                self._current.append(text)
+                self._cut()
             return
         if not self._in_section:
             return
@@ -936,10 +949,33 @@ class PageLineReader(HTMLParser):
 
 
 def page_status_lines(rendered: str) -> list[str]:
-    """Every line the rendered page shows under `## Evidence Status`."""
+    """Every line the rendered page shows under `## Evidence Status`.
+
+    Read twice where the first read finds no section at all. A heading inside
+    a quotation or a list item is someone else's heading and does not open
+    this section -- unless it is the only one there is, which is what an
+    author writes by opening a container and not closing it. GitHub's
+    sanitizer balances that container around the rest of the document, so the
+    one `## Evidence Status` in the body renders inside a `<blockquote>` it
+    was never meant to be in, and reading nothing there let a status the page
+    plainly shows reach neither view (#1745, round 3).
+
+    "Unless it is the only one there is" rather than a rule about which
+    containers were closed: the rendered HTML is balanced either way -- a
+    quotation closes before the document continues and an unclosed container
+    closes at the very end -- and telling those apart is a second model of the
+    thing this reader exists to stop modelling. Counting instead is one
+    sentence, and it fails toward refusing: the second read can only find a
+    section the first did not, so it can only add lines.
+    """
     reader = PageLineReader()
     reader.feed(rendered)
-    return reader.finish()
+    lines = reader.finish()
+    if reader.opened:
+        return lines
+    nested = PageLineReader(a_nested_heading_may_open_it=True)
+    nested.feed(rendered)
+    return nested.finish()
 
 
 @dataclass(frozen=True)
