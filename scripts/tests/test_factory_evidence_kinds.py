@@ -6040,11 +6040,11 @@ class ALongSHeadingIsAnotherHeadingTests(unittest.TestCase):
     def test_a_rewrite_leaves_the_long_s_section_where_it_is(self) -> None:
         # The harm as the author sees it: their long-s section survives, and
         # the real one is the one rewritten.
-        written, stood_down = self.evidence().write_evidence_status_section(self.BODY, self.ENTRIES)
-        self.assertIn(self.LONG_S, written, stood_down)
-        self.assertIn("- [complete] the printer's item -- not this section", written)
-        self.assertNotIn(self.AUTHORS_LINE, written)
-        self.assertEqual(written.count("## Evidence Status"), 1)
+        write = self.evidence().write_evidence_status_section(self.BODY, self.ENTRIES)
+        self.assertIn(self.LONG_S, write.body, write.refusal)
+        self.assertIn("- [complete] the printer's item -- not this section", write.body)
+        self.assertNotIn(self.AUTHORS_LINE, write.body)
+        self.assertEqual(write.body.count("## Evidence Status"), 1)
 
     def test_the_owner_read_sees_one_section_and_does_not_refuse_for_two(self) -> None:
         lines, reason = self.evidence()._rendered_status_lines(self.BODY)
