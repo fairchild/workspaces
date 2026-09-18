@@ -2349,6 +2349,27 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
                 self.assertIsNone(pr_readiness.unread_status_heading_failure(body), name)
                 self.assertEqual(self.failures(body), [])
 
+    # A heading-shaped line INSIDE the swallowing block, with the status below
+    # the block. The block prints those characters as text, so `## Notes` is a
+    # heading to nobody -- but the check handed the text from the swallowed
+    # heading's end to a markdown parser, which read it as one and closed the
+    # section before the status was reached (#1742, round 4).
+    INNER_HEADING = {
+        "a pre block": "<pre>\n## Evidence Status\n## Notes\n</pre>",
+        "a closed comment": "<!--\n## Evidence Status\n## Notes\n-->",
+    }
+
+    def test_a_heading_shaped_line_inside_the_block_does_not_hide_the_status_below_it(self) -> None:
+        for name, block in self.INNER_HEADING.items():
+            with self.subTest(shape=name):
+                body = self.body(f"{block}\n{self.BLOCKED}\n\n")
+                failure = pr_readiness.unread_status_heading_failure(body)
+                self.assertIsNotNone(failure, name)
+                self.assertIn("inside a raw HTML block", failure)
+                heading_line = body[: body.index("## Evidence Status")].count("\n") + 1
+                self.assertIn(f"line {heading_line}", failure)
+                self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok)
+
     def test_a_pending_status_inside_the_same_comment_is_still_refused(self) -> None:
         # The choice the comment case forces, made the way #1744 made it: a
         # run this gate cannot see on the page may refuse and may never

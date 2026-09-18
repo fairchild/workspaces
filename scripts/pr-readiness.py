@@ -925,7 +925,7 @@ EXACT_STATUS_HEADING_RE = re.compile(
 )
 
 
-def _a_status_is_kept_out(normalized: str, heading_end: int, block: Token) -> bool:
+def _a_status_is_kept_out(normalized: str, block: Token) -> bool:
     """Whether a swallowed heading is keeping a pending status out of the gate's reach.
 
     Two places one can be. Inside the block itself, where an author wrote the
@@ -934,14 +934,22 @@ def _a_status_is_kept_out(normalized: str, heading_end: int, block: Token) -> bo
     status sits in ordinary markdown underneath -- which is the shape all four
     of the refusal's own cases have.
 
-    The second is asked by giving the text below the heading a real heading and
-    handing it to the gate's own two views. Nothing new reads anything here:
-    the question "would this have refused, had the line been a heading?" is
-    answered by the readers that would have answered it.
+    The second is asked by giving the text a real heading and handing it to the
+    gate's own two views. Nothing new reads anything here: the question "would
+    this have refused, had the line been a heading?" is answered by the readers
+    that would have answered it.
+
+    That text starts after the BLOCK, not after the heading. A block prints its
+    contents as characters, so a `## Notes` line inside it is text to every
+    reader -- but handed to a markdown parser it is a heading, and it closed
+    the synthetic section before the status below the block was reached. The
+    block's own contents are the first half's job and are read there as text,
+    which is the reading the page agrees with.
     """
     if any(RENDERED_PENDING_RE.match(text) for text in html_block_text_lines(block.content)):
         return True
-    probe = f"## {EVIDENCE_STATUS_HEADING}\n{normalized[heading_end:]}"
+    below = "\n".join(normalized.split("\n")[(block.map or [0, 0])[1] :])
+    probe = f"## {EVIDENCE_STATUS_HEADING}\n{below}"
     written, _ = split_fenced_blocks(extract_section(probe, EVIDENCE_STATUS_HEADING, strip=False))
     return bool(PENDING_STATUS_RE.search(written)) or any(
         RENDERED_PENDING_RE.match(text) for text in rendered_status_lines(probe)
@@ -989,7 +997,7 @@ def _swallowed_status_heading_failure(normalized: str) -> str | None:
             ),
             None,
         )
-        if block is None or not _a_status_is_kept_out(normalized, match.end(), block):
+        if block is None or not _a_status_is_kept_out(normalized, block):
             continue
         return (
             f"The heading at line {line + 1} is inside a raw HTML block (opened at line "
