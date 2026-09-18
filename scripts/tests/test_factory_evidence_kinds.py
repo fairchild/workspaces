@@ -6537,18 +6537,40 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
         self.assertIn("carries inline HTML", unreadable)
         self.assertIn(unreadable, comment)
 
-        # Claim 2: the readiness gate does not refuse it for this.
+        # Claim 2: the readiness gate does not refuse it for this. Asked of
+        # the check that would, and of whether making the heading plain changes
+        # any refusal -- rather than of whether the word "heading" appears in
+        # one. It did appear: #1744's pending refusal names the run it matched
+        # with "the page shows this line under the heading", and that branch
+        # and this test were independently green until they met (#1738, round
+        # 4 rebase).
         gate = self.readiness_gate()
         self.assertIsNone(gate.evidence_status_heading_failure(written))
+        failures = gate.evaluate(
+            {"title": "t", "body": written, "draft": False, "labels": []}, ["Sources/App.swift"]
+        ).failures
+        pending = "Requested evidence is blocked or still pending CI."
         self.assertEqual(
             [
                 failure
-                for failure in gate
-                .evaluate({"title": "t", "body": written, "draft": False, "labels": []}, ["Sources/App.swift"])
-                .failures
-                if "heading" in failure.casefold()
+                for failure in failures
+                if "heading" in failure.casefold() and not failure.startswith(pending)
             ],
             [],
+        )
+        # The gate DOES refuse this body, and not for the heading: the author's
+        # own `[pending-ci]` line is under a heading the page shows, so the
+        # rendered view reads it and says so. That refusal names the run it
+        # matched -- "the page shows this line under the heading" -- which is
+        # where the word comes from, and why the filter above cannot be a bare
+        # word match. #1744's branch and this test were independently green
+        # until they met on one tree.
+        self.assertEqual(
+            [failure for failure in failures if failure.startswith(pending)],
+            [
+                f'{pending} The page shows this line under the heading: '
+                f'"[pending-ci] {self.ITEM.strip("`").replace("`", "")} -- the lane has not run yet".'
+            ],
         )
         self.assertIn("The readiness gate does not refuse it for this", comment)
         # And the sentence that was not true of this repo is gone.

@@ -16,9 +16,10 @@ The `## Evidence Status` section is read two ways, and a pending line seen by
 either one fails the gate. The written view matches the lines as an author
 typed them; the rendered view parses the body as GitHub Flavored Markdown and
 reads every line the page shows -- a list item, a paragraph, a table cell, a
-sub-heading -- so an escape, a character reference or inline HTML around the
-status token is resolved rather than hiding it (#1706), and a status outside a
-list item is still a status (#1727). The two are combined as a conjunction of
+sub-heading, the text of a raw HTML block -- so an escape, a character
+reference or inline HTML around the status token is resolved rather than hiding
+it (#1706), a status outside a list item is still a status (#1727), and one the
+page prints from raw HTML is one too (#1736). The two are combined as a conjunction of
 refusals, never a vote: the rendered view can only add failures, so it cannot
 pass a body the written view fails, and a shape only one of them sees is still
 a shape the gate catches.
@@ -27,6 +28,7 @@ a shape the gate catches.
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import re
@@ -295,6 +297,192 @@ def rendered_inline_text(children: list[Token] | None) -> str:
     return "".join(parts)
 
 
+# A tag as HTML writes one: a name, then attributes whose quoted values may
+# carry a `>`, then an optional `/` and the close. `<[^>]*>` stopped at the
+# first `>` inside `<div title="CI result > [blocked] threshold">` and left the
+# attribute's tail as text, where a status then anchored on a line the page
+# never shows (#1736).
+# `<` is excluded from the attribute NAME as well as from an unquoted value.
+# Allowing it let `<div <div <div ...` match one attribute per repetition and
+# then backtrack over all of them at every offset: 50 KB of `<div ` took 13
+# seconds where 1 KB took 0.005, and a gate a body can make hang is a gate an
+# author bypasses by timeout (#1736, round 4). A tag with a `<` in an attribute
+# name is not a tag to GitHub either, so the exclusion narrows nothing real.
+HTML_ATTRIBUTE = r"""[^\s"'>/=<]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?"""
+HTML_TAG_RE = re.compile(rf"</?(?P<name>[A-Za-z][A-Za-z0-9-]*)(?:\s+{HTML_ATTRIBUTE})*\s*/?>")
+
+# The tags that start a line on the page: CommonMark's HTML-block conditions 1
+# and 6, plus `br`, which is a line break.
+#
+# Condition 6 is the long list this repo already reads HTML blocks by.
+# Condition 1 is `pre`, `script`, `style` and `textarea` -- four tags that open
+# a block of their own and were missing, so `<div>note<pre>[blocked] x</pre></div>`
+# read as the single run `note[blocked] x` and the status anchored nowhere,
+# while GitHub renders the `<pre>` as its own block (#1736, round 4).
+#
+# Everything else -- `<span>`, `<strong>`, `<code>`, `<a>`, and a tag the
+# sanitizer does not know such as `<T>` -- is inline: it shows nothing of its
+# own and the text on either side of it stays on one line.
+LINE_STARTING_TAGS = frozenset(
+    """pre script style textarea
+    address article aside base basefont blockquote body br caption center col
+    colgroup dd details dialog dir div dl dt fieldset figcaption figure footer
+    form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li
+    link main menu menuitem nav noframes ol optgroup option p param search
+    section summary table tbody td tfoot th thead title tr track ul""".split()
+)
+
+# What ends an open comment. `-->` is the spec's end and `--!>` is what a
+# browser also takes for one (`py/bad-tag-filter`); neither is a delimiter with
+# no comment open, where `base --> head` is prose a reader sees whole.
+COMMENT_CLOSERS = ("-->", "--!>")
+# And what closes one the moment it opens: `<!-->` and `<!--->`, the spec's
+# abrupt-closing forms. Read as an opener alone, the text after them stayed
+# inside a comment for this reader and outside it on the page.
+COMMENT_ABRUPT_CLOSERS = (">", "->")
+
+# A `<...>` this grammar does not parse, but which opens the way a tag does.
+# GitHub's parser is more forgiving than this one, and every shape it takes and
+# this does not is a run that reads one way here and another on the page:
+# `<div a="1"b="2">`, `<div title=>`, `<div a/b>`, `<div title=a"b>` and
+# `<x:y>` all render with what follows them on a line of their own, and all
+# were accepted here because the unparsed text sat in front of the status
+# (#1736, round 4). `< b and c >` in prose is not one of these: a name has to
+# follow the bracket.
+AMBIGUOUS_TAG_RE = re.compile(r"</?(?P<name>[A-Za-z][A-Za-z0-9:._-]*)")
+
+# What a character reference can decode to that the page treats as a new line.
+NEWLINE_REFERENCE_RE = re.compile(r"\r\n?")
+
+
+def html_block_text_lines(content: str) -> list[str]:
+    """Every line of text a raw HTML block shows, in the order the page shows them.
+
+    GitHub prints a raw HTML block as itself, so a status between its tags is a
+    status a reader acts on -- and the parser models no inline inside an
+    `html_block`, so the rendered view read nothing there at all and the
+    written view caught only what its own anchor covers, a list marker in front
+    of the token. `<div>` on the line below the heading and `[blocked] the UI
+    lane` under it reached neither view while the page showed it (#1736).
+
+    This is a small model of ONE question: where does a line start on the page?
+    Its boundaries are written down rather than believed complete. A line
+    starts at a tag in `LINE_STARTING_TAGS`, at either delimiter of a comment,
+    at a newline the source carries, and at a newline a character reference
+    decodes to. It does not model which elements are open, what the sanitizer
+    strips, CSS, or a table's layout beyond a cell being a line.
+
+    Why a model is allowed here and was refused for heading identity in the
+    contributor skill: that is an ACCEPTANCE question, where a wrong model
+    accepts a section nobody sees and a rewrite then destroys an author's text
+    with no one to notice, so the rule there had to be one that cannot widen.
+    This is a REFUSAL question under the standing rule that invisible text may
+    refuse and may never accept (#1729): a wrong line start over-refuses, which
+    fails closed, and the failure names the run it matched, so the cost to an
+    author is one read. A model is tolerable where its failure is a named
+    refusal and intolerable where its failure is a silent acceptance.
+
+    The source newline is the one boundary coarser than the page: HTML collapses
+    it, so `<div>` over two source lines is one line to a reader and two here.
+    It is kept because dropping it would drop refusals this gate already makes,
+    and it errs toward refusing.
+
+    Text inside a comment is read like any other run. A comment renders as
+    nothing, and refusing on `<!-- [blocked] x -->` costs an author a minute
+    and costs the gate no soundness, where accepting on it is the hole. So no
+    run is called visible or hidden, and the factory's own metadata comment is
+    not special-cased: it carries JSON, whose lines open on a brace or a quote,
+    and the writer places it above this heading rather than under it.
+
+    Each run is decoded and then split, in that order, so `&#10;` makes the two
+    lines the page makes and the anchor sees the second -- and `&#13;` with it,
+    which decodes to a carriage return and is a line break to the page just the
+    same (#1736, round 4).
+
+    Where this grammar cannot parse a `<...>` that opens like a tag, the block
+    is read TWICE: once with that text left as text, and once with it taken for
+    a tag -- removed, and a line start if its name is block-level. The lines of
+    both readings are returned, so a status anchors if EITHER reading puts it
+    at the start of a line. That is the arc's rule made concrete: this model
+    lives on the refusing side, so where its answer is uncertain it refuses
+    under any plausible reading and accepts only when none of them anchors.
+    The over-refusals it brings back land on malformed markup alone, and each
+    names the run it matched.
+    """
+    readings = [_html_block_runs(content, unparsed_as_tag=False)]
+    if _holds_an_unparsed_tag(content):
+        readings.append(_html_block_runs(content, unparsed_as_tag=True))
+    seen, lines = set(), []
+    for runs in readings:
+        for run in runs:
+            for line in NEWLINE_REFERENCE_RE.sub("\n", html.unescape(run)).split("\n"):
+                text = line.strip()
+                if text and text not in seen:
+                    seen.add(text)
+                    lines.append(text)
+    return lines
+
+
+def _holds_an_unparsed_tag(content: str) -> bool:
+    """Whether this block carries a `<...>` that opens like a tag and does not parse as one."""
+    for index, character in enumerate(content):
+        if character != "<" or HTML_TAG_RE.match(content, index) is not None:
+            continue
+        if AMBIGUOUS_TAG_RE.match(content, index) and ">" in content[index:]:
+            return True
+    return False
+
+
+def _html_block_runs(content: str, *, unparsed_as_tag: bool) -> list[str]:
+    """The block's runs under one reading of the `<...>` shapes this grammar cannot parse.
+
+    Linear in the length of the block: the scan walks each character once, and
+    the tag pattern is asked only where a `<` sits and only anchored at that
+    index, never re-scanned from every offset.
+    """
+    runs: list[str] = []
+    current: list[str] = []
+    index, in_comment = 0, False
+
+    def cut() -> None:
+        runs.append("".join(current))
+        current.clear()
+
+    while index < len(content):
+        if in_comment:
+            closer = next((end for end in COMMENT_CLOSERS if content.startswith(end, index)), None)
+            if closer is not None:
+                cut()
+                in_comment, index = False, index + len(closer)
+                continue
+        elif content.startswith("<!--", index):
+            cut()
+            opened = index + len("<!--")
+            abrupt = next(
+                (end for end in COMMENT_ABRUPT_CLOSERS if content.startswith(end, opened)), None
+            )
+            in_comment = abrupt is None
+            index = opened + (len(abrupt) if abrupt is not None else 0)
+            continue
+        elif (tag := HTML_TAG_RE.match(content, index)) is not None:
+            if tag["name"].lower() in LINE_STARTING_TAGS:
+                cut()
+            index = tag.end()
+            continue
+        elif unparsed_as_tag and content[index] == "<":
+            opener = AMBIGUOUS_TAG_RE.match(content, index)
+            closer = content.find(">", index)
+            if opener is not None and closer != -1:
+                if opener["name"].lower() in LINE_STARTING_TAGS:
+                    cut()
+                index = closer + 1
+                continue
+        current.append(content[index])
+        index += 1
+    cut()
+    return runs
+
+
 def rendered_status_lines(body: str) -> list[str]:
     """The text of every line a reader sees under `## Evidence Status`.
 
@@ -308,7 +496,8 @@ def rendered_status_lines(body: str) -> list[str]:
     heading outright -- so every one of them is a line whose status a reader
     acts on. Code under the heading, fenced or indented, is a code block and
     has no inline of its own, which is what `split_fenced_blocks` says on the
-    written side.
+    written side. A raw HTML block has no inline either, and the page prints it
+    anyway, so its own lines are read through `html_block_text_lines` (#1736).
 
     The section is the one the written view reads, found by what renders rather
     than by what was typed: it opens at a top-level h2 whose rendered text is
@@ -340,9 +529,19 @@ def rendered_status_lines(body: str) -> list[str]:
             if section_boundary_token(token):
                 break
             if token.type == "inline":
-                lines.extend(
-                    part.strip() for part in rendered_inline_text(token.children).split("\n")
-                )
+                for part in rendered_inline_text(token.children).split("\n"):
+                    lines.append(part.strip())
+                    # A `<...>` that opens like a tag and parses as none reaches
+                    # here as text, because this parser does not call it a tag
+                    # either -- `<x:y>[blocked] x</x:y>` is one run of prose to
+                    # it. Whether the page shows that bracket or strips it is
+                    # the renderer's answer and not one this model has, so the
+                    # line is read both ways and a status anchors if either
+                    # reading starts a line with it (#1736, round 4).
+                    if _holds_an_unparsed_tag(part):
+                        lines.extend(html_block_text_lines(part))
+            elif token.type == "html_block":
+                lines.extend(html_block_text_lines(token.content))
             index += 1
     return lines
 
@@ -686,6 +885,17 @@ def changed_release_files(files: list[str]) -> list[str]:
     return [path for path in files if path in RELEASE_PATHS]
 
 
+PENDING_FAILURE = "Requested evidence is blocked or still pending CI."
+# Long enough to recognise a line by, short enough to read in a comment bullet.
+MATCHED_LINE_LIMIT = 120
+
+
+def matched_line_note(line: str) -> str:
+    """What the gate matched, for an author who cannot see it in what they wrote."""
+    shown = line if len(line) <= MATCHED_LINE_LIMIT else f"{line[: MATCHED_LINE_LIMIT - 1]}\u2026"
+    return f'The page shows this line under the heading: "{shown}".'
+
+
 def is_docs_only(files: list[str]) -> bool:
     return bool(files) and all(
         path.endswith(DOC_EVIDENCE_EXEMPT_SUFFIXES)
@@ -740,10 +950,22 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
             f'Evidence Status opens a code fence that never closes: "{unclosed_fence}". '
             "Close it so the status lines after it are read."
         )
-    if PENDING_STATUS_RE.search(evidence_status) or any(
-        RENDERED_PENDING_RE.match(line) for line in rendered_status_lines(body)
-    ):
-        failures.append("Requested evidence is blocked or still pending CI.")
+    written_pending = PENDING_STATUS_RE.search(evidence_status)
+    rendered_pending = next(
+        (line for line in rendered_status_lines(body) if RENDERED_PENDING_RE.match(line)), None
+    )
+    if written_pending or rendered_pending is not None:
+        # The written view's match is a line the author typed and can find by
+        # eye. The rendered view's may not be: it reads a table cell, a decoded
+        # reference, and the text a raw HTML block puts on a line, so a refusal
+        # an author disagrees with is unreadable without the run that caused it
+        # (#1736). Named only when the rendered view is the only one that saw
+        # it, which is exactly when the author has nothing to look at.
+        failures.append(
+            PENDING_FAILURE
+            if written_pending
+            else f"{PENDING_FAILURE} {matched_line_note(rendered_pending)}"
+        )
 
     if re.search(r"(?i)\bdo not merge(?:\s+this\s+pr|\s+until|\b)", f"{title}\n{body}"):
         failures.append("PR text contains a merge-stop instruction.")
