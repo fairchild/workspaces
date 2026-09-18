@@ -17,6 +17,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -1969,6 +1970,332 @@ class ThisGateFindsASectionWherePageShowsOneTests(unittest.TestCase):
         )
 
 
+class WhatTheParsedStartCostsTheEvidenceRefusalTests(unittest.TestCase):
+    """Which refusals the parsed start drops, and why each one was an example's (#1742).
+
+    `Mergeability` and `Validation` are POSITIVE checks -- no section is a
+    failure -- so a stricter start can only add refusals there. `Evidence
+    Status` is NEGATIVE: a `[blocked]` or `[pending-ci]` line inside the
+    section is the failure, so a section this gate no longer reads is a
+    refusal it no longer makes. That direction is the one worth measuring
+    rather than asserting, and every case below is the same shape: the text
+    that supplied the refusal is inside a fenced example, which the page shows
+    as code and no reader acts on.
+
+    It is also the direction in which the two views now AGREE. The rendered
+    read finds its heading by parse already, so it never saw a fenced section
+    either; the written read making a refusal the rendered read could not was
+    the disagreement, not the safety. Measured on stored data: of the three
+    issues in this repo carrying a fenced `## Evidence Status`, the gate's old
+    start manufactured a refusal from an example's text on all three, and none
+    of the 1,000 stored pull request bodies changes verdict at all.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+    OPENING = (
+        "The release lane lost its provisioning step, so a signed build never reached the "
+        "appcast and the update check stalled. This restores it, with the lane's own log as "
+        "the proof. One file, +12 -3; no behavior a user sees.\n\n"
+    )
+    MERGEABILITY = (
+        "## Mergeability\n\n"
+        "- Surface: desktop\n"
+        "- User-facing behavior changed: none; refactor only\n"
+        "- Non-happy paths considered: nil userdata and zero address behavior covered\n"
+        "- Residual risk or follow-up: none\n\n"
+    )
+    EVIDENCE = "## Evidence\n\n- [x] Not a testable change\n"
+
+    def body(self, middle: str) -> str:
+        return f"{self.OPENING}{self.MERGEABILITY}{middle}{self.EVIDENCE}"
+
+    def test_a_fenced_example_no_longer_supplies_a_pending_refusal(self) -> None:
+        # The refusal this drops. The page shows a documentation sample; a
+        # reader sees no status line, and neither view reads one now.
+        body = self.body(
+            "The format an author fills in, for reference:\n\n"
+            "```markdown\n## Evidence Status\n\n- [blocked] the UI lane -- waiting\n```\n\n"
+        )
+        self.assertEqual(pr_readiness.extract_section(body, "Evidence Status"), "")
+        self.assertEqual(pr_readiness.rendered_status_lines(body), [])
+        self.assertEqual(pr_readiness.evaluate(pr(body), self.FILES).failures, [])
+
+    def test_the_real_section_below_that_example_is_the_one_read(self) -> None:
+        # And the refusal it gains: with a real section under the example, the
+        # old start read the example and missed the author's own blocked line,
+        # leaving the rendered view to report a line the author could not find.
+        # The written view reads it now, so the failure names nothing.
+        body = self.body(
+            "The format an author fills in, for reference:\n\n"
+            "```markdown\n## Evidence Status\n\n- [complete] an item -- proof\n```\n\n"
+            "## Evidence Status\n\n- [blocked] the UI lane -- waiting\n\n"
+        )
+        self.assertEqual(
+            pr_readiness.extract_section(body, "Evidence Status"),
+            "- [blocked] the UI lane -- waiting",
+        )
+        # Two failures, and the second is main's and not this change's:
+        # `evidence_status_heading_failure` is a line scan, so the example's
+        # heading line counts toward the heading count even though the page
+        # shows it as code. A refusal on text nobody sees is allowed and this
+        # change neither adds nor widens it; the split between a line-scanned
+        # count and a parsed section is named at that function.
+        self.assertEqual(
+            pr_readiness.evaluate(pr(body), self.FILES).failures,
+            [
+                "Ambiguous Evidence Status headings; use at most one exact "
+                "'## Evidence Status' heading and no variants.",
+                PENDING_TEXT,
+            ],
+        )
+
+    def test_the_false_unclosed_fence_refusal_is_gone(self) -> None:
+        # The other refusal the old start manufactured, and the one that cost
+        # an author a round: the slice began inside a closed fence, so the
+        # fence's own CLOSING line was the first fence marker in it and read as
+        # an opener with nothing after it. The gate told authors to close a
+        # fence they had closed -- twice on stored issues (#1728, #1590).
+        body = self.body(
+            "```markdown\n## Evidence Status\n\n- [complete] an item -- proof\n```\n\n"
+        )
+        self.assertIsNone(pr_readiness.split_fenced_blocks(body)[1])
+        self.assertIsNone(
+            pr_readiness.split_fenced_blocks(
+                pr_readiness.extract_section(body, "Evidence Status", strip=False)
+            )[1]
+        )
+        self.assertEqual(pr_readiness.evaluate(pr(body), self.FILES).failures, [])
+
+    # The two fail-opens this read does not close, each main's own, each now
+    # reachable through more heading spellings. Found by a confirmation pass
+    # over this branch, measured here so the widening is a number rather than
+    # a sentence, and filed rather than carried as prose.
+    FENCED_FIELDS = (
+        "```markdown\n"
+        "- Surface: desktop\n"
+        "- User-facing behavior changed: none; refactor only\n"
+        "- Non-happy paths considered: covered\n"
+        "- Release/ops preconditions: not applicable\n"
+        "- Residual risk or follow-up: none\n"
+        "```\n"
+    )
+    WIDENED_SPELLINGS = ("## **{h}**", "## _{h}_", "   ## {h}", "{h}\n---", "## {h}  ", "## {h}\t", "## {h} ##", "##\t{h}")
+
+    def test_a_positive_field_read_still_credits_fenced_text(self) -> None:
+        # `field_value` searches the section's raw text, so the page showing
+        # those lines as code changes nothing: the fields are answered. True
+        # under a literal heading on main -- the control below -- and this
+        # read adds eight spellings that reach it.
+        literal = f"{self.OPENING}## Mergeability\n\n{self.FENCED_FIELDS}\n{self.EVIDENCE}"
+        self.assertEqual(pr_readiness.evaluate(pr(literal), self.FILES).failures, [])
+        reached = [
+            shape
+            for shape in self.WIDENED_SPELLINGS
+            if not pr_readiness.evaluate(
+                pr(f"{self.OPENING}{shape.format(h='Mergeability')}\n\n{self.FENCED_FIELDS}\n{self.EVIDENCE}"),
+                self.FILES,
+            ).failures
+        ]
+        self.assertEqual(len(reached), len(self.WIDENED_SPELLINGS), reached)
+
+    def test_a_section_below_an_unclosed_details_is_still_a_heading_here(self) -> None:
+        # #1742's third item, blocked on #1745: the page folds this section
+        # into the disclosure and every reader in this repo calls the heading
+        # top-level, because telling which elements are open is a renderer.
+        # Main answers the same way under a literal heading -- the control --
+        # and this read adds the same eight spellings.
+        fields = (
+            "- Surface: desktop\n- User-facing behavior changed: none; refactor only\n"
+            "- Non-happy paths considered: covered\n"
+            "- Release/ops preconditions: not applicable\n- Residual risk or follow-up: none\n"
+        )
+        folded = "<details>\n<summary>the log</summary>\n\n"
+        literal = f"{self.OPENING}{folded}## Mergeability\n\n{fields}\n{self.EVIDENCE}"
+        self.assertEqual(pr_readiness.evaluate(pr(literal), self.FILES).failures, [])
+        reached = [
+            shape
+            for shape in self.WIDENED_SPELLINGS
+            if not pr_readiness.evaluate(
+                pr(f"{self.OPENING}{folded}{shape.format(h='Mergeability')}\n\n{fields}\n{self.EVIDENCE}"),
+                self.FILES,
+            ).failures
+        ]
+        self.assertEqual(len(reached), len(self.WIDENED_SPELLINGS), reached)
+
+    def test_a_real_unclosed_fence_in_the_section_still_refuses(self) -> None:
+        # The control: the refusal exists for a reason and still fires where
+        # the author's own section opens a fence and leaves it open.
+        body = self.body(
+            "## Evidence Status\n\n- [complete] an item -- proof\n\n```\nthe log\n\n"
+        )
+        failures = pr_readiness.evaluate(pr(body), self.FILES).failures
+        self.assertTrue(
+            any("opens a code fence that never closes" in failure for failure in failures),
+            failures,
+        )
+
+
+class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
+    """The narrowing says what it declined, instead of going quiet (#1742).
+
+    `Mergeability` and `Validation` are positive checks, so a start that reads
+    fewer sections only refuses more there. `Evidence Status` is negative -- a
+    `[blocked]` line in the section is the failure -- so a heading this gate
+    stops reading is a refusal it stops making, and three shapes reached that
+    silence, each found by a confirmation pass over this branch rather than by
+    a test written for it:
+
+    - `## EVİDENCE STATUS`. The old literal start matched it, because `re`'s
+      IGNORECASE folds the whole Unicode table and maps a dotted capital I
+      onto `i`; no parse-backed identity in this repo ever did, so the
+      contributor skill's reader already saw zero headings there.
+    - `## Evidence Statuſ`. The fold declines it now, which is the point of
+      the change, and the section under it then belonged to nobody.
+    - `## **Evidence Status**` above the real heading. The line-scanned
+      ambiguity check sees one exact heading and the page shows two; this gate
+      reads the first, so an unclosed fence or a `[blocked]` line under the
+      second went unread where the old start had read that second one.
+
+    None of the three is a body the factory writes, and the skill's owner read
+    refuses all three for its heading count -- so the factory lane already
+    failed closed and this is the readiness gate saying the same thing. What
+    it adds is the line number, because an author cannot see a long s.
+
+    The refusal is deliberately NOT extended to a heading carrying a tag or a
+    code span. A heading with inline HTML is not this section and the repair
+    writes a plain one below it, leaving both on the page (#1730); counting
+    the rejected one would refuse the body that repair produces, which is the
+    failure this lane exists to prevent, and there is a fixture below for it.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+    OPENING = WhatTheParsedStartCostsTheEvidenceRefusalTests.OPENING
+    MERGEABILITY = WhatTheParsedStartCostsTheEvidenceRefusalTests.MERGEABILITY
+    EVIDENCE = WhatTheParsedStartCostsTheEvidenceRefusalTests.EVIDENCE
+    BLOCKED = "- [blocked] the UI lane -- waiting"
+
+    def body(self, middle: str) -> str:
+        return f"{self.OPENING}{self.MERGEABILITY}{middle}{self.EVIDENCE}"
+
+    def failures(self, body: str) -> list[str]:
+        return list(pr_readiness.evaluate(pr(body), self.FILES).failures)
+
+    # Derived, not listed: every single-character substitution in the heading
+    # that the old literal start's fold took and this identity declines. There
+    # are four, over three characters -- a dotted capital I, a dotless i, and
+    # the long s at either `s` -- and a listed set would have been wrong about
+    # which: `ß` reads as this heading to neither fold, so a fixture for it
+    # asserts nothing and scored as a missing refusal when it was written.
+    @staticmethod
+    def declined_spellings() -> list[str]:
+        heading = "Evidence Status"
+        loose = re.compile(f"(?i){re.escape(heading)}")
+        return [
+            candidate
+            for point in range(0x110000)
+            for position in range(len(heading))
+            for candidate in [heading[:position] + chr(point) + heading[position + 1 :]]
+            if heading[position] != " "
+            and candidate != heading
+            and loose.fullmatch(candidate)
+            and pr_readiness.heading_identity(candidate) != pr_readiness.heading_identity(heading)
+        ]
+
+    DECLINED_SPELLING_COUNT = 4
+
+    def test_a_spelling_no_reader_takes_is_refused_and_its_line_named(self) -> None:
+        spellings = self.declined_spellings()
+        self.assertEqual(len(spellings), self.DECLINED_SPELLING_COUNT, spellings)
+        self.assertEqual(
+            sorted({hex(ord(char)) for word in spellings for char in word if not char.isascii()}),
+            ["0x130", "0x131", "0x17f"],
+        )
+        for heading in spellings:
+            with self.subTest(spelling=heading):
+                body = self.body(f"## {heading}\n\n{self.BLOCKED}\n\n")
+                self.assertEqual(pr_readiness.extract_section(body, "Evidence Status"), "")
+                failures = self.failures(body)
+                self.assertEqual(len(failures), 1, failures)
+                self.assertIn(f"is spelled '{heading}'", failures[0])
+                line = body[: body.index("## " + heading)].count("\n") + 1
+                self.assertIn(f"line {line}", failures[0])
+
+    def test_two_headings_a_reader_sees_are_refused_together(self) -> None:
+        # The shape the line-scanned ambiguity check cannot see.
+        body = self.body(
+            "## **Evidence Status**\n\n- [complete] first -- done\n\n"
+            f"## Evidence Status\n\n{self.BLOCKED}\n\n"
+        )
+        self.assertIsNone(pr_readiness.evidence_status_heading_failure(body))
+        failures = self.failures(body)
+        self.assertTrue(
+            any("A reader sees 2 headings that read as" in failure for failure in failures),
+            failures,
+        )
+
+    def test_the_line_scans_own_message_wins_where_both_would_speak(self) -> None:
+        # One body, one failure about its headings: the line scan's message
+        # names the exact spelling to write, which is the repair, so it is the
+        # one asked first.
+        body = self.body(
+            "##  Evidence Status\n\n- [complete] first -- done\n\n"
+            f"## Evidence Status\n\n{self.BLOCKED}\n\n"
+        )
+        failures = self.failures(body)
+        heading_failures = [f for f in failures if "read as" in f or "Ambiguous" in f]
+        self.assertEqual(
+            heading_failures,
+            [
+                "Ambiguous Evidence Status headings; use at most one exact "
+                "'## Evidence Status' heading and no variants."
+            ],
+        )
+
+    def test_the_repaired_body_the_factory_writes_is_not_refused(self) -> None:
+        # The control that matters most: a heading carrying a tag, with the
+        # plain heading the repair wrote below it. The page shows two headings
+        # and only one of them is ever this section, so the candidate list
+        # holds one and nothing here refuses (#1730).
+        for name, tagged in (
+            ("a span", "## <span>Evidence Status</span>"),
+            ("struck through", "## Evidence <del>Status</del>"),
+            ("a code span", "## `Evidence Status`"),
+            ("a trailing comment", "## Evidence Status<!-- a note -->"),
+        ):
+            with self.subTest(heading=name):
+                body = self.body(
+                    f"{tagged}\n\n- [complete] the author's own line -- proof\n\n"
+                    "## Evidence Status\n\n- [complete] the item -- checked\n\n"
+                )
+                self.assertEqual(pr_readiness.status_heading_candidates(body).__len__(), 1)
+                self.assertEqual(self.failures(body), [])
+
+    def test_a_fenced_heading_is_not_a_candidate(self) -> None:
+        # A documentation sample is code, so it is not a heading a reader
+        # could take for this section and adds no refusal here either.
+        body = self.body(
+            "```markdown\n## Evidence Status\n\n- [blocked] an example -- waiting\n```\n\n"
+            "## Evidence Status\n\n- [complete] the item -- checked\n\n"
+        )
+        self.assertEqual(pr_readiness.status_heading_candidates(body), [(16, "Evidence Status")])
+        self.assertIsNone(pr_readiness.unread_status_heading_failure(body))
+        # The body still draws main's own refusal, from main's own reader:
+        # `evidence_status_heading_failure` is a line scan and counts the
+        # example's heading line, so it reports two exact headings. Inherited,
+        # not added here, and named where that function is.
+        self.assertEqual(
+            self.failures(body),
+            [
+                "Ambiguous Evidence Status headings; use at most one exact "
+                "'## Evidence Status' heading and no variants."
+            ],
+        )
+
+    def test_the_plain_body_draws_nothing(self) -> None:
+        body = self.body("## Evidence Status\n\n- [complete] the item -- checked\n\n")
+        self.assertIsNone(pr_readiness.unread_status_heading_failure(body))
+        self.assertEqual(self.failures(body), [])
+
 class HeadingIdentityFoldsCaseAndNotLettersTests(unittest.TestCase):
     """Which two heading texts are one heading, and which are two (#1742).
 
@@ -2038,6 +2365,46 @@ class HeadingIdentityFoldsCaseAndNotLettersTests(unittest.TestCase):
                     self.assertEqual(
                         pr_readiness.heading_identity(text), owner.heading_identity(text)
                     )
+
+    def test_only_one_codepoint_could_alias_an_ascii_heading(self) -> None:
+        # Why a fold that declines these is enough, measured over the whole
+        # table rather than over the characters someone thought of. Every
+        # section this repo addresses is spelled in ASCII, so what matters is
+        # which codepoints `casefold()` maps ONTO an ASCII letter and `lower()`
+        # does not -- and there is exactly one of them.
+        differ = [
+            char
+            for point in range(0x110000)
+            for char in [chr(point)]
+            if char.casefold() != char.lower()
+        ]
+        onto_ascii = [
+            char for char in differ if len(folded := char.casefold()) == 1 and folded.isascii()
+        ]
+        self.assertEqual(onto_ascii, ["\u017f"])
+        # The rest of the difference, named so the number is not a bare fact:
+        # the multi-character foldings (`\u00df` -> `ss`, `\ufb01` -> `fi`) and
+        # the non-ASCII singletons (`\u03c2` -> `\u03c3`, `\u00b5` -> `\u03bc`).
+        self.assertEqual(len(differ), 297)
+        self.assertEqual(len([char for char in differ if len(char.casefold()) > 1]), 103)
+
+    def test_a_setext_heading_over_two_lines_is_still_this_heading(self) -> None:
+        # A line break in a heading is a space in both readers, so a heading
+        # underlined over two lines reads as the one heading the page shows.
+        owner = self.owner()
+        body = "Why this exists.\n\nEvidence\nStatus\n---\n- [complete] the item -- checked\n"
+        self.assertEqual(
+            pr_readiness.extract_section(body, "Evidence Status"),
+            "- [complete] the item -- checked",
+        )
+        self.assertEqual(
+            owner.markdown_section(body, "Evidence Status"), "- [complete] the item -- checked"
+        )
+        # And a single word broken across those lines is not, because the page
+        # shows a space in it too.
+        split = "Why this exists.\n\nEviden\nce Status\n---\n- [complete] the item -- checked\n"
+        self.assertEqual(pr_readiness.extract_section(split, "Evidence Status"), "")
+        self.assertEqual(owner.markdown_section(split, "Evidence Status"), "")
 
     def test_casefold_is_the_rule_that_was_replaced(self) -> None:
         # The measurement that says the change is not a no-op: every declining
@@ -2841,7 +3208,9 @@ class TheSeederAndThisGateAskOneQuestionTests(unittest.TestCase):
     the same identity rule, so the second question had the same answer as the
     first: the copy is gone, the seeder asks one question, and what this class
     measures is that the two readers find the same start on every shape either
-    rule set can tell apart.
+    rule set can tell apart for a plain-word heading -- which is every heading
+    this repo addresses. The one divergence outside that, a heading argument
+    whose own text holds markup, has its own fixture below.
     """
 
     SCRIPTS = TheRuntimeSeedsASectionAndThisGateThenReadsItTests.SCRIPTS
@@ -3030,6 +3399,21 @@ class TheSeederAndThisGateAskOneQuestionTests(unittest.TestCase):
                         )
                         agreed += 1
         self.assertEqual(agreed, self.START_SHAPE_COUNT * 2)
+
+    def test_a_heading_argument_holding_markup_is_where_the_two_part_company(self) -> None:
+        # The one divergence the grid above cannot carry, because every
+        # heading this repo addresses is a plain word. Asked for a heading
+        # whose own text holds a code span, the skill matches -- its
+        # `inline_text` re-emits the backticks -- and this gate does not,
+        # because any construct but text and emphasis makes
+        # `heading_identity_text` return None. No caller asks that, and the
+        # narrowing fails closed: the section reads as missing. Written as a
+        # fixture rather than as a claim of full equivalence (codex,
+        # gpt-5.6-sol, xhigh).
+        reader = self.reader()
+        body = "Why this exists.\n\n## `Mergeability`\n\n- Surface: desktop\n"
+        self.assertEqual(reader.markdown_section(body, "`Mergeability`"), "- Surface: desktop")
+        self.assertEqual(pr_readiness.extract_section(body, "`Mergeability`"), "")
 
     def test_a_heading_on_the_body_s_last_line_answers_the_same_in_both(self) -> None:
         """The shape that was argued to be unreachable, and is not (#1730, round 2).
