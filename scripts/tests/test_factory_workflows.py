@@ -1769,12 +1769,18 @@ class TheMacosLaneSaysWhatItCouldNotCarryTests(unittest.TestCase):
     def test_the_reconcile_step_collects_what_the_re_render_could_not_carry(self) -> None:
         step = self.step(self.RECONCILE_MARKER)
         self.assertIn('kwargs["announcements"] = uncarried', step)
-        self.assertIn("module.emit_uncarried_notes(uncarried)", step)
-        # After the write and before the body is handed to `gh pr edit`: the
-        # sink is only filled by the call that rewrites the section.
+        self.assertIn('module.emit_uncarried_notes(uncarried, "uncarried-notes.json")', step)
+        # After the call that rewrites the section, which is the only thing
+        # that fills the sink.
         self.assertLess(
             step.index("module.reconcile_pending_ci_evidence"),
-            step.index("module.emit_uncarried_notes(uncarried)"),
+            step.index("module.emit_uncarried_notes("),
+        )
+        # And the file is truncated first, so a previous run's losses in this
+        # workspace are not read as this run's.
+        self.assertIn(": > uncarried-notes.json", step)
+        self.assertLess(
+            step.index(": > uncarried-notes.json"), step.index("module.emit_uncarried_notes(")
         )
 
     def test_the_announcement_is_posted_by_a_step_of_its_own(self) -> None:
@@ -1782,7 +1788,36 @@ class TheMacosLaneSaysWhatItCouldNotCarryTests(unittest.TestCase):
         self.assertIn("steps.reconcile.outputs.uncarried_notes", step)
         self.assertIn("module.post_uncarried_notes(", step)
         # Nothing to say, nothing posted: the gate is on the output itself.
-        self.assertIn("if: always() && steps.reconcile.outputs.uncarried_notes != ''", step)
+        self.assertIn("steps.reconcile.outputs.uncarried_notes != ''", step)
+
+    def test_a_failed_body_write_says_nothing_to_the_author(self) -> None:
+        # The note names a commit and says text is missing from that body, so
+        # it is only true of a body GitHub received. Under `always()` a failed
+        # `gh pr edit` still ran the poster -- the step had failed, the output
+        # was already set, and the author was told about a loss on a body that
+        # was never written. The class #1730 round 2 closed for the factory
+        # turn, on the lane.
+        condition = self.step(self.ANNOUNCE_MARKER).split("\n", 1)[0]
+        self.assertIn("if:", condition)
+        self.assertNotIn("always()", condition)
+        self.assertIn("steps.reconcile.outcome == 'success'", condition)
+
+    def test_the_output_is_written_after_the_body_lands(self) -> None:
+        # The other half: a condition on the step's outcome is not enough on
+        # its own, because a later change could set the output before the edit
+        # and reach a poster gated on something else. `set -e` is what makes
+        # this hold -- the write below the edit is not reached when it fails.
+        step = self.step(self.RECONCILE_MARKER)
+        self.assertIn('gh pr edit "$PR_NUMBER" --body-file pr-body.md', step)
+        self.assertIn("uncarried_notes=", step)
+        self.assertLess(
+            step.index('gh pr edit "$PR_NUMBER" --body-file pr-body.md'),
+            step.index("uncarried_notes="),
+        )
+        # And the python writes a file rather than the output itself, so the
+        # ordering is the shell's to enforce.
+        self.assertNotIn("$GITHUB_OUTPUT", step.split('gh pr edit "$PR_NUMBER"', 1)[0])
+        self.assertIn("set -euo pipefail", step)
 
     def test_the_note_names_the_head_the_run_reconciled(self) -> None:
         # Once per loss per HEAD, which the poster can only honour if it is

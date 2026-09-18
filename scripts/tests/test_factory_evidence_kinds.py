@@ -7228,6 +7228,31 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         kept, _, _ = evidence.write_evidence_status_section(body, [huge])
         self.assertIn("## Evidence Notes", kept)
 
+    def test_a_body_at_the_limit_announces_the_notes_it_dropped(self) -> None:
+        # Said on the run's output AND handed back, like every other loss: the
+        # author whose text was dropped for length reads the pull request, and
+        # the size is the one reason for a drop they can act on (#1740).
+        evidence = sys.modules["evidence"]
+        status = f"- [complete] {self.ITEM} -- 214 tests passed"
+        shell = f"## Evidence Status\n\n{status}\n\n\n\n## Validation\n\n- ran it\n"
+        note = "n" * (evidence.PR_BODY_LIMIT - len(shell))
+        body = f"## Evidence Status\n\n{status}\n\n{note}\n\n## Validation\n\n- ran it\n"
+        with contextlib.redirect_stderr(io.StringIO()):
+            written = evidence.write_evidence_status_section(body, [status])
+        self.assertIsNone(written.refusal)
+        self.assertNotIn("Evidence Notes", written.body)
+        self.assertEqual(len(written.announcements), 1, written.announcements)
+        announcement = written.announcements[0]
+        self.assertIn("not written", announcement)
+        self.assertIn(str(evidence.PR_BODY_LIMIT), announcement)
+        self.assertIn("1 block(s)", announcement)
+        # The control: one block shorter carries the note and announces nothing.
+        shorter = body.replace(note, note[:-32], 1)
+        with contextlib.redirect_stderr(io.StringIO()):
+            carried = evidence.write_evidence_status_section(shorter, [status])
+        self.assertIn("## Evidence Notes", carried.body)
+        self.assertEqual(carried.announcements, [])
+
     def test_a_block_indented_under_a_status_bullet_moves_whole(self) -> None:
         # The bullet's own line is the machine's; a log pasted beneath it
         # belongs to the bullet only because the parser folds it there. Left to

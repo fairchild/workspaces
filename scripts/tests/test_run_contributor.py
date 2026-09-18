@@ -2732,6 +2732,7 @@ class RevisionTurnTests(unittest.TestCase):
         comment_posts: bool = True,
         existing_comments: list[str] | None = None,
         comment_raises: bool = False,
+        require_existing_pr: bool = True,
     ):
         execution = sys.modules["execution"]
         data = data or self._data()
@@ -2746,6 +2747,11 @@ class RevisionTurnTests(unittest.TestCase):
             commands.append(command)
             if command[:2] == ["git", "rev-parse"]:
                 return mock.Mock(stdout=f"{self.LIVE_HEAD}\n")
+            if command[:3] == ["gh", "pr", "create"]:
+                # The turn parses the number out of what `gh` prints, so the
+                # path that OPENS a pull request only runs to the end with a
+                # URL here (#1740, round 2).
+                return mock.Mock(stdout="https://github.com/fairchild/workspaces/pull/77\n")
             return mock.Mock(stdout="")
 
         def fake_run_optional(command, *, default, **_kwargs):
@@ -2786,10 +2792,16 @@ class RevisionTurnTests(unittest.TestCase):
                 mock.patch.object(execution, "_pr_body_and_head", return_value=(live_body, self.LIVE_HEAD)),
                 mock.patch.object(execution, "_factory_expected_pr_head_is_current", return_value=head_current),
                 mock.patch.object(execution, "ensure_label_exists"),
+                # Only the create path reaches these two, and it is reached
+                # from here by a state whose `own_pr` is None.
+                mock.patch.object(execution, "default_branch", return_value="main"),
+                mock.patch.object(execution, "ensure_issue_claimed"),
                 mock.patch.object(execution, "run_checked", side_effect=fake_run_checked),
                 mock.patch.object(execution, "run_optional", side_effect=fake_run_optional),
             ):
-                exit_code = execution.route_execution_action(data, env, require_existing_pr=True)
+                exit_code = execution.route_execution_action(
+                    data, env, require_existing_pr=require_existing_pr
+                )
             outputs = dict(
                 line.split("=", 1)
                 for line in Path(output_path).read_text(encoding="utf-8").splitlines()
@@ -3278,6 +3290,117 @@ class RevisionTurnTests(unittest.TestCase):
         self.assertEqual(comments, [])
         self.assertEqual(outputs, {})
 
+    # The author's own section, with the evidence the turn needs, and a second
+    # source line under the status bullet. The rewrite replaces that bullet
+    # from the entries in hand and the continuation goes with it -- the loss
+    # every path below has to tell them about.
+    CONTINUED_STATUS_BODY = (
+        "## Summary\n- Rewrote the sheet's status mapping\n\n"
+        "## Evidence Status\n\n"
+        "- [complete] `swift test` passes -- Test run with 1992 tests passed\n"
+        "  and the rest of the sentence I wrote\n\n"
+        "## Validation\n- `swift test --filter SheetTests`\n"
+    )
+    UNCARRIED_HEADLINE = "was not carried"
+
+    def _route_with_a_continued_status(self, *, own_pr: bool = True, **kwargs):
+        """One turn over a body whose status line the author continued."""
+        state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        if not own_pr:
+            # The turn that OPENS the pull request: no PR to advance, and the
+            # lane that runs it does not require one.
+            state["own_pr"] = None
+            kwargs["require_existing_pr"] = False
+        with mock.patch.object(self, "_state", return_value=state):
+            return self._route(
+                dirty=True,
+                live_body="stale body",
+                data=self._data(self.CONTINUED_STATUS_BODY),
+                revision=False,
+                **kwargs,
+            )
+
+    def uncarried(self, comments: list[str]) -> list[str]:
+        return [comment for comment in comments if self.UNCARRIED_HEADLINE in comment]
+
+    def test_the_turn_that_edits_a_pull_request_says_what_it_could_not_carry(self) -> None:
+        # The acceptance criterion of #1740, asserted on the turn rather than
+        # on the composer: with the call at the edit path removed, everything
+        # else stays green and this fails.
+        exit_code, commands, comments, _ = self._route_with_a_continued_status()
+        self.assertEqual(exit_code, 0)
+        notes = self.uncarried(comments)
+        self.assertEqual(len(notes), 1, comments)
+        self.assertIn("continuing the status line", notes[0])
+        self.assertIn("at line 2", notes[0])
+        self.assertIn(self.LIVE_HEAD, notes[0])
+        self.assertIn(self.PERSONA, notes[0])
+        # After the body write, because the sentence is about a body GitHub
+        # holds. `commands` carries both, in order.
+        edited = [
+            index for index, command in enumerate(commands) if command[:3] == ["gh", "pr", "edit"]
+        ]
+        posted = [
+            index for index, command in enumerate(commands) if command[:3] == ["gh", "pr", "comment"]
+        ]
+        self.assertTrue(edited and posted, commands)
+        self.assertLess(edited[0], posted[-1])
+
+    def test_the_turn_that_opens_a_pull_request_says_it_too(self) -> None:
+        # The create path is a second call site, and a fix applied to one of
+        # them is the shape this pins against.
+        exit_code, commands, comments, _ = self._route_with_a_continued_status(own_pr=False)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(self.uncarried(comments)), 1, comments)
+        created = [
+            index for index, command in enumerate(commands) if command[:3] == ["gh", "pr", "create"]
+        ]
+        posted = [
+            index for index, command in enumerate(commands) if command[:3] == ["gh", "pr", "comment"]
+        ]
+        self.assertTrue(created and posted, commands)
+        self.assertLess(created[0], posted[-1])
+
+    def test_a_revision_turn_with_no_diff_says_it_as_well(self) -> None:
+        # This path publishes a body without committing one, so it owes the
+        # same report as the paths that push.
+        state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        with mock.patch.object(self, "_state", return_value=state):
+            exit_code, _, comments, outputs = self._route(
+                dirty=False,
+                live_body="stale body",
+                data=self._data(self.CONTINUED_STATUS_BODY),
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(outputs.get("revision_outcome"), "body-only")
+        self.assertEqual(len(self.uncarried(comments)), 1, comments)
+
+    def test_a_turn_that_carried_everything_says_nothing(self) -> None:
+        # The anti-vacuity control: the same turn on a body with nothing under
+        # the status line posts no such comment at all.
+        _, _, comments, _ = self._route_with_tagged_heading()
+        self.assertEqual(self.uncarried(comments), [])
+
+    def test_a_turn_that_published_nothing_says_nothing(self) -> None:
+        # The class #1730 round 2 closed for the rejected-heading note: a
+        # sentence about text missing from this PR's body is only true of a
+        # body GitHub received. Here the write stands the body down, the turn
+        # ends without an edit, and the only comment is the stand-down -- the
+        # stand-down reason IS in the announcements, and it stays unsaid on
+        # this channel because nothing was published.
+        state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        with mock.patch.object(self, "_state", return_value=state):
+            exit_code, commands, comments, _ = self._route(
+                dirty=True,
+                live_body="stale body",
+                data=self._data(self.UNWRITABLE_BODY),
+                revision=False,
+            )
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(any(command[:3] == ["gh", "pr", "edit"] for command in commands), commands)
+        self.assertEqual(self.uncarried(comments), [])
+        self.assertEqual(len([c for c in comments if "left as written" in c]), 1, comments)
+
 
 class UncarriedNotesReachTheWorkflowTests(unittest.TestCase):
     """The macOS lane's losses cross to the step that can say them (#1740).
@@ -3295,28 +3418,37 @@ class UncarriedNotesReachTheWorkflowTests(unittest.TestCase):
     )
 
     def emitted(self, notes: list[str]) -> str:
+        """The file the step hands to the shell, or "" when none was written."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            output_file = Path(tmpdir) / "github-output"
-            output_file.touch()
-            with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output_file)}, clear=False):
-                run_contributor.emit_uncarried_notes(notes)
-            return output_file.read_text(encoding="utf-8")
+            path = Path(tmpdir) / "uncarried-notes.json"
+            run_contributor.emit_uncarried_notes(notes, str(path))
+            return path.read_text(encoding="utf-8") if path.exists() else ""
 
     def test_every_announcement_reaches_the_next_step(self) -> None:
         written = self.emitted([self.NOTE])
-        self.assertTrue(
-            written.startswith(f"{run_contributor.UNCARRIED_NOTES_OUTPUT}="),
-            f"unexpected $GITHUB_OUTPUT content: {written!r}",
-        )
-        self.assertEqual(json.loads(written.split("=", 1)[1]), [self.NOTE])
-        # One line, or a note carrying a newline would spill into a key of its
-        # own -- and this text is written around the author's own words.
+        self.assertEqual(json.loads(written), [self.NOTE])
+        # One line, because the shell appends it to $GITHUB_OUTPUT as a value:
+        # a note carrying a newline would spill into a key of its own, and
+        # this text is written around the author's own words.
         self.assertEqual(written.count("\n"), 1)
 
-    def test_a_run_that_dropped_nothing_writes_no_output(self) -> None:
-        # The posting step is gated on this output being non-empty, so an
-        # empty emission would put an empty comment on every green run.
+    def test_a_run_that_dropped_nothing_writes_no_file(self) -> None:
+        # The step publishes the output only when this file is non-empty, so
+        # an empty emission would put an empty comment on every green run.
         self.assertEqual(self.emitted([]), "")
+
+    def test_the_file_is_written_rather_than_the_workflow_output(self) -> None:
+        # The ordering is the shell's to enforce: the output is published on
+        # the line after a successful `gh pr edit`, so a failed body write
+        # leaves the poster with nothing to say (#1740, round 2). Writing
+        # $GITHUB_OUTPUT from here would put it back before the edit.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / "github-output"
+            output_file.touch()
+            path = Path(tmpdir) / "uncarried-notes.json"
+            with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output_file)}, clear=False):
+                run_contributor.emit_uncarried_notes([self.NOTE], str(path))
+            self.assertEqual(output_file.read_text(encoding="utf-8"), "")
 
 
 if __name__ == "__main__":

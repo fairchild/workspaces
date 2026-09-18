@@ -462,5 +462,72 @@ class ReviewActionWiringTests(unittest.TestCase):
         self.assertEqual(calls, ["review-post", "diff-complete", "mergeable-label"])
 
 
+class TheApprovalCompletionSaysWhatItCouldNotCarryTests(unittest.TestCase):
+    """The review-time completion rewrites the section too, so it owes the note (#1740).
+
+    `_complete_diff_evidence_after_approval` writes completions through
+    `update_evidence_entries`, which replaces the status list from the entries
+    in hand -- and a line the author continued under one of those bullets goes
+    with it. Said through `log()` alone that reached the Actions step log; the
+    author reads the pull request.
+    """
+
+    CONTINUATION = "  and the second line I wrote under it"
+
+    def body(self) -> str:
+        block = "<!-- evidence-status:v1\n" + json.dumps(
+            {
+                "entries": [
+                    {
+                        "index": 1,
+                        "item": DIFF_ITEM,
+                        "status": "pending-ci",
+                        "detail": "awaiting the review",
+                    }
+                ]
+            }
+        ) + "\n-->\n"
+        return (
+            "*Persona*\n\n## Summary\n- change\n\n"
+            f"{block}\n"
+            f"## Evidence Status\n- [pending-ci] {DIFF_ITEM} -- awaiting the review\n"
+            f"{self.CONTINUATION}\n"
+        )
+
+    def completed(self, *, prior: list[str] | None = None):
+        """One approval completion, reporting the body written and the comments posted."""
+        edited: list[str] = []
+        posted: list[str] = []
+        with (
+            mock.patch.object(execution, "_pr_body_and_head", return_value=(self.body(), HEAD)),
+            mock.patch.object(
+                execution, "_latest_approving_review", return_value={"html_url": "https://github.test/r/1"}
+            ),
+            mock.patch.object(execution, "_factory_expected_pr_head_is_current", return_value=True),
+            mock.patch.object(execution, "_edit_pr_body", side_effect=lambda *a, **k: edited.append(a[1])),
+            mock.patch.object(execution, "_pr_comment_bodies", return_value=prior or []),
+            mock.patch.object(
+                execution, "_post_pr_comment", side_effect=lambda *a, **k: posted.append(a[1]) or True
+            ),
+        ):
+            execution._complete_diff_evidence_after_approval(42, {})
+        return edited, posted
+
+    def test_the_author_is_told_which_line_the_completion_could_not_carry(self) -> None:
+        edited, posted = self.completed()
+        self.assertEqual(len(edited), 1, edited)
+        self.assertNotIn(self.CONTINUATION.strip(), edited[0])
+        self.assertEqual(len(posted), 1, posted)
+        self.assertIn("continuing the status line", posted[0])
+        self.assertIn(HEAD, posted[0])
+        # No byline: this completion is the lane's, not a character's.
+        self.assertNotIn("*Persona*", posted[0])
+
+    def test_a_note_already_on_this_head_is_not_said_twice(self) -> None:
+        _, first = self.completed()
+        _, again = self.completed(prior=first)
+        self.assertEqual(again, [])
+
+
 if __name__ == "__main__":
     unittest.main()

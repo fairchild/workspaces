@@ -321,6 +321,9 @@ jobs:
              | .number]
             | if length == 1 then .[0] else empty end')
           : > issue-body.md
+          # Truncated for the same reason as the issue body: a file left by a
+          # previous run in this workspace would be read as this run's losses.
+          : > uncarried-notes.json
           if [ -n "$ISSUE_NUMBER" ]; then
             gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' > issue-body.md
           else
@@ -386,19 +389,25 @@ jobs:
           kwargs["text_urls"] = uploaded_text_urls
 
           # What the re-render could not carry out of the author's own section.
-          # Emitted rather than posted here: the body is written by the step
-          # below, and a note about a body that is not published yet would be
-          # a claim this run cannot make.
+          # Written to a file rather than posted or published here: the body
+          # is written by the shell below, and a note saying text is missing
+          # from this PR's body is only true of a body GitHub received.
           uncarried = []
           kwargs["announcements"] = uncarried
           reconciled = module.reconcile_pending_ci_evidence(body_path.read_text(), **kwargs)
           body_path.write_text(reconciled)
-          module.emit_uncarried_notes(uncarried)
+          module.emit_uncarried_notes(uncarried, "uncarried-notes.json")
           PY
           gh pr edit "$PR_NUMBER" --body-file pr-body.md
+          # Only now, and only under `set -e`: a failed edit above ends the
+          # step with the output unset, so the poster has nothing to say about
+          # a body that was never written.
+          if [ -s uncarried-notes.json ]; then
+            echo "uncarried_notes=$(cat uncarried-notes.json)" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Say what the re-render could not carry
-        if: always() && steps.reconcile.outputs.uncarried_notes != ''
+        if: steps.reconcile.outcome == 'success' && steps.reconcile.outputs.uncarried_notes != ''
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
