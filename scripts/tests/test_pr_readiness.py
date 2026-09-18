@@ -2454,6 +2454,114 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
         self.assertIsNotNone(failure)
         self.assertIn("none of them is", failure)
 
+# Every shape this one predicate has been probed on, with the verdict it owes
+# and the words the refusal owes an author. Four confirmation passes in a row
+# each opened a new hole in `_a_status_is_kept_out` and its refusal -- a
+# swallowed heading with nothing pending under it, a heading-shaped line
+# inside the block, a status wrapped in markup inside it -- and each was found
+# by someone reading the code rather than by a test. The table is so the fifth
+# pass checks a list it can read instead of hunting for the eleventh shape.
+#
+# A row is (name, block, refused, fragment): the text placed between the
+# Mergeability and Evidence sections of an otherwise passing body, whether
+# `evaluate` refuses it, and a phrase the failure must carry. Adding a shape
+# here is adding a test.
+HEADING_LINE_PREFIX = "The heading at line"
+INSIDE_A_BLOCK = "inside a raw HTML block"
+BLOCKED_LINE = "- [blocked] the UI lane -- waiting"
+
+SWALLOWED_HEADING_TABLE = (
+    # Round 2: the heading is swallowed by an opener a line above it and the
+    # status sits below the block in ordinary markdown.
+    ("a details closer, status below", f"</details>\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
+    ("an img tag, status below", f'<img src="https://example.invalid/a.png">\n## Evidence Status\n\n{BLOCKED_LINE}\n\n', True, INSIDE_A_BLOCK),
+    ("a div around heading and status", f"<div>\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
+    ("a comment a browser ends at --!>", f"<!-- note --!>\n\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
+    # Round 3: the block covers the heading and hides nothing. The section is
+    # optional, so its absence is not a body to refuse.
+    ("a closed comment, heading alone", "<!--\n## Evidence Status\n-->\n\n", False, None),
+    ("a closed comment, a complete item", "<!--\n## Evidence Status\n- [complete] ran it -- 1992 tests passed\n-->\n\n", False, None),
+    ("a pre block, a complete item", "<pre>\n## Evidence Status\n- [complete] ran it -- 1992 tests passed\n</pre>\n\n", False, None),
+    ("a pre block, a wrapped complete item", "<pre>\n## Evidence Status\n- **[complete]** ran it\n</pre>\n\n", False, None),
+    # Round 4: a heading-shaped line INSIDE the block, status below the block.
+    # The block prints it as characters; a markdown parser reads it as a
+    # heading and ended the synthetic section before the status.
+    ("a pre block holding a second heading", f"<pre>\n## Evidence Status\n## Notes\n</pre>\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
+    ("a comment holding a second heading", f"<!--\n## Evidence Status\n## Notes\n-->\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
+    # Round 5: the status inside the block wrapped in markup the block prints
+    # as characters. The list marker is optional here, which is why neither
+    # existing pattern covered the pair.
+    ("a comment, a bold status", "<!--\n## Evidence Status\n- **[blocked]** waiting\n-->\n\n", True, INSIDE_A_BLOCK),
+    ("a comment, a backticked status", "<!--\n## Evidence Status\n- `[blocked]` waiting\n-->\n\n", True, INSIDE_A_BLOCK),
+    ("a pre block, a bold status", "<pre>\n## Evidence Status\n- **[blocked]** waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
+    ("a pre block, a bold status with no marker", "<pre>\n## Evidence Status\n**[blocked]** waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
+    ("a pre block, a backticked status with no marker", "<pre>\n## Evidence Status\n`[blocked]` waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
+    ("a pre block, an underscored status", "<pre>\n## Evidence Status\n- _[blocked]_ waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
+    ("a comment, a wrapped pending-ci", "<!--\n## Evidence Status\n- **[pending-ci]** waiting\n-->\n\n", True, INSIDE_A_BLOCK),
+    ("a pre block, a backticked pending-ci with no marker", "<pre>\n## Evidence Status\n`[pending-ci]` waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
+    # Controls the refusal must not cost.
+    ("a comment, a plain status", "<!--\n## Evidence Status\n- [blocked] waiting\n-->\n\n", True, INSIDE_A_BLOCK),
+    ("the blank line the message asks for", f"</details>\n\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, PENDING_TEXT),
+    ("a fenced example of the heading", "```markdown\n## Evidence Status\n\n- [blocked] an example\n```\n\n", False, None),
+    ("an indented example of the heading", "    ## Evidence Status\n\n    - [blocked] an example\n\n", False, None),
+)
+
+
+class TheSwallowedHeadingTableTests(unittest.TestCase):
+    """The table, run.
+
+    Each pass over this branch found its shape by reading the predicate. This
+    runs every shape any of them found, so the next one reads a list rather
+    than looking for the shape nobody has thought of yet -- and so a fix that
+    closes one hole and opens another fails here rather than on a pull request.
+    """
+
+    FILES = AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests.FILES
+    OPENING = AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests.OPENING
+    MERGEABILITY = AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests.MERGEABILITY
+    EVIDENCE = AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests.EVIDENCE
+
+    def body(self, middle: str) -> str:
+        return f"{self.OPENING}{self.MERGEABILITY}{middle}{self.EVIDENCE}"
+
+    def test_every_probed_shape_gets_the_verdict_it_owes(self) -> None:
+        for name, block, refused, fragment in SWALLOWED_HEADING_TABLE:
+            with self.subTest(shape=name):
+                result = pr_readiness.evaluate(pr(self.body(block)), self.FILES)
+                self.assertEqual(result.ok, not refused, (name, result.failures))
+                if fragment is not None:
+                    self.assertTrue(
+                        any(fragment in failure for failure in result.failures),
+                        (name, result.failures),
+                    )
+
+    def test_a_refused_shape_names_the_heading_line_and_the_block_line(self) -> None:
+        # The message is the whole value of refusing rather than going quiet,
+        # so the table checks that every swallowed-heading refusal still
+        # carries both line numbers and the repair.
+        for name, block, refused, fragment in SWALLOWED_HEADING_TABLE:
+            if not refused or fragment != INSIDE_A_BLOCK:
+                continue
+            with self.subTest(shape=name):
+                body = self.body(block)
+                failure = pr_readiness.unread_status_heading_failure(body)
+                self.assertIsNotNone(failure, name)
+                heading_line = body[: body.index("## Evidence Status")].count("\n") + 1
+                self.assertIn(f"{HEADING_LINE_PREFIX} {heading_line}", failure)
+                self.assertIn("blank line", failure)
+
+    def test_the_table_covers_both_status_tokens_and_every_wrapper(self) -> None:
+        # A table nobody checks the shape of grows lopsided. These are the
+        # axes the four passes actually moved along.
+        rows = "\n".join(block for _, block, _, _ in SWALLOWED_HEADING_TABLE)
+        for token in ("[blocked]", "[pending-ci]", "[complete]"):
+            self.assertIn(token, rows)
+        for wrapper in ("**[", "`[", "_["):
+            self.assertIn(wrapper, rows)
+        for container in ("<!--", "<pre>", "<div>", "</details>", "<img"):
+            self.assertIn(container, rows)
+
+
 class HeadingIdentityFoldsCaseAndNotLettersTests(unittest.TestCase):
     """Which two heading texts are one heading, and which are two (#1742).
 

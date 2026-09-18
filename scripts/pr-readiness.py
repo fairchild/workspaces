@@ -403,6 +403,22 @@ RENDERED_PENDING_RE = re.compile(
     rf"(?i)^(?:{LIST_MARKER}\s*)?(?:\[[ x]\]\s*)?\[(?:blocked|pending-ci)\](?:\s|$)"
 )
 
+# The same line, in text no markdown parser ever touched. A raw HTML block
+# prints its contents as characters, so `**[blocked]**` inside one is a status
+# a reader sees with two literal asterisks either side of it, where in ordinary
+# markdown the parser resolves the emphasis away long before the pattern above
+# reads the line. So the wrappers the written view tolerates are tolerated
+# here, and the list marker stays optional the way the rendered view has it.
+#
+# Neither existing pattern covers that pair: `RENDERED_PENDING_RE` makes the
+# marker optional and allows no wrapper, and `PENDING_STATUS_RE` allows the
+# wrappers and REQUIRES a marker -- so `` `[blocked]` waiting `` on a line of
+# its own inside a `<pre>` matched neither, and the page prints it (#1742,
+# round 5).
+RAW_HTML_PENDING_RE = re.compile(
+    rf"(?i)^(?:{LIST_MARKER}\s*)?(?:\[[ x]\]\s*)?[`*_]*\[(?:blocked|pending-ci)\][`*_]*(?:\s|$)"
+)
+
 
 def rendered_inline_text(children: list[Token] | None) -> str:
     """Inline tokens as the text GitHub renders them.
@@ -945,8 +961,13 @@ def _a_status_is_kept_out(normalized: str, block: Token) -> bool:
     the synthetic section before the status below the block was reached. The
     block's own contents are the first half's job and are read there as text,
     which is the reading the page agrees with.
+
+    Read as text, and therefore through `RAW_HTML_PENDING_RE`: markup inside a
+    raw block is characters, so a status wrapped in backticks, asterisks or
+    underscores there is a status the page prints wrapped, not one a parser
+    unwraps.
     """
-    if any(RENDERED_PENDING_RE.match(text) for text in html_block_text_lines(block.content)):
+    if any(RAW_HTML_PENDING_RE.match(text) for text in html_block_text_lines(block.content)):
         return True
     below = "\n".join(normalized.split("\n")[(block.map or [0, 0])[1] :])
     probe = f"## {EVIDENCE_STATUS_HEADING}\n{below}"
