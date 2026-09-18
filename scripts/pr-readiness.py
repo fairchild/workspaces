@@ -858,7 +858,18 @@ class PageLineReader(HTMLParser):
         self._code_depth = 0
         self._pre_depth = 0
         self._nesting = 0
+        self._section_depth: int | None = None
         self._a_nested_heading_may_open_it = a_nested_heading_may_open_it
+
+    def _boundary_depth(self) -> int:
+        """The nesting depth a heading has to sit at to bound this section.
+
+        The depth the section was opened at, so a section the second pass
+        found inside a container ends at that container's next heading rather
+        than at the container's end. Zero before anything opens: a top-level
+        heading is what a first pass is looking for.
+        """
+        return 0 if self._section_depth is None else self._section_depth
 
     def _cut(self) -> None:
         text = " ".join("".join(self._current).split())
@@ -868,6 +879,13 @@ class PageLineReader(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         name = tag.lower()
+        if name == "br" and self._heading is not None:
+            # A break splits a line wherever it sits, and a heading is not an
+            # exception: `> ## Context<br>[blocked] x` is two lines on the
+            # page, and collecting the heading whole read it as one and let
+            # the status through (#1745, round 4).
+            self._heading.append("\n")
+            return
         if name in OPAQUE_CONTAINERS:
             self._nesting += 1
         elif name == "h2":
@@ -877,7 +895,7 @@ class PageLineReader(HTMLParser):
             self._cut()
             self._heading = []
             return
-        elif name == "h1" and not self._nesting:
+        elif name == "h1" and self._nesting == self._boundary_depth():
             self._cut()
             self._in_section = False
             return
@@ -895,28 +913,38 @@ class PageLineReader(HTMLParser):
         if name in OPAQUE_CONTAINERS:
             self._nesting = max(0, self._nesting - 1)
         if name == "h2" and self._heading is not None:
-            text = "".join(self._heading)
+            # The breaks inside it are line boundaries; its identity is the
+            # whole of its text, the way `## Evidence<br>Status` names this
+            # section while showing a reader two lines.
+            pieces = "".join(self._heading).split("\n")
             self._heading = None
             # `heading_identity` is the repo's one rule for when two headings
             # are one, shared with the written view and the contributor skill
             # (#1759), so a printer's long s in `Statuſ` is not this
             # section to any reader.
-            is_section = heading_identity(text) == heading_identity(EVIDENCE_STATUS_HEADING)
-            if not self._nesting:
-                self._current.clear()
-                self._in_section = is_section
-                self.opened = self.opened or is_section
-                return
-            if is_section and self._a_nested_heading_may_open_it:
+            is_section = heading_identity(" ".join(pieces)) == heading_identity(
+                EVIDENCE_STATUS_HEADING
+            )
+            if is_section and (not self._nesting or self._a_nested_heading_may_open_it):
                 self._current.clear()
                 self._in_section = True
                 self.opened = True
+                self._section_depth = self._nesting
                 return
-            # A heading in someone else's structure, on a pass that will not
-            # open on one: it is a line the page shows like any other.
+            if self._nesting == self._boundary_depth():
+                # A heading of the section's own kind at its own depth ends
+                # it -- including a section the second pass opened inside a
+                # container, which otherwise ran to the end of that container
+                # and refused on lines under a sibling heading (#1745, round 4).
+                self._current.clear()
+                self._in_section = False
+                return
+            # A heading in someone else's structure: it is a line the page
+            # shows like any other, cut at every break it holds.
             if self._in_section:
-                self._current.append(text)
-                self._cut()
+                for piece in pieces:
+                    self._current.append(piece)
+                    self._cut()
             return
         if not self._in_section:
             return

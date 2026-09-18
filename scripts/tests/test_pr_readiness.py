@@ -2109,6 +2109,99 @@ class ThePageReaderMayOnlyAddRefusalsTests(unittest.TestCase):
         self.assertIn("[blocked] x", page.lines)
 
 
+# The page reader's two rules, and every shape four rounds have probed them
+# on. Three times a fix here moved the failure to a neighbouring shape, each
+# found by someone reading the code; this is so the next pass reads a list.
+#
+# LINE-SPLITTING -- what starts a line:
+#   a boundary of any element in `LINE_STARTING_TAGS`; `<br>` anywhere,
+#   including inside a heading; a newline inside a raw `<pre>`.
+# and what does not:
+#   a newline anywhere else (the page collapses it); an inline tag; the
+#   boundaries of a code span.
+#
+# SECTION-BOUNDING -- what opens it:
+#   a top-level `<h2>` whose text reads as `Evidence Status` by
+#   `heading_identity`; a nested one only when no top-level one did.
+# what closes it:
+#   the next `<h1>` or `<h2>` at the depth the section was opened at.
+# what is transparent (a heading inside it is still the document's):
+#   `<details>`.
+# what is opaque (a heading inside it is someone else's):
+#   `<blockquote>`, `<li>`.
+# what is not read: text inside `<pre><code>`.
+# what is read: a bare `<code>`, a raw `<pre>`, and the text of a `<details>`.
+#
+# A row is (name, middle, lines, ok): the text placed after a passing body's
+# opening, every line the page shows under the heading, and the gate's
+# verdict. Adding a shape here is adding a test.
+PAGE_READER_TABLE = (
+    ("a block tag after prose", '## Evidence Status\n\nContext <div>[blocked] x</div>\n', ('Context', '[blocked] x'), False),
+    ("a pre after prose", '## Evidence Status\n\nContext <pre>[blocked] x</pre>\n', ('Context', '[blocked] x'), False),
+    ("a break after prose", '## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    ("a break inside a list item", '## Evidence Status\n\n- complete <br>[blocked] x\n', ('complete', '[blocked] x'), False),
+    ("an unparsed tag the page prints", '## Evidence Status\n\n<x:y>[blocked] x</x:y>\n', ('<x:y>[blocked] x</x:y>',), False),
+    ("a type parameter mid-line", '## Evidence Status\n\n<div>API note: Vec<T> [blocked] names an enum case</div>\n', ('API note: Vec [blocked] names an enum case',), True),
+    ("a fenced example", '## Evidence Status\n\n```\n- [blocked] x\n```\n', (), True),
+    ("an indented example", '## Evidence Status\n\n    - [blocked] x\n', (), False),
+    ("a code span", '## Evidence Status\n\n- `[blocked]` x\n', ('[blocked] x',), False),
+    ("a code span after a break", '## Evidence Status\n\nContext <br>`[blocked]` x\n', ('Context', '[blocked] x'), False),
+    ("a rule of asterisks", '## Evidence Status\n\n***\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    ("a dash rule", '## Evidence Status\n\n---\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    ("a quoted heading inside", '## Evidence Status\n\n> ## Note\n\nContext <br>[blocked] x\n', ('Note', 'Context', '[blocked] x'), False),
+    ("a heading inside a list item", '## Evidence Status\n\n- outer\n  - ## Note\n\nContext <br>[blocked] x\n', ('outer', 'Note', 'Context', '[blocked] x'), False),
+    ("a quoted example elsewhere", '## Notes\n\n> ## Evidence Status\n> - [blocked] an example\n\n## Evidence Status\n\n- [complete] ran it -- 1992 tests passed\n', ('[complete] ran it -- 1992 tests passed',), True),
+    ("a long-s heading", '## Evidence Statuſ\n\n- [blocked] x\n', (), False),
+    ("a fold holding the section", '<details>\n<summary>notes</summary>\n\n## Evidence Status\n\n- [blocked] x\n', ('[blocked] x',), False),
+    ("a fold holding a quoted heading", '## Evidence Status\n\n<details>\n<summary>s</summary>\n\n> ## Note\n\nContext <br>[blocked] x\n', ('s', 'Note', 'Context', '[blocked] x'), False),
+    ("an unclosed blockquote before", '<blockquote>\n\n## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    ("an unclosed list item before", '<ul><li>\n\n## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    ("an unclosed blockquote inside", '## Evidence Status\n\n<blockquote>\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    ("a break inside a quoted heading", '## Evidence Status\n\n> ## Context<br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    ("a sibling heading after a top-level section", '## Evidence Status\n\n## Notes\n\nContext <br>[blocked] x\n', (), True),
+    ("a sibling heading after a nested section", '<blockquote>\n\n## Evidence Status\n\n## Notes\n\nContext <br>[blocked] x\n', (), True),
+    ("a raw pre holding the status", '## Evidence Status\n\n<pre>\nnote\n[blocked] x\n</pre>\n', ('note', '[blocked] x'), False),
+)
+
+
+class ThePageReaderTableTests(unittest.TestCase):
+    """The table, run.
+
+    Two assertions per row rather than one: the lines are what this reader
+    exists to produce, and the verdict is what an author sees. A fix that
+    keeps a verdict by reading different lines -- which is how round 4's
+    swallowed `<br>` hid -- fails the first.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+
+    def body(self, middle: str) -> str:
+        return GOOD_BODY + f"\n{middle}"
+
+    def test_every_probed_shape_shows_the_lines_the_table_says(self) -> None:
+        for name, middle, lines, _ in PAGE_READER_TABLE:
+            with self.subTest(shape=name), recorded_page():
+                page = pr_readiness.page_view(self.body(middle))
+                self.assertIsNone(page.unverified, name)
+                self.assertEqual(page.lines, lines, name)
+
+    def test_every_probed_shape_gets_the_verdict_the_table_says(self) -> None:
+        for name, middle, _, ok in PAGE_READER_TABLE:
+            with self.subTest(shape=name), recorded_page():
+                result = pr_readiness.evaluate(pr(self.body(middle)), self.FILES)
+                self.assertEqual(result.ok, ok, (name, result.failures))
+
+    def test_the_table_exercises_both_rules(self) -> None:
+        # A table nobody checks the shape of grows lopsided. These are the
+        # axes the four rounds actually moved along.
+        shapes = "\n".join(middle for _, middle, _, _ in PAGE_READER_TABLE)
+        for splitter in ("<br>", "<div>", "<pre>", "```", "`[blocked]`", "    - [blocked]"):
+            self.assertIn(splitter, shapes)
+        for bound in ("***", "---", "> ##", "<details>", "<blockquote>", "<ul><li>", "## Notes"):
+            self.assertIn(bound, shapes)
+        self.assertIn("Statu\u017f", shapes)
+
+
 class ThePageSeesThroughAFoldTests(unittest.TestCase):
     """A section inside a collapsed block is a section a reader can open (#1742, item 3).
 
