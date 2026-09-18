@@ -266,6 +266,7 @@ from execution import (  # noqa: E402, F401
     ensure_issue_claimed,
     ensure_label_exists,
     fetch_review,
+    post_uncarried_notes,
     pr_marker,
     route_action,
     route_execution_action,
@@ -655,6 +656,7 @@ def privileged_patch_allowed(selection_item: dict[str, object] | None, env: dict
 
 
 REFUSED_PATHS_OUTPUT = "refused_privileged_paths"
+UNCARRIED_NOTES_OUTPUT = "uncarried_notes"
 
 
 def emit_refused_privileged_paths(sensitive: list[str]) -> None:
@@ -677,6 +679,28 @@ def emit_refused_privileged_paths(sensitive: list[str]) -> None:
             handle.write(f"{REFUSED_PATHS_OUTPUT}={encoded}\n")
     except OSError as error:
         print(f"warning: could not emit refused paths: {error}", file=sys.stderr)
+
+
+def emit_uncarried_notes(notes: list[str]) -> None:
+    """Hand what the write could not carry to the workflow, so a later step can say it.
+
+    The macOS lane reconciles the section inside a step that writes the body
+    with `gh pr edit` after this script returns, so the announcement cannot be
+    posted from here without claiming a body that is not written yet. It
+    crosses to a following step instead, the way refused paths cross to the
+    job that comments on the issue (#1548). JSON keeps agent-authored text on
+    one line, which is what the $GITHUB_OUTPUT format requires.
+    """
+
+    output_file = os.environ.get("GITHUB_OUTPUT", "")
+    if not output_file or not notes:
+        return
+    encoded = json.dumps(notes, separators=(",", ":"))
+    try:
+        with open(output_file, "a", encoding="utf-8") as handle:
+            handle.write(f"{UNCARRIED_NOTES_OUTPUT}={encoded}\n")
+    except OSError as error:
+        print(f"warning: could not emit uncarried notes: {error}", file=sys.stderr)
 
 
 def enforce_agent_patch_policy(

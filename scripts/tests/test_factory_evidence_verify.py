@@ -765,5 +765,66 @@ class HostileIndexTests(unittest.TestCase):
         )
 
 
+class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
+    """This lane rewrites the author's section too, so it owes them the same note (#1740).
+
+    `update_evidence_entries` returns a body and nothing else, so what the
+    re-render dropped was said through `log()` -- the Actions step log, which
+    the author of the dropped text does not read. The verifier now carries the
+    announcements out of the write and says them on the pull request it just
+    wrote, after the write and never before it.
+    """
+
+    def carried_note(self, *, write_succeeds: bool = True) -> list[list[str]]:
+        """The notes the verifier posted while completing one green check."""
+        # A continuation under the status line: the re-render replaces the line
+        # from the entries in hand, and the author's second line goes with it.
+        body = body_with_entries([ci_entry()]).replace(
+            "-- waiting for checks\n",
+            "-- waiting for checks\n  and the rest of what the author wrote\n",
+        )
+        pr = pr_payload(body, labels=[])
+        posted: list[list[str]] = []
+
+        with (
+            mock.patch.object(
+                verify, "_gh_json", side_effect=lambda args, env: pr if any("pulls/321" in a for a in args) else None
+            ),
+            mock.patch.object(
+                verify,
+                "check_runs_for",
+                return_value=[
+                    {
+                        "status": "completed",
+                        "conclusion": "success",
+                        "completed_at": "2026-08-27T00:00:00Z",
+                        "html_url": "https://example.invalid/run/1",
+                    }
+                ],
+            ),
+            mock.patch.object(verify, "_write_pr_body", return_value=write_succeeds),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(verify, "_gh", return_value=True),
+            mock.patch.object(
+                verify,
+                "post_uncarried_notes",
+                side_effect=lambda pr_number, persona, notes, head, env: posted.append(list(notes)) or True,
+            ),
+        ):
+            verify.process_pr(321, {})
+        return posted
+
+    def test_the_author_is_told_on_the_pull_request_what_the_write_dropped(self) -> None:
+        posted = self.carried_note()
+        self.assertEqual(len(posted), 1, posted)
+        self.assertEqual(len(posted[0]), 1, posted[0])
+        self.assertIn("continuing the status line", posted[0][0])
+
+    def test_nothing_is_said_when_the_body_write_did_not_land(self) -> None:
+        # A note about text missing from a body nobody wrote names a loss that
+        # did not happen: the section is still whole on the pull request.
+        self.assertEqual(self.carried_note(write_succeeds=False), [])
+
+
 if __name__ == "__main__":
     unittest.main()

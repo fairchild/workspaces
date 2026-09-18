@@ -34,7 +34,7 @@ from evidence import (  # noqa: E402
     check_runs_for,
     update_evidence_entries,
 )
-from execution import APP_BOT_GIT_IDENTITIES  # noqa: E402
+from execution import APP_BOT_GIT_IDENTITIES, post_uncarried_notes  # noqa: E402
 
 FACTORY_PR_MARKER = "<!-- contributor:issue="
 BLOCKED_EVIDENCE_LABEL = "blocked:evidence"
@@ -316,7 +316,8 @@ def _apply_ci_updates(
         safe_updates = _updates_targeting_unchanged_entries(body, updates)
         if not safe_updates:
             return body
-        new_body = update_evidence_entries(body, safe_updates)
+        uncarried: list[str] = []
+        new_body = update_evidence_entries(body, safe_updates, announcements=uncarried)
         if new_body == body:
             return body
         current = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
@@ -337,6 +338,12 @@ def _apply_ci_updates(
             log(f"PR #{pr_number} body update failed")
             return None
         log(f"PR #{pr_number}: updated {len(safe_updates)} ci evidence entries")
+        # This lane rewrites the author's section, so it drops the same text
+        # the factory turn drops, and a step log is not where the author who
+        # wrote that text is looking (#1740). Said after the write, because
+        # the sentence is about a body GitHub now holds; without a persona,
+        # because the verifier is not a character.
+        post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
         return new_body
     log(f"PR #{pr_number} body kept changing during verification; giving up without writing")
     return None

@@ -221,8 +221,11 @@ jobs:
             exit 1
           fi
           echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          CURRENT_HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')
+          # The head this run reconciled against, which is what a note to the
+          # author has to name: it says which body their text went missing from.
+          echo "head_sha=$CURRENT_HEAD_SHA" >> "$GITHUB_OUTPUT"
           if [ -n "$EXPECTED_HEAD_SHA" ]; then
-            CURRENT_HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')
             if [ "$CURRENT_HEAD_SHA" != "$EXPECTED_HEAD_SHA" ]; then
               echo "PR #$PR_NUMBER advanced after evidence dispatch" >&2
               exit 1
@@ -382,10 +385,53 @@ jobs:
                   uploaded_text_urls.append((label, url))
           kwargs["text_urls"] = uploaded_text_urls
 
+          # What the re-render could not carry out of the author's own section.
+          # Emitted rather than posted here: the body is written by the step
+          # below, and a note about a body that is not published yet would be
+          # a claim this run cannot make.
+          uncarried = []
+          kwargs["announcements"] = uncarried
           reconciled = module.reconcile_pending_ci_evidence(body_path.read_text(), **kwargs)
           body_path.write_text(reconciled)
+          module.emit_uncarried_notes(uncarried)
           PY
           gh pr edit "$PR_NUMBER" --body-file pr-body.md
+
+      - name: Say what the re-render could not carry
+        if: always() && steps.reconcile.outputs.uncarried_notes != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          UNCARRIED_NOTES: ${{ steps.reconcile.outputs.uncarried_notes }}
+        run: |
+          set -euo pipefail
+          uv run --python 3.12 --with markdown-it-py==4.2.0 python3 - <<'PY'
+          import importlib.util
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          module_path = Path(".agents/skills/cofounder-contributor/scripts/run-contributor.py")
+          spec = importlib.util.spec_from_file_location("run_contributor", module_path)
+          module = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+
+          # No persona: this lane is the runtime, not a character. Once per
+          # loss per head -- the poster reads what the pull request already
+          # shows before it says anything.
+          module.post_uncarried_notes(
+              int(os.environ["PR_NUMBER"]),
+              None,
+              json.loads(os.environ["UNCARRIED_NOTES"]),
+              os.environ["HEAD_SHA"],
+              dict(os.environ),
+          )
+          PY
 
       - name: Fail on evidence errors
         if: always()

@@ -3279,5 +3279,45 @@ class RevisionTurnTests(unittest.TestCase):
         self.assertEqual(outputs, {})
 
 
+class UncarriedNotesReachTheWorkflowTests(unittest.TestCase):
+    """The macOS lane's losses cross to the step that can say them (#1740).
+
+    The step that re-renders the section writes the body afterwards, in the
+    shell around its heredoc, so the python that knows what was dropped
+    cannot post about a body that is not published yet. It hands the
+    announcements to the next step the way refused paths are handed to the
+    job that comments on the issue (#1548).
+    """
+
+    NOTE = (
+        "not carried to `## Evidence Notes`: a ``` code fence with no closing "
+        "line at line 4 of the `Evidence Status` section"
+    )
+
+    def emitted(self, notes: list[str]) -> str:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / "github-output"
+            output_file.touch()
+            with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output_file)}, clear=False):
+                run_contributor.emit_uncarried_notes(notes)
+            return output_file.read_text(encoding="utf-8")
+
+    def test_every_announcement_reaches_the_next_step(self) -> None:
+        written = self.emitted([self.NOTE])
+        self.assertTrue(
+            written.startswith(f"{run_contributor.UNCARRIED_NOTES_OUTPUT}="),
+            f"unexpected $GITHUB_OUTPUT content: {written!r}",
+        )
+        self.assertEqual(json.loads(written.split("=", 1)[1]), [self.NOTE])
+        # One line, or a note carrying a newline would spill into a key of its
+        # own -- and this text is written around the author's own words.
+        self.assertEqual(written.count("\n"), 1)
+
+    def test_a_run_that_dropped_nothing_writes_no_output(self) -> None:
+        # The posting step is gated on this output being non-empty, so an
+        # empty emission would put an empty comment on every green run.
+        self.assertEqual(self.emitted([]), "")
+
+
 if __name__ == "__main__":
     unittest.main()

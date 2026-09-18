@@ -1741,6 +1741,68 @@ class EvidenceReconcileContractTests(unittest.TestCase):
         self.assertIn("permission-issues: write", reconcile_job)
 
 
+class TheMacosLaneSaysWhatItCouldNotCarryTests(unittest.TestCase):
+    """The re-render's losses cross from the step that computes them to the step that says them (#1740).
+
+    The reconcile step rewrites the author's `## Evidence Status` section and
+    then writes the body with `gh pr edit` in the shell below its heredoc, so
+    the python that knows what was dropped cannot announce it: a note about a
+    body that is not published yet is a claim the run cannot make. It hands
+    the announcements to `$GITHUB_OUTPUT` instead and a following step posts
+    them, which is the crossing `emit_refused_privileged_paths` makes for
+    refused paths (#1548).
+    """
+
+    EVIDENCE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "_evidence.yml"
+
+    RECONCILE_MARKER = "\n      - name: Reconcile pending-ci evidence\n"
+    ANNOUNCE_MARKER = "\n      - name: Say what the re-render could not carry\n"
+    PR_MARKER = "\n      - name: Resolve PR number\n"
+
+    def step(self, marker: str) -> str:
+        """One step's executable lines, comments removed, required to appear once."""
+        workflow = self.EVIDENCE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(workflow.count(marker), 1, f"{marker.strip()} must appear exactly once")
+        step = workflow.split(marker, 1)[1].split("\n      - name: ", 1)[0]
+        return "\n".join(line for line in step.split("\n") if not line.lstrip().startswith("#"))
+
+    def test_the_reconcile_step_collects_what_the_re_render_could_not_carry(self) -> None:
+        step = self.step(self.RECONCILE_MARKER)
+        self.assertIn('kwargs["announcements"] = uncarried', step)
+        self.assertIn("module.emit_uncarried_notes(uncarried)", step)
+        # After the write and before the body is handed to `gh pr edit`: the
+        # sink is only filled by the call that rewrites the section.
+        self.assertLess(
+            step.index("module.reconcile_pending_ci_evidence"),
+            step.index("module.emit_uncarried_notes(uncarried)"),
+        )
+
+    def test_the_announcement_is_posted_by_a_step_of_its_own(self) -> None:
+        step = self.step(self.ANNOUNCE_MARKER)
+        self.assertIn("steps.reconcile.outputs.uncarried_notes", step)
+        self.assertIn("module.post_uncarried_notes(", step)
+        # Nothing to say, nothing posted: the gate is on the output itself.
+        self.assertIn("if: always() && steps.reconcile.outputs.uncarried_notes != ''", step)
+
+    def test_the_note_names_the_head_the_run_reconciled(self) -> None:
+        # Once per loss per HEAD, which the poster can only honour if it is
+        # told which head this is. The resolve step reads it from the PR and
+        # publishes it whether or not the dispatch bound one.
+        pr_step = self.step(self.PR_MARKER)
+        self.assertIn('echo "head_sha=$CURRENT_HEAD_SHA" >> "$GITHUB_OUTPUT"', pr_step)
+        self.assertLess(
+            pr_step.index("CURRENT_HEAD_SHA=$("), pr_step.index('if [ -n "$EXPECTED_HEAD_SHA" ]')
+        )
+        self.assertIn("HEAD_SHA: ${{ steps.pr.outputs.head_sha }}", self.step(self.ANNOUNCE_MARKER))
+
+    def test_the_author_is_told_after_the_body_is_written(self) -> None:
+        # Order is the claim: the note says text is missing from the body on
+        # the pull request, which is only true once the edit has landed.
+        workflow = self.EVIDENCE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertLess(workflow.index(self.RECONCILE_MARKER), workflow.index(self.ANNOUNCE_MARKER))
+        self.assertIn('gh pr edit "$PR_NUMBER" --body-file pr-body.md', self.step(self.RECONCILE_MARKER))
+
+
 class ReusableWorkflowPermissionTests(unittest.TestCase):
     """A job calling a local reusable workflow must hold every permission the
     callee declares. GitHub validates that at run creation: a shortfall fails
