@@ -50,7 +50,7 @@ class CandidateTests(unittest.TestCase):
         self.env = patch.dict(os.environ, {"GITHUB_REPOSITORY": "fairchild/workspaces", "GITHUB_RUN_ID": "42", "GITHUB_RUN_ATTEMPT": "1"})
         self.env.start()
         self.addCleanup(self.env.stop)
-        self.args = SimpleNamespace(directory=self.directory, source=SOURCE, tag="v0.28.0", version="0.28.0", build="36", channel="stable", ci_run_id="12", previous_stable_tag="v0.27.0", reviewed_prs="1,2")
+        self.args = SimpleNamespace(directory=self.directory, source=SOURCE, tag="v0.28.0", version="0.28.0", build="36", channel="stable", ci_run_id="12", previous_stable_tag="v0.27.0", reviewed_prs="1,2", maintainer_reviewed_prs="")
         manifest = {**candidate.expected(self.args), "assets": {}}
         for key, name, content in (("dmg", "WorkSpaces-0.28.0.dmg", b"signed-dmg"), ("latestDmg", "WorkSpaces-latest.dmg", b"signed-dmg"), ("appcast", "appcast.xml", b"signed-appcast")):
             path = self.directory / name
@@ -147,6 +147,34 @@ class CandidateTests(unittest.TestCase):
                 candidate.publish(self.args)
             api.assert_not_called()
 
+    def reseal(self, allowlist):
+        self.args.maintainer_reviewed_prs = allowlist
+        with patch.object(candidate, "release_notes", return_value="Reviewed notes\n"):
+            candidate.seal(self.args)
+        self.args.candidate_sha256 = candidate.digest(self.directory / "candidate.json")
+
+    def test_sealed_maintainer_allowlist_is_part_of_candidate_identity(self):
+        self.reseal("1528,1739")
+        self.assertEqual(json.loads((self.directory / "candidate.json").read_text())["maintainerReviewedPullRequests"], "1528,1739")
+        candidate.verify(self.args)
+        for substituted in ("1528", "1528,1739,1740", ""):
+            with self.subTest(allowlist=substituted):
+                self.args.maintainer_reviewed_prs = substituted
+                with self.assertRaisesRegex(ValueError, "maintainerReviewedPullRequests mismatch"):
+                    candidate.verify(self.args)
+
+    def test_summary_names_the_maintainer_signed_pull_requests_only_when_there_are_some(self):
+        self.args.artifact_url = "https://github.com/fairchild/workspaces/actions/runs/42/artifacts/1"
+        for allowlist, expected in (("", False), ("1528,1739", True)):
+            with self.subTest(allowlist=allowlist):
+                self.reseal(allowlist)
+                step_summary = self.directory.parent / f"summary-{allowlist or 'none'}.md"
+                with patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(step_summary)}):
+                    candidate.summary(self.args)
+                written = step_summary.read_text()
+                self.assertEqual("#1528, #1739" in written, expected)
+                self.assertEqual("maintainer" in written.lower(), expected)
+
     def test_notes_match_exact_section_not_neighboring_versions(self):
         notes = "# Changelog\n\n## [0.28.0] - today\n\nChosen notes\n\n## [0.27.0] - yesterday\nOld notes\n"
         self.assertEqual(candidate.release_notes(notes, "0.28.0"), "Chosen notes\n")
@@ -241,19 +269,58 @@ class TrustTests(unittest.TestCase):
                 return json.dumps([reviews])
             return ""
         with patch.object(candidate, "run", side_effect=execute), patch.object(candidate, "api", return_value=[pr]):
-            self.assertEqual(candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"}), [1])
+            self.assertEqual(candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"}, set()), ([1], []))
             for field, value in (("state", "DISMISSED"), ("commit_id", "c" * 40), ("submitted_at", "2026-09-07T00:03:00Z"), ("user", {"login": "author"})):
                 original = copy.deepcopy(reviews[0])
                 reviews[0][field] = value
                 with self.subTest(field=field), self.assertRaisesRegex(ValueError, "approving review"):
-                    candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"})
+                    candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"}, set())
                 reviews[0] = original
             reviews.append({**reviews[0], "state": "CHANGES_REQUESTED", "submitted_at": "2026-09-07T00:01:30Z"})
             with self.assertRaisesRegex(ValueError, "approving review"):
-                candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"})
+                candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"}, set())
         with patch.object(candidate, "run", side_effect=execute), patch.object(candidate, "api", return_value=[]):
             with self.assertRaisesRegex(ValueError, "no unambiguous merged main PR"):
-                candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"})
+                candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"}, set())
+
+    def test_maintainer_allowlist_signs_the_prs_it_names_and_no_others(self):
+        pr = {"number": 1, "merge_commit_sha": SOURCE, "merged_at": "2026-09-07T00:02:00Z", "base": {"ref": "main", "repo": {"full_name": "fairchild/workspaces"}}, "head": {"sha": "b" * 40}, "user": {"login": "author"}}
+        reviews = [{"state": "CHANGES_REQUESTED", "commit_id": "b" * 40, "submitted_at": "2026-09-07T00:01:00Z", "user": {"login": "reviewer"}}]
+        def execute(*args, **kwargs):
+            if args[:2] == ("git", "rev-list"):
+                return SOURCE
+            if args[:2] == ("gh", "api"):
+                return json.dumps([reviews])
+            return ""
+        with patch.object(candidate, "run", side_effect=execute), patch.object(candidate, "api", return_value=[pr]):
+            with self.assertRaisesRegex(ValueError, "approving review"):
+                candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"}, set())
+            self.assertEqual(candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"}, {1}), ([], [1]))
+            with self.subTest("a list naming someone else does not sign this one"):
+                with self.assertRaisesRegex(ValueError, "approving review"):
+                    candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"}, {2})
+
+    def test_allowlist_claims_no_signature_where_a_real_approval_exists(self):
+        pr = {"number": 1, "merge_commit_sha": SOURCE, "merged_at": "2026-09-07T00:02:00Z", "base": {"ref": "main", "repo": {"full_name": "fairchild/workspaces"}}, "head": {"sha": "b" * 40}, "user": {"login": "author"}}
+        reviews = [{"state": "APPROVED", "commit_id": "b" * 40, "submitted_at": "2026-09-07T00:01:00Z", "user": {"login": "reviewer"}}]
+        def execute(*args, **kwargs):
+            if args[:2] == ("git", "rev-list"):
+                return SOURCE
+            if args[:2] == ("gh", "api"):
+                return json.dumps([reviews])
+            return ""
+        with patch.object(candidate, "run", side_effect=execute), patch.object(candidate, "api", return_value=[pr]):
+            self.assertEqual(candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"}, {1}), ([1], []))
+            with self.subTest("a number outside the range cannot sign a future release"):
+                with self.assertRaisesRegex(ValueError, "outside this release range"):
+                    candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"}, {1, 99})
+
+    def test_allowlist_input_is_validated_before_it_reaches_the_range(self):
+        self.assertEqual(candidate.pr_numbers(" 1739, 1620 ,1620 "), [1620, 1739])
+        self.assertEqual(candidate.pr_numbers(""), [])
+        for bad in ("1739;1620", "#1739", "-4", "0", "1739.0"):
+            with self.subTest(value=bad), self.assertRaisesRegex(ValueError, "allowlist"):
+                candidate.pr_numbers(bad)
 
     def test_rebase_merged_pr_covers_all_introduced_commits_once(self):
         pr = {"number": 1, "merge_commit_sha": SOURCE, "merged_at": "2026-09-07T00:02:00Z", "base": {"ref": "main", "repo": {"full_name": "fairchild/workspaces"}}, "head": {"sha": "b" * 40}, "user": {"login": "author"}}
@@ -268,7 +335,7 @@ class TrustTests(unittest.TestCase):
                 return json.dumps([reviews])
             return ""
         with patch.object(candidate, "run", side_effect=execute), patch.object(candidate, "api", return_value=[pr]):
-            self.assertEqual(candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"}), [1])
+            self.assertEqual(candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"}, set()), ([1], []))
         self.assertEqual(review_reads, 1)
 
     def test_only_metadata_commit_after_successful_main_ci_automatically_qualifies(self):
@@ -290,20 +357,45 @@ class TrustTests(unittest.TestCase):
             event = Path(temp) / "event.json"
             event.write_text(json.dumps({"workflow_run": ci}))
             env = {"GITHUB_EVENT_PATH": str(event), "GITHUB_REPOSITORY": "fairchild/workspaces", "GITHUB_REF": "refs/heads/main", "GITHUB_EVENT_NAME": "workflow_run"}
-            with patch.dict(os.environ, env), patch.object(candidate, "run", side_effect=execute), patch.object(candidate, "api", side_effect=read), patch.object(candidate, "optional_api", return_value=None), patch.object(candidate, "check_reviewed_range", return_value=[1]), patch.object(candidate, "check_release_base"), patch.object(candidate, "emit") as emit:
-                candidate.source(SimpleNamespace(channel="stable"))
+            with patch.dict(os.environ, env), patch.object(candidate, "run", side_effect=execute), patch.object(candidate, "api", side_effect=read), patch.object(candidate, "optional_api", return_value=None), patch.object(candidate, "check_reviewed_range", return_value=([1], [])), patch.object(candidate, "check_release_base"), patch.object(candidate, "emit") as emit:
+                candidate.source(SimpleNamespace(channel="stable", maintainer_reviewed_prs=""))
                 self.assertEqual(emit.call_args.args[0]["source"], SOURCE)
                 self.assertEqual(emit.call_args.args[0]["eligible"], "true")
                 changed.append("Sources/Unexpected.swift")
-                candidate.source(SimpleNamespace(channel="stable"))
+                candidate.source(SimpleNamespace(channel="stable", maintainer_reviewed_prs=""))
                 emit.assert_called_with({"eligible": "false"})
                 changed.pop()
                 title = "chore: routine metadata cleanup"
-                candidate.source(SimpleNamespace(channel="stable"))
+                candidate.source(SimpleNamespace(channel="stable", maintainer_reviewed_prs=""))
                 emit.assert_called_with({"eligible": "false"})
                 ci["head_repository"] = {"full_name": "foreign/workspaces"}
                 with self.assertRaisesRegex(ValueError, "trusted main CI"):
-                    candidate.source(SimpleNamespace(channel="stable"))
+                    candidate.source(SimpleNamespace(channel="stable", maintainer_reviewed_prs=""))
+
+    def test_only_a_dispatched_release_can_carry_a_maintainer_allowlist(self):
+        ci = {"id": 12, "workflow_id": 9, "head_sha": SOURCE, "head_branch": "main", "event": "workflow_dispatch", "head_repository": {"full_name": "fairchild/workspaces"}, "status": "completed", "conclusion": "success", "html_url": "https://github.com/fairchild/workspaces/actions/runs/12"}
+        metadata = plistlib.dumps({"CFBundleShortVersionString": "0.28.0", "CFBundleVersion": "36", "CFBundleIdentifier": "com.cloudcompute.workspaces", "SUPublicEDKey": "public"}).decode()
+        def execute(*args, **kwargs):
+            return metadata if args[:2] == ("git", "show") else ""
+        def read(path):
+            if path.endswith("ci.yml"):
+                return {"id": 9}
+            if "workflows/ci.yml/runs" in path:
+                return {"workflow_runs": [ci]}
+            return ci
+        with tempfile.TemporaryDirectory() as temp:
+            event = Path(temp) / "event.json"
+            event.write_text("{}")
+            env = {"GITHUB_EVENT_PATH": str(event), "GITHUB_REPOSITORY": "fairchild/workspaces", "GITHUB_REF": "refs/heads/main", "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_SHA": SOURCE, "GITHUB_RUN_ID": "42"}
+            with patch.dict(os.environ, env), patch.object(candidate, "run", side_effect=execute), patch.object(candidate, "api", side_effect=read), patch.object(candidate, "optional_api", return_value=None), patch.object(candidate, "check_reviewed_range", return_value=([1], [1620, 1739])) as reviewed, patch.object(candidate, "emit") as emit:
+                candidate.source(SimpleNamespace(channel="tester", maintainer_reviewed_prs="1739,1620"))
+                self.assertEqual(reviewed.call_args.args[3], {1620, 1739})
+                self.assertEqual(emit.call_args.args[0]["reviewed_prs"], "1")
+                self.assertEqual(emit.call_args.args[0]["maintainer_reviewed_prs"], "1620,1739")
+            event.write_text(json.dumps({"workflow_run": ci}))
+            with patch.dict(os.environ, {**env, "GITHUB_EVENT_NAME": "workflow_run"}), patch.object(candidate, "run", side_effect=execute), patch.object(candidate, "api", side_effect=read), patch.object(candidate, "emit"):
+                with self.assertRaisesRegex(ValueError, "automatic"):
+                    candidate.source(SimpleNamespace(channel="stable", maintainer_reviewed_prs="1739"))
 
     def test_only_successful_main_ci_for_this_repo_and_sha_qualifies(self):
         good = {"workflow_id": 9, "head_sha": SOURCE, "head_branch": "main", "event": "push", "head_repository": {"full_name": "fairchild/workspaces"}, "status": "completed", "conclusion": "success"}

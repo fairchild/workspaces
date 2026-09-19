@@ -12,6 +12,13 @@ on:
         type: choice
         options: [stable, tester]
         default: stable
+      maintainer_reviewed_prs:
+        description: >-
+          Comma-separated PR numbers the maintainer reviewed themselves, signing
+          for them in place of an independent approval on the merged head. Per
+          release; it is sealed into the candidate manifest and never carried forward.
+        type: string
+        default: ''
 
 concurrency:
   # Ordinary main CI completions must not displace a pending stable release.
@@ -44,6 +51,7 @@ jobs:
       ci_run_id: ${{ steps.source.outputs.ci_run_id }}
       previous_stable_tag: ${{ steps.source.outputs.previous_stable_tag }}
       reviewed_prs: ${{ steps.source.outputs.reviewed_prs }}
+      maintainer_reviewed_prs: ${{ steps.source.outputs.maintainer_reviewed_prs }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -55,7 +63,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_CHANNEL: ${{ inputs.channel || 'stable' }}
-        run: uv run --script scripts/release-candidate.py source --channel "$RELEASE_CHANNEL"
+          # Empty on the automatic path, which GitHub gives no inputs: an
+          # unattended release keeps the unsigned strictness it has today.
+          MAINTAINER_REVIEWED_PRS: ${{ inputs.maintainer_reviewed_prs }}
+        run: |
+          uv run --script scripts/release-candidate.py source --channel "$RELEASE_CHANNEL" \
+            --maintainer-reviewed-prs "$MAINTAINER_REVIEWED_PRS"
       - name: Verify environment policy before signing
         if: steps.source.outputs.eligible == 'true'
         env:
@@ -423,11 +436,13 @@ jobs:
           CI_RUN_ID: ${{ needs.qualify.outputs.ci_run_id }}
           PREVIOUS_STABLE_TAG: ${{ needs.qualify.outputs.previous_stable_tag }}
           REVIEWED_PRS: ${{ needs.qualify.outputs.reviewed_prs }}
+          MAINTAINER_REVIEWED_PRS: ${{ needs.qualify.outputs.maintainer_reviewed_prs }}
         run: |
           uv run --script scripts/release-candidate.py seal --directory build \
             --source "$SOURCE" --tag "$TAG" --channel "$CHANNEL" \
             --version "$VERSION" --build "$BUILD" --ci-run-id "$CI_RUN_ID" \
-            --previous-stable-tag "$PREVIOUS_STABLE_TAG" --reviewed-prs "$REVIEWED_PRS"
+            --previous-stable-tag "$PREVIOUS_STABLE_TAG" --reviewed-prs "$REVIEWED_PRS" \
+            --maintainer-reviewed-prs "$MAINTAINER_REVIEWED_PRS"
 
       - name: Upload immutable release candidate
         id: upload
@@ -507,6 +522,7 @@ jobs:
       VERSION: ${{ needs.qualify.outputs.version }}
       BUILD: ${{ needs.qualify.outputs.build }}
       CANDIDATE_SHA256: ${{ needs.build-sign-notarize-release.outputs.candidate_sha256 }}
+      MAINTAINER_REVIEWED_PRS: ${{ needs.qualify.outputs.maintainer_reviewed_prs }}
       EXPECTED_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
       ARTIFACT_URL: ${{ needs.build-sign-notarize-release.outputs.artifact_url }}
     steps:
@@ -528,6 +544,7 @@ jobs:
           uv run --script scripts/release-candidate.py summary --directory release-assets \
             --source "$SOURCE" --tag "$TAG" --channel "$CHANNEL" \
             --version "$VERSION" --build "$BUILD" \
+            --maintainer-reviewed-prs "$MAINTAINER_REVIEWED_PRS" \
             --candidate-sha256 "$CANDIDATE_SHA256" --artifact-url "$ARTIFACT_URL"
 
   publish-github-release:
@@ -550,6 +567,7 @@ jobs:
       VERSION: ${{ needs.qualify.outputs.version }}
       BUILD: ${{ needs.qualify.outputs.build }}
       CANDIDATE_SHA256: ${{ needs.build-sign-notarize-release.outputs.candidate_sha256 }}
+      MAINTAINER_REVIEWED_PRS: ${{ needs.qualify.outputs.maintainer_reviewed_prs }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -566,7 +584,9 @@ jobs:
         run: |
           uv run --script scripts/release-candidate.py publish --directory release-assets \
             --source "$SOURCE" --tag "$TAG" --channel "$CHANNEL" \
-            --version "$VERSION" --build "$BUILD" --candidate-sha256 "$CANDIDATE_SHA256"
+            --version "$VERSION" --build "$BUILD" \
+            --maintainer-reviewed-prs "$MAINTAINER_REVIEWED_PRS" \
+            --candidate-sha256 "$CANDIDATE_SHA256"
 
   validate-published-release-assets:
     needs: [qualify, build-sign-notarize-release, publish-github-release]
@@ -614,10 +634,13 @@ jobs:
           VERSION: ${{ needs.qualify.outputs.version }}
           BUILD: ${{ needs.qualify.outputs.build }}
           CANDIDATE_SHA256: ${{ needs.build-sign-notarize-release.outputs.candidate_sha256 }}
+          MAINTAINER_REVIEWED_PRS: ${{ needs.qualify.outputs.maintainer_reviewed_prs }}
         run: |
           uv run --script scripts/release-candidate.py verify_publication --directory release-assets \
             --source "$SOURCE" --tag "$TAG" --channel "$CHANNEL" \
-            --version "$VERSION" --build "$BUILD" --candidate-sha256 "$CANDIDATE_SHA256"
+            --version "$VERSION" --build "$BUILD" \
+            --maintainer-reviewed-prs "$MAINTAINER_REVIEWED_PRS" \
+            --candidate-sha256 "$CANDIDATE_SHA256"
 
       - name: Validate published release assets
         env:
