@@ -76,6 +76,15 @@ def timestamp(value: str) -> dt.datetime:
     return parsed
 
 
+def pr_numbers(value: str) -> list[int]:
+    numbers = set()
+    for item in (value or "").replace(",", " ").split():
+        if not item.isdigit() or not int(item):
+            raise ValueError(f"Maintainer review allowlist takes pull request numbers, got {item!r}")
+        numbers.add(int(item))
+    return sorted(numbers)
+
+
 def stable_version(value: str) -> tuple[int, int, int]:
     match = VERSION.fullmatch(value.removeprefix("v"))
     if not match or match[4]:
@@ -114,17 +123,19 @@ def check_control_source(sha: str) -> None:
         raise ValueError("Release tooling changed on main; prepare from the updated reviewed source: " + ", ".join(changed.splitlines()))
 
 
-def check_reviewed_range(repo: str, sha: str, latest: dict | None) -> list[int]:
+def check_reviewed_range(repo: str, sha: str, latest: dict | None, allowlist: set[int]) -> tuple[list[int], list[int]]:
     # An administrator can bypass this repository's normal review rule. The
     # signing boundary therefore verifies actual reviews, rather than assuming
     # a main ref or the mere presence of a ruleset means the code was reviewed.
+    # The allowlist is the maintainer's own signature on named pull requests,
+    # supplied at dispatch and recorded apart from the reviews it stands in for.
     if not latest:
         raise ValueError("A previously approved stable release is required as the review baseline")
     baseline = latest["tag_name"]
     stable_version(baseline)
     run("git", "merge-base", "--is-ancestor", baseline, sha)
     commits = run("git", "rev-list", "--first-parent", f"{baseline}..{sha}").splitlines()
-    reviewed = []
+    reviewed, maintainer_reviewed = [], []
     for commit in commits:
         prs = api(f"repos/{repo}/commits/{commit}/pulls?per_page=100")
         # For a default-branch commit this API returns the PR that introduced
@@ -135,7 +146,7 @@ def check_reviewed_range(repo: str, sha: str, latest: dict | None) -> list[int]:
             raise ValueError(f"Commit {commit} has no unambiguous merged main PR; signing requires reviewed changes")
         pr = merged[0]
         run("git", "merge-base", "--is-ancestor", pr["merge_commit_sha"], sha)
-        if pr["number"] in reviewed:
+        if pr["number"] in reviewed or pr["number"] in maintainer_reviewed:
             continue
         pages = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{repo}/pulls/{pr['number']}/reviews?per_page=100"))
         decisions = {}
@@ -145,9 +156,19 @@ def check_reviewed_range(repo: str, sha: str, latest: dict | None) -> list[int]:
         approved = any(r["state"] == "APPROVED" and r["commit_id"] == pr["head"]["sha"]
                        and user != pr["user"]["login"] for user, r in decisions.items())
         if not approved or any(r["state"] == "CHANGES_REQUESTED" for r in decisions.values()):
-            raise ValueError(f"PR #{pr['number']} lacks an independent approving review on its merged head")
-        reviewed.append(pr["number"])
-    return reviewed
+            if pr["number"] not in allowlist:
+                raise ValueError(f"PR #{pr['number']} lacks an independent approving review on its merged head")
+            maintainer_reviewed.append(pr["number"])
+        else:
+            # An allowlisted PR that passes on its own review is reported as
+            # reviewed; the manifest claims a maintainer signature only where
+            # one was actually needed.
+            reviewed.append(pr["number"])
+    # A list carried forward from an earlier release would sign commits nobody
+    # named, so every allowlisted number must belong to this range.
+    if stale := sorted(allowlist - set(reviewed) - set(maintainer_reviewed)):
+        raise ValueError("Maintainer review allowlist names PRs outside this release range: " + ", ".join(f"#{n}" for n in stale))
+    return reviewed, maintainer_reviewed
 
 
 def check_release_base(repo: str, sha: str, version: str) -> None:
@@ -168,6 +189,9 @@ def source(args) -> None:
     if os.environ.get("GITHUB_REF") != "refs/heads/main":
         raise ValueError("Release preparation must execute from main")
     automatic = os.environ["GITHUB_EVENT_NAME"] == "workflow_run"
+    allowlist = set(pr_numbers(args.maintainer_reviewed_prs))
+    if automatic and allowlist:
+        raise ValueError("An automatic release carries no maintainer review allowlist; dispatch the release to supply one")
     ci_run = event.get("workflow_run") if automatic else None
     sha = ci_run["head_sha"] if automatic else os.environ["GITHUB_SHA"]
     if not SHA.fullmatch(sha):
@@ -216,7 +240,7 @@ def source(args) -> None:
     if existing and (existing["object"]["type"] != "commit" or existing["object"]["sha"] != sha):
         raise ValueError("Existing tag does not identify this exact source commit")
     check_control_source(sha)
-    reviewed = check_reviewed_range(repo, sha, latest)
+    reviewed, maintainer_reviewed = check_reviewed_range(repo, sha, latest, allowlist)
     if channel == "stable":
         check_release_base(repo, sha, version)
     values = {
@@ -226,6 +250,7 @@ def source(args) -> None:
         "ci_url": ci_run["html_url"], "ci_run_id": str(ci_run["id"]),
         "previous_stable_tag": latest["tag_name"] if latest else "",
         "reviewed_prs": ",".join(map(str, reviewed)),
+        "maintainer_reviewed_prs": ",".join(map(str, maintainer_reviewed)),
     }
     emit(values)
 
@@ -278,6 +303,7 @@ def seal(args) -> None:
         "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"], "createdAt": now().isoformat(),
         "ciRunId": args.ci_run_id, "previousStableTag": args.previous_stable_tag,
         "reviewedPullRequests": args.reviewed_prs,
+        "maintainerReviewedPullRequests": args.maintainer_reviewed_prs,
         "files": {name: digest(directory / name) for name in files},
     }
     (directory / "candidate.json").write_text(json.dumps(candidate, indent=2) + "\n")
@@ -289,7 +315,7 @@ def verify(args) -> dict:
     if digest(directory / "candidate.json") != args.candidate_sha256:
         raise ValueError("Candidate identity changed after preparation")
     candidate = json.loads((directory / "candidate.json").read_text())
-    for key, value in {"schemaVersion": 1, **expected(args), "channel": args.channel, "repository": os.environ["GITHUB_REPOSITORY"], "runId": os.environ["GITHUB_RUN_ID"]}.items():
+    for key, value in {"schemaVersion": 1, **expected(args), "channel": args.channel, "repository": os.environ["GITHUB_REPOSITORY"], "runId": os.environ["GITHUB_RUN_ID"], "maintainerReviewedPullRequests": args.maintainer_reviewed_prs}.items():
         if candidate.get(key) != value:
             raise ValueError(f"Candidate {key} mismatch")
     age = now() - timestamp(candidate["createdAt"])
@@ -314,6 +340,10 @@ def summary(args) -> None:
     repo = os.environ["GITHUB_REPOSITORY"]
     previous = candidate.get("previousStableTag")
     rollback = f"[Previous stable release](https://github.com/{repo}/releases/tag/{previous})" if previous else "No previous stable release recorded."
+    signed = pr_numbers(candidate.get("maintainerReviewedPullRequests", ""))
+    review_line = "- Changes since the previous stable release have independent PR approvals on their merged heads"
+    review_line += (",\n  except these, which the maintainer signed for at dispatch: "
+                    + ", ".join(f"#{n}" for n in signed) + ".") if signed else "."
     body = f"""## {args.tag} is ready for publication
 
 Version **{args.version}**, build **{args.build}**, source `{args.source}`.
@@ -330,7 +360,7 @@ updated installations. A corrective update needs a higher build number.
 ### Completed checks
 
 - [Exact-commit main CI](https://github.com/{repo}/actions/runs/{candidate['ciRunId']}) passed.
-- Changes since the previous stable release have independent PR approvals on their merged heads.
+{review_line}
 - Developer ID bundle signature, provisioning profile, and notarization passed.
 - Downloaded candidate: manifest, asset hashes, Sparkle signature, DMG ticket,
   Gatekeeper, and packaged CLI launch passed.
@@ -457,9 +487,11 @@ def main() -> None:
     parser.add_argument("--published-directory", type=Path, default=Path("release-downloads"))
     parser.add_argument("--previous-stable-tag", default="")
     parser.add_argument("--reviewed-prs", default="")
+    parser.add_argument("--maintainer-reviewed-prs", default="")
     for name in ("source", "tag", "version", "build", "candidate-sha256", "ci-run-id", "artifact-url"):
         parser.add_argument(f"--{name}")
     args = parser.parse_args()
+    args.maintainer_reviewed_prs = ",".join(map(str, pr_numbers(args.maintainer_reviewed_prs)))
     if args.command != "source":
         if not args.source or not SHA.fullmatch(args.source) or not args.version or not VERSION.fullmatch(args.version) or not args.build or not args.build.isdigit():
             parser.error("valid --source, --version and --build are required")
