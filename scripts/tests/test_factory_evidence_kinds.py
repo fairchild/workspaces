@@ -8553,9 +8553,13 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
              "detail": "device booked", "kind": "other"},
         ]
 
-    def body(self, entries: list[dict[str, object]]) -> str:
+    def body(self, entries: list[object]) -> str:
+        # A record can hold a bare value beside its entries, and a body built
+        # from one renders a line only for the entries (#1778, round 14).
         lines = "\n".join(
-            f"- [{entry['status']}] {entry['item']} -- {entry['detail']}" for entry in entries
+            f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
+            for entry in entries
+            if isinstance(entry, dict)
         )
         return (
             "<!-- evidence-status:v1\n" + json.dumps({"entries": entries}) + "\n-->\n\n"
@@ -8907,6 +8911,35 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
         self.assertEqual(evidence.comment_safe("a\n\n<<!--!-- x"), "a  x")
         self.assertEqual(evidence.quoted_for_comment("a`b"), "`ab`")
         self.assertEqual(evidence.quoted_for_comment("   "), "")
+
+    # intent: control
+    def test_a_scalar_beside_an_unkeyable_object_still_stands_the_write_down(self) -> None:
+        # The object's refusal wins: it stands for a line the author can see,
+        # and that is what the criterion is about. The scalar beside it is
+        # preserved either way (#1778, round 14).
+        entries = self.entries("2")
+        entries.append("legacy")
+        source, written, said, _ = self.write(entries)
+        self.assertEqual(written, source, "a record with an unkeyable entry was rewritten")
+        self.assertTrue(any("position 2" in note for note in said), said)
+
+    # intent: guard
+    def test_a_bare_value_is_named_but_never_refused(self) -> None:
+        # The two answers, side by side: `unrenderable_entries` is about
+        # entries that stand for a line, `scalar_record_positions` about
+        # values that stand for none.
+        evidence = self.evidence()
+        record = [
+            {"index": 1, "item": "run `a`", "status": "complete", "detail": "d", "kind": "test"},
+            "legacy",
+            42,
+        ]
+        self.assertEqual(evidence.unrenderable_entries(record), [])
+        self.assertIsNone(evidence.unrenderable_record_refusal(record))
+        self.assertEqual(evidence.scalar_record_positions(record), [2, 3])
+        said = evidence.scalar_record_announcement(record)
+        self.assertIn("position 2, 3", said)
+        self.assertIn("preserved exactly as recorded", said)
 
     # intent: control
     def test_entries_this_code_can_account_for_are_written_as_before(self) -> None:

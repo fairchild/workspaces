@@ -106,7 +106,11 @@ def body_with_contract(
     visible = "\n".join(
         lines
         if lines is not None
-        else [f"- [{entry['status']}] {entry['item']} -- {entry['detail']}" for entry in entries]
+        else [
+            f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
+            for entry in entries
+            if isinstance(entry, dict)
+        ]
     )
     requested = "\n".join(f"- {item}" for item in contract)
     return (
@@ -2968,17 +2972,18 @@ class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
         )
 
     # intent: fix
-    def test_a_scalar_beside_a_complete_entry_keeps_the_page_whole(self) -> None:
-        """The non-object exemption became a regression (#1778, round 13).
+    def test_a_scalar_beside_a_complete_entry_is_preserved_and_said(self) -> None:
+        """A scalar stands for no line, so the write goes on and says so (#1778, round 14).
 
-        One complete `ci` entry bound to the head plus a bare value in the
-        entries list: main makes no write at all, and this branch
-        re-verifies every `ci` entry whatever it records — so it reached the
-        writer, rewrote the section, and dropped the author's second status
-        line with `announcements` empty. The scalar is named by position now
-        and the record refused.
+        Round 13 refused the whole record for a bare value, which completes
+        nothing, protects nothing, and broke the contract the run planner's
+        suite names — the legacy scalar is preserved AND the renderable
+        entries are written. The criterion is about LINES: an unkeyable
+        OBJECT entry stands for one, and that refusal stays. This shape has
+        no line of its own to lose, so what it earns is a sentence naming its
+        position, not a stand-down.
         """
-        entries = [ci_entry(status="complete", verified_head_sha=HEAD), "a bare value"]
+        entries = [ci_entry(status="complete", verified_head_sha=HEAD), "legacy"]
         body = body_with_contract(
             [CI_ITEM],
             entries,
@@ -3023,7 +3028,9 @@ class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
             ),
         ):
             verify.process_pr(321, {})
-        self.assertNotIn("body", written, "the record was rewritten with a bare value in it")
+        self.assertIn("body", written, "the renderable entry was not written")
+        self.assertIn('"legacy"', written["body"], "the bare value was not preserved")
+        self.assertIn(f"- [complete] {CI_ITEM}", written["body"])
         self.assertEqual(len(posted), 1, f"nothing was said: {posted}")
         self.assertIn("position 2", posted[0][0])
         self.assertIn("bare value", posted[0][0])
@@ -3038,10 +3045,15 @@ class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
         already closed. Round 9's rule — every return hands back what the
         pull request holds now — applied to what is SAID (#1778, round 13).
         """
+        # The two reads differ in WHAT the refusal would name, not only in
+        # whether there is one: the body in hand holds an unclosed block, and
+        # the live read holds a different unclosed block plus a bare value in
+        # the record. A note composed from the stale copy names neither of
+        # the live body's reasons (#1778, round 14).
         unclosed = body_with_contract([CI_ITEM], [ci_entry()]).replace(
             "\n\n## Validation\n", "\n\n<pre>\nthe run log nobody closed\n\n## Validation\n", 1
         )
-        repaired = body_with_contract([CI_ITEM], [ci_entry()])
+        repaired = body_with_contract([CI_ITEM], [ci_entry(), "legacy"])
         reads = [pr_payload(unclosed, labels=[]), pr_payload(repaired, labels=[])]
         posted: list[list[str]] = []
 
@@ -3080,9 +3092,14 @@ class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
         # the note list composed from it is EMPTY. Composed from the stale
         # copy it carries the block's sentence, which is the comment the
         # author had already acted on.
-        self.assertEqual(
-            said, [], f"the author was told to fix what they had just fixed: {said}"
-        )
+        # The live body earns one sentence of its own -- the bare value at
+        # position 2 -- and none of the stale body's. Composed from the copy
+        # the attempt started with, the note names a block the author has
+        # already closed and says nothing about the value.
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("position 2", said[0])
+        self.assertNotIn("raw HTML block", said[0])
+        self.assertNotIn("run log nobody closed", said[0])
 
     # intent: control
     def test_a_record_this_code_can_render_says_nothing_extra(self) -> None:

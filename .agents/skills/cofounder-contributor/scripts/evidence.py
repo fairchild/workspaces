@@ -3645,16 +3645,11 @@ def entry_as_rendered(entry: object) -> tuple[dict[str, object] | None, str | No
     string rather than as the number the author meant.
     """
     if not isinstance(entry, dict):
-        # NAMED, not exempt. Round 12 called this a tolerated loss on the
-        # ground that a scalar carries no item to recognise it by -- and then
-        # the re-verify-everything change made it a REGRESSION: one complete
-        # `ci` entry bound to the head beside a scalar sibling makes no write
-        # on main and one here, and the author's second status line goes with
-        # `announcements` empty (#1778, round 13). "Nothing to recognise it
-        # by" is a weaker reason than a silent deletion: the position is what
-        # a reader needs to find it in the block, and it is what the sentence
-        # gives them.
-        return None, "no object to read as an entry (the record holds a bare value here)"
+        # A scalar in the entries list is NOT an unrenderable entry: it is a
+        # value the record carries that no renderer ever made a line for.
+        # `unrenderable_entries` answers about entries that stand for a line;
+        # `scalar_record_positions` answers about these (#1778, round 14).
+        return None, None
     claimed = entry.get("index")
     index = usable_entry_index(entry)
     if index is None:
@@ -3785,14 +3780,14 @@ def unrenderable_entries(entries: object) -> list[str]:
     By POSITION in the record rather than by index, because the index is the
     thing that may be unreadable.
 
-    EVERY entry the renderer cannot render is named, including one that is not
-    an object at all -- a bare string or number in the entries list. Round 12
-    exempted those as a tolerated loss; the re-verify-everything change on
-    this branch turned the same shape into a regression, because a record
-    holding a scalar beside a complete `ci` entry is now rewritten where main
-    left it alone, and the author's status line went with nothing said. The
-    position is what a reader needs to find such an entry in the block, and it
-    is what the sentence gives them (#1778, round 13).
+    OBJECT entries only. An entry with an item stands for a line the author
+    can see, so a write that cannot render it cannot account for that line and
+    stands down whole (#1778, rounds 11-13). A SCALAR in the entries list
+    stands for no line any renderer produced: refusing a whole record for one
+    completes nothing, protects nothing, and breaks a contract main keeps --
+    the legacy scalar is preserved and the renderable entries are written.
+    Those are named by `scalar_record_positions` and announced rather than
+    refused (#1778, round 14).
     """
     named: list[str] = []
     for position, entry in enumerate(entries if isinstance(entries, list) else [], start=1):
@@ -3823,6 +3818,40 @@ def colliding_record_refusal(entries: object) -> str | None:
         "evidence entries share index(es) "
         f"{', '.join(str(index) for index in shared)}, so an update aimed at one would "
         "land on every entry carrying it; leaving the contract for the author"
+    )
+
+
+def scalar_record_positions(entries: object) -> list[int]:
+    """Where the record carries a bare value instead of an entry.
+
+    Named, not refused, and not deleted: the value is preserved in the
+    metadata byte for byte, the renderable entries are written, and any line
+    under the heading that no renderable entry owns is carried to
+    `## Evidence Notes` by the write's own carry path. What the author gets is
+    a sentence naming the position, which is the only handle a scalar has
+    (#1778, round 14).
+    """
+    return [
+        position
+        for position, entry in enumerate(entries if isinstance(entries, list) else [], start=1)
+        if not isinstance(entry, dict)
+    ]
+
+
+def scalar_record_announcement(entries: object) -> str | None:
+    """The sentence a record carrying a bare value earns, or None."""
+    if not (positions := scalar_record_positions(entries)):
+        return None
+    places = ", ".join(str(position) for position in positions)
+    plural = len(positions) != 1
+    return (
+        f"`## {EVIDENCE_STATUS_HEADING}` was written with the record's bare value"
+        f"{'s' if plural else ''} at position {places} preserved exactly as recorded: "
+        f"nothing renders a status line for {'them' if plural else 'it'}, so the list holds "
+        "the entries that do render and no line was written back for "
+        f"{'those values' if plural else 'that value'}. A status line under the heading that "
+        f"only {'they' if plural else 'it'} stood for is replaced by this write like any "
+        "other, which is what it does on main too."
     )
 
 
@@ -3869,6 +3898,13 @@ def _render_structured_entries(
     stands down, the way a colliding index does, so record and page stay as
     the author left them and the sentence names the entry.
     """
+    if (scalars := scalar_record_announcement(updated_entries)) is not None:
+        # Said, and then the write goes on: a bare value in the record is
+        # preserved and the entries that DO render are written (#1778,
+        # round 14).
+        log(scalars)
+        if announcements is not None and scalars not in announcements:
+            announcements.append(scalars)
     if (refusal := unrenderable_record_refusal(updated_entries)) is not None:
         log(refusal)
         if announcements is not None:
