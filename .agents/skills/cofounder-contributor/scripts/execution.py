@@ -697,6 +697,35 @@ def _as_the_page_shows_it(text: str) -> str:
 # BELOW a closed disclosure was read as folded away and posted again (#1740,
 # round 4).
 COLLAPSED_BLOCK_RE = re.compile(r"(?is)<details\b.*</details>|<details\b.*\Z")
+
+
+def _paragraph_bounds(text: str) -> list[tuple[int, int]]:
+    """Where each run of non-blank lines begins and ends, in this text's own offsets.
+
+    A code span is an inline construct, so it lives inside one block and a
+    blank line ends it. This is the block boundary the scan below needs, and
+    it is deliberately coarse: a list item or a fence is read as one run of
+    lines rather than as its own container, which can only make the scan see
+    a span CommonMark does not -- the safe direction here, because a span it
+    invents leaves a `<details` unblanked and a note this runtime says again.
+    """
+    bounds: list[tuple[int, int]] = []
+    start: int | None = None
+    end = offset = 0
+    for line in text.split("\n"):
+        if line.strip():
+            if start is None:
+                start = offset
+            end = offset + len(line)
+        elif start is not None:
+            bounds.append((start, end))
+            start = None
+        offset += len(line) + 1
+    if start is not None:
+        bounds.append((start, end))
+    return bounds
+
+
 def _code_spans_blanked(text: str) -> str:
     """The text with every code span replaced by spaces, length for length.
 
@@ -711,19 +740,22 @@ def _code_spans_blanked(text: str) -> str:
     as shown, which silences the next run about a note the write dropped.
     Anyone who can comment could plant it (#1773, round 5).
 
-    Per LINE, because a code span is an inline construct and cannot reach out
-    of the block it is in: a backtick on one line and a backtick three lines
-    down do not make the `<details>` between them into text, and the page
-    says so -- it folds that note in every such shape. Scanning the comment as
-    one string called them a span and left the block unstripped.
+    Per BLOCK, because that is the span a code span can occupy: it is an
+    inline construct, so a blank line ends it, and inside a paragraph it
+    crosses soft line breaks freely. Scanning the whole comment as one string
+    called two backticks either side of a blank line a span; scanning it a
+    line at a time called a span's continuation on the next line a span of its
+    own, and the harm ran the other way -- `start ``open` / `here ``<details>``
+    more`` end` is one span and then literal text to the page, which folds the
+    note, while the per-line read blanked the `<details` as if it were inside
+    a span, left the block unstripped, and recorded a note nobody was shown as
+    shown. Anyone who can comment could plant either (#1773, rounds 5 and 6).
     """
-    blanked: list[str] = []
-    for line in text.split("\n"):
-        chars = list(line)
-        for start, stop in code_span_ranges(line):
-            chars[start:stop] = " " * (stop - start)
-        blanked.append("".join(chars))
-    return "\n".join(blanked)
+    chars = list(text)
+    for start, stop in _paragraph_bounds(text):
+        for open_at, close_at in code_span_ranges(text[start:stop]):
+            chars[start + open_at : start + close_at] = " " * (close_at - open_at)
+    return "".join(chars)
 
 
 def _without_collapsed_blocks(comment: str) -> str:

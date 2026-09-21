@@ -2528,9 +2528,21 @@ def write_evidence_status_section(
         # section this writer would place next run and a reader would find
         # above the status now.
         return placed(written)
-    with_notes = insert_markdown_section(
+    # The same answer the status path takes, from the same function. Through
+    # the back-compat wrapper this insert's refusal reached only the step log:
+    # the notes had already been cut out of the body above, so a refusal left
+    # a placed status section, no notes, an empty announcement list and no
+    # refusal on the write -- the author's own words gone with nothing said,
+    # which is the failure this branch closed one call site over (#1773,
+    # round 6). A refusal stands the whole write down instead, so the notes
+    # are not cut when they cannot be placed.
+    with_notes, notes_stood_down, notes_unverified = inserted_markdown_section(
         written, EVIDENCE_NOTES_HEADING, "\n\n".join(blocks), after_heading=EVIDENCE_STATUS_HEADING
     )
+    if notes_unverified is not None:
+        _announce_unverified(announcements, notes_unverified)
+    if notes_stood_down is not None:
+        return _stood_down(source, notes_stood_down, announcements)
     if len(with_notes) > PR_BODY_LIMIT >= len(written):
         # A body GitHub will not store is not a body, and dropping the notes is
         # what makes this one storable: without them the status the lane just
