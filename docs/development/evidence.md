@@ -523,7 +523,7 @@ counts toward clearing `blocked:evidence` (`should_clear_blocked_label`); that
 is the gap [#1778](https://github.com/fairchild/workspaces/issues/1778) tracks.
 
 For a reviewer: a completion in the comment is a claim, not a proof. The run
-link an entry carries (`proof_url`) is recorded, not verified, so it takes you
+link an entry carries is recorded, not verified, so it takes you
 to a run page to read as evidence rather than as proof that the entry is
 genuine.
 
