@@ -1176,6 +1176,41 @@ def rate_limit_is_spent(error: urllib.error.HTTPError) -> bool:
     return error.code in {403, 429} and headers.get("x-ratelimit-remaining") == "0"
 
 
+# The words GitHub puts in a secondary-limit body. Documented for the REST
+# API, and the other witness available when the response carries neither
+# `Retry-After` nor an exhausted quota -- which GitHub documents as a shape a
+# secondary limit can take (#1773, round 11).
+SECONDARY_LIMIT_PHRASES = ("secondary rate limit", "abuse detection")
+
+
+def says_secondary_rate_limit(error: urllib.error.HTTPError) -> bool:
+    """Whether the response BODY names a secondary limit, read at most once.
+
+    The header was the only witness, and a header-less secondary 403 with
+    quota remaining therefore read as a forbidden token: the write refused and
+    told the author to export a token the renderer accepts, which would not
+    have helped, because waiting would. A real forbidden token also has quota
+    remaining, so the quota cannot be the witness either -- the message is
+    what separates them, and it is the witness GitHub provides.
+
+    Reading the body consumes it, so the text is cached on the error object:
+    a caller that reads it afterwards for its own message gets the same text
+    rather than an empty stream.
+    """
+    cached = getattr(error, "_body_text", None)
+    if cached is None:
+        try:
+            cached = error.read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 - a body that cannot be read says nothing
+            cached = ""
+        try:
+            error._body_text = cached
+        except Exception:  # noqa: BLE001 - some error objects refuse attributes
+            pass
+    lowered = cached.lower()
+    return any(phrase in lowered for phrase in SECONDARY_LIMIT_PHRASES)
+
+
 def http_failure_reason(error: urllib.error.HTTPError) -> str:
     """Why a non-2xx answer arrived, naming the rate limit when that is the cause."""
     if rate_limit_is_spent(error):
@@ -1183,23 +1218,37 @@ def http_failure_reason(error: urllib.error.HTTPError) -> str:
         return f"the renderer's rate limit is spent (it resets at {reset})"
     if (retry := (error.headers or {}).get("retry-after")) is not None:
         return f"the renderer asked for a pause (HTTP {error.code}, retry after {retry})"
+    if error.code in {403, 429} and says_secondary_rate_limit(error):
+        return f"the renderer applied a secondary rate limit (HTTP {error.code})"
     return f"the renderer answered HTTP {error.code}"
 
 
 def http_failure_cause(error: urllib.error.HTTPError) -> str:
     """Which cause in `RENDERER_CAUSES` this non-2xx answer is.
 
-    Permanence, not the status class. A 401 and a 403 that is not a rate
-    limit are the renderer refusing this token, which waiting does not fix. A
-    spent primary limit and a SECONDARY limit are both time: the first says
-    the window is exhausted, the second carries `Retry-After` and asks for a
-    pause, and reading it as a rejected token refused the write and told the
+    Permanence, not the status class: does waiting change the answer? A 401
+    and a 403 that is not a rate limit are the renderer refusing this token,
+    which waiting does not fix. A spent primary limit and a SECONDARY limit
+    are both time: the first says the window is exhausted, the second asks for
+    a pause, and reading it as a rejected token refused the write and told the
     author to export a different token, which would not have helped (#1773,
     round 9).
+
+    A secondary limit has TWO witnesses, because GitHub documents responses
+    that carry neither `Retry-After` nor an exhausted quota: the header when
+    it is there, and the response body's own message when it is not. Quota
+    remaining cannot be the witness -- a real forbidden token has quota
+    remaining too -- so a header-less 403 is read as a secondary limit only
+    when its body says so, and as a forbidden token otherwise. What stays
+    unverifiable here is whether GitHub's live secondary 403 for THIS endpoint
+    carries that message: the classifier is tested against both shapes, and
+    the live shape has not been observed (#1773, round 11).
     """
     if rate_limit_is_spent(error):
         return "spent rate limit"
     if (error.headers or {}).get("retry-after") is not None:
+        return "secondary rate limit"
+    if error.code in {403, 429} and says_secondary_rate_limit(error):
         return "secondary rate limit"
     if error.code == 401:
         return "rejected token"
@@ -1504,13 +1553,60 @@ def _folded_refusal(written: str, heading: str) -> str:
     )
 
 
-def unverified_note(reason: str) -> str:
-    """The sentence an author is owed when the page could not be asked about their write."""
+# Both sentences an author can get when the renderer did not answer open with
+# these words, and one predicate reads them: the write that went ahead
+# unverified (a transient cause) and the write that stood down (a permanent
+# one). The instrument that counts them grepped the step log for this phrase
+# instead, which is a reading of a sentence rather than of a fact -- and the
+# two parted the moment one seam built its note without the prefix the
+# classifier keys on (#1773, round 11).
+PAGE_NOT_ASKED_PREFIX = "the page could not be asked"
+UNVERIFIED_ANNOUNCEMENT_PREFIX = f"{PAGE_NOT_ASKED_PREFIX} about this write: "
+
+
+def page_was_not_asked(text: str) -> bool:
+    """Whether this sentence says the renderer did not answer -- either way it can end."""
+    return text.startswith(PAGE_NOT_ASKED_PREFIX)
+
+
+def unverified_announcement(heading: str, reason: str) -> str:
+    """The sentence an author is owed when the page could not be asked about their write.
+
+    ONE constructor, and it is the same fact the classifier reads. The note
+    used to be built here without the prefix `is_unverified_announcement`
+    matches, and one seam appended it raw -- so the note travelled fine and
+    arrived under "Text under your `## Evidence Status` heading was not
+    carried", telling an author lines had been dropped when nothing had been
+    dropped and the check was about `## Mergeability` (#1773, round 11). A
+    constructor and a classifier that are two spellings of one fact disagree
+    the first time either moves; these are one function and its predicate.
+
+    The HEADING is in the sentence for a second reason: two sections failing
+    for one reason are two notes, not one. `_announce_unverified` dedupes on
+    the sentence, so without the heading the second section's note collapsed
+    into the first's and the author was told about one section when two were
+    unchecked. With it the dedup key is (heading, reason), which is what the
+    author needs to act on.
+    """
     return (
-        f"rendered view unverified: {reason}. Whether the section this write places is folded "
-        "away behind a disclosure was decided by the source model alone, which cannot see a "
-        "fold"
+        f"{UNVERIFIED_ANNOUNCEMENT_PREFIX}`## {heading}`: rendered view unverified: {reason}. "
+        "Whether the section this write places is folded away behind a disclosure was decided "
+        "by the source model alone, which cannot see a fold"
     )
+
+
+def is_unverified_announcement(announcement: str) -> bool:
+    """Whether this sentence says a check could not be run rather than what a write did."""
+    return announcement.startswith(UNVERIFIED_ANNOUNCEMENT_PREFIX)
+
+
+def unverified_heading(announcement: str) -> str | None:
+    """The section an unverified note is about, read back out of the note itself."""
+    if not is_unverified_announcement(announcement):
+        return None
+    rest = announcement[len(UNVERIFIED_ANNOUNCEMENT_PREFIX) :]
+    match = re.match(r"`## (?P<heading>[^`]+)`: ", rest)
+    return match["heading"] if match else None
 
 
 def _unasked_refusal(heading: str, reason: str, repair: str) -> str:
@@ -1521,7 +1617,7 @@ def _unasked_refusal(heading: str, reason: str, repair: str) -> str:
     401 to export a token the renderer accepts, which is what they did.
     """
     return (
-        f"the page could not be asked whether the `## {heading}` section this write places is "
+        f"{PAGE_NOT_ASKED_PREFIX} whether the `## {heading}` section this write places is "
         f"folded away: {reason}. That is a condition of this environment rather than a blip, so "
         f"the write stands down instead of placing a section on a weaker check than a lane runs -- "
         f"{repair}"
@@ -1717,7 +1813,9 @@ def placement_refusal(body: str, written: str, heading: str) -> PlacementAnswer:
                 return PlacementAnswer(
                     refusal=_unasked_refusal(heading, page.unverified, page.repair or "")
                 )
-            return PlacementAnswer(unverified=unverified_note(page.unverified))
+            return PlacementAnswer(
+                unverified=unverified_announcement(heading, page.unverified)
+            )
         shown = folded_headings_on_the_page(page.html, f"{heading} {mark}")
         if not shown:
             # A heading the parse reads and the page does not show at all. The

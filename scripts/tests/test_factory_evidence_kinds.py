@@ -8852,6 +8852,8 @@ class TheWriterStandsDownOnAFoldedPlacementTests(unittest.TestCase):
         self.assertTrue(evidence.is_stood_down_announcement(write.announcements[0]))
         self.assertIn("the page folds it away", write.announcements[0])
 
+    # intent: control
+    # Green on main: the unchanged case beside the stand-down.
     def test_the_same_write_goes_ahead_once_the_disclosure_is_closed(self) -> None:
         # The control on the write itself: closing the element is the repair
         # the refusal names, and the status lands under the page's own heading.
@@ -9145,6 +9147,8 @@ class TheUnreadPageReachesTheSurfaceTheAuthorReadsTests(unittest.TestCase):
             any(self.evidence().is_stood_down_announcement(n) for n in write.announcements)
         )
 
+    # intent: control
+    # Green on main: nothing to say when the page answers.
     def test_the_page_answering_leaves_no_note(self) -> None:
         with recorded_page():
             write = self.write(self.PLACEABLE_BODY)
@@ -9158,9 +9162,13 @@ class TheUnreadPageReachesTheSurfaceTheAuthorReadsTests(unittest.TestCase):
         # headlines this would be a claim about the author's text, which it is
         # not: nothing was deleted and nothing was left unwritten.
         execution = sys.modules["execution"]
-        note = f"{self.evidence().UNVERIFIED_ANNOUNCEMENT_PREFIX}the renderer answered HTTP 503"
+        helpers = sys.modules["_helpers"]
+        # Built by the constructor the classifier reads, so the note carries
+        # its heading and the headline names the section it is about.
+        note = helpers.unverified_announcement("Mergeability", "the renderer answered HTTP 503")
         comment = execution.compose_uncarried_notes_comment(None, [note], "abc1234")
-        self.assertIn(execution.UNVERIFIED_NOTES_HEADLINE, comment)
+        self.assertIn(execution.unverified_notes_headline("Mergeability"), comment)
+        self.assertNotIn(execution.unverified_notes_headline("Evidence Status"), comment)
         self.assertNotIn(execution.UNCARRIED_NOTES_HEADLINE, comment)
         self.assertNotIn(execution.STOOD_DOWN_NOTES_HEADLINE, comment)
         self.assertIn("Nothing here says anything was lost", comment)
@@ -9169,8 +9177,9 @@ class TheUnreadPageReachesTheSurfaceTheAuthorReadsTests(unittest.TestCase):
     def test_a_deletion_and_an_unread_check_are_still_told_apart(self) -> None:
         execution = sys.modules["execution"]
         evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
         notes = [
-            f"{evidence.UNVERIFIED_ANNOUNCEMENT_PREFIX}the renderer was unreachable",
+            helpers.unverified_announcement("Evidence Status", "the renderer was unreachable"),
             "not carried to `## Evidence Notes`: a fence with no closing line",
         ]
         comment = execution.compose_uncarried_notes_comment(None, notes, "abc1234")
@@ -9178,7 +9187,7 @@ class TheUnreadPageReachesTheSurfaceTheAuthorReadsTests(unittest.TestCase):
         # the claim that names an edit. The unread check gets its own block
         # under its own sentence, so the two are not read as one loss.
         self.assertIn(execution.UNCARRIED_NOTES_HEADLINE, comment)
-        self.assertNotIn(execution.UNVERIFIED_NOTES_HEADLINE, comment)
+        self.assertNotIn(execution.unverified_notes_headline("Evidence Status"), comment)
         self.assertIn("could not be moved to `## Evidence Notes`", comment)
         self.assertIn("a fence with no closing line", comment)
         self.assertIn("Nothing here says anything was lost", comment)
@@ -9257,6 +9266,8 @@ class ThePageIsAskedAboutTheHeadingThisWritePlacesTests(unittest.TestCase):
                     helpers.folded_headings_on_the_page(page.html, self.HEADING), [True, False]
                 )
 
+    # intent: guard
+    # Green on main: a property of main's own flagger.
     def test_neither_shape_is_one_the_rejected_heading_note_flags(self) -> None:
         # Why the round-2 justification did not hold: that note reads h2
         # TOKENS, and a raw `<h2>` inside raw HTML is not one.
@@ -9480,6 +9491,8 @@ class TheRefusalSurvivesTheCommentsDedupTests(unittest.TestCase):
         )
         self.assertIn(execution._as_the_page_shows_it(note), shown)
 
+    # intent: control
+    # Green on main: the case the strip must keep answering.
     def test_a_real_folded_block_is_still_stripped(self) -> None:
         # The property the strip exists for, unchanged: a note behind a
         # summary is a note nobody read, so it suppresses nothing.
@@ -9770,11 +9783,15 @@ class TheDedupUsesTheScannerThatAlreadyExistsTests(unittest.TestCase):
             comment, execution.uncarried_notes_checked_line(self.HEAD)
         )
 
+    # intent: guard
+    # Green on main: a regression this branch introduced in round 8 and fixed inside itself, so main never had it to fail on.
     def test_a_folded_note_is_never_recorded_as_shown(self) -> None:
         for label, prefix in {"no stray backtick": "", **self.BYPASSES}.items():
             with self.subTest(shape=label):
                 self.assertEqual(self.shown(self.comment(prefix)), set(), label)
 
+    # intent: control
+    # Green on main: the unchanged case beside it.
     def test_a_note_in_the_open_is_still_recorded_as_shown(self) -> None:
         # The property the strip exists beside: a note a reader can see does
         # suppress the next run's copy.
@@ -9826,6 +9843,8 @@ class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
     suite would notice.
     """
 
+    # intent: guard
+    # Green on main: recorder tooling.
     def test_the_record_command_can_refresh_a_recording_that_drifted(self) -> None:
         """The command the drift test names has to be able to fix what it names (#1790).
 
@@ -9862,6 +9881,8 @@ class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
         self.assertEqual(entry["body"], body)
         self.assertRegex(entry["recorded_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
+    # intent: guard
+    # Green on main: recorder tooling: no run invents its own fixtures.
     def test_without_the_flag_a_recording_is_read_rather_than_re_asked(self) -> None:
         # The control: an ordinary run reads the checkout and reaches nothing.
         digest = next(iter(rendered_index()))
@@ -9906,6 +9927,8 @@ class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
                 asking.add(label)
         self.assertEqual(asking, set(self.SHAPES_THAT_ASK_THE_PAGE))
 
+    # intent: guard
+    # Green on main: green on main only because this head's recordings are copied in with the tests; against a clean base tree it fails.
     def test_every_recording_this_suite_needs_is_committed(self) -> None:
         index = rendered_index()
         shapes = ThePlacementAsksThePageWhetherASectionIsFoldedTests.SHAPES
@@ -9918,6 +9941,8 @@ class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
                 self.assertIn(hashlib.sha256(written.encode("utf-8")).hexdigest(), index)
                 self.assertTrue(rendered_fixture_path(written).is_file())
 
+    # intent: guard
+    # Green on main: the recorder's own bookkeeping, which main has too.
     def test_every_recording_names_the_body_it_answers(self) -> None:
         for digest, entry in rendered_index().items():
             text = indexed_body(entry)
@@ -10179,13 +10204,78 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
                     f"{label}: a note the page folds away was recorded as shown",
                 )
 
+    # intent: fix
+    def test_a_comment_with_bare_cr_endings_reads_as_the_same_blocks(self) -> None:
+        """A door into the rounds-5/6/8 class, closed at the boundary (#1773, round 11).
+
+        `_inline_block_bounds` builds its offset table with `split("\n")`, so
+        a comment whose lines end in bare CR was ONE inline span covering the
+        whole comment — and two backticks anywhere in it then pair across a
+        real `<details>` between them, which is the shape rounds 5, 6 and 8
+        each closed for LF text. Measured at `9a5db027`: 4 blocks with LF or
+        CRLF, 1 with CR. Line endings are normalised once at the boundary now.
+
+        What I verified is the BOUNDS half. The onward consequence — a folded
+        note recorded as shown — does not reproduce at either head, because a
+        CR-only comment's checked line is unrecognised too and the reading
+        returns nothing at all; the claim that it bypasses the dedup is
+        relayed from a live render and stays unverified here.
+        """
+        execution = self.execution()
+        note = "a heading a reader cannot see"
+        lf = (
+            f"{self.checked()}\n\nstart `open\n\n<details>\n<summary>click</summary>\n\n"
+            f"- {note}\n\n</details>\n\nhere` end\n"
+        )
+        blocks = {}
+        for label, ending in (("lf", "\n"), ("crlf", "\r\n"), ("cr", "\r")):
+            with self.subTest(ending=label):
+                comment = lf.replace("\n", ending)
+                normalised = helpers.MARKDOWN_LINE_ENDING_RE.sub("\n", comment)
+                blocks[label] = len(execution._inline_block_bounds(normalised))
+                # The boundary does the normalising, so the caller passes the
+                # comment as GitHub gave it.
+                self.assertNotIn("<details", execution._without_collapsed_blocks(comment))
+        self.assertEqual(blocks["cr"], blocks["lf"], blocks)
+        self.assertEqual(blocks["crlf"], blocks["lf"], blocks)
+
+    # intent: guard
+    def test_the_dedup_reads_a_comment_the_same_way_however_its_lines_end(self) -> None:
+        # The other half of the boundary: a note shown in the open is shown
+        # under all three endings, and a note behind a disclosure is hidden
+        # under all three. At `9a5db027` a CR-only comment read as neither —
+        # the checked line was unrecognised, so the reading returned nothing
+        # and every note in it counted as never said.
+        execution = self.execution()
+        note = "a note the page shows"
+        plain = f"**headline**\n\n- {note}\n\n{self.checked()}\n"
+        folded = (
+            f"**headline**\n\n<details>\n<summary>click</summary>\n\n- {note}\n\n"
+            f"</details>\n\n{self.checked()}\n"
+        )
+        for label, ending in (("lf", "\n"), ("crlf", "\r\n"), ("cr", "\r")):
+            with self.subTest(ending=label):
+                shown = execution._notes_a_reader_has_been_shown(
+                    plain.replace("\n", ending), self.checked()
+                )
+                hidden = execution._notes_a_reader_has_been_shown(
+                    folded.replace("\n", ending), self.checked()
+                )
+                self.assertIn(note, shown, f"{label}: a note said in the open read as unsaid")
+                self.assertNotIn(note, hidden, f"{label}: a folded note read as shown")
+
+    # intent: guard
     def test_the_page_folds_the_note_in_every_interrupted_shape(self) -> None:
         # Asks reality: the recorded answer from the live renderer for each
-        # of the four bodies above.
+        # of the four bodies above. BOUNDED: `<details.*` with `re.S` runs to
+        # the end of the document, so it is satisfied by a note anywhere after
+        # the opening tag -- these recordings happen to fold the note, so the
+        # unbounded form was weak here rather than false, and the sibling
+        # below is where it was false (#1773, round 11).
         for label, interrupter in self.INTERRUPTERS.items():
             with self.subTest(interrupter=label), recorded_page():
                 html = helpers.render_markdown(self.interrupted(interrupter))
-            folded = re.search(r"<details.*", html, re.S)
+            folded = re.search(r"<details.*?</details>", html, re.S)
             self.assertIsNotNone(folded, label)
             self.assertIn(self.NOTE, folded.group(0), f"{label}: the page did not fold the note")
 
@@ -10273,17 +10363,45 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
             self.assertLessEqual(stop, paragraph_at, f"a span reached past its block: {body[start:stop]!r}")
         self.assertIn("and later: a | b appears again here", spans)
 
-    def test_the_page_folds_the_note_below_that_table(self) -> None:
-        # Asks reality, from a recording taken with the token.
+    # intent: fix
+    def test_the_page_does_not_fold_the_note_below_that_table(self) -> None:
+        """A test named "asks reality" passed under the opposite of its claim.
+
+        The slice was `<details.*` with `re.S`, which runs to the END of the
+        document -- so "the note is inside the disclosure" was satisfied by a
+        note anywhere after the opening tag. In this recording `</details>`
+        closes at offset 286 and the note sits at 392: OUTSIDE the fold. The
+        page does not fold this one, and the assertion is now the bounded
+        slice saying so (#1773, round 11).
+
+        What the module does with the same comment is the line under it: the
+        note is recorded as SHOWN, which agrees with the page.
+        """
         comment = (
             f"{self.checked()}\n\n| a | b | c |\n| --- | --- | --- |\n"
             f"| x `open | <details>more | y` end |\n\n- {self.NOTE}\n"
         )
         with recorded_page():
             html = helpers.render_markdown(comment)
-        folded = re.search(r"<details.*", html, re.S)
-        self.assertIsNotNone(folded)
-        self.assertIn(self.NOTE, folded.group(0))
+        folded = re.search(r"<details.*?</details>", html, re.S)
+        self.assertIsNotNone(folded, "the page did not open a disclosure at all")
+        self.assertNotIn(
+            self.NOTE, folded.group(0), "the note is below the disclosure, not inside it"
+        )
+        # And what the module makes of the same comment, asserted as it is
+        # rather than as it ought to be: it strips from the `<details` in the
+        # middle cell to the END of the comment, so the note below the table
+        # is cut and reads as never shown. The page and the module disagree
+        # about this shape. The direction is the safe one -- a note the reader
+        # HAS seen is offered again, which is noise rather than silence -- and
+        # it is a finding of this round, recorded in the body rather than
+        # fixed here, because narrowing the strip to the block the page closes
+        # is the same block-mapping change #1781 tracks.
+        self.assertEqual(
+            self.execution()._notes_a_reader_has_been_shown(comment, self.checked()),
+            set(),
+            "the module's answer moved; the body's residual needs restating",
+        )
 
     def test_a_blank_line_ends_the_span_so_a_later_block_is_still_stripped(self) -> None:
         # The control the brief names: a span that closes on the next line,
@@ -10353,6 +10471,55 @@ class EveryInsertTakesTheWritesAnswerTests(unittest.TestCase):
         body, said = self.seeded(transient=True)
         self.assertIn("## Mergeability", body)
         self.assertTrue(any("unverified" in note for note in said), said)
+
+    # intent: fix
+    def test_the_note_arrives_under_the_headline_the_author_reads(self) -> None:
+        """The channel held and the message did not (#1773, round 11).
+
+        The seed appended the raw note while the classifier keys on a prefix
+        only one other seam added, so the note fell into the UNCARRIED bucket
+        and the author read "Text under your `## Evidence Status` heading was
+        not carried" -- when nothing was dropped and the check was about
+        `## Mergeability`. Asserted through the COMMENT the author reads
+        rather than by finding a substring somewhere in the notes.
+        """
+        execution = sys.modules["execution"]
+        evidence = sys.modules["evidence"]
+        _, said = self.seeded(transient=True)
+        self.assertTrue(said, "the seed said nothing")
+        self.assertTrue(
+            all(evidence.is_unverified_announcement(note) for note in said),
+            f"the classifier does not recognise the seed's own note: {said}",
+        )
+        comment = execution.compose_uncarried_notes_comment(None, said, "abc1234")
+        headline = comment.splitlines()[0]
+        self.assertEqual(headline, execution.unverified_notes_headline("Mergeability"))
+        self.assertNotIn(execution.UNCARRIED_NOTES_HEADLINE, comment)
+        self.assertNotIn(execution.STOOD_DOWN_NOTES_HEADLINE, comment)
+        self.assertIn("Nothing here says anything was lost", comment)
+
+    # intent: fix
+    def test_two_sections_unchecked_for_one_reason_are_two_notes(self) -> None:
+        # The dedup keys on the whole sentence, and the sentence carries the
+        # heading now: without it the second section's note collapsed into the
+        # first's and the author heard about one section when two went
+        # unchecked (#1773, round 11).
+        helpers_module = sys.modules["_helpers"]
+        evidence = sys.modules["evidence"]
+        announcements: list[str] = []
+        for heading in ("Evidence Status", "Evidence Notes"):
+            evidence._announce_unverified(
+                announcements, helpers_module.unverified_announcement(heading, "a reason")
+            )
+        # And once each, however many times a run asks.
+        evidence._announce_unverified(
+            announcements, helpers_module.unverified_announcement("Evidence Status", "a reason")
+        )
+        self.assertEqual(len(announcements), 2, announcements)
+        self.assertEqual(
+            [helpers_module.unverified_heading(note) for note in announcements],
+            ["Evidence Status", "Evidence Notes"],
+        )
 
     def test_the_seed_hands_its_caller_the_reason_rather_than_a_step_log(self) -> None:
         """The property this class is for, driven at the seam (#1773, round 9).
@@ -10452,17 +10619,86 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
                     render("# body")
         return raised.exception
 
-    def http_error(self, code: int, *, rate_limited: bool = False, retry_after: str | None = None):
+    def http_error(
+        self,
+        code: int,
+        *,
+        rate_limited: bool = False,
+        retry_after: str | None = None,
+        body: str = "",
+    ):
         headers = {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "soon"} if rate_limited else {}
         if retry_after is not None:
             # A SECONDARY rate limit: the quota is not spent, the renderer is
             # asking for a pause, and `Retry-After` is the time that fixes it.
             headers = {"retry-after": retry_after, "x-ratelimit-remaining": "42"}
+        if body and not headers:
+            # The header-less shape: quota remaining, no `Retry-After`, and
+            # the message as the only witness (#1773, round 11).
+            headers = {"x-ratelimit-remaining": "42"}
         return urllib.error.HTTPError(
             helpers.MARKDOWN_API_URL, code, "refused", email.message_from_string(
                 "\n".join(f"{name}: {value}" for name, value in headers.items())
-            ), None
+            ), io.BytesIO(body.encode("utf-8")) if body else None
         )
+
+    SECONDARY_BODY = (
+        '{"message": "You have exceeded a secondary rate limit. Please wait a few minutes '
+        'before you try again.", "documentation_url": "https://docs.github.com/rest"}'
+    )
+    FORBIDDEN_BODY = '{"message": "Resource not accessible by integration"}'
+
+    # intent: fix
+    def test_a_header_less_secondary_limit_is_time_rather_than_the_token(self) -> None:
+        """Permanence decides, and the message is the witness (#1773, round 11).
+
+        GitHub documents secondary 403/429 responses that carry neither
+        `Retry-After` nor an exhausted quota, and the classifier recognised a
+        secondary limit by the header alone -- so such a response read as a
+        forbidden token, refused the write, and told the author to export a
+        token the renderer accepts, when waiting is what fixes it. Quota
+        remaining cannot be the witness either: a real forbidden token has
+        quota remaining too. The response body's own message separates them.
+
+        What stays unverified: whether GitHub's live secondary 403 for THIS
+        endpoint carries that message. Both shapes are classified here; the
+        live shape has not been observed.
+        """
+        token = {"GH_TOKEN": "a-token"}
+        paused = self.raised_by(self.http_error(403, body=self.SECONDARY_BODY), token)
+        self.assertEqual(paused.cause, "secondary rate limit")
+        self.assertTrue(paused.transient)
+        self.assertIsNone(paused.repair)
+        self.assertIn("secondary rate limit", paused.args[0])
+        for code in (403, 429):
+            with self.subTest(code=code):
+                self.assertEqual(
+                    helpers.http_failure_cause(self.http_error(code, body=self.SECONDARY_BODY)),
+                    "secondary rate limit",
+                )
+
+    # intent: control
+    def test_a_header_less_403_that_says_nothing_is_still_the_token(self) -> None:
+        # The control the decision needs: a forbidden token also has quota
+        # remaining and no `Retry-After`, so without the message the answer is
+        # unchanged -- permanent, refusing, with a repair the author can act
+        # on.
+        token = {"GH_TOKEN": "a-token"}
+        refused = self.raised_by(self.http_error(403, body=self.FORBIDDEN_BODY), token)
+        self.assertEqual(refused.cause, "forbidden token")
+        self.assertFalse(refused.transient)
+        self.assertEqual(
+            helpers.http_failure_cause(self.http_error(403)), "forbidden token"
+        )
+
+    # intent: guard
+    def test_reading_the_body_leaves_it_readable(self) -> None:
+        # The body is a stream: reading it to classify consumed it, so a
+        # caller that reads it afterwards for its own message got nothing.
+        error = self.http_error(403, body=self.SECONDARY_BODY)
+        self.assertTrue(helpers.says_secondary_rate_limit(error))
+        self.assertTrue(helpers.says_secondary_rate_limit(error))
+        self.assertIn("secondary rate limit", error._body_text)
 
     def test_each_raise_site_decides_which_family_it_is(self) -> None:
         """All THREE sites, and the permanence split inside one of them.
