@@ -8795,13 +8795,30 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
             "execution_for_field_walk",
             REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "execution.py",
         )
-        fields = ("index", "status", "item", "detail", "kind", "check_name", "proof_url")
+        # Each field is driven in a record where THAT field is what the
+        # sentence is about — otherwise the walk passes without exercising it,
+        # which is how a `status` mutant survived this test's first version:
+        # the entry's index was unreadable, so the index reason was returned
+        # and the status branch never ran.
+        fields = {
+            "index": {"index": "HOSTILE"},
+            "status": {"index": 2, "status": "HOSTILE"},
+            "item": {"index": "2", "item": "HOSTILE"},
+            "detail": {"index": "2", "detail": "HOSTILE"},
+            "kind": {"index": "2", "kind": "HOSTILE"},
+            "check_name": {"index": "2", "check_name": "HOSTILE"},
+            "proof_url": {"index": "2", "proof_url": "HOSTILE"},
+        }
         self.assertEqual(len(fields), 7, "the fields this walk claims to cover")
-        for field in fields:
+        reached: set[str] = set()
+        for field, overrides in fields.items():
             for name, hostile in self.HOSTILE_VALUES.items():
                 with self.subTest(field=field, value=name):
                     entries = self.entries("2")
-                    entries[1][field] = hostile
+                    entries[1].update(
+                        {key: (hostile if value == "HOSTILE" else value)
+                         for key, value in overrides.items()}
+                    )
                     _, _, said, _ = self.write(entries)
                     comment = (
                         execution.compose_uncarried_notes_comment(None, said, "a" * 40)
@@ -8812,10 +8829,15 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
                     self.assertNotIn("-->", comment)
                     for marker in ("![x](", "[click](", "@fairchild", "## Not a heading"):
                         if marker in comment:
+                            reached.add(field)
                             self.assertTrue(
                                 self.inside_a_code_span(comment, marker),
                                 f"{field}/{name}: {marker} reached the comment active",
                             )
+        # And the walk is not vacuous: the three fields that DO reach a
+        # comment reached one here. The other four never appear in a
+        # stand-down sentence at all, which is the answer for them.
+        self.assertEqual(reached, {"index", "status", "item"}, "the walk exercised nothing")
 
     # intent: guard
     def test_the_recovery_line_fits_the_reason_the_write_stood_down(self) -> None:
