@@ -481,19 +481,19 @@ def _apply_ci_updates(
     a note, and that note is posted only while the head it names is still the
     head: when it has moved the note goes unsaid, and the next event says it
     against the head it belongs to.
+
+    A collision arriving on the retry read -- an owner giving two entries one
+    index between this run's first read and its write -- is refused by
+    `_updates_targeting_unchanged_entries`, which keys on the same definition
+    of an index and hands a colliding one no check name, so every update
+    aimed at it is dropped and the loop returns the body untouched. A second
+    guard was added in the loop for that case and then measured redundant:
+    two guards for one condition on one path is the shape this family keeps
+    taking, so the redundant one is gone rather than kept as depth (#1778,
+    round 4). The guard before the write stays, because it is what stops the
+    check-run READS, which no narrowing can.
     """
     for attempt in range(1, MAX_WRITE_ATTEMPTS + 1):
-        # Re-run on every body this loop is about to write, not once before
-        # it. The retry re-reads a body an owner may have edited in between,
-        # and a collision arriving there took a false `[complete]` from
-        # another check's verdict because the guard had already had its turn
-        # (#1778, round 3).
-        if (shared := colliding_indexes(evidence_entries(body))):
-            log(
-                f"PR #{pr_number}: evidence entries share index(es) "
-                f"{', '.join(str(index) for index in shared)}; leaving the contract for the author"
-            )
-            return body
         safe_updates = _updates_targeting_unchanged_entries(body, updates)
         if not safe_updates:
             return body

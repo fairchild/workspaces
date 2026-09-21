@@ -1084,15 +1084,39 @@ class AMixedKindIndexManufacturesACompletionTests(unittest.TestCase):
             verify.process_pr(321, {})
         return written.get("body"), gh_calls, reads
 
-    def test_neither_order_writes_verifies_or_clears(self) -> None:
-        for label, entries in (
-            ("the non-ci entry last", [self.CI, self.DIFF]),
-            ("the ci entry last", [self.DIFF, self.CI]),
-        ):
+    ORDERS = (
+        ("the non-ci entry last", "CI", "DIFF"),
+        ("the ci entry last", "DIFF", "CI"),
+    )
+
+    def ordered(self, first: str, second: str) -> list[dict[str, object]]:
+        return [getattr(self, first), getattr(self, second)]
+
+    def test_neither_order_makes_a_check_run_read(self) -> None:
+        """The pre-write guard's own signature, and the only one it owns.
+
+        With the in-loop guard gone, what this guard is FOR is avoiding work:
+        a contract the lane cannot read is not worth a check-run lookup. The
+        WRITE is refused by the narrowing, so a test asserting "no body was
+        written" passes with this guard deleted and is a test wearing the
+        narrowing's name (#1778, round 4).
+
+        So this fails by observing a read.
+        """
+        for label, first, second in self.ORDERS:
             with self.subTest(order=label):
-                body, gh_calls, reads = self.run_over(entries)
+                _, _, reads = self.run_over(self.ordered(first, second))
+                self.assertEqual(reads, [], f"{label}: a check run was read for a contract it cannot read")
+
+    def test_neither_order_writes_or_clears(self) -> None:
+        # The outcome, which two guards hold between them: the pre-write one
+        # stops the reads and the narrowing stops the write. Neither mutant
+        # reddens this alone, and that is what it documents -- the property,
+        # not the mechanism.
+        for label, first, second in self.ORDERS:
+            with self.subTest(order=label):
+                body, gh_calls, _ = self.run_over(self.ordered(first, second))
                 self.assertIsNone(body, f"{label}: a contract it cannot read was written")
-                self.assertEqual(reads, [], f"{label}: it was verified anyway")
                 self.assertNotIn(
                     ["pr", "edit", "321", "--remove-label", "blocked:evidence"],
                     gh_calls,
@@ -1116,15 +1140,24 @@ class AMixedKindIndexManufacturesACompletionTests(unittest.TestCase):
         self.assertIn("- [complete] ", body)
 
 
-class TheGuardRunsOnEveryBodyTheRunWritesTests(unittest.TestCase):
-    """A collision arriving mid-flight took a false completion (#1778, round 3).
+class TheNarrowingRefusesACollisionOnTheRetryReadTests(unittest.TestCase):
+    """What refuses a collision that arrives mid-flight, named (#1778, round 4).
 
-    The guard ran once, in `process_pr`, before the write. `_apply_ci_updates`
-    then re-reads the live body on a retry — an owner edited the description
-    between the read and the write — and re-applied the updates to whatever
-    came back, without asking again. A twin entry injected there named the
+    `_apply_ci_updates` re-reads the live body on a retry — an owner edited
+    the description between this run's read and its write — and re-applies
+    the updates to whatever comes back. A twin entry injected there named the
     same check, so the narrowing kept the update and the write landed a
     `[complete]` on both lines.
+
+    `_updates_targeting_unchanged_entries` is what refuses it now: keyed on
+    the one definition of an index, a colliding index has no single check
+    name, so every update aimed at it is dropped and the loop returns the
+    body untouched. Round 3 added a second guard inside the loop for the same
+    condition and this test could not tell them apart — it went red only when
+    both were broken. The redundant guard is gone, and this test fails when
+    the narrowing alone is broken, which is the isolation each guard owes:
+    the pre-write guard is covered by `test_neither_order_writes_verifies_or_clears`
+    (which asserts no check-run READS, the thing only it can stop).
     """
 
     GREEN = [
@@ -1136,7 +1169,7 @@ class TheGuardRunsOnEveryBodyTheRunWritesTests(unittest.TestCase):
         }
     ]
 
-    def test_a_collision_injected_on_the_retry_read_is_refused(self) -> None:
+    def test_the_narrowing_drops_every_update_aimed_at_the_injected_index(self) -> None:
         clean = body_with_entries([ci_entry(index=1)])
         injected = body_with_entries(
             [ci_entry(index=1), dict(ci_entry(index=1), detail="a second line the owner added")]
