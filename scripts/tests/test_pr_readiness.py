@@ -5185,28 +5185,40 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
 
     # intent: guard
     def test_the_gate_says_the_drift_wherever_it_is_run(self) -> None:
-        """The WIRING, felt on the interpreter the suite runs under (#1771, round 7).
+        """The WIRING, felt wherever the suite runs (#1771, rounds 7 and 8).
 
-        `evaluate` appends the drift notice to what it returns, and on the
-        interpreter this suite runs under the versions match — so the notice
-        never fires and the hook could be deleted with every test still
-        green. The version is patched here instead of hoped for, so the
-        wiring is pinned wherever the suite runs and in both directions.
+        `evaluate` appends the drift notice to what it returns, and where the
+        versions match the notice never fires — so the hook could be deleted
+        with every test still green. The version is patched here instead of
+        hoped for.
+
+        ALL THREE cases patch it, including the control. Round 7 left the "no
+        drift" half reading the real interpreter, which is the same
+        dependence one layer down: the suite passed under 3.13 and failed
+        under 3.11 and 3.12, where the un-patched notice really is present
+        and the control asserted its absence. Nothing here reads
+        `unicodedata.unidata_version` as it comes.
         """
         body = GOOD_BODY
-        self.assertNotIn(
-            "Unicode data", " ".join(pr_readiness.evaluate(pr(body), self.FILES).notices)
-        )
-        for version, expected in (("14.0.0", "BEHIND"), ("16.0.0", "AHEAD")):
+        for version, expected in (
+            (pr_readiness.DEFAULT_IGNORABLE_TRANSCRIBED_FROM, None),
+            ("14.0.0", "BEHIND"),
+            ("16.0.0", "AHEAD"),
+        ):
             with self.subTest(running=version):
                 with mock.patch.object(unicodedata, "unidata_version", version):
                     result = pr_readiness.evaluate(pr(body), self.FILES)
                     notice = pr_readiness.unicode_data_notice()
                 said = " ".join(result.notices)
+                self.assertTrue(result.ok, "a drift notice must not fail the body")
+                if expected is None:
+                    self.assertIsNone(notice, "a matching version said something")
+                    self.assertNotIn("Unicode data", said)
+                    self.assertNotIn("BEHIND the gate's table", said)
+                    continue
                 self.assertIsNotNone(notice)
                 self.assertIn(expected, notice, "the notice does not name its direction")
                 self.assertIn(notice, said, "the gate did not carry the drift into its output")
-                self.assertTrue(result.ok, "a drift notice must not fail the body")
 
     # intent: guard
     def test_the_two_directions_ask_for_different_things(self) -> None:
