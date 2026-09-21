@@ -2527,6 +2527,16 @@ def write_evidence_status_section(
             # ahead under a weaker check than a lane runs, and the author is
             # the one who has to know that (#1773, round 2).
             _announce_unverified(announcements, answer.unverified)
+        else:
+            # And retracted when a later render in the same run answers. A
+            # failure is not cached, so an earlier question that went unasked
+            # can be asked again -- and telling an author the page could not
+            # be reached about a body it was then reached about is a sentence
+            # they cannot act on (#1773, round 3). This is the LAST question,
+            # and it is about the body being returned.
+            announcements[:] = [
+                note for note in announcements if not is_unverified_announcement(note)
+            ]
         if answer.refusal:
             return _stood_down(source, answer.refusal, announcements)
         return SectionWrite(candidate, None, announcements)

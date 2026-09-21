@@ -1184,12 +1184,12 @@ class FoldedSectionReader(HTMLParser):
     and a heading carrying a tag is counted here because it is counted there,
     even though neither reader would choose it.
 
-    Depth rather than presence, so a `<details>` nested inside another still
-    folds what it holds. `<summary>` needs no case of its own: it is inside
-    the element like everything else, and a page does not put an h2 in one.
-    A `<details>` written INSIDE a heading opens after the `h2` start tag, so
-    the heading's own depth is taken before it and such a heading is not its
-    own fold.
+    A stack rather than a count, because whether a heading is folded is
+    whether any disclosure still open around it is CLOSED. `<details open>` is
+    displayed on load and hides nothing, so it contributes no fold; a closed
+    one nested inside an open one still does (#1773, round 3). A `<details>`
+    written INSIDE a heading opens after the `h2` start tag, so the heading's
+    own state is taken before it and such a heading is not its own fold.
     """
 
     def __init__(self, heading: str) -> None:
@@ -1198,33 +1198,40 @@ class FoldedSectionReader(HTMLParser):
         # One entry per heading the page shows that reads as this section, in
         # document order: True where a fold holds it.
         self.folded: list[bool] = []
-        self._fold_depth = 0
+        # One entry per `<details>` still open, True where it is a CLOSED one.
+        self._folds: list[bool] = []
         self._heading: list[str] | None = None
-        self._heading_fold_depth = 0
+        self._heading_folded = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         name = tag.lower()
         if name == "details":
-            self._fold_depth += 1
+            # `<details open>` shows its contents on load, so it hides nothing
+            # and folds nothing. GitHub returns it as `<details open="">`, and
+            # counting it refused a section the page displays (#1773, round 3).
+            # A CLOSED disclosure nested inside an open one still folds what it
+            # holds, which is why this is a stack rather than a flag.
+            self._folds.append(not any(key.lower() == "open" for key, _ in attrs))
         elif name == "br" and self._heading is not None:
             # A space, which is what `inline_text` makes of a break in a
             # heading. The two readers have to enumerate one set.
             self._heading.append(" ")
         elif name == "h2":
             self._heading = []
-            self._heading_fold_depth = self._fold_depth
+            self._heading_folded = any(self._folds)
 
     def handle_endtag(self, tag: str) -> None:
         name = tag.lower()
         if name == "details":
-            # Never below zero: a `</details>` the renderer emits without an
-            # opening one is not a document this reader has to model, and a
-            # negative depth would read a later fold as no fold at all.
-            self._fold_depth = max(self._fold_depth - 1, 0)
+            # A `</details>` the renderer emits without an opening one is not a
+            # document this reader has to model, and popping an empty stack
+            # would read a later fold as no fold at all.
+            if self._folds:
+                self._folds.pop()
         elif name == "h2" and self._heading is not None:
             text, self._heading = "".join(self._heading), None
             if heading_identity(text) == self.wanted:
-                self.folded.append(self._heading_fold_depth > 0)
+                self.folded.append(self._heading_folded)
 
     def handle_data(self, data: str) -> None:
         if self._heading is not None:
@@ -1306,6 +1313,19 @@ def _unshown_refusal(body: str, heading: str) -> str:
     )
 
 
+# How much of the author's line a refusal quotes. The line is named by its
+# NUMBER, so the quotation is there to recognise it by, not to reproduce it --
+# and a `<details …>` carrying a long attribute is a line a body can hold
+# 65,536 characters of, which composed a comment past what GitHub stores and
+# got the whole note refused (#1773, round 3).
+QUOTED_LINE_LIMIT = 200
+
+
+def _quotable(line: str) -> str:
+    """Enough of a line to recognise it by, with an ellipsis where the rest went."""
+    return line if len(line) <= QUOTED_LINE_LIMIT else f"{line[: QUOTED_LINE_LIMIT - 1]}\u2026"
+
+
 def _folded_refusal(written: str, heading: str) -> str:
     """Why a section the page folds away is not a write, naming the disclosure that folds it."""
     line = section_heading_line(written, heading)
@@ -1319,7 +1339,7 @@ def _folded_refusal(written: str, heading: str) -> str:
         # after which an `@name` in the same tag is a mention GitHub delivers
         # to someone with nothing to do with this (#1730, round 2; #1773,
         # round 2).
-        opening = MARKDOWN_LINE_ENDING_RE.split(written)[at].strip()
+        opening = _quotable(MARKDOWN_LINE_ENDING_RE.split(written)[at].strip())
         where = f"inside the `<details>` opened at line {at + 1} ({code_span(opening)})"
     return (
         f"the `## {heading}` section this write places renders {where}, so the page folds it "
@@ -1337,21 +1357,59 @@ def unverified_note(reason: str) -> str:
     )
 
 
-def could_be_folded(written: str, heading_line: int) -> bool:
+# A token no author writes, appended to the heading this write places so the
+# page can be asked about THAT heading and no other. Renaming a heading cannot
+# change what folds it, so the probe body's fold structure is the real one.
+PLACEMENT_PROBE_MARK = "wsx7placementprobe"
+SETEXT_UNDERLINE_RE = re.compile(r"^[ \t]{0,3}(=+|-+)[ \t]*$")
+
+
+def probe_body_naming_one_heading(written: str, heading: str, heading_line: int) -> str | None:
+    """`written` with the heading this write places renamed to something unique, or None.
+
+    The page cannot be asked "is the heading I placed folded" while several
+    headings read as that name, and which rendered heading is which cannot be
+    decided without a model of what the renderer does to a heading carrying a
+    tag -- a model round 2 measured as needing two branches. So the question
+    is made unambiguous instead of the answer being guessed: the placed
+    heading gets a name nothing else has, and the page is asked about that.
+
+    A setext underline below the renamed line goes, because the line above it
+    is an ATX heading now and the underline would be a rule of its own. The
+    replacement is one line for one line, so every line number below it holds
+    and the body's block structure -- which is what folds anything -- is
+    untouched.
+    """
+    lines = MARKDOWN_LINE_ENDING_RE.split(written)
+    if not 0 <= heading_line < len(lines):
+        return None
+    lines[heading_line] = f"## {heading} {PLACEMENT_PROBE_MARK}"
+    following = heading_line + 1
+    if following < len(lines) and SETEXT_UNDERLINE_RE.match(lines[following]):
+        lines[following] = ""
+    return "\n".join(lines)
+
+
+def could_be_folded(written: str) -> bool:
     """Whether anything above this heading could fold it, read as text rather than as structure.
 
     A page folds a heading only inside a `<details>`, and a `<details>` is
-    text an author wrote above it. So a body with no such opening tag above
-    the heading has nothing to ask the page about, and asking anyway would
-    spend a request on every ordinary write.
+    text an author wrote. So a body with no such opening tag has nothing to
+    ask the page about, and asking anyway would spend a request on every
+    ordinary write.
+
+    The WHOLE body, not the text above the heading. Gating on what sits above
+    while asking a question about the body was a rule whose answer depended on
+    where an unrelated disclosure happened to sit -- the same body refused or
+    placed according to something that had nothing to do with it (#1773,
+    round 3). The gate and the question are about the same text now.
 
     Read as text on purpose, which makes it over-inclusive: a `<details>`
-    inside a fenced example above the heading costs one call and the page
-    answers that nothing is folded. Under-inclusive it cannot be -- a fold
-    needs the tag -- and that is the direction that would matter.
+    inside a fenced example costs one call and the page answers that nothing
+    is folded. Under-inclusive it cannot be -- a fold needs the tag -- and
+    that is the direction that would matter.
     """
-    above = "\n".join(MARKDOWN_LINE_ENDING_RE.split(written)[:heading_line])
-    return DISCLOSURE_OPEN_RE.search(above) is not None
+    return DISCLOSURE_OPEN_RE.search(written) is not None
 
 
 class PlacementAnswer(NamedTuple):
@@ -1420,32 +1478,33 @@ def placement_refusal(body: str, written: str, heading: str) -> PlacementAnswer:
     if not has_markdown_section(written, heading):
         return PlacementAnswer(refusal=_unshown_refusal(body, heading))
     heading_line = section_heading_line(written, heading)
-    if heading_line is None or not could_be_folded(written, heading_line):
+    if heading_line is None or not could_be_folded(written):
         return PlacementAnswer()
-    page = rendered_page(written)
+    probe = probe_body_naming_one_heading(written, heading, heading_line)
+    if probe is None:
+        return PlacementAnswer(refusal=_unshown_refusal(body, heading))
+    page = rendered_page(probe)
     if page.unverified is not None:
         return PlacementAnswer(unverified=unverified_note(page.unverified))
-    shown = folded_headings_on_the_page(page.html, heading)
+    marked = f"{heading} {PLACEMENT_PROBE_MARK}"
+    shown = folded_headings_on_the_page(page.html, marked)
     if not shown:
         # A heading the parse reads and the page does not show at all. The
         # same refusal as a swallowed section, because that is what it is.
         return PlacementAnswer(refusal=_unshown_refusal(body, heading))
-    # ANY of them, rather than the one this write lands on. Which one that is
-    # cannot be decided without a model of GitHub's sanitizer, and the
-    # measurement says so: `## <details>Evidence Status</details>` comes back
-    # as `<h2><details><summary>Details</summary>Evidence Status</details></h2>`
-    # -- the renderer ADDS a summary, so that heading's text is no longer this
-    # heading and the page shows one match where the body has two; while
-    # `## Evidence <del>Status</del>` comes back reading as this heading and
-    # the page shows two. An index into one list read against the other names
-    # some other heading, which is the defect this round exists to close, and
-    # it is unsafe counted from either end (#1773, round 2).
-    #
-    # So no index is taken. A body whose page folds a heading of this name
-    # away is refused, whichever heading it is. That can only ADD refusals,
-    # and the one it adds needs two headings a reader sees under one name --
-    # the shape `rejected_heading_note` already tells an author to repair.
-    return PlacementAnswer(refusal=_folded_refusal(written, heading) if any(shown) else None)
+    if len(shown) != 1:
+        # The mark is not a name an author writes, so more than one heading
+        # carrying it is a body this check cannot reason about. Refusing says
+        # so rather than picking one.
+        return PlacementAnswer(refusal=_unshown_refusal(body, heading))
+    # Exactly the heading this write places, because the probe gave it a name
+    # nothing else has. "Any heading of this name" was the round-2 answer and
+    # it refused placements a reader can see: a raw `<h2>Evidence Status</h2>`
+    # inside a CLOSED `<details>`, or a heading inside a `<summary>`, is a
+    # folded heading of this name that the PARSER never reads as an h2 at all
+    # -- so `rejected_heading_note` cannot flag it either, and the author got
+    # a refusal naming no line and no repair (#1773, round 3).
+    return PlacementAnswer(refusal=_folded_refusal(written, heading) if shown[0] else None)
 
 
 def insert_markdown_section(
