@@ -5159,26 +5159,44 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
         """
         self.assertEqual(pr_readiness.MEASURED_UNIDATA_VERSION, "15.1.0")
         self.assertEqual(pr_readiness.MEASURED_LEADING_RUN_SIZE, 4223)
-        self.assertEqual(
-            len(pr_readiness.INVISIBLE_LEADING),
-            pr_readiness.MEASURED_LEADING_RUN_SIZE,
-            "the run's size moved: re-derive the ranges and re-measure the pin",
-        )
-        self.assertEqual(
-            unicodedata.unidata_version,
-            pr_readiness.MEASURED_UNIDATA_VERSION,
-            "this interpreter's Unicode data is not the one the run was measured against",
-        )
+        if unicodedata.unidata_version == pr_readiness.MEASURED_UNIDATA_VERSION:
+            self.assertEqual(
+                len(pr_readiness.INVISIBLE_LEADING),
+                pr_readiness.MEASURED_LEADING_RUN_SIZE,
+                "the run's size moved under the Unicode data it was measured against: "
+                "re-derive the ranges and re-measure the pin",
+            )
+            self.assertIsNone(pr_readiness.unicode_data_notice())
+            return
+        # A different interpreter is not a defect and does not fail the suite.
+        # What it must not be is SILENT: the gate says so in its own output,
+        # naming both versions and what to re-derive. Measured: `uv run
+        # --script` resolves 3.13.13 / UCD 15.1.0 here, and the same file
+        # under 3.11 builds a 4,216-character run (#1771, round 6).
+        notice = pr_readiness.unicode_data_notice()
+        self.assertIsNotNone(notice, "the interpreter's Unicode data moved with nothing said")
+        self.assertIn(unicodedata.unidata_version, notice)
+        self.assertIn(pr_readiness.MEASURED_UNIDATA_VERSION, notice)
+        # Whether the SIZE moves with the version is a question for the
+        # measurement, not for an assumption: measured here, 3.11 (UCD 14.0.0)
+        # builds 4,216 and 3.12 (UCD 15.0.0) builds the same 4,223 as 3.13
+        # (15.1.0). The version is the thing that is loud; the size is what
+        # the pin above checks where it can.
 
     # intent: guard
     def test_a_newer_unicode_is_loud_rather_than_fatal(self) -> None:
-        # A newer interpreter is not a defect, so the drift notice says what
-        # to re-derive and the gate keeps running.
-        self.assertIsNone(pr_readiness.unicode_data_notice())
-        with mock.patch.object(pr_readiness, "DEFAULT_IGNORABLE_TRANSCRIBED_FROM", "14.0.0"):
+        # A newer -- or older -- interpreter is not a defect, so the drift
+        # notice says what to re-derive and the gate keeps running. Asserted
+        # against the running interpreter rather than against the one this was
+        # written on, because the whole point is that the suite is run under
+        # more than one (measured: 3.11 carries UCD 14.0.0 and this test file
+        # is run under it to check exactly that).
+        matching = unicodedata.unidata_version == pr_readiness.DEFAULT_IGNORABLE_TRANSCRIBED_FROM
+        self.assertEqual(pr_readiness.unicode_data_notice() is None, matching)
+        with mock.patch.object(pr_readiness, "DEFAULT_IGNORABLE_TRANSCRIBED_FROM", "0.0.0"):
             notice = pr_readiness.unicode_data_notice()
         self.assertIsNotNone(notice)
-        self.assertIn("14.0.0", notice)
+        self.assertIn("0.0.0", notice)
         self.assertIn(unicodedata.unidata_version, notice)
         self.assertIn("DEFAULT_IGNORABLE_RANGES", notice)
 
