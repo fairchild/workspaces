@@ -9526,6 +9526,270 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
             said[0].startswith(evidence.STOOD_DOWN_ANNOUNCEMENT_PREFIX), said[0]
         )
 
+    # The class the round-20 fix was measured on, kept as data so that the
+    # three tests below read the same population and a shape added to it is
+    # added once (#1778, round 21).
+    UNOWNED_LINE = "- [pending-ci] a line no entry owns -- waiting"
+    INLINE_CONSTRUCTS = (
+        ("emphasis", "verify *the signing profile*"),
+        ("strong", "verify **the lane**"),
+        ("a code span", "verify `swift test`"),
+        ("an inline link", "verify [the run](https://example.invalid/r)"),
+        ("an image", "verify ![the shot](https://example.invalid/s.png)"),
+        ("an autolink", "verify <https://example.invalid/r>"),
+        ("an entity reference", "verify the lane &amp; the profile"),
+        ("strikethrough", "verify ~~the old lane~~"),
+        ("plain", "verify the lane"),
+    )
+    BLOCK_OPENERS = (
+        ("an ordered marker", "1. verify the lane"),
+        ("an ordered marker past one", "2. verify the lane"),
+        ("a two-digit ordered marker", "10. verify the lane"),
+        ("an ordered marker with a paren", "1) verify the lane"),
+        ("a hyphen bullet", "- verify the lane"),
+        ("a star bullet", "* verify the lane"),
+        ("a plus bullet", "+ verify the lane"),
+        ("a quote", "> verify the lane"),
+        ("a quote with no space", ">verify the lane"),
+        ("a heading", "# verify the lane"),
+        ("a second-level heading", "## verify the lane"),
+        ("a sixth-level heading", "###### verify the lane"),
+        ("a backtick fence", "``` verify the lane"),
+        ("a tilde fence", "~~~ verify the lane"),
+        # Not openers, and measured green at `3be40143` for that reason: a
+        # run of hyphens or stars with text after it is a paragraph, not a
+        # thematic break. They are in the population because the population
+        # is "an item opening with block punctuation", not "an item the old
+        # reader got wrong".
+        ("three hyphens and text", "--- verify the lane"),
+        ("three stars and text", "*** verify the lane"),
+    )
+    REFERENCE_SHAPES = (
+        ("a full reference link", "verify [the run][r1]"),
+        ("a collapsed reference link", "verify [r1][]"),
+        ("a shortcut reference link", "verify [r1]"),
+    )
+    DEFINITION = "\n[r1]: https://example.invalid/1\n"
+
+    def beside_an_unowned_line(self, item: str, definition: str = "") -> str:
+        """One entry carrying `item`, a line no entry owns, and the body's
+        link reference definitions where an author would put them."""
+        entries = [
+            {"index": 1, "item": item, "status": "pending-ci",
+             "detail": "waiting", "kind": "ci"},
+            "legacy",
+        ]
+        return self.body(entries).replace(
+            "\n\n## Validation", f"\n{self.UNOWNED_LINE}\n\n## Validation", 1
+        ) + definition
+
+    def lines_named_by(self, item: str, definition: str = "") -> tuple[str, list[str], list[str]]:
+        """The written body, every line the write named, and the announcements.
+
+        One reading of the sentences for the whole class, so that a test of
+        sixteen shapes does not re-derive the quoting rule sixteen times.
+        Both sentences that can name a line are read: the one the page's
+        before/after comparison composes, and the one the write composes from
+        the body's own text when the page could not be read.
+        """
+        source = self.beside_an_unowned_line(item, definition)
+        said: list[str] = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            written = self.evidence().update_evidence_entries(
+                source, {1: {"status": "complete", "detail": "green"}}, announcements=said
+            )
+        named: list[str] = []
+        for note in said:
+            for pattern in (
+                r"replaced (?:this line|these lines) with nothing: (.+?)\. Rewriting",
+                r"rather than from the page: (.+?)\. Rewriting",
+            ):
+                found = re.search(pattern, note, re.S)
+                if found:
+                    named += [piece.strip().strip("`") for piece in found.group(1).split("`, `")]
+        return written, [line.strip("`") for line in named], said
+
+    def assertNamesOnlyTheUnownedLine(self, shape: str, item: str, definition: str = "") -> None:
+        written, named, said = self.lines_named_by(item, definition)
+        self.assertNotIn("a line no entry owns", written, f"{shape}: the line did not leave")
+        self.assertIn(
+            "[pending-ci] a line no entry owns -- waiting", named,
+            f"{shape}: a line left the body and nothing named it: {said}",
+        )
+        self.assertEqual(
+            [line for line in named if "a line no entry owns" not in line], [],
+            f"{shape}: the write named a line it had just written back: {said}",
+        )
+
+    # intent: fix
+    # marker: RED at `3be40143`, its own base -- `FAILED (failures=14)` over
+    # the sixteen shapes -- and red on main, `FAILED (failures=16)`, where
+    # no sentence names a replaced line at all.
+    def test_an_item_opening_with_block_punctuation_reads_as_its_line_reads(self) -> None:
+        """The item is INLINE content, and reading it as a document ate its first token.
+
+        Round 20 read the item with `MARKDOWN.parse`, which runs the block
+        phase over it: an item the author wrote as `1. verify the lane` lost
+        its `1. ` to a list marker, while the LINE holding that item keeps it
+        as text -- a marker after `[pending-ci] ` is not at the start of a
+        block. The two sides then disagreed about a line the write had just
+        rendered back, and the author was told it was replaced with nothing;
+        the repair for that sentence duplicates the line.
+
+        An item is inline content of a line, never a block of its own, so it
+        is read with `parseInline`, which has no block phase to eat a marker.
+        Measured over this population at `3be40143`: fourteen of the sixteen
+        shapes name the entry's own line, the two that do not are the ones
+        that are not block openers at all (#1778, round 21).
+        """
+        for shape, item in self.BLOCK_OPENERS:
+            with self.subTest(item=shape):
+                self.assertNamesOnlyTheUnownedLine(shape, item)
+
+    # intent: fix
+    # marker: RED at `3be40143` -- `FAILED (failures=4)`: the three
+    # reference shapes and the shadowing subtest -- and red on main,
+    # `FAILED (failures=4)`.
+    def test_an_item_resolves_its_references_where_its_line_resolves_them(self) -> None:
+        """The same reader is not enough; it has to read in the same context.
+
+        A link reference resolves against the document's definitions, so an
+        item read in a document with none rendered `verify [r1]` literally
+        while the line, read in the body, rendered `verify r1` -- and the
+        write announced as replaced a line quoting a URL the author never
+        wrote (`verify [r1](https://example.invalid/1)`, measured at
+        `3be40143`). The item is read in the context the line is read in:
+        the body parsed once, for its definitions and no more.
+
+        Not wider than that, which is the other way to be wrong: re-reading
+        the body per item would let a paragraph edited elsewhere change what
+        an item renders as. The two cases that pin the boundary are the last
+        two subtests -- a definition the item does not reference changes
+        nothing, and a definition it does reference is followed, because the
+        line follows it too (#1778, round 21).
+        """
+        for shape, item in self.REFERENCE_SHAPES:
+            with self.subTest(item=shape):
+                self.assertNamesOnlyTheUnownedLine(shape, item, self.DEFINITION)
+        # A definition the item does not reference leaves its reading alone:
+        # the announcements are the same bytes with and without it.
+        for shape, item in (("plain", "verify the lane"), ("a shortcut name", "verify [r1]")):
+            with self.subTest(unrelated=shape):
+                alone = self.lines_named_by(item)[2]
+                beside = self.lines_named_by(item, "\n[r9]: https://example.invalid/9\n")[2]
+                self.assertEqual(
+                    beside, alone,
+                    f"{shape}: a definition the item does not reference changed its reading",
+                )
+        # And the definition it DOES reference is followed. That is the
+        # decision this states: the item reads `[r1]` as a link because the
+        # line reads it as a link, and a rule that made the item read it
+        # literally would put the two sides back in disagreement.
+        with self.subTest(shadowing="the body defines the name the item uses"):
+            self.assertNamesOnlyTheUnownedLine(
+                "a shortcut name the body defines", "verify [r1]", self.DEFINITION
+            )
+
+    # intent: control
+    # marker: GREEN at `3be40143`, its own base -- `Ran 1 test ... OK` --
+    # which is what makes it a control; red on main, `FAILED (failures=9)`.
+    def test_the_inline_constructs_the_page_reader_flattens_still_hold(self) -> None:
+        # The nine that were already right at `3be40143`, kept as a control
+        # so that the reader this round changes is measured against the
+        # class it was already answering rather than only against the shapes
+        # it got wrong.
+        for shape, item in self.INLINE_CONSTRUCTS:
+            with self.subTest(item=shape):
+                self.assertNamesOnlyTheUnownedLine(shape, item)
+
+    # intent: fix
+    # marker: RED at `3be40143` -- `FAILED (failures=1)`: the section was
+    # rewritten, the line left, and nothing said so -- and red on main.
+    def test_a_section_the_reader_refused_before_the_write_still_says_what_left(self) -> None:
+        """The one shape where the BEFORE half of the fail-closed condition decides anything.
+
+        The reader refuses the whole section when an item carries inline HTML,
+        so `before` is empty, every line reads as "not replaced", and the
+        write goes ahead and rewrites the section: the author's line leaves
+        and the only sentence is the scalar one, with no replaced clause.
+        Main drops the same line, so the LOSS is not this branch's; the
+        SILENCE is, because the criterion this change states is that nothing
+        leaves without a line saying it left.
+
+        An empty `replaced` and an unreadable page are different results, and
+        the sentence says which one this is: it carries the reader's own
+        reason and names what left from the body's own text. The page is not
+        read around the refusal -- that is the second renderer round 17
+        closed -- and what left is measured rather than reconstructed: the
+        section's source lines before, minus every line still in the body
+        after, minus the lines this write rendered, minus the lines whose
+        item this write rendered (#1778, round 21).
+        """
+        item = "verify <b>the profile</b>"
+        source = self.beside_an_unowned_line(item)
+        _, unreadable_before = self.evidence()._rendered_status_lines(source)
+        self.assertEqual(
+            unreadable_before, "an item carries inline HTML (<b>)",
+            "the before page was readable; the case is not built",
+        )
+        written, named, said = self.lines_named_by(item)
+        self.assertNotIn("a line no entry owns", written, "the line did not leave")
+        self.assertEqual(named, ["- [pending-ci] a line no entry owns -- waiting"], said)
+        # The reason the reader gave travels with the sentence, so the author
+        # can see why it is quoting their bytes rather than the page.
+        spoken = " ".join(said)
+        self.assertIn("could not be read before this write", spoken)
+        self.assertIn("`an item carries inline HTML (<b>)`", spoken)
+        # And the entry's own line, rewritten in place, is not named beside it.
+        self.assertNotIn("the profile", spoken.split("from the page:")[1])
+
+    # intent: guard
+    # marker: red at `3be40143`, its own base, only on a NAME this round adds
+    # -- `ERROR: AttributeError: says_text_was_not_carried` -- and red the
+    # same way on main. The behaviour it pins is this round's, but a test
+    # that cannot run at its base is not behaviourally red there, and the
+    # two are counted apart (#1778, round 21).
+    def test_the_sentence_about_a_loss_is_said_once(self) -> None:
+        """Two writers, one rule, asked through one predicate.
+
+        The carry path already tells the author when text under the heading
+        could not be kept, and the sentence above tells them what a write
+        took. On a body that is both -- a paragraph under the heading, and a
+        reader that refused the section -- they are two sentences about one
+        loss, and the author reads two. `says_text_was_not_carried` is the
+        one spelling of the question, beside the one composer of the
+        sentence (#1778, round 21).
+        """
+        evidence = self.evidence()
+        self.assertTrue(
+            evidence.says_text_was_not_carried(
+                evidence._uncarried_note("a paragraph sits under the heading", 7, "A note.")
+            )
+        )
+        self.assertFalse(evidence.says_text_was_not_carried("This write replaced this line"))
+        entries = [
+            {"index": 1, "item": "verify <b>the profile</b>", "status": "pending-ci",
+             "detail": "waiting", "kind": "ci"},
+            "legacy",
+        ]
+        # A continuation under the status line is text the carry path cannot
+        # keep -- half a sentence is not a note -- and the inline HTML in the
+        # item is what makes the page unreadable before the write, so both
+        # sentences have something to say about the same loss.
+        source = self.body(entries).replace(
+            "\n\n## Validation", "\n  continued by the author here\n\n## Validation", 1
+        )
+        said: list[str] = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            evidence.update_evidence_entries(
+                source, {1: {"status": "complete", "detail": "green"}}, announcements=said
+            )
+        losses = [note for note in said if evidence.says_text_was_not_carried(note)]
+        self.assertEqual(len(losses), 1, said)
+        self.assertEqual(
+            [note for note in said if "could not be read before this write" in note], [], said
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
