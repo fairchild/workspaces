@@ -993,7 +993,13 @@ class RenderedStatusLineTests(unittest.TestCase):
         # nothing else touches the body, so both views read what the author
         # wrote. A body already in LF reaches them unchanged.
         seen: list[str] = []
-        with mock.patch.object(pr_readiness, "rendered_status_lines", side_effect=lambda body: seen.append(body) or []):
+        # Patched where the gate now reads: `status_lines_by_view`, since the
+        # two kinds of line take different readers (#1771, round 2).
+        with mock.patch.object(
+            pr_readiness,
+            "status_lines_by_view",
+            side_effect=lambda body: seen.append(body) or pr_readiness.SectionLines([], []),
+        ):
             body = self.body("- [complete] swift test -- 1992 tests passed\n")
             pr_readiness.evaluate(pr(body), self.FILES)
             self.assertEqual(seen, [body])
@@ -3018,6 +3024,90 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
             text = re.sub(r"<[^>]+>", "", html)
             self.assertIn(line, text, f"{name}: the page did not print the line as written")
 
+    # The cross-product the round-1 fixtures could not build: `padded_body`
+    # hardcodes the swallowed `<pre>` and every `PADDED_STATUSES` entry
+    # carries a list marker, so wrapper x NO marker x raw block x a heading
+    # the page really shows was unreachable -- which is the shape the ordinary
+    # path accepted (#1771, round 2).
+    UNSWALLOWED = {
+        "a padded span with no marker": "` [blocked] ` waiting",
+        "double-backtick padding with no marker": "`` [blocked] `` waiting",
+        "a punctuation gap with no marker": "**[blocked]:** waiting",
+    }
+
+    def unswallowed_body(self, line: str) -> str:
+        """A raw block under a heading the page shows, with the status unmarked."""
+        return self.body(f"## Evidence Status\n\n<pre>\n{line}\n</pre>\n\n")
+
+    def test_a_raw_block_under_a_real_heading_is_read_by_the_raw_reader(self) -> None:
+        """Models the criterion: which reader each kind of line takes.
+
+        The sibling below asks the page whether it prints these characters.
+        """
+        for name, line in self.UNSWALLOWED.items():
+            with self.subTest(spelling=name):
+                body = self.unswallowed_body(line)
+                section = pr_readiness.status_lines_by_view(body)
+                self.assertEqual(section.parsed, [], f"{name}: a raw block has no parsed inline")
+                self.assertIn(line, section.printed, name)
+                # The post-parse reader cannot see it, which is correct for
+                # what that reader is; the gate must not be asking it.
+                self.assertFalse(
+                    any(pr_readiness.RENDERED_PENDING_RE.match(one) for one in section.printed),
+                    f"{name}: the post-parse reader matched printed characters",
+                )
+                self.assertTrue(
+                    any(pr_readiness.RAW_HTML_PENDING_RE.match(one) for one in section.printed),
+                    name,
+                )
+                self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok, name)
+
+    def test_the_page_prints_those_unmarked_lines_too(self) -> None:
+        # Asks reality, from recordings taken with the token.
+        for name, line in self.UNSWALLOWED.items():
+            with self.subTest(spelling=name), recorded_page():
+                html = pr_readiness.render_markdown(self.unswallowed_body(line))
+            self.assertIn(line, re.sub(r"<[^>]+>", "", html), name)
+
+    def test_each_reader_takes_the_wrappers_its_input_can_carry(self) -> None:
+        """The criterion, pinned BOTH ways (#1771, round 2).
+
+        The round-1 test asserted that two readers accept the same shapes and
+        said nothing about the third, so removing `CLOSING_WRAPPER` from the
+        post-parse reader was green and ADDING `OPENING_WRAPPER` to it -- which
+        would paper over the routing defect above -- was green too. Each
+        reader's accept set AND its reject set are stated here, over all three
+        axes.
+        """
+        marked, unmarked = "- [blocked] waiting", "[blocked] waiting"
+        wrapped, padded = "- `[blocked]` waiting", "- ` [blocked] ` waiting"
+        colon = "- **[blocked]:** waiting"
+        # Pre-parse views take both wrappers and read a marker as characters.
+        for reader_name, reader, needs_marker in (
+            ("the written view", pr_readiness.PENDING_STATUS_RE, True),
+            ("the raw-block view", pr_readiness.RAW_HTML_PENDING_RE, False),
+        ):
+            with self.subTest(reader=reader_name):
+                search = reader.search if needs_marker else reader.match
+                for line in (marked, wrapped, padded, colon):
+                    self.assertTrue(search(line), f"{reader_name}: {line}")
+                self.assertEqual(
+                    bool(search(unmarked)),
+                    not needs_marker,
+                    f"{reader_name}: the marker rule",
+                )
+        # The post-parse view takes NEITHER wrapper: its input cannot carry
+        # one. It keeps the trailing punctuation, which survives a parse, and
+        # its marker is optional because `- [x] ` and a bulleted cell arrive
+        # as characters.
+        rendered = pr_readiness.RENDERED_PENDING_RE
+        self.assertTrue(rendered.match(marked))
+        self.assertTrue(rendered.match(unmarked))
+        self.assertTrue(rendered.match("- [blocked]: waiting"), "the colon survives a parse")
+        self.assertIsNone(rendered.match(wrapped), "a backtick cannot reach a post-parse line")
+        self.assertIsNone(rendered.match(padded), "nor can its padding")
+        self.assertIsNone(rendered.match("- **[blocked]** waiting"), "nor can emphasis")
+
     def test_a_wrapper_the_written_view_tolerates_is_tolerated_here(self) -> None:
         # The rule this reader is written to, asserted rather than described:
         # one spelling of the wrapper for all three readers, so a shape the
@@ -3581,7 +3671,10 @@ class TheLongSHeadingIsNotThisSectionInEitherReaderTests(unittest.TestCase):
             ("the skill's rejected-heading read", owner.rejected_section_headings),
             ("the owner read's heading count", evidence._rendered_status_lines),
             ("this gate's section start", pr_readiness.section_heading_index),
-            ("this gate's rendered read", pr_readiness.rendered_status_lines),
+            # The function that READS the heading, which is where the identity
+            # call has to be: `rendered_status_lines` is a thin wrapper over
+            # it since the two kinds of line were split (#1771, round 2).
+            ("this gate's rendered read", pr_readiness._status_lines),
         ):
             with self.subTest(reader=label):
                 source = inspect.getsource(function)
