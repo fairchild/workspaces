@@ -50,6 +50,24 @@ PENDING_TEXT = getattr(
 )
 
 
+def all_of(cases, expected: int, label: str):
+    """A fixture table, with its size asserted before anything iterates it.
+
+    A table-driven test iterates a dict nothing requires to be non-empty, so
+    emptying the table leaves five principal tests reporting OK in 0.000s --
+    and round 4's "accepted at base, refused at head" rested on those tables
+    happening to be populated (#1771, round 6). The COUNT rather than
+    non-emptiness, because a table trimmed to one shape is the same hole with
+    a smaller mouth.
+    """
+    if len(cases) != expected:
+        raise AssertionError(
+            f"{label}: {len(cases)} shapes, expected {expected} -- the table this test's "
+            "claim rests on was changed; re-measure the claim or update the count"
+        )
+    return cases
+
+
 def pending(matched: str) -> str:
     """The pending failure as the rendered view reports it, naming the line it matched.
 
@@ -911,14 +929,14 @@ class RenderedStatusLineTests(unittest.TestCase):
         return GOOD_BODY + f"\n## Evidence Status\n{section}"
 
     def test_each_written_shape_of_a_pending_line_fails(self) -> None:
-        for shape in self.SHAPES:
+        for shape in all_of(self.SHAPES, 3, "RenderedStatusLineTests.SHAPES"):
             with self.subTest(shape=shape):
                 self.assertEqual(
                     self.failures(self.body(f"{shape}\n")), [pending("[pending-ci] item -- waiting")]
                 )
 
     def test_a_blocked_token_fails_in_the_same_three_shapes(self) -> None:
-        for shape in self.SHAPES:
+        for shape in all_of(self.SHAPES, 3, "RenderedStatusLineTests.SHAPES"):
             with self.subTest(shape=shape):
                 self.assertEqual(
                     self.failures(self.body(f"{shape.replace('pending-ci', 'blocked')}\n")),
@@ -929,7 +947,7 @@ class RenderedStatusLineTests(unittest.TestCase):
         # `evaluate` rewrites CR and CRLF to LF before anything reads the body,
         # and reads the section from that same normalized text, so the rendered
         # view sees the shape the author wrote.
-        for shape in self.SHAPES:
+        for shape in all_of(self.SHAPES, 3, "RenderedStatusLineTests.SHAPES"):
             with self.subTest(shape=shape):
                 body = self.body(f"{shape}\n").replace("\n", "\r\n")
                 self.assertEqual(self.failures(body), [pending("[pending-ci] item -- waiting")])
@@ -938,19 +956,23 @@ class RenderedStatusLineTests(unittest.TestCase):
         self.assertEqual(self.failures(self.body("- [pending-ci] item -- waiting\n")), [self.PENDING])
 
     def test_a_complete_line_still_passes_in_every_shape(self) -> None:
-        for shape in ("- [complete] item -- proof", *(s.replace("pending-ci", "complete") for s in self.SHAPES)):
+        complete = [
+            one.replace("pending-ci", "complete")
+            for one in all_of(self.SHAPES, 3, "RenderedStatusLineTests.SHAPES")
+        ]
+        for shape in ("- [complete] item -- proof", *complete):
             with self.subTest(shape=shape):
                 self.assertEqual(self.failures(self.body(f"{shape}\n")), [])
 
     def test_a_rendered_only_shape_inside_a_fence_is_still_an_example(self) -> None:
         complete = "- [complete] swift test -- 1992 tests passed\n"
-        for shape in self.SHAPES:
+        for shape in all_of(self.SHAPES, 3, "RenderedStatusLineTests.SHAPES"):
             with self.subTest(shape=shape):
                 self.assertEqual(self.failures(self.body(f"{complete}\n```markdown\n{shape}\n```\n")), [])
 
     def test_a_task_box_in_front_of_a_rendered_only_shape_still_fails(self) -> None:
         for box in ("- [ ] ", "- [x] ", "1. [X] "):
-            for shape in self.SHAPES:
+            for shape in all_of(self.SHAPES, 3, "RenderedStatusLineTests.SHAPES"):
                 with self.subTest(box=box, shape=shape):
                     line = box + shape.split(" ", 1)[1]
                     self.assertEqual(
@@ -961,7 +983,9 @@ class RenderedStatusLineTests(unittest.TestCase):
     def test_the_rendered_view_reads_a_raw_body_without_the_gate(self) -> None:
         # The check reached directly, on the body as written: each shape
         # flattens to the text a reader sees.
-        section = "".join(f"{shape}\n" for shape in self.SHAPES)
+        section = "".join(
+            f"{shape}\n" for shape in all_of(self.SHAPES, 3, "RenderedStatusLineTests.SHAPES")
+        )
         self.assertEqual(
             pr_readiness.rendered_status_lines(self.body(section)),
             ["[pending-ci] item -- waiting"] * 3,
@@ -1883,7 +1907,7 @@ class ThePageSaysWhereALineStartsTests(unittest.TestCase):
         return pr_readiness.evaluate(pr(body), self.FILES)
 
     def test_a_block_tag_after_prose_starts_a_line_the_page_shows(self) -> None:
-        for shape, section in self.SHAPES.items():
+        for shape, section in all_of(self.SHAPES, 4, "ThePageSaysWhereALineStartsTests.SHAPES").items():
             with self.subTest(shape=shape), recorded_page():
                 failures = self.failures(self.body(section))
                 self.assertTrue(
@@ -1900,7 +1924,7 @@ class ThePageSaysWhereALineStartsTests(unittest.TestCase):
         # The fallback, stated as the cost it is: with no renderer the gate
         # stands on the source model, which does not see these, and it says so
         # rather than passing quietly.
-        for shape, section in self.SHAPES.items():
+        for shape, section in all_of(self.SHAPES, 4, "ThePageSaysWhereALineStartsTests.SHAPES").items():
             with self.subTest(shape=shape):
                 result = self.result(self.body(section))
                 self.assertEqual(result.failures, [])
@@ -3004,7 +3028,7 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
         The half that asks reality is the sibling below, which reads the
         recorded page for the same three bodies.
         """
-        for name, line in self.PADDED_STATUSES.items():
+        for name, line in all_of(self.PADDED_STATUSES, 3, "PADDED_STATUSES").items():
             with self.subTest(spelling=name):
                 body = self.padded_body(line)
                 self.assertEqual(pr_readiness.status_heading_candidates(body), [])
@@ -3021,7 +3045,7 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
         padding reach the page -- which is why they are statuses here and not
         in ordinary markdown.
         """
-        for name, line in self.PADDED_STATUSES.items():
+        for name, line in all_of(self.PADDED_STATUSES, 3, "PADDED_STATUSES").items():
             with self.subTest(spelling=name), recorded_page():
                 html = pr_readiness.render_markdown(self.padded_body(line))
             text = re.sub(r"<[^>]+>", "", html)
@@ -3054,7 +3078,7 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
 
         The sibling below asks the page whether it prints these characters.
         """
-        for name, line in self.UNSWALLOWED.items():
+        for name, line in all_of(self.UNSWALLOWED, 3, "UNSWALLOWED").items():
             with self.subTest(spelling=name):
                 body = self.unswallowed_body(line)
                 lines = pr_readiness.rendered_status_lines(body)
@@ -3078,7 +3102,7 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
     # intent: guard
     def test_the_page_prints_those_unmarked_lines_too(self) -> None:
         # Asks reality, from recordings taken with the token.
-        for name, line in self.UNSWALLOWED.items():
+        for name, line in all_of(self.UNSWALLOWED, 3, "UNSWALLOWED").items():
             with self.subTest(spelling=name), recorded_page():
                 html = pr_readiness.render_markdown(self.unswallowed_body(line))
             self.assertIn(line, re.sub(r"<[^>]+>", "", html), name)
@@ -3227,7 +3251,8 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
         # The rule this reader is written to, asserted rather than described:
         # one spelling of the wrapper for all three readers, so a shape the
         # written view takes cannot be one this reader misses.
-        for name, line in {**self.PADDED_STATUSES, "plain backticks": "- `[blocked]` waiting"}.items():
+        table = {**all_of(self.PADDED_STATUSES, 3, "PADDED_STATUSES"), "plain backticks": "- `[blocked]` waiting"}
+        for name, line in table.items():
             with self.subTest(spelling=name):
                 self.assertTrue(pr_readiness.PRINTED_PENDING_RE.match(line), name)
                 self.assertTrue(
@@ -4498,7 +4523,7 @@ class TheSeederAndThisGateAskOneQuestionTests(unittest.TestCase):
         # What the two questions were for, now answered by one: the body is
         # returned unwritten because the section is there, and the gate reads
         # the author's own section rather than reporting it missing.
-        for name, heading in self.SHAPES.items():
+        for name, heading in all_of(self.SHAPES, 4, "TheSeederAndThisGateAskOneQuestionTests.SHAPES").items():
             with self.subTest(shape=name):
                 body = self.BODY.format(heading=heading)
                 seeded = self.seeder().seed_mergeability_section(body, changed_files=self.FILES)
@@ -4521,7 +4546,7 @@ class TheSeederAndThisGateAskOneQuestionTests(unittest.TestCase):
         )
         # And the shapes the page shows: both readers find them, so neither
         # half of the old conjunction is left to be load-bearing.
-        for name, heading in self.SHAPES.items():
+        for name, heading in all_of(self.SHAPES, 4, "TheSeederAndThisGateAskOneQuestionTests.SHAPES").items():
             with self.subTest(shape=name):
                 body = self.BODY.format(heading=heading)
                 self.assertTrue(reader.has_markdown_section(body, "Mergeability"))
@@ -4972,7 +4997,7 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
     def test_the_gate_refuses_every_shape_the_page_prints_a_status_on(self) -> None:
         # The ACCEPTANCE, not a property of a regex: at `56ba54d6` each of
         # these returns ok.
-        for name, (written, printed, seen) in self.SHAPES.items():
+        for name, (written, printed, seen) in all_of(self.SHAPES, 7, "SHAPES").items():
             with self.subTest(shape=name):
                 result = pr_readiness.evaluate(pr(self.body(written)), self.FILES)
                 self.assertFalse(result.ok, f"{name}: the gate accepted a body showing a status")
@@ -4998,7 +5023,7 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
         # Tokenless, which is how the gate runs on a laptop: the parser
         # resolves the escape and the reference, so the line the model holds
         # is the line the page prints, delimiters and all.
-        for name, (written, printed, _) in self.SHAPES.items():
+        for name, (written, printed, _) in all_of(self.SHAPES, 7, "SHAPES").items():
             with self.subTest(shape=name):
                 lines = pr_readiness.rendered_status_lines(self.body(written))
                 self.assertIn(printed, lines, name)
@@ -5059,27 +5084,103 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
         token, through the gate, refused. A code point Unicode adds to either
         category is covered by the same walk.
         """
-        # The categories are named HERE rather than read off the gate, so this
+        # The property is named HERE rather than read off the gate, so this
         # walk is a claim about Unicode that the gate has to meet — at
         # `b76017a6` it fails on the characters the enumeration missed rather
-        # than erroring on a name that branch does not have.
+        # than erroring on a name that branch does not have, and at
+        # `8fbf932a` on the 22 default-ignorable marks `Cf ∪ Zs` does not
+        # reach.
         invisible = [
             chr(code)
             for code in range(0x110000)
             if unicodedata.category(chr(code)) in ("Cf", "Zs")
+            or any(
+                first <= code <= last
+                for first, last in pr_readiness.DEFAULT_IGNORABLE_RANGES
+            )
         ]
         self.assertGreater(len(invisible), 100, "the walk found almost nothing")
+        # Every code point of the run through the gate would be 4,223 bodies;
+        # the walk drives the ones a reader could plausibly type (the BMP and
+        # the tag block's first row) and asserts the rest by membership.
+        drivable = [one for one in invisible if ord(one) <= 0xFFFF or 0xE0000 <= ord(one) <= 0xE007F]
+        self.assertGreater(len(drivable), 200, "the walk drove almost nothing")
         unrefused = [
             f"U+{ord(one):04X}"
-            for one in invisible
+            for one in drivable
             if pr_readiness.evaluate(pr(self.body(f"- {one}[blocked] waiting")), self.FILES).ok
         ]
         self.assertEqual(unrefused, [], "a character that shows nothing hid a status")
+        self.assertEqual(
+            sorted(set(invisible) - set(pr_readiness.INVISIBLE_LEADING)),
+            [],
+            "a code point of the property is missing from the gate's run",
+        )
         # And the gate builds the same set from the same two categories, so
         # the run is that rule rather than a copy of it kept in step by hand.
         self.assertEqual(
             sorted(invisible), sorted(pr_readiness.INVISIBLE_LEADING), "the gate's own set"
         )
+
+    # intent: fix
+    def test_a_default_ignorable_mark_hides_nothing_either(self) -> None:
+        """The fourth shape, inside the class round 5 argued was safe to exclude.
+
+        Round 5 kept combining marks out of the run because "a mark renders as
+        a diacritic rather than as nothing". That is false for the
+        default-ignorable marks: U+034F, U+17B4-U+17B5, U+180B-U+180D and
+        U+FE00-U+FE0F are all `Mn`, all render as nothing, and all were
+        accepted at `8fbf932a` with the page printing `[blocked] waiting`
+        behind them. The run is the Default_Ignorable property now, so the
+        exclusion keeps only the marks that really do show something.
+        """
+        marks = [0x034F, 0x17B4, 0x17B5, *range(0x180B, 0x180E), *range(0xFE00, 0xFE10)]
+        self.assertEqual(len(marks), 22, "the shapes this claim is about")
+        for code in marks:
+            with self.subTest(mark=f"U+{code:04X}"):
+                self.assertEqual(unicodedata.category(chr(code)), "Mn")
+                self.assertIn(chr(code), pr_readiness.INVISIBLE_LEADING)
+                self.assertFalse(
+                    pr_readiness.evaluate(
+                        pr(self.body(f"- &#{code};[blocked] waiting")), self.FILES
+                    ).ok,
+                    f"U+{code:04X} hid a status",
+                )
+
+    # intent: guard
+    def test_the_measured_facts_are_pinned_rather_than_recomputed(self) -> None:
+        """A test that rebuilds the set cannot see the interpreter change under it.
+
+        `requires-python = ">=3.11"` permits a range, and the range matters:
+        3.11 carries UCD 14.0.0 and 3.13 carries 15.1.0, which differ in this
+        very set. The size and the Unicode version are literals here, so a
+        Python upgrade that moves them fails with a message naming what to
+        re-derive rather than passing quietly under a different answer.
+        """
+        self.assertEqual(pr_readiness.MEASURED_UNIDATA_VERSION, "15.1.0")
+        self.assertEqual(pr_readiness.MEASURED_LEADING_RUN_SIZE, 4223)
+        self.assertEqual(
+            len(pr_readiness.INVISIBLE_LEADING),
+            pr_readiness.MEASURED_LEADING_RUN_SIZE,
+            "the run's size moved: re-derive the ranges and re-measure the pin",
+        )
+        self.assertEqual(
+            unicodedata.unidata_version,
+            pr_readiness.MEASURED_UNIDATA_VERSION,
+            "this interpreter's Unicode data is not the one the run was measured against",
+        )
+
+    # intent: guard
+    def test_a_newer_unicode_is_loud_rather_than_fatal(self) -> None:
+        # A newer interpreter is not a defect, so the drift notice says what
+        # to re-derive and the gate keeps running.
+        self.assertIsNone(pr_readiness.unicode_data_notice())
+        with mock.patch.object(pr_readiness, "DEFAULT_IGNORABLE_TRANSCRIBED_FROM", "14.0.0"):
+            notice = pr_readiness.unicode_data_notice()
+        self.assertIsNotNone(notice)
+        self.assertIn("14.0.0", notice)
+        self.assertIn(unicodedata.unidata_version, notice)
+        self.assertIn("DEFAULT_IGNORABLE_RANGES", notice)
 
     # intent: guard
     def test_a_combining_mark_is_content_rather_than_nothing(self) -> None:
@@ -5092,6 +5193,24 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
         self.assertTrue(
             pr_readiness.evaluate(pr(self.body("- &#776;[blocked] waiting")), self.FILES).ok
         )
+
+    # intent: control
+    def test_code_is_where_the_two_views_differ_and_the_difference_is_stated(self) -> None:
+        # The asymmetry the criterion now names: a fenced status is accepted
+        # (a fence is code the page shows verbatim, #1727's decision, and the
+        # printed views get no inline content for it), an indented one is
+        # refused by the written view, and both are pinned so neither moves
+        # without someone deciding to move it.
+        for name, section, refused in (
+            ("fenced", "```\n- [blocked] waiting\n```", False),
+            ("fenced with a language", "```text\n- [blocked] waiting\n```", False),
+            ("indented four spaces", "    - [blocked] waiting", True),
+            ("plain", "- [blocked] waiting", True),
+        ):
+            with self.subTest(shape=name):
+                body = GOOD_BODY + f"\n## Evidence Status\n\n{section}\n"
+                result = pr_readiness.evaluate(pr(body), self.FILES)
+                self.assertEqual(not result.ok, refused, f"{name}: {result.failures}")
 
     # intent: control
     def test_a_tilde_stays_outside_the_run_because_a_struck_status_is_withdrawn(self) -> None:
@@ -5122,6 +5241,71 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
         self.assertFalse(result.ok)
 
 
+class ThePagePlaneIsAskedAboutTheInvisibleClassTests(unittest.TestCase):
+    """What the page does with the class the run is built from (#1771, round 6).
+
+    Exactly one test in this file reached the live renderer before this one,
+    and it only checks that the recordings still match -- so every claim about
+    what GitHub does with an invisible character rested on a comment. These
+    are recordings: the 22 default-ignorable marks and the three shapes #1794
+    tracks, each asked of GitHub once and committed, after which the drift
+    test covers them.
+
+    What this plane asserts: that the page prints the status token with the
+    invisible character in front of it, so a reader sees `[blocked] waiting`.
+    What it cannot: how a particular browser or font renders a code point --
+    "shows nothing" is Unicode's claim about the property, not this suite's
+    about a screen.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+    MARKS = (0x034F, 0x17B4, 0x17B5, *range(0x180B, 0x180E), *range(0xFE00, 0xFE10))
+    # The frontier as it stands AFTER the property replaced the category: the
+    # Hangul filler is default-ignorable, so this round closed it and #1794
+    # narrows to the two below (#1771, round 6).
+    FRONTIER = {
+        "a Hangul filler (closed this round)": ("- &#12644;[blocked] waiting", True),
+        "a Braille blank (So, not default-ignorable)": ("- &#10240;[blocked] waiting", False),
+        "a combining mark inside the token": ("- [&#776;blocked] waiting", False),
+    }
+
+    def body(self, line: str) -> str:
+        return GOOD_BODY + f"\n## Evidence Status\n\n{line}\n"
+
+    # intent: guard
+    def test_the_page_prints_the_status_behind_every_one_of_the_marks(self) -> None:
+        self.assertEqual(len(self.MARKS), 22, "the marks this claim is about")
+        for code in self.MARKS:
+            with self.subTest(mark=f"U+{code:04X}"), recorded_page():
+                page = pr_readiness.page_view(self.body(f"- &#{code};[blocked] waiting"))
+            self.assertTrue(page.lines, f"U+{code:04X}: the page showed no line at all")
+            self.assertTrue(
+                any("[blocked]" in line for line in page.lines),
+                f"U+{code:04X}: {page.lines}",
+            )
+            self.assertTrue(
+                any(pr_readiness.PRINTED_PENDING_RE.match(line) for line in page.lines),
+                f"U+{code:04X}: the gate's reader does not see what the page prints",
+            )
+
+    # intent: control
+    def test_the_page_prints_the_frontier_shapes_the_gate_still_accepts(self) -> None:
+        # #1794's three, recorded so the page-plane claim about them is a
+        # recording rather than a sentence: the page shows the token in each,
+        # and the gate accepts each — which is the frontier, stated.
+        for name, (line, refused) in all_of(self.FRONTIER, 3, "FRONTIER").items():
+            with self.subTest(shape=name):
+                body = self.body(line)
+                with recorded_page():
+                    page = pr_readiness.page_view(body)
+                self.assertTrue(
+                    any("blocked" in one for one in page.lines), f"{name}: {page.lines}"
+                )
+                with recorded_page():
+                    result = pr_readiness.evaluate(pr(body), self.FILES)
+                self.assertEqual(not result.ok, refused, f"{name}: {result.failures}")
+
+
 class ThePageShowsThoseDelimitersTooTests(unittest.TestCase):
     """The third side of the hole: `page.lines` carries them too (#1771, round 4).
 
@@ -5140,7 +5324,7 @@ class ThePageShowsThoseDelimitersTooTests(unittest.TestCase):
     # intent: fix
     def test_the_page_prints_the_delimiters_and_the_gate_reads_them(self) -> None:
         shapes = APrintedLineCanCarryADelimiterCharacterTests.SHAPES
-        for name, (written, printed, _) in shapes.items():
+        for name, (written, printed, _) in all_of(shapes, 7, "SHAPES").items():
             with self.subTest(shape=name), recorded_page():
                 body = self.body(written)
                 page = pr_readiness.page_view(body)

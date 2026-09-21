@@ -45,7 +45,7 @@ import urllib.request
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
@@ -181,6 +181,20 @@ LINE_ENDING_RE = re.compile(r"\r\n?")
 #   typed, which is markdown, and in markdown a status bullet is a line that
 #   opens a list item -- so the marker is REQUIRED there and nowhere else.
 #
+#   CODE is where the two views differ, and the difference is stated rather
+#   than left to be found (#1771, round 6). A FENCED block is cut out of the
+#   written view before it reads (`split_fenced_blocks`) and carries no inline
+#   content for the printed views, so `- [blocked] waiting` inside a fence is
+#   accepted: a fence is code the page shows verbatim, which is #1727's
+#   decision for the source model and the page agrees by construction. An
+#   INDENTED code block is code too, and it is REFUSED -- the written view's
+#   pattern allows the leading spaces and the line matches. That asymmetry
+#   stands rather than being tidied: the rule here is that a reader on the
+#   refusing side may add refusals and may never remove one, and dropping this
+#   refusal means deciding, against the page, that no author writing an
+#   indented `- [blocked]` under this heading means it. Both shapes have a
+#   control.
+#
 #   Every PRINTED view (`PRINTED_PENDING_RE`) reads a line as the page puts it
 #   on one, and takes it marker or no marker: a raw HTML block prints whatever
 #   sits on the line; the model's resolved inline text and the page's own text
@@ -201,37 +215,97 @@ LINE_ENDING_RE = re.compile(r"\r\n?")
 # The padding inside a wrapper is part of the wrapper rather than part of the
 # token: a code span written `` ` [blocked] ` `` shows its spaces to a reader
 # wherever the span is printed as characters (#1771).
-# The leading run, as a CATEGORY rather than as a list of characters: the
+# The leading run, as a PROPERTY rather than as a list of characters: the
 # inline delimiter characters a wrapper is made of, and every character that
 # occupies the line without showing anything.
 #
-# Round 4 enumerated three of the second kind and was told what that is worth:
-# a list of three invisible characters is a list wearing a criterion's
-# clothes, and four more went straight through it -- a word joiner (U+2060), a
-# zero-width non-joiner (U+200C), a zero-width joiner (U+200D) and a
-# left-to-right mark (U+200E) each print nothing and put `[blocked] waiting`
-# in front of a reader, on the page and in this model both (#1771, round 5).
+# Round 4 enumerated three invisible characters and four more went through it;
+# round 5 made the run `Cf` plus `Zs` and 22 more went through THAT -- every
+# default-ignorable combining mark (U+034F, U+17B4-U+17B5, U+180B-U+180D,
+# U+FE00-U+FE0F), which round 5 excluded on the stated ground that a mark
+# "renders as a diacritic rather than as nothing". False for these: GitHub
+# prints U+034F and U+FE00 verbatim at zero width, and the gate accepted the
+# status behind them (#1771, round 6).
 #
-# So the second set is derived from Unicode: the FORMAT characters (`Cf` --
-# the zero-width family, the bidi controls and isolates, the soft hyphen, the
-# byte-order mark, the tag characters above the BMP) and the SPACE separators
-# (`Zs` -- U+00A0 and every other width of space). A code point Unicode adds
-# to either is covered here the day this gate's Python knows about it, which
-# is what makes this a rule rather than a list. The walk costs about a tenth
-# of a second at import, against a gate that makes a network call.
+# The property the body already named as the right one is the run now:
+# Unicode's Default_Ignorable_Code_Point -- the characters Unicode says
+# should render as nothing -- in union with the format characters (`Cf`) and
+# the space separators (`Zs`).
 #
-# Two neighbours are deliberately out. COMBINING MARKS (`Mn`) show something:
-# a mark before the token renders as a diacritic on a dotted circle, and one
-# attached to `[` still shows the bracket, so a mark is content rather than
-# nothing. A TILDE is out for the reason it was out before: a struck-through
-# status is withdrawn rather than pending (#1727), and
-# `test_a_struck_status_is_not_the_status_wherever_it_sits` holds that.
+# Why the union rather than Default_Ignorable alone: 32 format characters are
+# NOT default-ignorable (the prepended concatenation marks U+0600-U+0605 and
+# their kin), and round 5 already refused them. A narrower run would be a
+# regression dressed as a rule.
+#
+# THE COST, written where the ranges are: `unicodedata` exposes no
+# Default_Ignorable predicate, so the ranges below are TRANSCRIBED from
+# Unicode's DerivedCoreProperties. That is a snapshot. Unicode adds code
+# points; this table does not. A table a reader can check beats one the
+# interpreter picks -- but it goes stale silently, so the version it was
+# copied from is recorded beside it and `unicode_data_notice()` says so out
+# loud when the running interpreter's UCD is newer. `Cf` and `Zs` keep
+# tracking the interpreter, so a new format character is covered the day
+# Python knows about it; only the default-ignorable half needs a human.
+DEFAULT_IGNORABLE_TRANSCRIBED_FROM = "15.1.0"
+DEFAULT_IGNORABLE_RANGES = (
+    (0x00AD, 0x00AD),    # SOFT HYPHEN
+    (0x034F, 0x034F),    # COMBINING GRAPHEME JOINER
+    (0x061C, 0x061C),    # ARABIC LETTER MARK
+    (0x115F, 0x1160),    # HANGUL CHOSEONG/JUNGSEONG FILLER
+    (0x17B4, 0x17B5),    # KHMER VOWEL INHERENT AQ/AA
+    (0x180B, 0x180F),    # MONGOLIAN FREE VARIATION SELECTORS, VOWEL SEPARATOR
+    (0x200B, 0x200F),    # ZERO WIDTH SPACE .. RIGHT-TO-LEFT MARK
+    (0x202A, 0x202E),    # BIDI EMBEDDING AND OVERRIDE CONTROLS
+    (0x2060, 0x206F),    # WORD JOINER .. NOMINAL DIGIT SHAPES
+    (0x3164, 0x3164),    # HANGUL FILLER
+    (0xFE00, 0xFE0F),    # VARIATION SELECTORS 1-16
+    (0xFEFF, 0xFEFF),    # ZERO WIDTH NO-BREAK SPACE
+    (0xFFA0, 0xFFA0),    # HALFWIDTH HANGUL FILLER
+    (0xFFF0, 0xFFF8),    # unassigned specials, default-ignorable by property
+    (0x1BCA0, 0x1BCA3),  # SHORTHAND FORMAT CONTROLS
+    (0x1D173, 0x1D17A),  # MUSICAL SYMBOL BEAM/PHRASE CONTROLS
+    (0xE0000, 0xE0FFF),  # TAGS AND VARIATION SELECTORS SUPPLEMENT
+)
 INVISIBLE_CATEGORIES = ("Cf", "Zs")
 INVISIBLE_LEADING = "".join(
-    chr(code)
-    for code in range(0x110000)
-    if unicodedata.category(chr(code)) in INVISIBLE_CATEGORIES
+    sorted(
+        {chr(code) for first, last in DEFAULT_IGNORABLE_RANGES for code in range(first, last + 1)}
+        | {
+            chr(code)
+            for code in range(0x110000)
+            if unicodedata.category(chr(code)) in INVISIBLE_CATEGORIES
+        }
+    )
 )
+# The MEASURED facts, pinned as literals rather than recomputed: a test that
+# rebuilds the set from the interpreter it is running on cannot see the
+# interpreter change under it. `requires-python = ">=3.11"` permits a range,
+# and the range matters -- 3.11 (UCD 14.0.0) builds a 4,216-character run and
+# accepts U+13439, 3.13 (UCD 15.1.0) builds 4,223 and refuses it (#1771,
+# round 6).
+MEASURED_UNIDATA_VERSION = "15.1.0"
+MEASURED_LEADING_RUN_SIZE = 4223
+
+
+def unicode_data_notice() -> str | None:
+    """Whether this interpreter's Unicode data has moved past the transcription.
+
+    Loud, not fatal: a newer interpreter is not a defect, and a gate that
+    refused to run on one would be worse than the drift it is warning about.
+    What it names is what to re-derive.
+    """
+    running = unicodedata.unidata_version
+    if running == DEFAULT_IGNORABLE_TRANSCRIBED_FROM:
+        return None
+    return (
+        f"Unicode data moved: the default-ignorable ranges were transcribed from "
+        f"{DEFAULT_IGNORABLE_TRANSCRIBED_FROM} and this interpreter carries {running}. "
+        f"Re-derive DEFAULT_IGNORABLE_RANGES from DerivedCoreProperties {running} and "
+        f"re-measure MEASURED_LEADING_RUN_SIZE (pinned at {MEASURED_LEADING_RUN_SIZE} "
+        f"against {MEASURED_UNIDATA_VERSION})."
+    )
+
+
 WRAPPER_DELIMITERS = "`*_"
 OPENING_WRAPPER = "[" + re.escape(WRAPPER_DELIMITERS + "\t" + INVISIBLE_LEADING) + "]*"
 STATUS_TOKEN = r"\[(?:blocked|pending-ci)\]"
@@ -756,7 +830,7 @@ def _status_lines(body: str) -> list[str]:
     a failure to one that stands.
     """
     tokens = MARKDOWN.parse(body)
-    lines: list[tuple[str, bool]] = []
+    lines: list[str] = []
     index = 0
     while index < len(tokens):
         token = tokens[index]
