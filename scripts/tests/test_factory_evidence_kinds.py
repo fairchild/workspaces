@@ -10234,8 +10234,15 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
                 normalised = helpers.MARKDOWN_LINE_ENDING_RE.sub("\n", comment)
                 blocks[label] = len(execution._inline_block_bounds(normalised))
                 # The boundary does the normalising, so the caller passes the
-                # comment as GitHub gave it.
-                self.assertNotIn("<details", execution._without_collapsed_blocks(comment))
+                # comment as GitHub gave it -- and what it hands onward is LF
+                # text, which is the contract every reader below it is written
+                # against. Asserted about the OUTPUT because that is where it
+                # is observable: the onward consequence of the collapsed
+                # bounds could not be constructed at either head (see the
+                # round's report), so this is the property, not a symptom.
+                onward = execution._without_collapsed_blocks(comment)
+                self.assertNotIn("<details", onward)
+                self.assertNotIn("\r", onward, f"{label}: a CR reached the readers below")
         self.assertEqual(blocks["cr"], blocks["lf"], blocks)
         self.assertEqual(blocks["crlf"], blocks["lf"], blocks)
 

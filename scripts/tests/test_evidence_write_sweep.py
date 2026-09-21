@@ -567,5 +567,52 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         self.assertEqual(sweep_script.lines_lost(prose, written), [])
 
 
+class TheInstrumentAsksAValueRatherThanAPhraseTests(unittest.TestCase):
+    """What the runtime SAID stopped being load-bearing (#1773, round 11).
+
+    `unasked` grepped the step log for "the page could not be asked", and the
+    seam that says it built its note without that prefix -- so the field read
+    0 for 24 bodies the page had not been asked about, the same mismatch that
+    sent the author's note under the wrong headline. The count reads the
+    announcements through the predicate the writer exposes now, so a reworded
+    sentence moves nothing.
+    """
+
+    # intent: fix
+    def test_the_count_survives_a_write_that_announces_without_logging(self) -> None:
+        evidence = sys.modules["evidence"]
+        note = sys.modules["_helpers"].unverified_announcement(
+            "Evidence Status", "the renderer answered HTTP 503"
+        )
+
+        def announce_only(text, updates, announcements=None):
+            if announcements is not None:
+                announcements.append(note)
+            return text
+
+        with mock.patch.object(evidence, "update_evidence_entries", side_effect=announce_only):
+            _, _, unasked, said = sweep_script.write_once("## Evidence Status\n\n- [pending-ci] x -- y\n")
+        self.assertEqual(said, (), "the probe logged after all; the assertion below proves nothing")
+        self.assertTrue(unasked, "the count read the step log rather than what the write said")
+
+    # intent: guard
+    def test_a_stand_down_carries_its_reason_behind_a_known_prefix(self) -> None:
+        # The other half: a refusal's reason is read out from behind the
+        # stand-down prefix rather than searched for in the sentence.
+        evidence = sys.modules["evidence"]
+        helpers = sys.modules["_helpers"]
+        refusal = helpers._unasked_refusal("Evidence Status", "no token", "export one")
+        self.assertTrue(
+            sweep_script._says_the_page_was_not_asked(
+                f"{evidence.STOOD_DOWN_ANNOUNCEMENT_PREFIX}{refusal}"
+            )
+        )
+        self.assertFalse(
+            sweep_script._says_the_page_was_not_asked(
+                f"{evidence.STOOD_DOWN_ANNOUNCEMENT_PREFIX}a fence with no closing line"
+            )
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
