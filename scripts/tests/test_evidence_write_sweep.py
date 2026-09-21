@@ -106,12 +106,45 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         )
         self.assertEqual(self.summary["refusals"], self.REFUSALS)
 
+    def test_the_bodies_this_run_could_not_measure_are_counted_and_named(self) -> None:
+        """What a tokenless run cannot see, said rather than absorbed (#1773, round 6).
+
+        Every corpus body carrying a `<details>` is one the placement check
+        would ask the page about, and with no token there is no page. The
+        write refuses those rather than placing a section on a weaker check
+        than a lane runs -- the right answer for the write, and a blind spot
+        for this instrument, so the instrument names it. A figure a pull
+        request quotes is worth quoting only with its denominator, and the
+        denominator here is 168 minus these.
+        """
+        unmeasured = [outcome for outcome in self.outcomes if outcome.unasked]
+        self.assertEqual(self.summary["bodies_the_page_could_not_be_asked_about"], len(unmeasured))
+        self.assertEqual(
+            {outcome.label.split(" / ")[0] for outcome in unmeasured},
+            {"a closed details note", "an element left open"},
+        )
+        # Disjoint over this corpus: a hazard refusal and an unasked page are
+        # never the same body, so the two figures add up to every refusal.
+        self.assertEqual(
+            self.summary["refusals"] + self.summary["bodies_the_page_could_not_be_asked_about"],
+            sum(outcome.refused for outcome in self.outcomes),
+        )
+
     def test_the_refusals_are_the_two_hazards_and_not_a_shape_that_should_write(self) -> None:
         # A refusal count is only a cost if it is the cost of the hazards. Both
         # hazards are a block the parser cannot end; the exception is the one
         # the writer documents -- a runaway fence with no heading below it is a
         # cut to the end of the body that the page agrees with, so it writes.
-        refused = {outcome.label.split(" / ")[0] for outcome in self.outcomes if outcome.refused}
+        #
+        # A body the page could not be asked about is not a hazard refusal and
+        # is counted separately: this instrument runs with no token, and a
+        # placement that cannot see the page refuses rather than proceeding on
+        # a weaker check (#1773, round 6).
+        refused = {
+            outcome.label.split(" / ")[0]
+            for outcome in self.outcomes
+            if outcome.refused and not outcome.unasked
+        }
         self.assertEqual(refused, {"a fence that never closes", "a comment that never closes"})
         wrote = {
             outcome.label
@@ -142,6 +175,7 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
             return sweep_script.Outcome(
                 label="probe",
                 refused=False,
+                unasked=False,
                 lost=lost,
                 closed=closed,
                 announced=announced,
@@ -313,7 +347,7 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         entry = f"- [pending-ci] {item} -- {detail}"
         self.assertIn(entry, body)
         self.assertNotIn(entry, sweep_script.author_lines(body))
-        written, refused, said = sweep_script.write_once(body)
+        written, refused, _, said = sweep_script.write_once(body)
         self.assertFalse(refused)
         self.assertEqual(sweep_script.lines_lost(body, written), [])
         self.assertEqual(sweep_script.seams_closed(body, written), [])
@@ -407,7 +441,7 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
             sweep_script.seams_closed(seam, closed), [("A note for the reviewer.", "===")]
         )
         # The real write closes none of them, on this body or any other.
-        written, _, _ = sweep_script.write_once(seam)
+        written, _, _, _ = sweep_script.write_once(seam)
         self.assertEqual(sweep_script.seams_closed(seam, written), [])
         # And the heading the writer adds above a carried note is not a seam it
         # closed, which is the false positive a block comparison would report.
@@ -442,7 +476,7 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         self.assertEqual(sweep_script.lines_lost(prose, prose.replace(note + "\n", "")), [note])
         # And the lines the write really does own stay out of it, or every
         # write in the corpus would report a loss.
-        written, _, _ = sweep_script.write_once(prose)
+        written, _, _, _ = sweep_script.write_once(prose)
         self.assertNotEqual(written, prose)
         self.assertEqual(sweep_script.lines_lost(prose, written), [])
 
