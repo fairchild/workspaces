@@ -185,7 +185,11 @@ class CheckRunResolutionTests(unittest.TestCase):
 
 
 class VerificationSelectionTests(unittest.TestCase):
-    def test_pending_and_stale_complete_entries_need_verification(self) -> None:
+    def test_every_ci_entry_needs_verification_whatever_it_records(self) -> None:
+        # Entry 3 is the one this changed: `complete` and bound to the current
+        # head used to be skipped, which is how a completion typed into the
+        # block was never looked at again (#1778). The `diff` entry is still
+        # not this lane's business.
         entries: list[object] = [
             ci_entry(index=1, status="pending-ci"),
             ci_entry(index=2, status="complete", verified_head_sha=OTHER_HEAD),
@@ -195,7 +199,7 @@ class VerificationSelectionTests(unittest.TestCase):
 
         self.assertEqual(
             verify.ci_entries_needing_verification(entries, HEAD),
-            [(1, "Web CI"), (2, "Web CI")],
+            [(1, "Web CI"), (2, "Web CI"), (3, "Web CI")],
         )
 
     def test_entries_without_extractable_names_are_skipped(self) -> None:
@@ -211,17 +215,42 @@ class BlockedLabelClearTests(unittest.TestCase):
             ci_entry(index=1, status="complete", verified_head_sha=HEAD),
             {"index": 2, "item": DIFF_ITEM, "status": "complete", "detail": "d"},
         ]
-        self.assertTrue(verify.should_clear_blocked_label(complete, HEAD))
+        # A `ci` entry counts only where THIS RUN verified it, so the clear
+        # takes what the run concluded rather than what the body says (#1778).
+        green = {1: {"status": "complete", "verified_head_sha": HEAD}}
+        self.assertTrue(verify.should_clear_blocked_label(complete, HEAD, verified=green))
+        # The same entries with nothing verified: the half of #1778 that let a
+        # forged body clear its own label.
+        self.assertFalse(verify.should_clear_blocked_label(complete, HEAD, verified={}))
+        # A stale RECORDED sha with nothing verified stays refused, which is
+        # the property this row was written for.
+        stale = [ci_entry(index=1, status="complete", verified_head_sha=OTHER_HEAD)]
+        self.assertFalse(verify.should_clear_blocked_label(stale, HEAD, verified={}))
+        # With this run's own verification green on this head it clears, and
+        # that is the change rather than an oversight: the verification is the
+        # authority and the recorded sha is the forgeable field. In the flow
+        # the updates are written into the body before this is asked, so the
+        # two never disagree there; asked directly, the run wins.
+        self.assertTrue(verify.should_clear_blocked_label(stale, HEAD, verified=green))
         self.assertFalse(
             verify.should_clear_blocked_label(
-                [ci_entry(index=1, status="complete", verified_head_sha=OTHER_HEAD)], HEAD
+                [ci_entry(index=1, status="pending-ci")], HEAD, verified=green
             )
         )
-        self.assertFalse(
-            verify.should_clear_blocked_label([ci_entry(index=1, status="pending-ci")], HEAD)
+        self.assertFalse(verify.should_clear_blocked_label([], HEAD, verified=green))
+        self.assertFalse(verify.should_clear_blocked_label(None, HEAD, verified=green))
+        # A body of non-`ci` entries needs nothing verified, because this lane
+        # has no way to verify one -- the residual #1778 does not close.
+        self.assertTrue(
+            verify.should_clear_blocked_label(
+                [{"index": 1, "item": DIFF_ITEM, "status": "complete", "detail": "d"}],
+                HEAD,
+                verified={},
+            )
         )
-        self.assertFalse(verify.should_clear_blocked_label([], HEAD))
-        self.assertFalse(verify.should_clear_blocked_label(None, HEAD))
+        # And the recorded reading survives for the one question it is safe
+        # for: whether this run changed anything.
+        self.assertTrue(verify._recorded_contract_is_complete(complete, HEAD))
 
     def test_label_provenance_requires_factory_actor_on_latest_event(self) -> None:
         factory_actor = next(iter(verify.FACTORY_LABEL_ACTORS))
@@ -319,6 +348,243 @@ class StandingRejectionTests(unittest.TestCase):
         )
         self.assertFalse(self.check([]))
         self.assertFalse(self.check(None))
+
+
+class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
+    """A `complete` nothing verified is a claim, and the verifier now checks it (#1778).
+
+    `ci_entries_needing_verification` skipped an entry already `complete` and
+    bound to the current head, and `should_clear_blocked_label` read the
+    entries AS RECORDED. Put together: anyone who can edit a pull request
+    description could write `{"status": "complete", "verified_head_sha":
+    "<head>"}` into a `ci` entry, and the next run of this lane looked at
+    nothing, re-rendered the entry as complete, and removed the
+    `blocked:evidence` label it had applied itself.
+
+    Nothing about that needed a compromised token or a forged identity. The
+    body is the record, the record is editable by anyone with write access to
+    the pull request, and the lane trusted it about the one thing it exists to
+    check.
+
+    Re-verify rather than sign, which is the decision on the issue: one login
+    covers many actors here, so a signature proves what the block's existence
+    already proves. A `ci` entry is re-checked against the live check runs on
+    every run instead.
+    """
+
+    def run_over(self, entries, *, runs, labels=("blocked:evidence",)):
+        """`process_pr` over one body, reporting the body written and the gh commands."""
+        body = body_with_entries(entries)
+        pr = pr_payload(body, labels=list(labels))
+        written: dict[str, str] = {}
+        gh_calls: list[list[str]] = []
+
+        def fake_gh_json(args, env):
+            if any("pulls/321" in arg for arg in args):
+                return pr
+            return None
+
+        with (
+            mock.patch.object(verify, "_gh_json", side_effect=fake_gh_json),
+            mock.patch.object(verify, "check_runs_for", return_value=runs),
+            mock.patch.object(
+                verify,
+                "_write_pr_body",
+                side_effect=lambda number, new_body, env: written.update(body=new_body) or True,
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+        return written.get("body"), gh_calls
+
+    @staticmethod
+    def cleared(gh_calls) -> bool:
+        return ["pr", "edit", "321", "--remove-label", "blocked:evidence"] in gh_calls
+
+    FORGED = dict(status="complete", verified_head_sha=HEAD)
+    FAILED_RUN = [
+        {
+            "status": "completed",
+            "conclusion": "failure",
+            "completed_at": "2026-08-27T00:00:00Z",
+            "html_url": "https://example.invalid/run/9",
+        }
+    ]
+    GREEN_RUN = [
+        {
+            "status": "completed",
+            "conclusion": "success",
+            "completed_at": "2026-08-27T00:00:00Z",
+            "html_url": "https://example.invalid/run/1",
+        }
+    ]
+
+    def test_a_forged_completion_whose_live_run_failed_is_returned_to_pending(self) -> None:
+        # The headline. On `016d94ba` this body's entry is skipped, the label
+        # is cleared, and the forged `[complete]` line survives the run.
+        body, gh_calls = self.run_over([ci_entry(**self.FORGED)], runs=self.FAILED_RUN)
+        self.assertIsNotNone(body, "the run wrote no body at all")
+        self.assertIn(f"- [pending-ci] {CI_ITEM}", body)
+        self.assertNotIn(f"- [complete] {CI_ITEM}", body)
+        self.assertIn("concluded failure", body)
+        self.assertIn("https://example.invalid/run/9", body)
+        self.assertFalse(self.cleared(gh_calls), gh_calls)
+
+    def test_a_forged_completion_naming_a_check_that_does_not_exist_is_undone(self) -> None:
+        # The other way a forgery shows: an item naming a check nobody runs.
+        # An answered query that came back empty is the case that says the
+        # check does not exist, which is what `check_known` is for.
+        body, gh_calls = self.run_over([ci_entry(**self.FORGED)], runs=[])
+        self.assertIn(f"- [pending-ci] {CI_ITEM}", body)
+        self.assertIn("may not match a check on this repository", body)
+        self.assertFalse(self.cleared(gh_calls), gh_calls)
+
+    def test_a_forged_completion_whose_run_has_not_finished_is_undone(self) -> None:
+        body, gh_calls = self.run_over(
+            [ci_entry(**self.FORGED)], runs=[{"status": "in_progress", "conclusion": None}]
+        )
+        self.assertIn(f"- [pending-ci] {CI_ITEM}", body)
+        self.assertIn("waiting for checks", body)
+        self.assertFalse(self.cleared(gh_calls), gh_calls)
+
+    def test_a_genuine_completion_stays_complete_and_still_clears_the_label(self) -> None:
+        # The control, and the property that says the change costs an honest
+        # body nothing: the same recorded entry, a green live run.
+        body, gh_calls = self.run_over([ci_entry(**self.FORGED)], runs=self.GREEN_RUN)
+        self.assertIn(f"- [complete] {CI_ITEM}", body)
+        self.assertIn(f'"verified_head_sha": "{HEAD}"', body)
+        self.assertIn("https://example.invalid/run/1", body)
+        self.assertTrue(self.cleared(gh_calls), gh_calls)
+
+    def test_a_completion_is_re_read_even_when_the_recorded_sha_matches(self) -> None:
+        # The condition that was doing the skipping, asserted directly rather
+        # than only through the seam.
+        entries = [ci_entry(**self.FORGED)]
+        self.assertEqual(
+            verify.ci_entries_needing_verification(entries, HEAD), [(1, "Web CI")]
+        )
+        # And an entry the lane cannot name a check for is still not its
+        # business -- the fail-closed rule #1120 set, unchanged.
+        self.assertEqual(
+            verify.ci_entries_needing_verification(
+                [{"index": 1, "item": "a screenshot of the sidebar", "status": "complete"}], HEAD
+            ),
+            [],
+        )
+
+    def test_the_clear_counts_what_this_run_verified_and_not_what_the_body_says(self) -> None:
+        # The second half of the hole. Even with the entries re-verified, a
+        # clear computed from the recorded entries would pass a body whose
+        # `ci` entry this run never confirmed -- which is what happens when
+        # the check-run lookup itself fails.
+        entries = [ci_entry(**self.FORGED)]
+        self.assertFalse(verify.should_clear_blocked_label(entries, HEAD, verified={}))
+        self.assertTrue(
+            verify.should_clear_blocked_label(
+                entries, HEAD, verified={1: {"status": "complete", "verified_head_sha": HEAD}}
+            )
+        )
+        # A run that verified the entry and found it wanting does not clear.
+        self.assertFalse(
+            verify.should_clear_blocked_label(
+                entries, HEAD, verified={1: {"status": "pending-ci"}}
+            )
+        )
+
+    def test_a_lookup_failure_leaves_the_label_alone(self) -> None:
+        # `check_runs_for` returning None is a failed query, which says
+        # nothing about the check. The entry goes to pending-ci and the label
+        # stays: the lane does not clear on a question it could not ask.
+        body, gh_calls = self.run_over([ci_entry(**self.FORGED)], runs=None)
+        self.assertIn(f"- [pending-ci] {CI_ITEM}", body)
+        self.assertFalse(self.cleared(gh_calls), gh_calls)
+
+    def test_a_correction_the_body_refuses_still_holds_the_label(self) -> None:
+        """The case that makes the second half of the fix load-bearing.
+
+        Re-verifying an entry is not enough on its own, because the
+        correction has to be WRITTEN before the recorded entries say anything
+        different -- and a write can stand down. A body whose
+        `## Evidence Status` section is the last one and sits above a `<pre>`
+        that never closes cannot be rewritten: the cut's far end is not
+        something the body states, so the runtime refuses it and leaves the
+        body byte-identical, forged `complete` metadata and all.
+
+        On that body a clear computed from the recorded entries clears, even
+        with the entry re-verified and found failing, because the recorded
+        entry still says complete. A clear computed from what this run
+        verified does not.
+        """
+        entry = dict(ci_entry(**self.FORGED), detail="forged")
+        payload = json.dumps({"entries": [entry]}, indent=2, ensure_ascii=False)
+        unwritable = (
+            "*Persona*\n\n## Summary\n- change\n\n"
+            f"<!-- evidence-status:v1\n{payload}\n-->\n\n"
+            f"## Evidence Status\n- [complete] {CI_ITEM} -- forged\n\n"
+            "<pre>\nnever closed\n\n"
+            "Closes #99\n\n<!-- contributor:issue=99;agent=test -->"
+        )
+        pr = pr_payload(unwritable, labels=["blocked:evidence"])
+        written: dict[str, str] = {}
+        gh_calls: list[list[str]] = []
+        with (
+            mock.patch.object(
+                verify, "_gh_json",
+                side_effect=lambda args, env: pr if any("pulls/321" in a for a in args) else None,
+            ),
+            mock.patch.object(verify, "check_runs_for", return_value=self.FAILED_RUN),
+            mock.patch.object(
+                verify, "_write_pr_body",
+                side_effect=lambda n, b, e: written.update(body=b) or True,
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+        # The correction could not be written, so the record still says
+        # complete -- and the label stays anyway.
+        self.assertNotIn("body", written)
+        self.assertFalse(self.cleared(gh_calls), gh_calls)
+        # And the reading that used to decide it would have cleared.
+        self.assertTrue(
+            verify._recorded_contract_is_complete(verify.evidence_entries(unwritable), HEAD)
+        )
+
+    def test_one_check_run_read_per_ci_entry_per_run(self) -> None:
+        # The cost, measured rather than asserted. Three `ci` entries, three
+        # reads -- and the non-ci entry beside them costs nothing, because the
+        # lane never had a way to verify it.
+        entries = [
+            ci_entry(index=1, **self.FORGED),
+            ci_entry(index=2, **self.FORGED),
+            ci_entry(index=3, **self.FORGED),
+            {"index": 4, "item": "a screenshot of the sidebar", "status": "complete",
+             "detail": "uploaded", "kind": "screenshot"},
+        ]
+        body = body_with_entries(entries)
+        pr = pr_payload(body, labels=["blocked:evidence"])
+        reads: list[tuple[str, str]] = []
+
+        with (
+            mock.patch.object(
+                verify, "_gh_json",
+                side_effect=lambda args, env: pr if any("pulls/321" in a for a in args) else None,
+            ),
+            mock.patch.object(
+                verify, "check_runs_for",
+                side_effect=lambda name, sha, env: reads.append((name, sha)) or self.GREEN_RUN,
+            ),
+            mock.patch.object(verify, "_write_pr_body", return_value=True),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(verify, "_gh", return_value=True),
+        ):
+            verify.process_pr(321, {})
+        self.assertEqual(reads, [("Web CI", HEAD)] * 3)
 
 
 class ProcessPrTests(unittest.TestCase):
@@ -526,8 +792,23 @@ class ProcessPrTests(unittest.TestCase):
         body = body_with_entries(entries)
         pr = pr_payload(body, labels=["blocked:evidence"])
 
+        # The entry is re-verified now, green, so the clear is reached on its
+        # merits -- and still declines, because the label is not the machine's.
         with (
             mock.patch.object(verify, "_gh_json", return_value=pr),
+            mock.patch.object(
+                verify,
+                "check_runs_for",
+                return_value=[
+                    {
+                        "status": "completed",
+                        "conclusion": "success",
+                        "completed_at": "2026-08-27T00:00:00Z",
+                        "html_url": "https://example.invalid/run/1",
+                    }
+                ],
+            ),
+            mock.patch.object(verify, "_write_pr_body", return_value=True),
             mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=False),
             mock.patch.object(verify, "_gh") as gh,
         ):
