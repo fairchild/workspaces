@@ -40,6 +40,7 @@ from evidence import (  # noqa: E402
     colliding_indexes,
     entries_by_index,
     entry_index,
+    usable_entry_index,
     update_evidence_entries,
 )
 from execution import APP_BOT_GIT_IDENTITIES, post_uncarried_notes  # noqa: E402
@@ -166,7 +167,10 @@ def ci_entries_needing_verification(
         check_name = _ci_check_name(item)
         if check_name is None:
             continue
-        index = entry_index(entry)
+        # Usable, not merely claimed: an index nothing renders is a line no
+        # reader sees, so looking a check up for it spends a call on nothing
+        # and hands the clear a verdict about no line (#1778, round 7).
+        index = usable_entry_index(entry)
         if index is None:
             continue
         needed.append((index, check_name))
@@ -485,7 +489,23 @@ def _apply_ci_updates(
         # `blocked:evidence` taken off against a live body recording an unmet
         # requirement -- this lane having fetched the truth and dropped it
         # (#1778, round 5, and the stand-down half of #1786).
-        current_body = str(current.get("body") or "") if isinstance(current, dict) else ""
+        # `None` where the read told us nothing, "" where the PR's description
+        # is genuinely empty: an owner who deletes their description mid-run
+        # has an empty body, and treating that as a failed read decided the
+        # label on the copy this run started from and cleared it (#1778,
+        # round 7).
+        current_body = str(current.get("body") or "") if isinstance(current, dict) else None
+        if current_sha != head_sha:
+            # Above both returns, because a moved head means this run's
+            # conclusions are about a commit the PR has left -- so there is no
+            # body to hand the caller and no decision to take on one. The
+            # stand-down path reached this check only after returning, so a
+            # push mid-run took the label off against the body from before it.
+            log(
+                f"PR #{pr_number} advanced during verification; "
+                + ("leaving the stand-down unsaid" if new_body == body else "skipping write")
+            )
+            return None
         if new_body == body:
             # Same reason as the review-time completion: the write stands down
             # whole on a block whose closer never came, which returns the body
@@ -495,18 +515,12 @@ def _apply_ci_updates(
             # (#1740, round 3). Read the live PR before saying so, the way the
             # writing path below does: a push in between would file the note
             # under a head the author has already left (#1740, round 4).
-            if current_sha == head_sha:
-                post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
-            else:
-                log(f"PR #{pr_number} advanced during verification; leaving the stand-down unsaid")
+            post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
             # The live body, so the label is decided on what the PR holds now
             # rather than on the copy this run started from. A read that told
             # us nothing leaves the body we have, which is the answer we had
-            # anyway.
-            return current_body or body
-        if current_sha != head_sha:
-            log(f"PR #{pr_number} advanced during verification; skipping write")
-            return None
+            # anyway; an empty one is an answer.
+            return body if current_body is None else current_body
         if current_body != body:
             log(
                 f"PR #{pr_number} body changed during verification "

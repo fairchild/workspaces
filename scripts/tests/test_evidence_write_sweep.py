@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -105,6 +106,52 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
             * len(sweep_script.LINE_ENDINGS),
         )
         self.assertEqual(self.summary["refusals"], self.REFUSALS)
+
+    def test_a_refusal_is_detected_by_value_rather_than_by_its_wording(self) -> None:
+        """The instrument read a sentence, and the writer stopped printing it (#1778, round 7).
+
+        `refused` grepped stderr for "refusing to rewrite". The collision
+        stand-down does not print that, so a body the write refused came back
+        byte-identical with `refused=False` and `silent=False` -- rewording a
+        refusal blinded the instrument to it. The flag comes from the
+        predicate the writer exposes now, so what a refusal SAYS stops being
+        load-bearing.
+        """
+        evidence = sys.modules["evidence"]
+        colliding = sweep_script.body(
+            sweep_script.SECTION_TAILS["nothing else"]
+            if "nothing else" in sweep_script.SECTION_TAILS
+            else next(iter(sweep_script.SECTION_TAILS.values())),
+            next(iter(sweep_script.SUCCESSORS.values())),
+            "\n",
+        )
+        entry = json.dumps(
+            {
+                "entries": [
+                    {"index": 1, "item": sweep_script.ITEM, "status": "pending-ci",
+                     "detail": sweep_script.DETAIL, "kind": "test"},
+                    {"index": 1, "item": "a second requirement", "status": "pending-ci",
+                     "detail": "waiting", "kind": "test"},
+                ]
+            }
+        )
+        colliding = re.sub(
+            r"<!-- evidence-status:v1\n.*?\n-->",
+            f"<!-- evidence-status:v1\n{entry}\n-->",
+            colliding,
+            count=1,
+            flags=re.S,
+        )
+        written, refused, said = sweep_script.write_once(colliding)
+        self.assertEqual(written, colliding, "the writer did not stand down on a collision")
+        self.assertTrue(refused, f"a refusal the writer does not word that way went uncounted")
+        # And the wording is not what carries it: the predicate is.
+        self.assertTrue(
+            any(
+                evidence.is_stood_down_announcement(one)
+                for one in [evidence.STOOD_DOWN_ANNOUNCEMENT_PREFIX + "anything at all"]
+            )
+        )
 
     def test_the_refusals_are_the_two_hazards_and_not_a_shape_that_should_write(self) -> None:
         # A refusal count is only a cost if it is the cost of the hazards. Both

@@ -1445,6 +1445,65 @@ class AStoodDownWriteDecidesTheLabelOnTheLiveBodyTests(unittest.TestCase):
             "the label was cleared against a live body recording an unmet requirement",
         )
 
+    def run_with_live(self, live_body: str | None, *, live_head: str = HEAD):
+        """One run whose second PR read answers differently from its first."""
+        settled = body_with_entries([self.settled_entry()])
+        pr = pr_payload(settled, labels=["blocked:evidence"])
+        reads = {"n": 0}
+        gh_calls: list[list[str]] = []
+        written: list[str] = []
+
+        def fake_gh_json(args, env):
+            if not any("pulls/321" in arg for arg in args):
+                return None
+            reads["n"] += 1
+            if reads["n"] > 1:
+                pr["body"] = settled if live_body is None else live_body
+                pr["head"] = {"sha": live_head}
+            return pr
+
+        with (
+            mock.patch.object(verify, "_gh_json", side_effect=fake_gh_json),
+            mock.patch.object(verify, "check_runs_for", return_value=self.GREEN),
+            mock.patch.object(
+                verify, "_write_pr_body", side_effect=lambda n, b, e: written.append(b) or True
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+        return reads["n"], written, gh_calls
+
+    def cleared(self, gh_calls) -> bool:
+        return ["pr", "edit", "321", "--remove-label", "blocked:evidence"] in gh_calls
+
+    def test_an_emptied_description_is_a_body_rather_than_a_failed_read(self) -> None:
+        """An owner deleting their description mid-run (#1778, round 7).
+
+        `current_body or body` read an empty live body as a read that told us
+        nothing and fell back to the copy this run started from -- so the
+        clear was decided on a body the PR no longer has, and the label came
+        off a description with no contract in it at all.
+        """
+        reads, written, gh_calls = self.run_with_live("")
+        self.assertGreater(reads, 1, "the live body was never read")
+        self.assertEqual(written, [], "this is the stand-down path")
+        self.assertFalse(self.cleared(gh_calls), "the label was cleared against an empty body")
+
+    def test_a_head_that_moved_mid_run_takes_no_decision_at_all(self) -> None:
+        """The byte-identical stand-down returned BEFORE the head check.
+
+        So a push between this run's read and its write had the label decided
+        on the body from before the push -- the conclusions belong to a commit
+        the pull request has left.
+        """
+        reads, written, gh_calls = self.run_with_live(None, live_head="b" * 40)
+        self.assertGreater(reads, 1)
+        self.assertEqual(written, [])
+        self.assertFalse(self.cleared(gh_calls), "the label was cleared after the head moved")
+
     def test_a_live_body_that_still_says_complete_still_clears(self) -> None:
         # The control: reading the live body is not a reason to stop clearing.
         settled = body_with_entries([self.settled_entry()])
@@ -1494,6 +1553,49 @@ class TheClearRefusesACollidingIndexTooTests(unittest.TestCase):
         entries = [dict(self.TWIN), dict(self.TWIN, index=2)]
         self.assertEqual(verify.colliding_indexes(entries), [])
         self.assertTrue(verify.should_clear_blocked_label(entries, HEAD, verified={}))
+
+
+class OneRuleForWhichIndexAnythingCanActOnTests(unittest.TestCase):
+    """Three validity rules over one field, reduced to two named ones (#1778, round 7).
+
+    `entry_index` answers what an entry CLAIMS -- an identity, any integer, so
+    two entries at index 0 are a collision the write must refuse. Whether
+    anything can ACT on the claim is a second question with one answer: an
+    index numbers a line in a rendered list and the first is 1. This lane
+    looked up a check for an index-0 entry while the review-response lane told
+    the author about none, which is one contract read two ways.
+    """
+
+    def test_an_index_below_one_is_claimed_but_not_actionable(self) -> None:
+        for index in (0, -1):
+            with self.subTest(index=index):
+                entry = {"index": index, "item": CI_ITEM, "status": "pending-ci", "detail": "d"}
+                self.assertEqual(verify.entry_index(entry), index)
+                self.assertIsNone(verify.usable_entry_index(entry))
+
+    def test_the_verifier_looks_up_no_check_for_a_line_nothing_renders(self) -> None:
+        for index in (0, -2):
+            with self.subTest(index=index):
+                entries = [{"index": index, "item": CI_ITEM, "status": "pending-ci", "detail": "d"}]
+                self.assertEqual(verify.ci_entries_needing_verification(entries, HEAD), [])
+
+    def test_the_response_lane_takes_the_same_definition(self) -> None:
+        response = load_module(
+            "factory_review_response_indexes", REPO_ROOT / "scripts" / "factory-review-response.py"
+        )
+        self.assertIs(response._entry_index, verify.usable_entry_index)
+        for index in (0, -1):
+            self.assertIsNone(response._entry_index({"index": index}))
+        self.assertEqual(response._entry_index({"index": 2}), 2)
+
+    def test_a_collision_below_one_is_still_a_collision(self) -> None:
+        # The identity rule stays wide: the write fans `updates[0]` across
+        # every entry claiming 0, so the guard has to see two of them.
+        entries = [
+            {"index": 0, "item": CI_ITEM, "status": "pending-ci", "detail": "d"},
+            {"index": 0, "item": DIFF_ITEM, "status": "pending-ci", "detail": "d"},
+        ]
+        self.assertEqual(verify.colliding_indexes(entries), [0])
 
 
 class VerdictDefinitenessTests(unittest.TestCase):
