@@ -223,6 +223,59 @@ def entry_update_for_check_run(
     }
 
 
+def duplicate_ci_indexes(entries: list[object] | None) -> list[int]:
+    """Indexes more than one `ci` entry claims, which is two answers to one requirement.
+
+    An entry's index is its identity to everything downstream: the updates
+    map is keyed by it, and a second entry at the same index means one of the
+    two verdicts silently replaces the other and lands on both lines. Which
+    one wins is decided by the order the entries happen to be written in, and
+    that is not a fact about the checks.
+
+    So neither verdict is acted on. The same answer `_indistinguishable` gives
+    two requested items that read alike: two answers the lane cannot choose
+    between are reported as malformed rather than resolved, where the author
+    can still fix it (#1778, round 2).
+    """
+    seen: set[int] = set()
+    duplicates: list[int] = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        if _evidence_item_kind(str(entry.get("item", "")).strip()) != "ci":
+            continue
+        try:
+            index = int(entry["index"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        if index in seen and index not in duplicates:
+            duplicates.append(index)
+        seen.add(index)
+    return duplicates
+
+
+def verdict_is_definite(runs: list[dict[str, object]] | None) -> bool:
+    """Whether this lookup SAYS something about the check, rather than failing to.
+
+    Three answers are definite: a completed run (whatever it concluded), and
+    an answered query that came back empty, which says the check does not
+    exist. Two are not: a lookup that failed outright (`None`), and a run that
+    exists and has not finished -- a check mid-re-run.
+
+    The difference decides whether a recorded completion may be rewritten.
+    Demoting one on an indefinite answer wrote `pending-ci` into the body, and
+    the NEXT run then read a completion where the one before had read none and
+    spent a slot of the review budget on the transition -- which is exactly
+    what the recorded reading exists to avoid, and which main did not do
+    (#1778, round 2).
+    """
+    if runs is None:
+        return False
+    if not runs:
+        return True
+    return latest_completed_run(runs) is not None
+
+
 def _recorded_contract_is_complete(entries: list[object] | None, head_sha: str) -> bool:
     """Whether the body ALREADY read as complete, taking the entries at their word.
 
@@ -291,6 +344,15 @@ def should_clear_blocked_label(
             return False
         update = confirmed.get(index)
         if not isinstance(update, dict):
+            return False
+        # The verdict has to belong to the check THIS entry names. Looked up
+        # by index alone, a decoy entry reusing an index and naming any green
+        # check cleared the label on a red required one -- no race and no
+        # forged status needed, just two entries at one index with the green
+        # one written last (#1778, round 2). The write path already makes this
+        # comparison (`_updates_targeting_unchanged_entries`); the clear made
+        # none.
+        if str(update.get("check_name", "")).strip() != (_ci_check_name(item) or ""):
             return False
         if str(update.get("status", "")).strip() != "complete":
             return False
@@ -518,11 +580,31 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
         return
 
     updates: dict[int, dict[str, object]] = {}
-    needed = ci_entries_needing_verification(entries, head_sha)
-    if needed:
-        for index, check_name in needed:
+    verified: dict[int, dict[str, object]] = {}
+    if (shared := duplicate_ci_indexes(entries)):
+        # Two entries at one index are two answers to one requirement, and
+        # which of them a verdict belongs to is decided by the order they
+        # happen to be written in. Neither is acted on: nothing is verified,
+        # nothing is written, and the label stays (#1778, round 2).
+        log(
+            f"PR #{pr_number}: evidence entries share index(es) "
+            f"{', '.join(str(index) for index in shared)}; leaving the contract for the author"
+        )
+    else:
+        recorded_status: dict[int, tuple[str, str]] = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                recorded_status[int(entry["index"])] = (
+                    str(entry.get("status", "")).strip(),
+                    str(entry.get("verified_head_sha", "")).strip(),
+                )
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+        for index, check_name in ci_entries_needing_verification(entries, head_sha):
             runs = check_runs_for(check_name, head_sha, env)
-            updates[index] = entry_update_for_check_run(
+            update = entry_update_for_check_run(
                 check_name,
                 head_sha,
                 latest_completed_run(runs),
@@ -531,10 +613,28 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
                 # back empty does.
                 check_known=runs is None or bool(runs),
             )
-        updated_body = _apply_ci_updates(pr_number, head_sha, body, updates, env)
-        if updated_body is None:
-            return
-        body = updated_body
+            if verdict_is_definite(runs):
+                updates[index] = update
+                verified[index] = update
+                continue
+            # An indefinite answer says nothing about the check, so it cannot
+            # unsay a completion. The entry keeps what it records and is not
+            # rewritten; it is absent from `verified`, so the label stays.
+            status, recorded_sha = recorded_status.get(index, ("", ""))
+            if not (status == "complete" and recorded_sha == head_sha):
+                updates[index] = update
+        if updates:
+            updated_body = _apply_ci_updates(pr_number, head_sha, body, updates, env)
+            if updated_body is None:
+                return
+            body = updated_body
+            # The same narrowing the write makes: an update whose target index
+            # no longer names the check it was computed for did not land, so
+            # it may not count toward the clear either (#1778, round 2).
+            verified = {
+                index: update
+                for index, update in _updates_targeting_unchanged_entries(body, verified).items()
+            }
 
     # The transition question, and it takes the RECORDED reading on purpose.
     # It asks whether the body already looked complete before this run, and
@@ -545,7 +645,7 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
     # budget on each (#1778).
     was_complete = _recorded_contract_is_complete(entries, head_sha)
     now_complete = should_clear_blocked_label(
-        evidence_entries(body), head_sha, verified=updates
+        evidence_entries(body), head_sha, verified=verified
     )
     label_names = {
         str(label.get("name", ""))
