@@ -3838,8 +3838,20 @@ def scalar_record_positions(entries: object) -> list[int]:
     ]
 
 
-def scalar_record_announcement(entries: object) -> str | None:
-    """The sentence a record carrying a bare value earns, or None."""
+def scalar_record_announcement(entries: object, replaced: list[str] | None = None) -> str | None:
+    """The sentence a record carrying a bare value earns, or None.
+
+    `replaced` is what the write took: the status-shaped lines under the
+    heading before it, minus the lines it rendered back. That is a
+    MEASUREMENT of the section rather than an ownership rule -- which line
+    belongs to which entry is #1779's question, and this branch merges first
+    -- and it is what the author needs: round 14 said a line only the bare
+    value stood for is "replaced like any other, which is what it does on
+    main too", and on the shape this branch's re-verify change reaches, main
+    makes no write at all. A line leaving the body under a sentence that says
+    main does the same is a line leaving with nothing true said about it
+    (#1778, round 15).
+    """
     if not (positions := scalar_record_positions(entries)):
         return None
     places = ", ".join(str(position) for position in positions)
@@ -3849,9 +3861,24 @@ def scalar_record_announcement(entries: object) -> str | None:
         f"{'s' if plural else ''} at position {places} preserved exactly as recorded: "
         f"nothing renders a status line for {'them' if plural else 'it'}, so the list holds "
         "the entries that do render and no line was written back for "
-        f"{'those values' if plural else 'that value'}. A status line under the heading that "
-        f"only {'they' if plural else 'it'} stood for is replaced by this write like any "
-        "other, which is what it does on main too."
+        f"{'those values' if plural else 'that value'}."
+    ) + _replaced_lines_clause(replaced or [])
+
+
+def _replaced_lines_clause(replaced: list[str]) -> str:
+    """Each line this write took out, named verbatim, or nothing when it took none.
+
+    Through `quoted_for_comment`, because the author's own text is going into
+    a comment and that is the RENDER half of the one quoting rule.
+    """
+    if not replaced:
+        return ""
+    quoted = ", ".join(quoted_for_comment(line, 200) for line in replaced)
+    return (
+        f" This write replaced {'these lines' if len(replaced) != 1 else 'this line'} with "
+        f"nothing: {quoted}. Rewriting "
+        f"{'them' if len(replaced) != 1 else 'it'} below the status section keeps "
+        f"{'them' if len(replaced) != 1 else 'it'} in the body the next run writes."
     )
 
 
@@ -3898,13 +3925,11 @@ def _render_structured_entries(
     stands down, the way a colliding index does, so record and page stay as
     the author left them and the sentence names the entry.
     """
-    if (scalars := scalar_record_announcement(updated_entries)) is not None:
-        # Said, and then the write goes on: a bare value in the record is
-        # preserved and the entries that DO render are written (#1778,
-        # round 14).
-        log(scalars)
-        if announcements is not None and scalars not in announcements:
-            announcements.append(scalars)
+    # The REFUSAL decides first. Said in the other order, a record holding
+    # both a bare value and an unkeyable entry told the author two things
+    # that disagree: "was written with the record's bare value preserved"
+    # and then "was left as written" -- for a write that did not happen
+    # (#1778, round 15). The scalar sentence belongs to the path that writes.
     if (refusal := unrenderable_record_refusal(updated_entries)) is not None:
         log(refusal)
         if announcements is not None:
@@ -3916,13 +3941,13 @@ def _render_structured_entries(
         if rendered is not None:
             rendered_entries.append(rendered)
 
+    rendered_lines = [
+        f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
+        for entry in sorted(rendered_entries, key=lambda entry: entry["index"])
+    ]
     if rendered_entries:
         write = write_evidence_status_section(
-            _strip_evidence_metadata(body),
-            [
-                f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
-                for entry in sorted(rendered_entries, key=lambda entry: entry["index"])
-            ],
+            _strip_evidence_metadata(body), rendered_lines
         )
         reconciled, refusal = write.body, write.refusal
         if announcements is not None:
@@ -3936,6 +3961,23 @@ def _render_structured_entries(
             return body
     else:
         reconciled = body
+    # What this write TOOK, measured across it rather than predicted before
+    # it: the section's status lines as the page reads them, before and
+    # after. Reading both sides through one reader is the whole of it -- a
+    # comparison between the page's reading and the write's own bytes counts
+    # every line as replaced, including the ones it rendered back unchanged
+    # (#1778, round 15).
+    before, unreadable_before = _rendered_status_lines(body)
+    after, unreadable_after = _rendered_status_lines(reconciled)
+    replaced = (
+        []
+        if unreadable_before is not None or unreadable_after is not None
+        else [line for line in before if line not in after]
+    )
+    if (scalars := scalar_record_announcement(updated_entries, replaced)) is not None:
+        log(scalars)
+        if announcements is not None:
+            announcements.append(scalars)
     reconciled = _insert_evidence_metadata(
         reconciled,
         {
