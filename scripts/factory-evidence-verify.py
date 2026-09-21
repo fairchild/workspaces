@@ -32,6 +32,14 @@ from evidence import (  # noqa: E402
     _evidence_item_kind,
     _extract_evidence_metadata,
     check_runs_for,
+    # What an index is, and when two entries claim one, is ONE function in the
+    # module that fans an update across a collision -- called here rather than
+    # copied. Two definitions that agree is the shape this whole strand is
+    # named for, and round 5 left one across the module boundary (#1778,
+    # round 6).
+    colliding_indexes,
+    entries_by_index,
+    entry_index,
     update_evidence_entries,
 )
 from execution import APP_BOT_GIT_IDENTITIES, post_uncarried_notes  # noqa: E402
@@ -218,64 +226,6 @@ def entry_update_for_check_run(
         "status": "pending-ci",
         "detail": f"latest `{check_name}` run on head {short} concluded {conclusion or 'unknown'}{link}",
     }
-
-
-def entry_index(entry: object) -> int | None:
-    """The index this entry claims, or None if it claims none this lane can read.
-
-    ONE definition, because three readers had three. `duplicate_ci_indexes`
-    counted only `ci` entries, `_updates_targeting_unchanged_entries` keyed on
-    the LAST entry at an index whatever its kind, and
-    `should_clear_blocked_label` iterated every `ci` entry -- and the gap
-    between them was not theoretical: one index carrying a `ci` entry and a
-    non-`ci` one passed the guard, and `update_evidence_entries` applied the
-    update to EVERY entry at that index. One green `Web CI` run rewrote a
-    `pending-ci` `diff` entry to a complete `ci` one bound to the head and
-    cleared the label, with nothing typed by hand (#1778, round 3, filed as
-    #1784).
-
-    `OverflowError` too: `1e9999` in the PR-editable metadata parses as
-    infinity, and `int()` of that raises a class the others do not cover.
-    """
-    if not isinstance(entry, dict):
-        return None
-    try:
-        return int(entry["index"])
-    except (KeyError, TypeError, ValueError, OverflowError):
-        return None
-
-
-def entries_by_index(entries: list[object] | None) -> dict[int, list[dict[str, object]]]:
-    """Every entry this lane can read, grouped by the index it claims -- ALL kinds."""
-    grouped: dict[int, list[dict[str, object]]] = {}
-    for entry in entries or []:
-        index = entry_index(entry)
-        if index is not None:
-            grouped.setdefault(index, []).append(entry)  # type: ignore[arg-type]
-    return grouped
-
-
-def colliding_indexes(entries: list[object] | None) -> list[int]:
-    """Indexes more than one entry claims, of ANY kind.
-
-    An entry's index is its identity to everything downstream: the updates
-    map is keyed by it, and a second entry at the same index means one
-    verdict silently replaces the other and lands on both lines. Which one
-    wins is decided by the order the entries happen to be written in, and
-    that is not a fact about the checks.
-
-    ANY kind, not `ci` alone. Scoping it to `ci` was this guard's own defect:
-    a mixed-kind index passed it, and one green run then manufactured a
-    completion on a line no check covers. The kinds of the colliding entries
-    change nothing about the ambiguity -- what is ambiguous is which entry the
-    verdict belongs to (#1778, round 3).
-
-    So neither verdict is acted on. The same answer `_indistinguishable` gives
-    two requested items that read alike: two answers the lane cannot choose
-    between are reported as malformed rather than resolved, where the author
-    can still fix it (#1778, round 2).
-    """
-    return sorted(index for index, at in entries_by_index(entries).items() if len(at) > 1)
 
 
 def verdict_is_definite(runs: list[dict[str, object]] | None) -> bool:

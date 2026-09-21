@@ -8509,13 +8509,13 @@ class TheWriterRefusesACollidingIndexItself(unittest.TestCase):
     def test_an_index_no_reader_can_take_is_not_a_collision(self) -> None:
         evidence = self.evidence()
         self.assertEqual(
-            evidence.colliding_entry_indexes(
+            evidence.colliding_indexes(
                 [self.entry(1), {"item": "no index at all", "status": "blocked", "detail": "d"},
                  {"index": "not a number", "item": "x", "status": "blocked", "detail": "d"}]
             ),
             [],
         )
-        self.assertIsNone(evidence.evidence_entry_index({"index": float("inf")}))
+        self.assertIsNone(evidence.entry_index({"index": float("inf")}))
 
 
 if __name__ == "__main__":
