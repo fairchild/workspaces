@@ -3968,11 +3968,33 @@ def _render_structured_entries(
     # every line as replaced, including the ones it rendered back unchanged
     # (#1778, round 15).
     before, unreadable_before = _rendered_status_lines(body)
-    after, unreadable_after = _rendered_status_lines(reconciled)
+    after, _ = _rendered_status_lines(reconciled)
+    # A line whose ITEM is one the write rendered was REWRITTEN, not replaced:
+    # the completion that updates a detail -- appending the run link -- makes
+    # the entry's own line differ before and after, and naming it "replaced
+    # with nothing" told the author to write their completed status line back
+    # below the section (#1778, round 16). The item is read with this
+    # module's own parser, bound to the items the write rendered, which is a
+    # reading of the line rather than an ownership rule; ownership is #1779's.
+    #
+    # `unreadable_after` was in this condition and guards nothing: after a
+    # successful write the section is a plain list this reader takes, because
+    # the write moves every other block out to `## Evidence Notes` and refuses
+    # rather than writing a section it cannot place. Six shapes were tried --
+    # a table, a sub-heading, a quote, an indented code block, inline HTML in
+    # an item, a bare paragraph -- and every one is unreadable BEFORE and
+    # readable after.
+    rendered_items = sorted({str(entry["item"]).strip() for entry in rendered_entries})
+    items = set(rendered_items)
+
+    def _rewritten(line: str) -> bool:
+        split = split_evidence_status_line(f"- {line}", rendered_items)
+        return split is not None and split[1].strip() in items
+
     replaced = (
         []
-        if unreadable_before is not None or unreadable_after is not None
-        else [line for line in before if line not in after]
+        if unreadable_before is not None
+        else [line for line in before if line not in after and not _rewritten(line)]
     )
     if (scalars := scalar_record_announcement(updated_entries, replaced)) is not None:
         log(scalars)

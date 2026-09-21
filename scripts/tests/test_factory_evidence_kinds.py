@@ -8969,6 +8969,106 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
         # of the quoting rule, like every other PR-editable value.
         self.assertTrue(self.inside_a_code_span(said[0], "the line the scalar stood for"))
 
+    # intent: fix
+    def test_a_line_the_write_rewrote_is_not_named_as_replaced(self) -> None:
+        """The completed entry's OWN line, named as taken (#1778, round 16).
+
+        A completion updates the detail — the verifier appends the run link —
+        so the entry's line differs before and after, and the round-15
+        comparison named it "replaced with nothing" and told the author to
+        write their own completed status line back below the section. Round
+        15's fixture rendered the entry back byte-identical, so it could not
+        feel this; the verifier's real completion changes the detail every
+        time.
+
+        A before-line whose ITEM is one the write rendered was rewritten, not
+        replaced. The item is read with this module's own parser bound to the
+        rendered items — a reading of the line, not an ownership rule.
+        """
+        entries = [
+            {"index": 1, "item": self.ITEM, "status": "complete",
+             "detail": "green on head aaaaaaaaaaaa", "kind": "ci"},
+            "legacy",
+        ]
+        unowned = "- [pending-ci] the line the scalar stood for -- waiting"
+        source = self.body(entries).replace(
+            "\n\n## Validation", f"\n{unowned}\n\n## Validation", 1
+        )
+        said: list[str] = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            written = self.evidence().update_evidence_entries(
+                source,
+                {1: {"status": "complete",
+                     "detail": "green on head aaaaaaaaaaaa — https://example.invalid/run/1"}},
+                announcements=said,
+            )
+        self.assertNotEqual(written, source, "the write did not happen")
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("replaced this line with nothing", said[0])
+        self.assertIn("the line the scalar stood for", said[0])
+        self.assertNotIn(self.ITEM, said[0].split("replaced this line")[1])
+        # And the line it rewrote is on the page with its new detail.
+        self.assertIn("https://example.invalid/run/1", written)
+
+    # intent: control
+    def test_an_entry_rendered_back_byte_identical_is_not_named_either(self) -> None:
+        # Round 15's fixture, kept as the control: the entry's line is
+        # unchanged across the write, so it is not in `before` minus `after`
+        # at all, and the subtraction above is not what keeps it out.
+        entries = [
+            {"index": 1, "item": self.ITEM, "status": "complete",
+             "detail": "green on head abc", "kind": "ci"},
+            "legacy",
+        ]
+        unowned = "- [pending-ci] the line the scalar stood for -- waiting"
+        source = self.body(entries).replace(
+            "\n\n## Validation", f"\n{unowned}\n\n## Validation", 1
+        )
+        said: list[str] = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.evidence().update_evidence_entries(
+                source, {1: {"status": "complete", "detail": "green on head abc"}},
+                announcements=said,
+            )
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("the line the scalar stood for", said[0])
+        self.assertNotIn(self.ITEM, said[0].split("replaced this line")[1])
+
+    # intent: guard
+    def test_a_written_section_is_always_one_this_reader_can_take(self) -> None:
+        """Why the fail-closed condition names only the BEFORE body.
+
+        `unreadable_after` guarded nothing and is gone. Six shapes were tried
+        to construct a write that succeeds and leaves a section the page
+        reader refuses — a table, a sub-heading, a quote, an indented code
+        block, inline HTML in an item, a bare paragraph under the heading —
+        and every one is unreadable BEFORE and readable after, because the
+        write moves every non-status block to `## Evidence Notes` and refuses
+        rather than writing a section it cannot place. The attempt is the
+        test (#1778, round 16).
+        """
+        evidence = self.evidence()
+        for name, tail in (
+            ("a table", "\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n"),
+            ("a sub-heading", "\n### notes\n\nprose\n\n"),
+            ("a quote", "\n> quoted\n\n"),
+            ("an indented code block", "\n    code\n\n"),
+            ("inline html in an item", "\n- [pending-ci] x <b>y</b> -- d\n\n"),
+            ("a bare paragraph", "\nprose under the heading\n\n"),
+        ):
+            with self.subTest(shape=name):
+                entries = [{"index": 1, "item": self.ITEM, "status": "pending-ci",
+                            "detail": "queued", "kind": "ci"}]
+                source = self.body(entries).replace("\n\n## Validation", f"\n{tail}## Validation", 1)
+                _, unreadable_before = evidence._rendered_status_lines(source)
+                with contextlib.redirect_stderr(io.StringIO()):
+                    written = evidence.update_evidence_entries(
+                        source, {1: {"status": "complete", "detail": "green"}}
+                    )
+                _, unreadable_after = evidence._rendered_status_lines(written)
+                self.assertIsNotNone(unreadable_before, f"{name}: the before body was readable")
+                self.assertIsNone(unreadable_after, f"{name}: the write left an unreadable section")
+
     # intent: control
     def test_a_scalar_with_nothing_replaced_says_nothing_about_replacing(self) -> None:
         # The control: the same record with no unowned line under the
