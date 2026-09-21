@@ -12,6 +12,7 @@ sections in a form GitHub Actions can surface cleanly.
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import hashlib
 import importlib.util
@@ -94,13 +95,55 @@ def all_of(cases, expected: set[str], label: str):
     return cases
 
 
+# What makes a binding a claims table, stated once: a module-level mapping
+# from a row's name to the three axes a row's claim is written on. The
+# population this file's thesis quantifies over is READ by this, never listed
+# -- a hardcoded pair left a third table guarded by nothing (#1771, round 17).
+CLAIMS_TABLE_SUFFIX = "_CLAIMS"
+
+
+def a_needle_that_can_fail(needle: object) -> bool:
+    """Whether this needle could be absent from some text, which is what makes it an assertion."""
+    return isinstance(needle, str) and bool(needle.strip())
+
+
+def says_something(claim) -> bool:
+    """Whether this claim asserts anything about the row it is written for.
+
+    NOT container non-emptiness. `(("",), (), ())` is a non-empty tuple
+    holding a needle every text contains, so `assertIn("", text)` is true of
+    every fixture and the row it names is pinned by nothing -- measured green
+    on both tables at `8d7bf4c1`. That is round 15's emptied claim one
+    wrapper deeper, and each round moved the floor because the predicate was
+    never written in terms of what a claim must ASSERT (#1771, round 17).
+
+    Written over the whole domain, axis by axis: a claim says something when
+    at least one axis carries a needle that can FAIL. A `contains` or
+    `absent` needle is non-empty text. An `order` pair is two non-empty
+    needles that DIFFER, because `text.index(a) < text.index(a)` is false for
+    every text -- an axis that can never pass says as little about its row as
+    one that can never fail, and the guard asks for one that can do both.
+    """
+    contains, absent, order = claim
+    if any(a_needle_that_can_fail(needle) for needle in contains):
+        return True
+    if any(a_needle_that_can_fail(needle) for needle in absent):
+        return True
+    return any(
+        a_needle_that_can_fail(first) and a_needle_that_can_fail(second) and first != second
+        for first, second in order
+    )
+
+
 def every_claim_says_something(claims, label: str):
     """Each row's claim asserts SOMETHING, asked before any row is read.
 
     The other half of the predicate `all_of` states. `all_of` pins WHICH
-    rows a table has; this pins that the claim written for a row is not
-    empty -- `((), (), ())` in place of a row's claim iterates cleanly,
-    asserts nothing, and leaves the row it names unpinned (#1771, round 15).
+    rows a table has; this pins that the claim written for a row asserts
+    something about it -- `((), (), ())` in place of a row's claim iterates
+    cleanly, asserts nothing, and leaves the row it names unpinned (#1771,
+    round 15), and `(("",), (), ())` does the same one wrapper deeper
+    (round 17). `says_something` is the predicate; this applies it.
 
     One function rather than the same three lines under each claims table:
     the two copies were a rule with two spellings, and with ONE of them
@@ -108,14 +151,48 @@ def every_claim_says_something(claims, label: str):
     and a seed had nowhere to call it (#1771, round 16). Returns the claims,
     the way `all_of` returns its table, so a caller binds what it asked
     about.
+
+    `label` is the claims TABLE's own name, not the calling test's: the
+    recorder that checks every table went through this guard compares names
+    against the enumerated population, and two call sites passing the same
+    bare method name could not tell "both tables came through" from "one
+    came through twice" (#1771, round 17).
     """
-    empty = sorted(name for name, claim in claims.items() if not any(claim))
+    empty = sorted(name for name, claim in claims.items() if not says_something(claim))
     if empty:
         raise AssertionError(
             f"{label}: a row's claim asserts nothing at all: {empty} -- the row is named "
             "here and pinned by nothing; write the claim or take the row out"
         )
     return claims
+
+
+def claims_tables(namespace: dict) -> set[str]:
+    """Every claims table a module binds, by KIND rather than by a list.
+
+    The population the round's thesis is about. A hardcoded pair of readers
+    meant a third claims table with no guard at all left the suite green
+    (measured at `8d7bf4c1`: `Ran 319 tests`, `OK`), so what a table IS gets
+    stated -- a module-level mapping whose name ends in `_CLAIMS` -- and the
+    tables are read off the module rather than written down twice.
+    """
+    return {
+        name
+        for name, value in namespace.items()
+        if name.endswith(CLAIMS_TABLE_SUFFIX) and isinstance(value, dict)
+    }
+
+
+def unguarded(tables: set[str], asked: set[str]) -> list[str]:
+    """Which claims tables no test read through the guard, named.
+
+    Names rather than a count, for the reason `all_of` gives: a count
+    answers "how many" where the claim is about WHICH. The round-16 recorder
+    asserted a count over labels that were the same string at both call
+    sites, so one table going through twice read as two tables going through
+    (#1771, round 17).
+    """
+    return sorted(tables - asked)
 
 
 def pending(matched: str) -> str:
@@ -226,27 +303,107 @@ class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
             with self.subTest(row=name):
                 self.assertIs(every_claim_says_something({name: claim}, "seed")[name], claim)
 
-    READERS = (
-        "ThePageReaderTableTests.test_each_row_is_the_shape_its_name_claims",
-        "TheSwallowedHeadingTableTests.test_each_row_is_the_shape_its_name_claims",
-    )
+    # What a claim can look like and still assert nothing about its row. Each
+    # is a non-empty container -- which is all `any(claim)` ever asked --
+    # holding a needle no text can fail (#1771, round 17).
+    SAYS_NOTHING = {
+        "an empty `contains` needle": (("",), (), ()),
+        "a blank `contains` needle": (("   ",), (), ()),
+        "an empty `absent` needle": ((), ("",), ()),
+        "an order pair of two empty needles": ((), (), (("", ""),)),
+        "an order pair of one needle with itself": ((), (), (("a", "a"),)),
+    }
 
-    # intent: guard
-    # marker: red at `bb149390`, its own base, only on the NAME this round adds
-    # (`NameError: every_claim_says_something`). The property it pins holds there --
-    # the two inline copies of the rule enforce it -- so it is a guard, and the two
-    # numbers are counted apart (#1771, round 16).
-    def test_both_claims_tables_are_read_through_it(self) -> None:
-        """The seeds above pin the function; this pins that it is what runs.
+    # intent: fix
+    # marker: red at `8d7bf4c1`, its own base, behaviourally: `any(claim)`
+    # accepts every shape above, and the suite stays green with one of them
+    # in either real table (#1771, round 17).
+    def test_a_claim_that_asserts_nothing_is_named_however_it_is_spelled(self) -> None:
+        """The predicate over its whole domain, not over its containers.
 
-        Asked by driving the two tests with the function replaced by a
-        recorder, rather than by counting occurrences in the source: a grep
-        over this file answers a question about text, and what is at stake
-        is whether the claims a test reads went through the guard. A third
-        claims table written with the rule spelled out again beside it is
-        exactly what round 16 removed, and this is what would notice.
+        Round 15 closed `()` and round 16 closed the second copy of the rule,
+        and each moved the floor because the predicate was never written in
+        terms of what a claim must ASSERT. `(("",), (), ())` is a non-empty
+        tuple, so `any(claim)` said yes, and `assertIn("", text)` is then
+        true of every fixture -- measured at `8d7bf4c1`, `Ran 318 tests` /
+        `OK` with that claim in `PAGE_READER_CLAIMS`, and again with it in
+        `SWALLOWED_CLAIMS`.
+
+        Each axis, each of its members: a `contains` or `absent` needle that
+        is non-empty text, or an `order` pair of two non-empty needles that
+        differ. Both directions are seeded, because a predicate that rejects
+        everything would pass the rejecting half alone.
+        """
+        for shape, claim in self.SAYS_NOTHING.items():
+            with self.subTest(rejects=shape):
+                self.assertFalse(says_something(claim), f"{shape}: read as a claim")
+                with self.assertRaises(AssertionError) as raised:
+                    every_claim_says_something({"a row that pins nothing": claim}, "seed")
+                self.assertIn("a row that pins nothing", str(raised.exception))
+        for shape, claim in self.WHOLE.items():
+            with self.subTest(accepts=shape):
+                self.assertTrue(says_something(claim), f"{shape}: a real claim was rejected")
+        # And the real tables pass it, which is the other direction over the
+        # population this file actually has.
+        for name in sorted(claims_tables(vars(sys.modules[__name__]))):
+            with self.subTest(table=name):
+                every_claim_says_something(getattr(sys.modules[__name__], name), name)
+
+    def readers_of(self, tables: set[str]) -> list[str]:
+        """The qualnames of the tests whose own source names a claims table.
+
+        Not `tests_that_read`: a helper whose name starts with `test` is a
+        test to unittest and an unmarked one to the marker census.
+
+        A list of readers written by hand is the defect one level up: it was
+        a two-tuple, and a third claims table with a test of its own left it
+        untouched. The readers are FOUND -- a test that reads a claims table
+        names it -- and what they did once found is recorded rather than
+        assumed, which a source scan cannot do.
+        """
+        source = Path(__file__).read_text(encoding="utf-8")
+        found: list[str] = []
+        for klass in ast.walk(ast.parse(source)):
+            if not isinstance(klass, ast.ClassDef):
+                continue
+            for method in klass.body:
+                if not isinstance(method, ast.FunctionDef) or not method.name.startswith("test"):
+                    continue
+                # The NAMES a test refers to, not the text of its source: a
+                # docstring naming a table is prose about one, and searching
+                # the segment made every test that mentions a table read as
+                # one that reads it -- the same "a comment quoting it is not
+                # it" rule the marker census keeps.
+                named = {
+                    node.id for node in ast.walk(method) if isinstance(node, ast.Name)
+                }
+                if named & tables:
+                    found.append(f"{klass.name}.{method.name}")
+        return found
+
+    # intent: fix
+    # marker: red at `8d7bf4c1`, its own base, behaviourally -- the count
+    # there passes with one table out of the funnel and the other calling
+    # twice, and names no table at all (#1771, round 17).
+    def test_every_claims_table_this_module_binds_is_read_through_it(self) -> None:
+        """The population, read by kind, against the tables that actually came through.
+
+        The seeds above pin the function; this pins that every claims table
+        goes through it. Both halves were wrong at `8d7bf4c1`: the readers
+        were a hardcoded pair, so a third claims table with no guard left the
+        suite green (`Ran 319 tests`, `OK`), and the assertion was a COUNT
+        over labels that were the same bare method name at both call sites,
+        so one table through twice read as two tables through once (measured
+        green with exactly that swap).
+
+        Names, not a count -- `all_of`'s own reason, applied to the
+        population this round is about -- and the population is enumerated
+        from the module's bindings rather than listed here.
         """
         module = sys.modules[__name__]
+        tables = claims_tables(vars(module))
+        self.assertTrue(tables, "no claims table was found; the enumerator reads nothing")
+        readers = self.readers_of(tables)
         original = every_claim_says_something
         asked: list[str] = []
 
@@ -255,10 +412,43 @@ class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
             return original(claims, label)
 
         with mock.patch.object(module, "every_claim_says_something", recording):
-            suite = unittest.TestLoader().loadTestsFromNames(self.READERS, module)
+            suite = unittest.TestLoader().loadTestsFromNames(readers, module)
             outcome = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
         self.assertTrue(outcome.wasSuccessful(), outcome.failures + outcome.errors)
-        self.assertEqual(len(asked), len(self.READERS), asked)
+        self.assertEqual(
+            unguarded(tables, set(asked)), [],
+            "a claims table this module binds went through no guard; name it in a test",
+        )
+        self.assertEqual(
+            sorted(set(asked)), sorted(tables),
+            "the guard was asked about something that is not one of this module's claims tables",
+        )
+
+    # intent: fix
+    # marker: red at `8d7bf4c1`, its own base, on the NAMES this round adds
+    # (`claims_tables`, `unguarded`) -- the population it enumerates does not
+    # exist there to be asked (#1771, round 17).
+    def test_the_enumerator_finds_a_table_nothing_guards_and_names_it(self) -> None:
+        """The control the enumerator should FIND and REJECT, planted outside this module.
+
+        A synthetic third table in a namespace of its own rather than in this
+        file's bindings: a scanner that eventually scans the thing describing
+        it is the exclusion-list road this branch keeps refusing.
+        """
+        planted = {
+            "PAGE_READER_CLAIMS": {"a row": (("x",), (), ())},
+            "THIRD_CLAIMS": {"a planted row": ((), (), ())},
+            "NOT_A_TABLE": ("x", "y"),
+            "SOMETHING_ELSE": {"a row": (("x",), (), ())},
+        }
+        self.assertEqual(
+            claims_tables(planted), {"PAGE_READER_CLAIMS", "THIRD_CLAIMS"},
+            "the enumerator reads something other than claims tables, or misses one",
+        )
+        self.assertEqual(
+            unguarded(claims_tables(planted), {"PAGE_READER_CLAIMS"}), ["THIRD_CLAIMS"]
+        )
+        self.assertEqual(unguarded(claims_tables(planted), {"PAGE_READER_CLAIMS", "THIRD_CLAIMS"}), [])
 
 
 class TheFixtureGuardNamesWhatItExpectsTests(unittest.TestCase):
@@ -2647,7 +2837,7 @@ class ThePageReaderTableTests(unittest.TestCase):
         claim written for it fails the completeness check below.
         """
         table = PAGE_READER_TABLE
-        claims = PAGE_READER_CLAIMS
+        claims, claims_name = PAGE_READER_CLAIMS, "PAGE_READER_CLAIMS"
         labels = PAGE_READER_LABELS
         self.assertEqual(
             sorted(set(table) - set(claims) - labels),
@@ -2660,7 +2850,7 @@ class ThePageReaderTableTests(unittest.TestCase):
         # table whose names `all_of` pins, and the NON-VACUITY of each row's
         # claim through the one function that asks it (#1771, rounds 15, 16).
         for name, (contains, absent, order) in every_claim_says_something(
-            claims, self.id().rsplit(".", 1)[-1]
+            claims, claims_name
         ).items():
             with self.subTest(row=name):
                 text = table[name][0]
@@ -4375,7 +4565,7 @@ class TheSwallowedHeadingTableTests(unittest.TestCase):
         each claim is checked for asserting anything at all.
         """
         table = SWALLOWED_HEADING_TABLE
-        claims = SWALLOWED_CLAIMS
+        claims, claims_name = SWALLOWED_CLAIMS, "SWALLOWED_CLAIMS"
         labels = SWALLOWED_LABELS
         self.assertEqual(
             sorted(set(table) - set(claims) - labels),
@@ -4388,7 +4578,7 @@ class TheSwallowedHeadingTableTests(unittest.TestCase):
         # table whose names `all_of` pins, and the NON-VACUITY of each row's
         # claim through the one function that asks it (#1771, rounds 15, 16).
         for name, (contains, absent, order) in every_claim_says_something(
-            claims, self.id().rsplit(".", 1)[-1]
+            claims, claims_name
         ).items():
             with self.subTest(row=name):
                 text = table[name][0]
