@@ -228,13 +228,19 @@ def _entry_line_numbers(lines: list[str], text: str, recorded: set[str]) -> set[
     for line in lines:
         starts.append(offset)
         offset += len(line) + 1
+    # The SAME function the write asks, with the same four inputs: the line,
+    # the items, the section the line is read in, and the lines the write
+    # owns. Asking `is_recorded_status_line` alone left this instrument with
+    # no cap at all, so the write took a differently-spelled author line and
+    # this called the same line lost -- the disagreement the branch exists to
+    # close, reopened by the cap that closed part of it (#1751, round 6).
+    section = helpers.markdown_section(text, "Evidence Status")
+    owned = evidence.rendered_entry_lines(evidence.evidence_entries_of(text))
     return {
         index
         for index, start in enumerate(starts)
         if bounds[1] <= start < bounds[2]
-        and evidence.is_recorded_status_line(
-            evidence.status_line_as_page_reads_it(lines[index]), recorded
-        )
+        and evidence.is_machine_status_line(lines[index], recorded, section, owned)
     }
 
 

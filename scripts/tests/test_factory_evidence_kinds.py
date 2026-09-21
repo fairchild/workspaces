@@ -8936,42 +8936,6 @@ class ALineTheWriteCannotReadBackIsSaidRatherThanOrphanedTests(unittest.TestCase
             len([line for line in notes.splitlines() if pattern.search(line)]),
         )
 
-    def test_an_unchanged_verdict_does_not_accrue_a_copy_per_write(self) -> None:
-        """The write knows its own bytes, and that is the cap (#1751, round 5).
-
-        A line no reader can read back was carried to `## Evidence Notes` on
-        every write, so a pull request accrued one copy per COMPLETED CHECK
-        SUITE -- the rate matters, because that is how often this writer runs,
-        and a long-lived pull request would walk its body toward the 65,536
-        characters GitHub stores.
-
-        A status line byte-identical to one this write is about to render is
-        this write's line whatever a reading makes of it, which is the only
-        claim available for a line no reader can parse.
-        """
-        evidence = self.evidence()
-        item, detail = self.CROSSING
-        body = (
-            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
-            f"- [pending-ci] {item} -- waiting\n\n## Validation\n\n- ran it\n"
-        )
-        seen = []
-        for _ in range(3):
-            body = evidence.write_evidence_status_section(
-                body, [f"- [complete] {item} -- {detail}"], recorded_items=[item]
-            ).body
-            seen.append(self.counts(body))
-        self.assertEqual(seen, [(1, 0), (1, 0), (1, 0)])
-        # A status CHANGE writes a different line, so the old one is carried
-        # once -- and once only, however many runs follow at that verdict.
-        after = []
-        for _ in range(2):
-            body = evidence.write_evidence_status_section(
-                body, [f"- [complete] {item} -- 215 passed"], recorded_items=[item]
-            ).body
-            after.append(self.counts(body))
-        self.assertEqual(after, [(1, 1), (1, 1)])
-
     def test_the_predicate_answers_about_lines_rather_than_items(self) -> None:
         evidence = self.evidence()
         item, detail = self.CROSSING
@@ -9130,6 +9094,229 @@ class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertIn("- [complete] ", written)
         self.assertIn(theirs, written)
+
+
+class OneReadingInOneContextForEverythingComparedTests(unittest.TestCase):
+    """The guard added to stop a deletion had the deletion (#1751, round 6).
+
+    Fifth iteration of one class. `_indistinguishable` keyed on the item read
+    ALONE while the ownership rule reads it IN THE SECTION, so two spellings
+    of one link-reference item were two requirements to the guard and one to
+    the rule: the contract passed, and the owner's line was replaced by the
+    entry with nothing said anywhere.
+    """
+
+    REF = "[Manual QA][qa] on device"
+    INLINE = "[Manual QA](https://example.invalid/qa) on device"
+    OWNER = "- [blocked] [Manual QA][qa] on device -- owner says device is unavailable"
+    DEFINITION = "[qa]: https://example.invalid/qa"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def body(self) -> str:
+        return (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {self.INLINE} -- waiting\n{self.OWNER}\n\n{self.DEFINITION}\n\n"
+            "## Validation\n\n- ran it\n"
+        )
+
+    def test_the_two_spellings_are_one_requirement_in_the_section(self) -> None:
+        evidence = self.evidence()
+        section = sys.modules["_helpers"].markdown_section(self.body(), "Evidence Status")
+        self.assertEqual(
+            evidence.item_as_page_reads_it(self.INLINE, section),
+            evidence.item_as_page_reads_it(self.REF, section),
+        )
+        # And the guard now sees what the rule sees.
+        self.assertEqual(evidence._indistinguishable([self.INLINE, self.REF], section), [self.REF])
+        # Read alone they are two items, which is what the guard used to see.
+        self.assertEqual(evidence._indistinguishable([self.INLINE, self.REF]), [])
+
+    def test_the_write_stands_down_and_the_owners_line_survives(self) -> None:
+        evidence = self.evidence()
+        body = self.body()
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            write = evidence.write_evidence_status_section(
+                body,
+                [f"- [complete] {self.INLINE} -- 214 passed"],
+                recorded_items=[self.INLINE, self.REF],
+            )
+        self.assertIn(self.OWNER, write.body)
+        self.assertEqual(write.body, body)
+        self.assertIsNotNone(write.refusal)
+        self.assertIn("cannot be told apart", write.refusal)
+        self.assertEqual(
+            len([n for n in write.announcements if evidence.is_stood_down_announcement(n)]), 1
+        )
+
+
+class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
+    """The cap reopened the disagreement this branch exists to close (#1751, round 6).
+
+    It compared the PAGE'S reading of the body line against the RAW bytes of
+    the rendered lines -- two spellings of one comparison -- and the sweep had
+    no cap at all. So an author who wrote the machine's text with a `*` marker
+    had their line taken and deleted by the write while the instrument that
+    measures the write called the same line lost.
+
+    Byte identity on both sides, and ONE function for both readers: they start
+    from the same shape, a line.
+    """
+
+    ITEM = "run `swift test"
+    DETAIL = "--filter QA` passed"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    @property
+    def rendered(self) -> str:
+        return f"- [complete] {self.ITEM} -- {self.DETAIL}"
+
+    SPELLINGS = {
+        "byte-identical": None,
+        "a star marker": ("- ", "* "),
+        "an ordered marker": ("- ", "1. "),
+        "a bold status token": ("[complete]", "**[complete]**"),
+        "a span in the item": ("run ", "<span>run</span> "),
+    }
+
+    def test_the_two_readers_agree_on_every_spelling(self) -> None:
+        evidence = self.evidence()
+        section = f"{self.rendered}\n"
+        disagreements = []
+        for label, swap in self.SPELLINGS.items():
+            line = self.rendered if swap is None else self.rendered.replace(*swap, 1)
+            write = evidence.is_machine_status_line(line, [self.ITEM], section, [self.rendered])
+            sweep = evidence.is_machine_status_line(line, [self.ITEM], section, [self.rendered])
+            if write != sweep:
+                disagreements.append(label)
+        self.assertEqual(disagreements, [], "one function answered two ways")
+
+    def test_a_differently_spelled_author_line_is_never_the_machines(self) -> None:
+        evidence = self.evidence()
+        section = f"{self.rendered}\n"
+        for label, swap in self.SPELLINGS.items():
+            if swap is None:
+                continue
+            with self.subTest(spelling=label):
+                line = self.rendered.replace(*swap, 1)
+                self.assertFalse(
+                    evidence.is_machine_status_line(line, [self.ITEM], section, [self.rendered]),
+                    f"{label} was taken for the machine's",
+                )
+        # The write's own bytes still are.
+        self.assertTrue(
+            evidence.is_machine_status_line(self.rendered, [self.ITEM], section, [self.rendered])
+        )
+
+    def test_a_star_marker_line_is_carried_rather_than_deleted(self) -> None:
+        # The harm, end to end: the author's line survives the write.
+        evidence = self.evidence()
+        star = self.rendered.replace("- ", "* ", 1)
+        body = (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {self.ITEM} -- waiting\n{star}\n\n## Validation\n\n- ran it\n"
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            write = evidence.write_evidence_status_section(
+                body, [self.rendered], recorded_items=[self.ITEM]
+            )
+        self.assertIn(star, write.body)
+
+    def test_the_sweep_asks_the_same_function(self) -> None:
+        # Not that it gets the same answer -- that it is the same call, which
+        # is what stops the two from drifting again.
+        source = (REPO_ROOT / "scripts" / "evidence-write-sweep.py").read_text(encoding="utf-8")
+        self.assertIn("evidence.is_machine_status_line(", source)
+        self.assertNotIn("evidence.is_recorded_status_line(", source)
+
+
+class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
+    """A volatile detail brought the uncapped rate back with no status change (#1751, round 6).
+
+    The cap keyed on the whole rendered line, and a detail is volatile: the
+    verifier's own `pending-ci` detail carries a head and a run URL and
+    changes on every push. So an unreadable line accrued a copy per push with
+    ZERO status changes -- the rate the cap was added to hold, back through a
+    field nobody counted as changing.
+
+    The metadata comment carries every entry as the last run wrote it, so the
+    line that run rendered is reconstructible byte for byte. A body line
+    identical to THAT, or to the line about to be rendered, is the machine's.
+    """
+
+    ITEM = "run `swift test"
+    DETAIL = "--filter QA` passed"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def counts(self, body: str) -> tuple[int, int]:
+        helpers = sys.modules["_helpers"]
+        pattern = re.compile(r"\[(complete|blocked|pending-ci)\]")
+        return tuple(
+            len([line for line in helpers.markdown_section(body, heading).splitlines()
+                 if pattern.search(line)])
+            for heading in ("Evidence Status", "Evidence Notes")
+        )
+
+    def body_with(self, detail: str) -> str:
+        entry = {"index": 1, "item": self.ITEM, "status": "pending-ci",
+                 "detail": detail, "kind": "test"}
+        return (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {self.ITEM} -- {detail}\n\n## Validation\n\n- ran it\n"
+        )
+
+    def test_seven_pushes_with_a_changing_detail_and_no_status_change(self) -> None:
+        evidence = self.evidence()
+        body = self.body_with(f"{self.DETAIL} on head aaaaaaaaaaaX")
+        seen = []
+        for push in range(7):
+            with contextlib.redirect_stderr(io.StringIO()):
+                body = evidence.update_evidence_entries(
+                    body,
+                    {1: {"status": "pending-ci",
+                         "detail": f"{self.DETAIL} on head aaaaaaaaaaa{push}"}},
+                )
+            seen.append(self.counts(body))
+        self.assertEqual(seen, [(1, 0)] * 7)
+
+    def test_a_status_change_carries_nothing_either(self) -> None:
+        """Keyed on the ENTRY, a status change costs no copy at all.
+
+        Round 5's cap keyed on the rendered line, so any change to it -- a
+        status, a detail -- left the old line behind as the author's. Keyed on
+        the entry, the line the last run rendered is reconstructible whatever
+        changed, so it is the machine's and is replaced.
+
+        Named for what it tests, unlike the round-5 test it replaces: that one
+        changed only the DETAIL and called it a status change, so it could not
+        fail on the thing it named.
+        """
+        evidence = self.evidence()
+        body = self.body_with(f"{self.DETAIL} on head aaaaaaaaaaaX")
+        for _ in range(2):
+            with contextlib.redirect_stderr(io.StringIO()):
+                body = evidence.update_evidence_entries(
+                    body,
+                    {1: {"status": "complete", "detail": f"{self.DETAIL} on head aaaaaaaaaaaY"}},
+                )
+            self.assertEqual(self.counts(body), (1, 0))
+        self.assertIn("- [complete] ", body)
+
+    def test_the_line_the_last_run_rendered_is_reconstructible(self) -> None:
+        evidence = self.evidence()
+        entries = evidence.evidence_entries_of(self.body_with("a detail"))
+        self.assertEqual(
+            evidence.rendered_entry_lines(entries),
+            [f"- [pending-ci] {self.ITEM} -- a detail"],
+        )
+        self.assertEqual(evidence.rendered_entry_lines(None), [])
 
 
 if __name__ == "__main__":
