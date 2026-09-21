@@ -1278,7 +1278,16 @@ class RenderedStatusLineTests(unittest.TestCase):
         # written view, so nothing else catches it, and the gate passed a body
         # the merge base failed. Found by codex (gpt-5.6-sol, xhigh).
         items = ("- [blocked] | x |", "- \\[blocked] | x |", "* [pending-ci] | x |", "1. [blocked] | x |")
-        for item in items:
+        for item in all_of(
+            items,
+            {
+                "- [blocked] | x |",
+                "- \\[blocked] | x |",
+                "* [pending-ci] | x |",
+                "1. [blocked] | x |",
+            },
+            "ABulletedRowThatBecameATable.items",
+        ):
             with self.subTest(item=item):
                 body = self.body(f"{item}\n  | --- | --- |\n")
                 cell = item.split("|")[0].strip().replace("\\", "")
@@ -5777,7 +5786,16 @@ class WhatTheGateSLongerReadingCostsTests(unittest.TestCase):
             "Non-happy paths considered",
             "Residual risk or follow-up",
         )
-        for field in required:
+        for field in all_of(
+            required,
+            {
+                "Surface",
+                "User-facing behavior changed",
+                "Non-happy paths considered",
+                "Residual risk or follow-up",
+            },
+            "TheMergeabilityFieldsAreAnswered.required",
+        ):
             with self.subTest(field=field):
                 self.assertIsNotNone(pr_readiness.field_value(gate, field))
                 self.assertIsNone(pr_readiness.field_value(skill, field))
@@ -6054,10 +6072,39 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
         behind them. The run is the Default_Ignorable property now, so the
         exclusion keeps only the marks that really do show something.
         """
-        marks = [0x034F, 0x17B4, 0x17B5, *range(0x180B, 0x180E), *range(0xFE00, 0xFE10)]
-        self.assertEqual(len(marks), 22, "the shapes this claim is about")
-        for code in marks:
-            with self.subTest(mark=f"U+{code:04X}"):
+        marks = {
+            f"U+{code:04X}": code
+            for code in (0x034F, 0x17B4, 0x17B5, *range(0x180B, 0x180E), *range(0xFE00, 0xFE10))
+        }
+        for mark, code in all_of(
+            marks,
+            {
+                "U+034F",
+                "U+17B4",
+                "U+17B5",
+                "U+180B",
+                "U+180C",
+                "U+180D",
+                "U+FE00",
+                "U+FE01",
+                "U+FE02",
+                "U+FE03",
+                "U+FE04",
+                "U+FE05",
+                "U+FE06",
+                "U+FE07",
+                "U+FE08",
+                "U+FE09",
+                "U+FE0A",
+                "U+FE0B",
+                "U+FE0C",
+                "U+FE0D",
+                "U+FE0E",
+                "U+FE0F",
+            },
+            "ACombiningMarkIsContent.marks",
+        ).items():
+            with self.subTest(mark=mark):
                 self.assertEqual(unicodedata.category(chr(code)), "Mn")
                 self.assertIn(chr(code), pr_readiness.INVISIBLE_LEADING)
                 self.assertFalse(
@@ -6775,17 +6822,33 @@ class EvidenceDeliveryPreflightTests(unittest.TestCase):
         self.prepared.cleanup.assert_called_once_with()
 
     def test_delivery_flags_reject_ambiguous_or_invalid_invocations(self):
-        invalid = [
-            ["--check-evidence-delivery", "0"],
-            ["--check-evidence-delivery", "-1"],
-            ["--check-evidence-delivery", "42", "--body-file", "body.md"],
-            ["--check-evidence-delivery", "42", "--event=event.json"],
-            ["--check-evidence-delivery", "42", "--changed-files", "files.json"],
-            ["--check-evidence-delivery", "42", "--base", "other"],
-            ["--expected-head", self.HEAD],
-        ]
-        for argv in invalid:
-            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+        # Named rather than positional, so the guard can say WHICH invocation
+        # left the table (#1771, round 14).
+        invalid = {
+            "a pull request number of zero": ["--check-evidence-delivery", "0"],
+            "a negative number": ["--check-evidence-delivery", "-1"],
+            "a body file beside it": ["--check-evidence-delivery", "42", "--body-file", "body.md"],
+            "an event file beside it": ["--check-evidence-delivery", "42", "--event=event.json"],
+            "a changed-files list beside it": [
+                "--check-evidence-delivery", "42", "--changed-files", "files.json",
+            ],
+            "another base beside it": ["--check-evidence-delivery", "42", "--base", "other"],
+            "an expected head with no delivery check": ["--expected-head", self.HEAD],
+        }
+        for name, argv in all_of(
+            invalid,
+            {
+                "a pull request number of zero",
+                "a negative number",
+                "a body file beside it",
+                "an event file beside it",
+                "a changed-files list beside it",
+                "another base beside it",
+                "an expected head with no delivery check",
+            },
+            "TheDeliveryFlags.invalid",
+        ).items():
+            with self.subTest(invocation=name), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
                 pr_readiness.parse_args(argv)
             self.assertEqual(error.exception.code, 2)
 
