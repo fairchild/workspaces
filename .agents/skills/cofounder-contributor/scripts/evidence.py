@@ -24,7 +24,6 @@ from _helpers import (
     code_span_ranges,
     heading_identity,
     inline_text,
-    insert_markdown_section,
     is_section_boundary,
     is_section_heading,
     log,
@@ -2657,7 +2656,22 @@ def render_execution_summary_body(
             validation = f"{validation.rstrip()}\n- blocked on evidence: {blocked_note}"
         else:
             validation = f"- blocked on evidence: {blocked_note}"
-        rendered = insert_markdown_section(rendered, "Validation", validation, before_heading="Risks")
+        # The write's answer, not the wrapper's silence: a placement the page
+        # would fold away is a `blocked on evidence` line no reader sees, and
+        # through the back-compat wrapper the reason reached a step log alone
+        # (#1773, round 8).
+        placed = inserted_markdown_section(
+            rendered, "Validation", validation, before_heading="Risks"
+        )
+        if placed.unverified is not None and announcements is not None:
+            _announce_unverified(announcements, placed.unverified)
+        if placed.refusal is not None:
+            note = f"`## Validation` not rewritten: {placed.refusal}"
+            log(note)
+            if announcements is not None:
+                announcements.append(note)
+        else:
+            rendered = placed.body
     return rendered, []
 
 

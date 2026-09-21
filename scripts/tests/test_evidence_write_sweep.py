@@ -58,7 +58,13 @@ def page_unavailable(*, transient: bool):
     reason = NO_TOKEN if not transient else "the renderer answered HTTP 503"
 
     def refuse(text: str) -> str:
-        raise helpers.RendererUnavailable(reason, transient=transient)
+        raise helpers.RendererUnavailable(
+            reason,
+            transient=transient,
+            # A permanent cause carries the action that resolves it, because
+            # refusing without one is a dead end (#1773, round 8).
+            repair=None if transient else "export GH_TOKEN or GITHUB_TOKEN and run again",
+        )
 
     with (
         mock.patch.object(helpers, "render_markdown", side_effect=refuse),
