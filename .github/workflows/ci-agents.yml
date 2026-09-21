@@ -124,7 +124,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Full history, because `scripts/tests/test_intent_markers.py` measures
+      # which tests this branch ADDS against the merge base with `main`, and
+      # the default checkout is one ref with no history: `origin/main` does
+      # not resolve there, so that guard skipped -- and a skipped guard reads
+      # as a green one. The cost is a full clone of this repository on every
+      # agent-lane run: 58.6 MiB packed, measured with `git count-objects -vH`
+      # (#1773, round 16).
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
