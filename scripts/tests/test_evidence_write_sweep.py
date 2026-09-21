@@ -155,6 +155,7 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         )
         self.assertEqual(self.summary["refusals"], self.REFUSALS)
 
+    # intent: control
     def test_the_bodies_this_run_could_not_measure_are_counted_and_named(self) -> None:
         """What a run without a page cannot see, said rather than absorbed (#1773, round 6).
 
@@ -185,6 +186,7 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
             sum(outcome.refused for outcome in self.outcomes),
         )
 
+    # intent: control
     def test_a_cause_the_write_proceeds_past_leaves_nothing_unmeasured(self) -> None:
         """The sibling: the count tracks the CAUSE, not the corpus (#1773, round 7).
 
@@ -578,8 +580,62 @@ class TheInstrumentAsksAValueRatherThanAPhraseTests(unittest.TestCase):
     sentence moves nothing.
     """
 
-    # intent: fix
+    # intent: guard
     def test_the_count_survives_a_write_that_announces_without_logging(self) -> None:
+        """Driven through the instrument's own entry points (#1773, round 12).
+
+        The first version of this test patched `update_evidence_entries` to
+        announce and read `write_once`'s fourth return value, so it was red at
+        `9a5db027` because that tuple had three members there -- an API
+        difference, not a behaviour one, and a user of this instrument runs
+        `sweep()` and `report()`. Under a blip the real seam announces the
+        note and logs nothing that the old grep could see, so the field is
+        the whole corpus here and read 0 at the previous head.
+        """
+        with page_unavailable(transient=True):
+            outcomes = sweep_script.sweep()
+        summary = sweep_script.report(outcomes)
+        # Measured under the blip: 24 of the 168 generated bodies reach a
+        # placement the page has to answer, and every one of them is counted
+        # here and was counted 0 at `9a5db027`.
+        self.assertEqual(summary["bodies"], 168)
+        self.assertEqual(
+            summary["bodies_the_page_could_not_be_asked_about"],
+            24,
+            "the count read the step log rather than what the write said",
+        )
+        # The write PROCEEDED on each of those: a blip is not a hazard in the
+        # body, so none of the 24 is in the refusal count beside it, and what
+        # the old grep searched the step log for was never printed.
+        self.assertEqual(
+            sum(outcome.unasked and outcome.refused for outcome in outcomes),
+            0,
+            "a blip was counted as a refusal",
+        )
+
+    # intent: guard
+    # marker: red at `016d94ba`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
+    def test_only_a_write_that_announces_without_logging_tells_the_two_apart(self) -> None:
+        """The case the instrument's public entry points cannot express.
+
+        Both readings agree on every body the real seam produces at this
+        head: round 11 gave the note's constructor the prefix the old grep
+        searched the step log for, so under a blip the log carries those
+        words too and `sweep()` counts the same 24 either way -- measured, as
+        the mutant that puts the grep back and leaves the suite green.
+
+        What separates them is a writer that ANNOUNCES WITHOUT LOGGING, and
+        no public path does that: the seam that announces also prints. So
+        this drives `write_once` with the announcement made and the log
+        silent, which is a reach into the module rather than a use of it, and
+        it is declared as the guard it is. The finding, said rather than
+        relabelled quietly: the by-value reading's advantage over the grep is
+        not observable through `sweep()` or `report()` today, and it would
+        become observable the moment any seam announces without printing --
+        which is the change this reading exists to survive (#1773, round 12).
+        """
         evidence = sys.modules["evidence"]
         note = sys.modules["_helpers"].unverified_announcement(
             "Evidence Status", "the renderer answered HTTP 503"
@@ -591,7 +647,9 @@ class TheInstrumentAsksAValueRatherThanAPhraseTests(unittest.TestCase):
             return text
 
         with mock.patch.object(evidence, "update_evidence_entries", side_effect=announce_only):
-            _, _, unasked, said = sweep_script.write_once("## Evidence Status\n\n- [pending-ci] x -- y\n")
+            written, refused, unasked, said = sweep_script.write_once(
+                "## Evidence Status\n\n- [pending-ci] x -- y\n"
+            )
         self.assertEqual(said, (), "the probe logged after all; the assertion below proves nothing")
         self.assertTrue(unasked, "the count read the step log rather than what the write said")
 
