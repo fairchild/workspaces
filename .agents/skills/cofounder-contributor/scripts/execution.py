@@ -696,6 +696,37 @@ def _as_the_page_shows_it(text: str) -> str:
 # BELOW a closed disclosure was read as folded away and posted again (#1740,
 # round 4).
 COLLAPSED_BLOCK_RE = re.compile(r"(?is)<details\b.*</details>|<details\b.*\Z")
+# A code span, at any backtick run length. Its contents are text a reader sees
+# as written, not markup -- so a `<details` QUOTED in a note is not a
+# disclosure, and reading it as one stripped from that note to the end of the
+# comment and took the checked line with it. The note then showed nobody
+# anything, nothing was recorded as shown, and the app posted the identical
+# comment again on every run at the same head (#1773, round 3).
+CODE_SPAN_RE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.DOTALL)
+
+
+def _code_spans_blanked(text: str) -> str:
+    """The text with the INSIDE of every code span replaced by spaces, length for length.
+
+    Length-preserving on purpose: the offsets of what the scan below finds are
+    used against the ORIGINAL text, so a note keeps the characters it was
+    written with while the scan sees no tag inside a span.
+    """
+    return CODE_SPAN_RE.sub(
+        lambda match: f"{match.group(1)}{' ' * len(match.group(2))}{match.group(1)}", text
+    )
+
+
+def _without_collapsed_blocks(comment: str) -> str:
+    """The comment with every folded block gone, reading a quoted tag as the text it is."""
+    masked = _code_spans_blanked(comment)
+    kept: list[str] = []
+    last = 0
+    for match in COLLAPSED_BLOCK_RE.finditer(masked):
+        kept.append(comment[last : match.start()])
+        last = match.end()
+    kept.append(comment[last:])
+    return "".join(kept)
 
 
 def _notes_a_reader_has_been_shown(comment: str, checked: str) -> set[str]:
@@ -714,7 +745,7 @@ def _notes_a_reader_has_been_shown(comment: str, checked: str) -> set[str]:
     this say the note again, which is the direction a guard on advice is
     allowed to fail in.
     """
-    lines = _rendered_lines(COLLAPSED_BLOCK_RE.sub("", comment))
+    lines = _rendered_lines(_without_collapsed_blocks(comment))
     if not any(line.strip() == checked for line in lines):
         return set()
     return {_as_the_page_shows_it(line[2:]) for line in lines if line.startswith("- ")}
