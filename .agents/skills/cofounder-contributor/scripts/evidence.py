@@ -1441,11 +1441,26 @@ def _indistinguishable(texts: list[str]) -> list[str]:
     normalize to one key are two answers the gate cannot choose between, and
     which one a requirement takes decides its status. Either is reported as
     malformed, where the author can still fix it, rather than resolved.
+
+    On the SAME key the ownership rule uses, which is the page's reading of
+    the item (`item_as_page_reads_it`). This compared raw text, and once the
+    ownership rule started reading the page the two disagreed: `Manual QA on
+    device` and `**Manual QA** on device` are one key to that rule and two
+    requirements here, so a contract carrying both passed this check and then
+    cost an author a line. Their own
+    `- [blocked] Manual QA on device -- owner says device is unavailable`
+    matched the recorded `**Manual QA** on device` under the reading, was
+    taken for the machine's, and was replaced by the rendered entry -- with no
+    error, no announcement and nothing in `## Evidence Notes` (#1751, round 4).
+
+    A collision the ownership rule can see is a collision this refuses. One
+    key in both places, so a contract that would cost an author a line is
+    malformed before any write happens.
     """
     seen: set[str] = set()
     duplicates: list[str] = []
     for text in texts:
-        key = _normalize_evidence_key(text)
+        key = _normalize_evidence_key(item_as_page_reads_it(str(text)))
         if key and key in seen and text not in duplicates:
             duplicates.append(text)
         seen.add(key)
@@ -2201,7 +2216,7 @@ def status_line_as_page_reads_it(line: str) -> str:
     return line
 
 
-def item_as_page_reads_it(item: str) -> str:
+def item_as_page_reads_it(item: str, context: str = "") -> str:
     """One recorded item as the page reads it, in the shape a line's item comes back in.
 
     The other side of `status_line_as_page_reads_it`, and the reason this
@@ -2228,13 +2243,145 @@ def item_as_page_reads_it(item: str) -> str:
     the markup around it, which is what the round before this one established.
     A form `inline_text` keeps -- a code span, a link, strikethrough -- reads
     back as itself, so reading a recorded item costs those nothing.
+
+    And in the same CONTEXT, which is the round after that one. Reading the
+    item on its own with `parseInline` was a third spelling of the same
+    mistake: a line's item is read inside a list item inside a document, and
+    an inline construct does not have to mean the same thing in the two
+    places. `[Manual QA][qa] on device` is literal text parsed alone and a
+    link where the body defines `[qa]:`, so the write did not recognise the
+    line it had just rendered and carried a copy per run (#1751, round 4). So
+    the item is read out of the line the write would render for it, parsed as
+    a section, with `context` carrying the text the LINE is parsed from -- the
+    section, where the write reads it -- so the two sides resolve the same
+    reference definitions and no others. Handing the item the whole body
+    instead is the same asymmetry one step over: the item would resolve a
+    definition written below the section that the line, parsed as the section,
+    does not.
+
+    What this does NOT reach, and it is the measurement rather than a guess:
+    a construct that OPENS in the item and CLOSES in the detail. There the
+    line itself stops having an item, because the separator ends up inside a
+    code span and no reader can say where the item ends -- the write's own
+    reader, the sweep, and a person all fail alike. That is not an asymmetry
+    to normalise away; it is a line that should not be written, and
+    `unreadable_status_lines` is where the write says so.
     """
-    tokens = MARKDOWN.parseInline(item.strip())
-    children = tokens[0].children if tokens else None
-    return inline_text(children).strip() if children else item.strip()
+    cached = _ITEM_READINGS.get((item, context))
+    if cached is not None:
+        return cached
+    probe = f"- [{_ITEM_PROBE_STATUS}] {item.strip()} -- {_ITEM_PROBE_DETAIL}"
+    tokens = MARKDOWN.parse(f"## {EVIDENCE_STATUS_HEADING}\n\n{probe}\n{context}")
+    reading = next(
+        (
+            _status_item_reading(tokens, index)
+            for index, token in enumerate(tokens)
+            if token.type == "list_item_open"
+        ),
+        None,
+    )
+    # The item is taken by REMOVING what the probe added, not by searching for
+    # a boundary: the probe's own prefix and detail are known exactly, and a
+    # boundary search with no contract in hand takes the first ` -- ` -- which
+    # cut a recorded `build -- release` down to `build` and handed the write
+    # somebody else's line as its own, the defect #1738 round 3 closed.
+    prefix, suffix = f"- [{_ITEM_PROBE_STATUS}] ", f" -- {_ITEM_PROBE_DETAIL}"
+    read = item.strip()
+    if reading is not None and reading.startswith(prefix) and reading.endswith(suffix):
+        read = reading[len(prefix) : -len(suffix)].strip()
+    _ITEM_READINGS[(item, context)] = read
+    return read
 
 
-def is_recorded_status_line(line: str, recorded_items: Iterable[str]) -> bool:
+# The detail the item-reading probe renders with. Any non-empty text would do
+# -- what matters is that the probe is a LINE, so the item is parsed where a
+# line's item is parsed. A single letter keeps the probe short and carries no
+# construct of its own.
+_ITEM_PROBE_DETAIL = "d"
+_ITEM_PROBE_STATUS = "complete"
+# One reading per (item, context). The probe is a parse, and a write asks for
+# the same item once per line of the section it is reading.
+_ITEM_READINGS: dict[tuple[str, str], str] = {}
+
+
+def unreadable_status_lines(
+    status_lines: Iterable[str], recorded_items: Iterable[str], context: str = ""
+) -> list[tuple[str, str]]:
+    """(line, why) for each line this write would render that its own reader cannot read back.
+
+    A write is a write when the next run can tell whose line it is. Two shapes
+    fail that, and both were found by asking the reader about lines the write
+    had just produced (#1751, round 4):
+
+    An inline construct that opens in the ITEM and closes in the DETAIL takes
+    the ` -- ` separator inside itself, so the rendered line has no boundary
+    any reader can find: a line whose item opens a code span the detail closes
+    is one span with the separator in the middle of it. The next run reads the
+    line as the author's and carries a copy to `## Evidence Notes`, per run.
+
+    And a line past `EVIDENCE_STATUS_LINE_LIMIT` is refused by
+    `split_evidence_status_line` outright, so an item of four thousand
+    characters renders a line the write never recognises again -- well under
+    the 65,536 characters GitHub stores, so nothing else refuses it either.
+
+    Reported rather than refused. The requirement still belongs on the page,
+    and dropping the line would take a reader's only sight of it; what the
+    author is owed is the sentence saying their item's text makes a line
+    nothing can parse, and the repair -- balance the construct, or shorten the
+    item -- is theirs. Silence was the cost of not asking.
+    """
+    items = list(recorded_items)
+    unreadable: list[tuple[str, str]] = []
+    for line in status_lines:
+        if is_recorded_status_line(status_line_as_page_reads_it(line), items, context):
+            continue
+        if len(line) > EVIDENCE_STATUS_LINE_LIMIT:
+            why = (
+                f"the line is {len(line)} characters, past the "
+                f"{EVIDENCE_STATUS_LINE_LIMIT} a status line is read up to, so no later run "
+                "can tell this line is the machine's; shorten the item"
+            )
+        else:
+            why = (
+                "the item and the detail share an inline construct, so the ` -- ` that "
+                "separates them is inside it and no reader can say where the item ends; "
+                "balance the construct inside the item"
+            )
+        unreadable.append((line, why))
+    return unreadable
+
+
+def recorded_item_key(
+    line: str, recorded_items: Iterable[str], context: str = ""
+) -> str | None:
+    """Which recorded item this line names, as the shared key, or None.
+
+    The rule below in the form a caller needs when it has to tell one
+    matching line from the next: a write renders exactly one line per entry,
+    so it owns exactly one line per entry, and a second line reading as the
+    same requirement is the author's (#1751, round 4).
+    """
+    items = [
+        item_as_page_reads_it(str(item))
+        for item in recorded_items
+        if str(item).strip()
+    ] if not context else [
+        item_as_page_reads_it(str(item), context)
+        for item in recorded_items
+        if str(item).strip()
+    ]
+    if not items:
+        return None
+    reading = split_evidence_status_line(line.strip(), items)
+    if reading is None:
+        return None
+    key = _normalize_evidence_key(reading[1])
+    return key if any(_normalize_evidence_key(item) == key for item in items) else None
+
+
+def is_recorded_status_line(
+    line: str, recorded_items: Iterable[str], context: str = ""
+) -> bool:
     """Whether a line under `## Evidence Status` is the machine's rather than the author's.
 
     THE RULE, and the one function that answers it, because the two readers of
@@ -2270,17 +2417,12 @@ def is_recorded_status_line(line: str, recorded_items: Iterable[str]) -> bool:
     answer -- every line is the author's -- and it is the answer the sweep
     gives a body whose metadata records no entries.
     """
-    items = [item_as_page_reads_it(str(item)) for item in recorded_items if str(item).strip()]
-    if not items:
-        return False
-    reading = split_evidence_status_line(line.strip(), items)
-    if reading is None:
-        return False
-    key = _normalize_evidence_key(reading[1])
-    return any(_normalize_evidence_key(item) == key for item in items)
+    return recorded_item_key(line, recorded_items, context) is not None
 
 
-def _is_status_list_item(tokens: list[Token], index: int, recorded_items: Iterable[str]) -> bool:
+def _is_status_list_item(
+    tokens: list[Token], index: int, recorded_items: Iterable[str], context: str = ""
+) -> bool:
     """Whether the list item opening at `index` belongs to the machine rather than the author.
 
     A bullet whose text opens with a status token -- `[complete]`, `[blocked]`
@@ -2296,7 +2438,7 @@ def _is_status_list_item(tokens: list[Token], index: int, recorded_items: Iterab
     `- [x]` box, a bullet naming no status -- is the author's and moves.
     """
     reading = _status_item_reading(tokens, index)
-    return reading is not None and is_recorded_status_line(reading, recorded_items)
+    return reading is not None and is_recorded_status_line(reading, recorded_items, context)
 
 
 def _without_edge_blank_lines(text: str) -> str:
@@ -2321,6 +2463,7 @@ def _list_item_spans(
     machine: list[tuple[int, int]],
     notes: list[tuple[int, int]],
     recorded_items: Iterable[str],
+    context: str = "",
 ) -> int:
     """Sort the items of the list opening at `start` into the machine's and the author's; return the index past it.
 
@@ -2335,7 +2478,7 @@ def _list_item_spans(
             index += 1
             continue
         if token.map is not None:
-            if _is_status_list_item(tokens, index, recorded_items):
+            if _is_status_list_item(tokens, index, recorded_items, context):
                 # The line the status is written on is the machine's; the rest
                 # of the item is one block of the author's, not a run of loose
                 # lines. A pasted log indented under a status bullet belongs to
@@ -2392,7 +2535,9 @@ def _uncarried_note(detail: str, line: int, went: str = "") -> str:
     )
 
 
-def _section_notes(section: str, recorded_items: Iterable[str]) -> tuple[list[str], list[str]]:
+def _section_notes(
+    section: str, recorded_items: Iterable[str], context: str = ""
+) -> tuple[list[str], list[str]]:
     """The blocks of one Evidence Status section that are not the machine's status lines, and what went.
 
     A status-shaped line inside the section that names no recorded item is the
@@ -2445,7 +2590,7 @@ def _section_notes(section: str, recorded_items: Iterable[str]) -> tuple[list[st
             index += 1
             continue
         if token.type in {"bullet_list_open", "ordered_list_open"}:
-            index = _list_item_spans(tokens, index, machine, spans, recorded_items)
+            index = _list_item_spans(tokens, index, machine, spans, recorded_items, context)
             continue
         spans.append((token.map[0], token.map[1]))
         index += 1
@@ -2623,13 +2768,38 @@ def write_evidence_status_section(
     # every status line in the body reads as the author's and the section
     # fills with the entries it was about to replace.
     recorded = list(recorded_items)
+    # A contract this write cannot tell apart is one it does not act on. Two
+    # items that read as one -- `Manual QA on device` and `**Manual QA** on
+    # device` -- make every line naming either of them the machine's, so an
+    # author's own status bullet for one is replaced by the entry for the
+    # other and goes without a word (#1751, round 4). Standing the body down
+    # keeps their line and says why; the accounting names the same collision
+    # where the author can fix it (`_indistinguishable`).
+    if (collisions := _indistinguishable(recorded)):
+        return _stood_down(
+            source,
+            "two recorded items read as one requirement on the page, so a line naming either "
+            f"of them cannot be told apart: {', '.join(code_span(item) for item in collisions)}; "
+            "make each requested item distinct",
+        )
+    rendered = list(status_lines)
+    # Every line this write is about to render, asked of its own reader. A
+    # line the reader cannot read back is one the next run will take for the
+    # author's and carry a copy of, per run -- so it is said here rather than
+    # found later by counting copies (#1751, round 4).
+    orphaned = [
+        f"`## {EVIDENCE_STATUS_HEADING}` line not readable back: {why} ({code_span(line)})"
+        for line, why in unreadable_status_lines(rendered, recorded)
+    ]
+    for announcement in orphaned:
+        log(announcement)
     sections, refusal = removed_section_texts(body, EVIDENCE_STATUS_HEADING)
     if refusal is not None:
         return _stood_down(source, refusal)
     notes: list[str] = []
-    announcements: list[str] = []
+    announcements: list[str] = list(orphaned)
     for section in sections:
-        carried, said = _section_notes(section, recorded)
+        carried, said = _section_notes(section, recorded, section)
         notes.extend(carried)
         announcements.extend(said)
     # The notes section comes out before the status section goes in, so that
@@ -2659,7 +2829,7 @@ def write_evidence_status_section(
     written = insert_markdown_section(
         strip_markdown_section(body, EVIDENCE_NOTES_HEADING) if kept else body,
         EVIDENCE_STATUS_HEADING,
-        "\n".join(status_lines),
+        "\n".join(rendered),
         before_heading="Validation",
     )
     if not blocks:
@@ -2701,6 +2871,22 @@ def render_execution_summary_body(
 ) -> tuple[str, list[str]]:
     if not _explicit_evidence_contract(requested_evidence):
         return summary_body, []
+
+    # A contract whose items this write cannot tell apart is one it does not
+    # act on. Two requested items that read as one requirement on the page --
+    # `Manual QA on device` and `**Manual QA** on device` -- make every status
+    # line naming either of them the entry's, so the author's own line for one
+    # is replaced by the entry for the other and goes with no error, no
+    # announcement and nothing in `## Evidence Notes`. The turn stops here
+    # instead, with the collision named, and the body stands whole (#1751,
+    # round 4). `_indistinguishable` answers on the same key the ownership
+    # rule uses, so a collision the rule would act on is one this refuses.
+    if (collisions := _indistinguishable(list(requested_evidence))):
+        return summary_body, [
+            "requested evidence items read as one requirement on the page, so a status line "
+            "naming either of them cannot be told apart and a line would be lost; make each "
+            f"item distinct: {', '.join(code_span(item) for item in collisions)}"
+        ]
 
     used_indexes: set[int] = set()
     complete_entries, errors = parse_structured_evidence_updates(

@@ -6314,7 +6314,11 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
                 with contextlib.redirect_stderr(spoke):
                     written, refusal, _ = self.evidence().write_evidence_status_section(
                         self.body(heading),
-                        ["- [complete] the UI lane -- swift test passed"],
+                        # Naming the recorded item, because the write asks its
+                        # own reader whether it can read back what it renders
+                        # and says so when it cannot (#1751, round 4). A line
+                        # for an item nobody recorded is exactly that shape.
+                        [f"- [complete] {self.ITEM} -- swift test passed"],
                         recorded_items=[self.ITEM],
                     )
                 self.assertIsNone(refusal)
@@ -8753,6 +8757,284 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         self.assertNotIn("- [pending-ci] build -- release -- waiting", write.body)
         self.assertIn(f"## Evidence Notes\n{self.THEIRS}", write.body)
         self.assertEqual(write.announcements, [])
+
+class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
+    """One function asked in two parse contexts (#1751, round 4).
+
+    `item_as_page_reads_it` parsed the recorded item ALONE with `parseInline`
+    while the line's item is parsed IN CONTEXT -- inside a list item, inside a
+    section, where the body's link reference definitions are in scope. An
+    inline construct does not have to mean the same thing in the two places:
+    `[Manual QA][qa] on device` is literal text parsed alone and a link where
+    `[qa]:` is defined, so the write did not recognise the line it had just
+    rendered and carried a copy of it per run.
+
+    The same defect one level up from round 3's, which was the same defect one
+    level up from round 2's. Each time: a reading compared against something
+    that went through a different reading.
+
+    The context is the text the LINE is parsed from -- the section -- rather
+    than the whole body, because handing the item more than the line sees is
+    the asymmetry with its sign flipped.
+    """
+
+    ITEM = "[Manual QA][qa] on device"
+    DEFINITION = "[qa]: https://example.invalid/qa"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def section(self, status: str, detail: str) -> str:
+        return f"- [{status}] {self.ITEM} -- {detail}\n\n{self.DEFINITION}\n"
+
+    def body(self, status: str = "pending-ci", detail: str = "waiting") -> str:
+        return (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"{self.section(status, detail)}\n## Validation\n\n- ran it\n"
+        )
+
+    def test_the_two_readings_of_one_item_agree_in_the_lines_own_context(self) -> None:
+        # The write's own pairing: the line read out of the SECTION tokens,
+        # the item read with that same section as context. Both sides resolve
+        # the definition or neither does.
+        evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
+        section = self.section("complete", "214 passed")
+        tokens = helpers.MARKDOWN.parse(section)
+        reading = next(
+            evidence._status_item_reading(tokens, index)
+            for index, token in enumerate(tokens)
+            if token.type == "list_item_open"
+        )
+        self.assertIn("https://example.invalid/qa", reading)
+        self.assertTrue(evidence.is_recorded_status_line(reading, [self.ITEM], section))
+        # And the sweep's pairing, which reads a physical line and so resolves
+        # no definition on either side -- internally consistent too.
+        line = f"- [complete] {self.ITEM} -- 214 passed"
+        self.assertTrue(
+            evidence.is_recorded_status_line(
+                evidence.status_line_as_page_reads_it(line), [self.ITEM]
+            )
+        )
+
+    def test_the_write_recognises_the_line_it_just_rendered(self) -> None:
+        # The end of it: three writes, and the section holds one line with
+        # nothing carried. At `3ac9675e` the first write left a copy behind.
+        evidence = self.evidence()
+        body = self.body()
+        line = f"- [complete] {self.ITEM} -- 214 passed"
+        for _ in range(3):
+            write = evidence.write_evidence_status_section(
+                body, [line], recorded_items=[self.ITEM]
+            )
+            self.assertIsNone(write.refusal)
+            body = write.body
+        self.assertEqual(body.count("- [complete]"), 1)
+        # The definition is a note and moves like any other block; what must
+        # not be there is a copy of the status line.
+        notes = sys.modules["_helpers"].markdown_section(body, "Evidence Notes")
+        self.assertNotIn("[complete]", notes)
+        self.assertNotIn("[pending-ci]", notes)
+
+    def test_an_item_carrying_its_own_separator_is_still_read_whole(self) -> None:
+        # The probe reads the item back by REMOVING what it added, not by
+        # searching for a boundary: a search with no contract takes the first
+        # ` -- ` and cut a recorded `build -- release` down to `build`, which
+        # handed the write somebody else's line as its own (#1738, round 3).
+        evidence = self.evidence()
+        self.assertEqual(evidence.item_as_page_reads_it("build -- release"), "build -- release")
+        self.assertFalse(
+            evidence.is_recorded_status_line(
+                "- [blocked] build -- staging -- someone else's line", ["build -- release"]
+            )
+        )
+
+    def test_the_reading_is_the_same_one_the_line_goes_through(self) -> None:
+        # Round 3's cases, unchanged by round 4: the mechanism got deeper, not
+        # different.
+        evidence = self.evidence()
+        for item in ("**Manual QA** on device", "*QA*", "_QA_", "Manual <span>QA</span>"):
+            with self.subTest(item=item):
+                line = f"- [complete] {item} -- 214 passed"
+                self.assertTrue(
+                    evidence.is_recorded_status_line(
+                        evidence.status_line_as_page_reads_it(line), [item]
+                    )
+                )
+
+
+class ALineTheWriteCannotReadBackIsSaidRatherThanOrphanedTests(unittest.TestCase):
+    """Two shapes where the LINE, not the item, is what cannot be read (#1751, round 4).
+
+    An inline construct that opens in the item and closes in the detail takes
+    the ` -- ` separator inside itself, so the rendered line has no boundary
+    any reader can find -- the write's reader, the sweep and a person fail
+    alike. And a line past `EVIDENCE_STATUS_LINE_LIMIT` is refused by
+    `split_evidence_status_line` outright, so a four-thousand-character item
+    renders a line no later run recognises, well under the 65,536 characters
+    GitHub stores.
+
+    Neither is an asymmetry to normalise away, and that is why they are not
+    fixed by the mechanism above: there is no item in the line to compare
+    against. The decision on the 4,000-character case, and on the crossing
+    construct with it: the line is still written, because the requirement
+    belongs on the page and dropping it would take a reader's only sight of
+    it -- and the author is told, by name, that their item's text makes a line
+    nothing can parse. Silence was the cost of not asking.
+    """
+
+    CROSSING = ("run `swift test", "--filter QA` passed")
+    TOO_LONG = ("Manual QA " + "x" * 4000, "214 passed")
+    PLAIN = ("Manual QA on device", "214 passed")
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def write(self, item: str, detail: str):
+        body = (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {item} -- waiting\n\n## Validation\n\n- ran it\n"
+        )
+        return self.evidence().write_evidence_status_section(
+            body, [f"- [complete] {item} -- {detail}"], recorded_items=[item]
+        )
+
+    def said(self, write) -> list[str]:
+        return [note for note in write.announcements if "not readable back" in note]
+
+    def test_a_construct_crossing_the_boundary_is_named(self) -> None:
+        said = self.said(self.write(*self.CROSSING))
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("no reader can say where the item ends", said[0])
+        self.assertIn("balance the construct", said[0])
+
+    def test_a_line_past_the_limit_is_named_with_its_length(self) -> None:
+        said = self.said(self.write(*self.TOO_LONG))
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("4037 characters", said[0])
+        self.assertIn(str(self.evidence().EVIDENCE_STATUS_LINE_LIMIT), said[0])
+        self.assertIn("shorten the item", said[0])
+
+    def test_an_ordinary_line_is_not_named(self) -> None:
+        self.assertEqual(self.said(self.write(*self.PLAIN)), [])
+
+    def test_the_line_is_still_written(self) -> None:
+        # Reported, not refused: the requirement stays on the page.
+        for item, detail in (self.CROSSING, self.TOO_LONG):
+            with self.subTest(item=item[:30]):
+                write = self.write(item, detail)
+                self.assertIsNone(write.refusal)
+                self.assertIn(f"- [complete] {item} -- {detail}", write.body)
+
+    def test_the_predicate_answers_about_lines_rather_than_items(self) -> None:
+        evidence = self.evidence()
+        item, detail = self.CROSSING
+        self.assertEqual(
+            [why for _, why in evidence.unreadable_status_lines(
+                [f"- [complete] {item} -- {detail}"], [item])],
+            [
+                "the item and the detail share an inline construct, so the ` -- ` that "
+                "separates them is inside it and no reader can say where the item ends; "
+                "balance the construct inside the item"
+            ],
+        )
+        plain_item, plain_detail = self.PLAIN
+        self.assertEqual(
+            evidence.unreadable_status_lines(
+                [f"- [complete] {plain_item} -- {plain_detail}"], [plain_item]
+            ),
+            [],
+        )
+
+
+class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
+    """The round-3 regression that deleted an owner's line in silence (#1751, round 4).
+
+    Round 3 put the ownership rule on the page's reading of the item, and left
+    `_indistinguishable` -- the check that refuses a contract whose items
+    cannot be told apart -- comparing RAW text. `Manual QA on device` and
+    `**Manual QA** on device` are two requirements to that check and one
+    requirement to the rule, so a contract carrying both passed and then cost
+    an author a line: their own
+    `- [blocked] Manual QA on device -- owner says device is unavailable`
+    matched the recorded `**Manual QA** on device` under the reading, was
+    taken for the machine's, and was replaced by the rendered entry. No error,
+    no announcement, nothing in `## Evidence Notes`.
+
+    One key in both places closes it, and the turn stops before writing rather
+    than acting on a contract it cannot tell apart.
+    """
+
+    PLAIN = "Manual QA on device"
+    BOLD = "**Manual QA** on device"
+    OWNER = "- [blocked] Manual QA on device -- owner says device is unavailable"
+
+    def body(self) -> str:
+        return (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {self.BOLD} -- waiting\n{self.OWNER}\n\n"
+            "## Validation\n\n- ran it\n"
+        )
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def test_the_collision_check_uses_the_ownership_rules_key(self) -> None:
+        evidence = self.evidence()
+        self.assertEqual(evidence._indistinguishable([self.BOLD, self.PLAIN]), [self.PLAIN])
+        # And still tells apart two items that are genuinely different.
+        self.assertEqual(evidence._indistinguishable([self.BOLD, "the smoke lane"]), [])
+
+    def test_the_turn_refuses_the_contract_and_keeps_the_authors_line(self) -> None:
+        run_contributor = sys.modules["run_contributor_evidence_kinds"]
+        with contextlib.redirect_stderr(io.StringIO()):
+            written, errors = run_contributor.render_execution_summary_body(
+                self.body(),
+                requested_evidence=[self.BOLD, self.PLAIN],
+                evidence_complete=["1 -- 214 passed"],
+                evidence_blocked=None,
+                evidence_pending_ci=None,
+            )
+        # The line the round-3 head deleted.
+        self.assertIn(self.OWNER, written)
+        self.assertEqual(written, self.body())
+        self.assertEqual(len(errors), 1)
+        self.assertIn("read as one requirement on the page", errors[0])
+        self.assertIn("make each item distinct", errors[0])
+
+    def test_the_accounting_names_the_collision_where_the_author_can_fix_it(self) -> None:
+        run_contributor = sys.modules["run_contributor_evidence_kinds"]
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            self.body(), [self.BOLD, self.PLAIN], review_ci=[]
+        )
+        self.assertEqual(accounting["duplicate_requested_items"], [self.PLAIN])
+        self.assertTrue(
+            any("asks for the same item more than once" in error for error in errors), errors
+        )
+
+    def test_a_distinguishable_contract_is_written_as_before(self) -> None:
+        # The control: the guard costs an ordinary contract nothing, and an
+        # author's status bullet for something the contract does not ask for
+        # is carried to the notes exactly as round 2 made it.
+        run_contributor = sys.modules["run_contributor_evidence_kinds"]
+        theirs = "- [blocked] release approval -- the signing profile is missing"
+        body = (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {self.BOLD} -- waiting\n{theirs}\n\n"
+            "## Validation\n\n- ran it\n"
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            written, errors = run_contributor.render_execution_summary_body(
+                body,
+                requested_evidence=[self.BOLD],
+                evidence_complete=["1 -- 214 passed"],
+                evidence_blocked=None,
+                evidence_pending_ci=None,
+            )
+        self.assertEqual(errors, [])
+        self.assertIn("- [complete] ", written)
+        self.assertIn(theirs, written)
+
 
 if __name__ == "__main__":
     unittest.main()
