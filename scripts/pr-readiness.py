@@ -331,15 +331,37 @@ def unicode_data_notice() -> str | None:
             f"accepts a status hidden behind one. Re-transcribe DEFAULT_IGNORABLE_RANGES from "
             f"DerivedCoreProperties {running} and re-measure the run ({pinned})."
         )
+    # MEASURED rather than assumed. An older UCD does not always build a
+    # smaller run: 3.11 (14.0.0) builds 4,216 against the pinned 4,223, and
+    # 3.12 (15.0.0) builds exactly 4,223 -- equal, with a different version
+    # string. The word was unconditionally SMALLER and a test pinned the
+    # wrong half of that (#1771, round 9).
+    size = len(INVISIBLE_LEADING)
+    if size < MEASURED_LEADING_RUN_SIZE:
+        comparison = (
+            f"SMALLER than the one this gate was measured with ({size} against "
+            f"{MEASURED_LEADING_RUN_SIZE}): format and space characters added since {running} "
+            "are not covered and a status hidden behind one is accepted"
+        )
+    elif size == MEASURED_LEADING_RUN_SIZE:
+        comparison = (
+            f"EQUAL to the one this gate was measured with ({size}): nothing this gate reads "
+            f"changed between {running} and {DEFAULT_IGNORABLE_TRANSCRIBED_FROM}, so the run "
+            "covers what it was measured to cover"
+        )
+    else:
+        comparison = (
+            f"LARGER than the one this gate was measured with ({size} against "
+            f"{MEASURED_LEADING_RUN_SIZE}), which means this interpreter knows members the "
+            "measured one did not -- re-measure before trusting either number"
+        )
     return (
         f"This interpreter's Unicode data is BEHIND the gate's table: its UCD is {running}, "
         f"older than the {DEFAULT_IGNORABLE_TRANSCRIBED_FROM} the default-ignorable table was "
         f"transcribed from. The table itself is unaffected, but `Cf` and `Zs` come from the "
-        f"interpreter, so the run here is SMALLER than the one this gate was measured with: "
-        f"format and space characters added since {running} are not covered and a status "
-        f"hidden behind one is accepted. Nothing to re-transcribe -- run the gate on "
-        f"{DEFAULT_IGNORABLE_TRANSCRIBED_FROM} data or later, and expect this interpreter's "
-        f"own size rather than the pin ({pinned})."
+        f"interpreter, so the run here is {comparison}. Nothing to re-transcribe -- run the "
+        f"gate on {DEFAULT_IGNORABLE_TRANSCRIBED_FROM} data or later, and expect this "
+        f"interpreter's own size rather than the pin ({pinned})."
     )
 
 
@@ -1855,6 +1877,21 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
     failures: list[str] = []
     notices: list[str] = []
 
+    # Said BEFORE the draft return, because it is about the interpreter this
+    # gate is running on and not about the body's readiness. The return used
+    # to swallow it, so three rounds built a notice that was silent in the
+    # state a pull request spends most of its life in (#1771, round 9).
+    #
+    # What else lives after that return, enumerated: the readiness FAILURES
+    # (which a draft is meant to be spared), the rendered-view notice, and
+    # the `page_view` render that produces it. The rendered-view notice stays
+    # below, and that is a decision rather than an oversight: it comes from a
+    # network render, and spending the markdown quota on every draft
+    # evaluation to say the renderer was unreachable is a cost a draft should
+    # not pay. So the rule is: an environment notice that costs nothing to
+    # produce is said on a draft; one that needs a request is not.
+    if (drift := unicode_data_notice()) is not None:
+        notices.append(drift)
     if pr.get("draft"):
         notices.append("Draft PR: readiness gate is advisory until the PR is ready for review.")
         return Result(failures, notices)
@@ -1909,9 +1946,6 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
     # The page first, then the source model. Both are refusers and either one
     # is enough, so the order decides only which line the failure names -- and
     # the page's line is the one an author can go and look at.
-    if (drift := unicode_data_notice()) is not None:
-        # Loud where a human reads it, rather than in a comment nobody runs.
-        notices.append(drift)
     page = page_view(body)
     if page.unverified:
         notices.append(
