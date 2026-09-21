@@ -1759,8 +1759,8 @@ class MergeabilitySeedTests(unittest.TestCase):
 
     def test_seeded_pr_body_passes_readiness_mergeability_checks(self) -> None:
         seeded = run_contributor.seed_mergeability_section(
-            self.SUMMARY_BODY, announcements=[], changed_files=self.CHANGED_FILES
-        )
+            self.SUMMARY_BODY, changed_files=self.CHANGED_FILES
+        ).body
         body = run_contributor.compose_pr_body(
             1032, "April Clearwater, Application Lead", seeded
         )
@@ -1773,8 +1773,8 @@ class MergeabilitySeedTests(unittest.TestCase):
 
     def test_seed_prefills_surface_and_agent_sections(self) -> None:
         seeded = run_contributor.seed_mergeability_section(
-            self.SUMMARY_BODY, announcements=[], changed_files=self.CHANGED_FILES
-        )
+            self.SUMMARY_BODY, changed_files=self.CHANGED_FILES
+        ).body
         section = pr_readiness.extract_section(seeded, "Mergeability")
 
         surface = pr_readiness.field_value(section, "Surface")
@@ -1794,7 +1794,7 @@ class MergeabilitySeedTests(unittest.TestCase):
         )
 
     def test_seed_uses_non_blank_placeholders_when_agent_says_nothing(self) -> None:
-        seeded = run_contributor.seed_mergeability_section("", announcements=[], changed_files=[])
+        seeded = run_contributor.seed_mergeability_section("", changed_files=[]).body
         section = pr_readiness.extract_section(seeded, "Mergeability")
 
         for field in (
@@ -1820,8 +1820,8 @@ class MergeabilitySeedTests(unittest.TestCase):
 
         self.assertEqual(
             run_contributor.seed_mergeability_section(
-                authored, announcements=[], changed_files=["Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift"]
-            ),
+                authored, changed_files=["Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift"]
+            ).body,
             authored,
         )
 
@@ -1849,8 +1849,8 @@ class MergeabilitySeedTests(unittest.TestCase):
         self.assertEqual(errors, [])
 
         seeded = run_contributor.seed_mergeability_section(
-            rendered, announcements=[], changed_files=self.CHANGED_FILES
-        )
+            rendered, changed_files=self.CHANGED_FILES
+        ).body
         _, evidence_errors = run_contributor.validate_evidence_accounting(
             seeded, ["swift test --filter WorkspaceServiceTests"]
         )
@@ -1895,8 +1895,8 @@ class PRShapeTests(unittest.TestCase):
 
     def test_the_mergeability_seed_reads_the_what_section(self) -> None:
         seeded = run_contributor.seed_mergeability_section(
-            MergeabilitySeedTests.SUMMARY_BODY, announcements=[], changed_files=["web-next/src/lib/db/x.ts"]
-        )
+            MergeabilitySeedTests.SUMMARY_BODY, changed_files=["web-next/src/lib/db/x.ts"]
+        ).body
         section = pr_readiness.extract_section(seeded, "Mergeability")
         self.assertIn(
             "Reject dot-only segments",
@@ -1905,7 +1905,7 @@ class PRShapeTests(unittest.TestCase):
 
     def test_the_seed_still_reads_a_body_written_under_the_old_heading(self) -> None:
         older = "## Summary\n- Reject dot-only segments in repo names\n"
-        seeded = run_contributor.seed_mergeability_section(older, announcements=[], changed_files=[])
+        seeded = run_contributor.seed_mergeability_section(older, changed_files=[]).body
         section = pr_readiness.extract_section(seeded, "Mergeability")
         self.assertIn(
             "Reject dot-only segments",
@@ -2747,7 +2747,7 @@ class RevisionTurnTests(unittest.TestCase):
     def _rendered_pr_body(self, data: dict[str, object]) -> str:
         execution = sys.modules["execution"]
         summary, _ = execution.build_execution_summary_body(data, requested_evidence=[])
-        seeded = execution.seed_mergeability_section(summary, announcements=[], changed_files=[])
+        seeded = execution.seed_mergeability_section(summary, changed_files=[]).body
         return execution.compose_pr_body(42, self.PERSONA, seeded)
 
     def _route(
@@ -2868,6 +2868,48 @@ class RevisionTurnTests(unittest.TestCase):
         self.assertIn("left as written", comments[0])
         self.assertIn("</pre>", comments[0])
         self.assertIn(self.PERSONA, comments[0])
+
+    def test_the_seeds_note_reaches_the_comment_the_turn_posts(self) -> None:
+        """End to end, because the seam is not where this can go wrong (#1773, round 10).
+
+        The seed's note has been lost twice by the same shape: round 8 left it
+        to a caller remembering to pass a list and the production caller
+        passed none; round 9 made the list required, and a required parameter
+        can still be handed one that goes nowhere. Both times every seam test
+        passed, because a seam test hands the seam a list of its own and
+        cannot see which list production hands it.
+
+        This drives the turn and reads the comment that is posted: the
+        renderer refusing with a blip, a body whose `<details>` never closes,
+        and the seeded `## Mergeability` section placed into the fold. The
+        note about the page going unread has to be in what the author reads.
+        """
+        helpers = sys.modules["_helpers"]
+
+        def blip(text: str) -> str:
+            raise helpers.RendererUnavailable(
+                "the renderer answered HTTP 503", cause="server error"
+            )
+
+        body = (
+            "## Summary\n- Rewrote the sheet's status mapping\n\n"
+            "<details>\n<summary>the log I pasted</summary>\n\nand never closed\n"
+        )
+        with (
+            mock.patch.object(helpers, "render_markdown", side_effect=blip),
+            mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
+        ):
+            _, _, comments, _ = self._route(
+                dirty=True,
+                live_body="stale body",
+                data=self._data(body),
+                revision=False,
+            )
+        self.assertTrue(comments, "the turn posted nothing at all")
+        self.assertTrue(
+            any("rendered view unverified" in comment for comment in comments),
+            f"the seed's note is not in what the author reads: {comments}",
+        )
 
     def test_an_ordinary_turn_posts_no_stand_down_comment(self) -> None:
         # The control: the same turn on a body that writes says nothing extra.

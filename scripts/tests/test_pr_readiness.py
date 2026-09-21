@@ -4284,8 +4284,8 @@ class TheRuntimeSeedsASectionAndThisGateThenReadsItTests(unittest.TestCase):
         reader = self.reader()
         self.assertFalse(reader.has_markdown_section(self.FENCED_EXAMPLE_BODY, "Mergeability"))
         seeded = self.seeder().seed_mergeability_section(
-            self.FENCED_EXAMPLE_BODY, announcements=[], changed_files=["Sources/Foo.swift"]
-        )
+            self.FENCED_EXAMPLE_BODY, changed_files=["Sources/Foo.swift"]
+        ).body
         self.assertTrue(reader.has_markdown_section(seeded, "Mergeability"))
         self.assertEqual(
             reader.markdown_section(seeded, "Mergeability").splitlines()[0],
@@ -4300,8 +4300,8 @@ class TheRuntimeSeedsASectionAndThisGateThenReadsItTests(unittest.TestCase):
         # the start disagreed. Now both starts do too, so the two readers
         # return the same text and the gate passes the body the factory heals.
         seeded = self.seeder().seed_mergeability_section(
-            self.FENCED_EXAMPLE_BODY, announcements=[], changed_files=["Sources/Foo.swift"]
-        )
+            self.FENCED_EXAMPLE_BODY, changed_files=["Sources/Foo.swift"]
+        ).body
         gate_read = pr_readiness.extract_section(seeded, "Mergeability")
         self.assertIn("`Sources/Foo.swift`", gate_read)
         self.assertEqual(gate_read, self.reader().markdown_section(seeded, "Mergeability"))
@@ -4339,8 +4339,8 @@ class TheRuntimeSeedsASectionAndThisGateThenReadsItTests(unittest.TestCase):
         question does not arise.
         """
         seeded = self.seeder().seed_mergeability_section(
-            self.FENCED_EXAMPLE_BODY, announcements=[], changed_files=["Sources/Foo.swift"]
-        )
+            self.FENCED_EXAMPLE_BODY, changed_files=["Sources/Foo.swift"]
+        ).body
         # Every fence in the body closes, and now so does every fence in the
         # gate's slice of it -- because there is none.
         self.assertIsNone(pr_readiness.split_fenced_blocks(seeded)[1])
@@ -4407,7 +4407,7 @@ class TheSeederAndThisGateAskOneQuestionTests(unittest.TestCase):
         for name, heading in self.SHAPES.items():
             with self.subTest(shape=name):
                 body = self.BODY.format(heading=heading)
-                seeded = self.seeder().seed_mergeability_section(body, announcements=[], changed_files=self.FILES)
+                seeded = self.seeder().seed_mergeability_section(body, changed_files=self.FILES).body
                 self.assertEqual(seeded, body, "the seeder wrote a section the body already showed")
                 self.assertEqual(pr_readiness.evaluate(pr(body), self.FILES).failures, [])
 
@@ -4416,14 +4416,14 @@ class TheSeederAndThisGateAskOneQuestionTests(unittest.TestCase):
         # A literal heading the page shows: nothing is written.
         literal = self.BODY.format(heading="## Mergeability")
         self.assertTrue(reader.has_markdown_section(literal, "Mergeability"))
-        self.assertEqual(seeder.seed_mergeability_section(literal, announcements=[], changed_files=self.FILES), literal)
+        self.assertEqual(seeder.seed_mergeability_section(literal, changed_files=self.FILES).body, literal)
         # A fenced example: the page does not show it, so the seeder goes in --
         # and this gate does not read it either.
         fenced = TheRuntimeSeedsASectionAndThisGateThenReadsItTests.FENCED_EXAMPLE_BODY
         self.assertFalse(reader.has_markdown_section(fenced, "Mergeability"))
         self.assertEqual(pr_readiness.extract_section(fenced, "Mergeability"), "")
         self.assertNotEqual(
-            seeder.seed_mergeability_section(fenced, announcements=[], changed_files=self.FILES), fenced
+            seeder.seed_mergeability_section(fenced, changed_files=self.FILES).body, fenced
         )
         # And the shapes the page shows: both readers find them, so neither
         # half of the old conjunction is left to be load-bearing.
