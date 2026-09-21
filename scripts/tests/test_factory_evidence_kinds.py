@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import bisect
 import contextlib
+import hashlib
 import importlib.util
 import io
 import itertools
@@ -47,6 +48,123 @@ run_contributor = load_module("run_contributor_evidence_kinds", SCRIPT_PATH)
 sync_execution_state = load_module(
     "sync_execution_state_evidence_kinds", SCRIPT_PATH.with_name("sync-execution-state.py")
 )
+
+# The skill's own module, by the name `run-contributor.py` put it under when it
+# imported it. Named here because the renderer seam lives on it and both the
+# refusal below and the recordings beside it address it directly.
+helpers = sys.modules["_helpers"]
+
+# One recording directory for both copies of the seam. The readiness gate
+# records what GitHub answered for a body under the sha256 of that body
+# (`test_pr_readiness.py`), and a body this suite asks about is the same body
+# with the same answer, so a recording made by either suite serves the other.
+RENDERED_FIXTURES = REPO_ROOT / "scripts" / "tests" / "fixtures" / "rendered"
+RENDERED_INDEX = RENDERED_FIXTURES / "index.json"
+RECORD_ENV = "WORKSPACES_RECORD_RENDERED"
+RECORD_COMMAND = (
+    f"{RECORD_ENV}=1 GH_TOKEN=$(gh auth token) "
+    "uv run --script scripts/tests/test_factory_evidence_kinds.py"
+)
+
+# Captured before `setUpModule` refuses the renderer for the whole file: the
+# recorder is the one place that DOES ask GitHub, and it asks the real
+# function rather than the suite's refusal of it. Absent on a tree whose skill
+# has no renderer, which is the red-at-base measurement -- the suite runs with
+# an older `_helpers.py` swapped in to say which shapes are new, and refusing
+# a function that is not there would error the file instead of failing the
+# tests being measured.
+_LIVE_RENDER = getattr(helpers, "render_markdown", None)
+
+
+def rendered_fixture_path(text: str) -> Path:
+    """Where the recorded answer for one body lives: its sha256, as HTML."""
+    return RENDERED_FIXTURES / f"{hashlib.sha256(text.encode('utf-8')).hexdigest()}.html"
+
+
+def rendered_index() -> dict[str, str]:
+    """Which body each recording answers, so a stale one can be re-asked."""
+    if not RENDERED_INDEX.is_file():
+        return {}
+    return json.loads(RENDERED_INDEX.read_text(encoding="utf-8"))
+
+
+def record_rendered(text: str) -> str:
+    """Ask the live renderer once and store what it said under this body's hash."""
+    rendered = _LIVE_RENDER(text)
+    RENDERED_FIXTURES.mkdir(parents=True, exist_ok=True)
+    rendered_fixture_path(text).write_text(rendered, encoding="utf-8")
+    index = rendered_index()
+    index[hashlib.sha256(text.encode("utf-8")).hexdigest()] = text
+    RENDERED_INDEX.write_text(
+        json.dumps(index, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    return rendered
+
+
+@contextlib.contextmanager
+def recorded_page():
+    """Answer the placement check from checked-in renderer responses instead of the network.
+
+    Every other test in this file runs with the renderer refused outright
+    (`setUpModule`), so the suite reaches no network whether or not a token is
+    in the environment and the check takes the fallback a laptop takes. A test
+    that needs the page's own answer wraps itself in this.
+
+    A body with no recording fails naming the command that records it: a
+    recording is a file someone committed after reading it, not something a
+    test run invents.
+    """
+
+    if _LIVE_RENDER is None:
+        yield
+        return
+
+    def answer(text: str) -> str:
+        path = rendered_fixture_path(text)
+        if path.is_file():
+            return path.read_text(encoding="utf-8")
+        if os.environ.get(RECORD_ENV):
+            return record_rendered(text)
+        raise AssertionError(
+            f"No recorded renderer response for this body ({path.name}). Record it with:\n"
+            f"  {RECORD_COMMAND}"
+        )
+
+    with (
+        mock.patch.object(helpers, "render_markdown", side_effect=answer),
+        mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
+    ):
+        yield
+
+
+_RENDERER_REFUSED = None
+SUITE_UNVERIFIED = "the suite does not reach the renderer"
+
+
+def setUpModule() -> None:
+    """No test in this file reaches the network.
+
+    The placement check asks GitHub to render the body a write produced, and a
+    suite that let that call out would be slow, would spend a rate limit, and
+    would answer differently on a laptop with a token and in a sandbox without
+    one. So the renderer is refused for the whole file and the tests that need
+    its answer opt back in through `recorded_page`.
+    """
+    global _RENDERER_REFUSED
+    if _LIVE_RENDER is None:
+        return
+
+    def refuse(text: str) -> str:
+        raise helpers.RendererUnavailable(SUITE_UNVERIFIED)
+
+    _RENDERER_REFUSED = mock.patch.object(helpers, "render_markdown", side_effect=refuse)
+    _RENDERER_REFUSED.start()
+
+
+def tearDownModule() -> None:
+    if _RENDERER_REFUSED is not None:
+        _RENDERER_REFUSED.stop()
+
 
 CI_ITEM = "CI: `Lint, Test, Build, E2E & Perf` green on the PR head"
 DIFF_ITEM = (
@@ -6296,8 +6414,13 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
         # turn, and it had to be asked before the write to see the author's
         # heading alone, which is what made the sentence above false. The write
         # still goes ahead -- the repair is the point, not a stand-down.
+        # Under the page's own answer, because one of these headings carries a
+        # `<details>` tag: the placement check asks the renderer whenever
+        # anything above the section could fold it, and a run that could not
+        # ask says so on this same stream (#1773). What is asserted here is
+        # that the WRITER says nothing, so the page is given.
         for name, (heading, _) in self.SHAPES.items():
-            with self.subTest(shape=name):
+            with self.subTest(shape=name), recorded_page():
                 spoke = io.StringIO()
                 with contextlib.redirect_stderr(spoke):
                     written, refusal, _ = self.evidence().write_evidence_status_section(
@@ -8428,6 +8551,297 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
         execution = self.execution()
         sent = self.posted([], self.notes())
         self.assertIn(execution.UNCARRIED_NOTES_HEADLINE, sent[0])
+
+
+class ThePlacementAsksThePageWhetherASectionIsFoldedTests(unittest.TestCase):
+    """The writer's placement check asks the page whether a fold hides the section (#1773).
+
+    `placement_refusal` is the postcondition on every write: the section this
+    write places has to be one a reader can see. It answered that from the
+    parse alone, and the parse cannot see a fold -- a `<details>` ends at a
+    blank line to CommonMark while the element stays open on the page, so a
+    section written below an unclosed one is a heading here and a heading
+    behind a disclosure to everyone else (#1742, item 3). The gate's side of
+    that was #1769: it reads a folded status and refuses it. This is the
+    writer's side, and it refuses to put the section there at all.
+
+    Deciding it means knowing element nesting across a whole body, which is
+    the model this seam exists not to build. So the page is asked, the way the
+    gate asks it for the line starts it reads (#1745), with the same fallback:
+    no renderer means the source model's answer and a sentence saying the page
+    went unread.
+    """
+
+    HEADING = "Evidence Status"
+    SECTION = "\n## Evidence Status\n\n- [complete] `swift test` -- 1992 tests passed\n"
+    SUMMARY = "## Summary\n\n- one change\n"
+    DISCLOSURE = "<details>\n<summary>notes</summary>\n\nfolded prose\n"
+
+    # Every placement shape this check answers about, with what it must say.
+    # `None` is placed; a string is the substring the refusal has to carry.
+    # The last three are what the source model already refused and still
+    # refuses, so the page's answer is a widening and not a replacement.
+    SHAPES: dict[str, tuple[str, str | None]] = {
+        "an unclosed disclosure above the section": (
+            f"{SUMMARY}\n{DISCLOSURE}",
+            "renders inside the `<details>` opened at line 5",
+        ),
+        "a disclosure closed above the section": (
+            f"{SUMMARY}\n{DISCLOSURE}\n</details>\n",
+            None,
+        ),
+        "a disclosure inside another, the outer left open": (
+            f"<details>\n<summary>outer</summary>\n\n<details>\n<summary>inner</summary>\n\nprose\n\n</details>\n",
+            "renders inside the `<details>` opened at line 1",
+        ),
+        "a fenced example of a disclosure above the section": (
+            f"{SUMMARY}\n```html\n<details>\n<summary>notes</summary>\n```\n",
+            None,
+        ),
+        "no raw HTML at all": (SUMMARY, None),
+        "a `<pre>` that never closes above the section": (
+            f"{SUMMARY}\n<pre>\na log nobody closed\n",
+            "is not a heading on the page",
+        ),
+        "a comment that never closes above the section": (
+            f"{SUMMARY}\n<!-- a note the author left\n",
+            "is not a heading on the page",
+        ),
+        "a fence that never closes above the section": (
+            f"{SUMMARY}\n```text\na log, never closed\n",
+            "is not a heading on the page",
+        ),
+    }
+
+    # The shape the check is NOT about: a disclosure the author opened inside
+    # the section folds that section's own text, and the heading stays where a
+    # reader arrives at it. Whether folded contents are readable is the
+    # reader's question and the gate answers it on its own account (#1769), so
+    # the writer places this and the page is not even asked.
+    SECTION_FOLDS_ITSELF = (
+        "## Summary\n\n- one change\n"
+        "\n## Evidence Status\n\n<details>\n<summary>runs</summary>\n\n"
+        "- [complete] `swift test` -- 1992 tests passed\n"
+    )
+
+    def placement(self, body: str) -> str | None:
+        return helpers.placement_refusal(body, body + self.SECTION, self.HEADING)
+
+    def test_every_placement_shape_gets_the_answer_the_page_supports(self) -> None:
+        for label, (body, expected) in self.SHAPES.items():
+            with self.subTest(shape=label), recorded_page():
+                refusal = self.placement(body)
+                if expected is None:
+                    self.assertIsNone(refusal, label)
+                else:
+                    self.assertIsNotNone(refusal, label)
+                    self.assertIn(expected, refusal, label)
+
+    def test_the_refusal_names_the_disclosure_and_the_repair(self) -> None:
+        # The headline shape, and what an author is owed about it: which
+        # element folded the section, where it was opened, and the one edit
+        # that puts the section back on the page.
+        body, _ = self.SHAPES["an unclosed disclosure above the section"]
+        with recorded_page():
+            refusal = self.placement(body)
+        self.assertIn("`## Evidence Status`", refusal)
+        self.assertIn("(`<details>`)", refusal)
+        self.assertIn("the page folds it away", refusal)
+        self.assertIn("closing that element above the section", refusal)
+
+    def test_a_section_the_page_shows_unfolded_is_placed(self) -> None:
+        # The control, stated on its own rather than only in the table: the
+        # same body with the disclosure closed is a placement, so the check
+        # costs an ordinary write nothing.
+        body, _ = self.SHAPES["a disclosure closed above the section"]
+        with recorded_page():
+            self.assertIsNone(self.placement(body))
+
+    def test_a_disclosure_inside_the_section_is_not_a_placement_question(self) -> None:
+        asked: list[str] = []
+        with recorded_page():
+            with mock.patch.object(helpers, "render_markdown", side_effect=asked.append):
+                refusal = helpers.placement_refusal(
+                    self.SUMMARY, self.SECTION_FOLDS_ITSELF, self.HEADING
+                )
+        self.assertIsNone(refusal)
+        self.assertEqual(asked, [], "the page was asked about a fold below the heading")
+
+    def test_the_page_is_asked_only_where_something_above_could_fold_the_heading(self) -> None:
+        # A request per write on every body would spend a rate limit on
+        # bodies where no fold is possible. The precondition is textual and
+        # over-inclusive -- a fenced `<details>` above costs one call -- and
+        # it can never skip a body a fold could reach.
+        asked: dict[str, list[str]] = {}
+        for label, (body, _) in self.SHAPES.items():
+            with self.subTest(shape=label), recorded_page():
+                seen: list[str] = []
+                recorded = helpers.render_markdown
+                with mock.patch.object(
+                    helpers,
+                    "render_markdown",
+                    side_effect=lambda text: seen.append(text) or recorded(text),
+                ):
+                    self.placement(body)
+                asked[label] = seen
+        self.assertEqual(
+            {label for label, seen in asked.items() if seen},
+            {
+                "an unclosed disclosure above the section",
+                "a disclosure closed above the section",
+                "a disclosure inside another, the outer left open",
+                "a fenced example of a disclosure above the section",
+            },
+        )
+
+    def test_the_page_is_asked_once_per_body(self) -> None:
+        body, _ = self.SHAPES["an unclosed disclosure above the section"]
+        seen: list[str] = []
+        with recorded_page():
+            recorded = helpers.render_markdown
+            with mock.patch.object(
+                helpers,
+                "render_markdown",
+                side_effect=lambda text: seen.append(text) or recorded(text),
+            ):
+                for _ in range(3):
+                    self.placement(body)
+        self.assertEqual(len(seen), 1, seen)
+
+    def test_with_no_renderer_every_shape_falls_back_to_the_source_model(self) -> None:
+        # The fallback, stated as the cost it is: with no page the check is
+        # exactly the check that shipped before this change, so the fold
+        # shapes are placed and the shapes the model sees are still refused.
+        for label, (body, expected) in self.SHAPES.items():
+            with self.subTest(shape=label):
+                refusal = self.placement(body)
+                if expected is not None and "is not a heading on the page" in expected:
+                    self.assertIn(expected, refusal or "", label)
+                else:
+                    self.assertIsNone(refusal, label)
+
+    def test_with_no_renderer_the_run_says_the_page_went_unread(self) -> None:
+        # Never a silent accept: the body the page would have refused is
+        # placed, and the run says which question went unanswered and why.
+        body, _ = self.SHAPES["an unclosed disclosure above the section"]
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            self.assertIsNone(self.placement(body))
+        self.assertIn(f"rendered view unverified: {SUITE_UNVERIFIED}", spoke.getvalue())
+
+    def test_a_body_with_nothing_to_fold_says_nothing_about_the_renderer(self) -> None:
+        # The note is about a question that was asked and went unanswered. A
+        # body no fold can reach asks nothing, so a tokenless run on ordinary
+        # bodies stays quiet rather than printing a line per write.
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            self.assertIsNone(self.placement(self.SUMMARY))
+        self.assertNotIn("rendered view unverified", spoke.getvalue())
+
+
+class TheWriterStandsDownOnAFoldedPlacementTests(unittest.TestCase):
+    """What the fold refusal does to a real write, and where its author reads it (#1773).
+
+    A refusal that only a postcondition sees is a refusal nobody acts on. The
+    write stands the body down whole -- the author's text untouched, the
+    status this run resolved not written either -- and the reason travels in
+    the announcements list, which is the surface that reaches the author
+    (#1740, #1756). So a folded placement is a refusal with a reason given
+    rather than a section quietly written where nobody arrives at it.
+    """
+
+    ITEM = "`swift test` passes"
+    FOLDED_BODY = (
+        "## Summary\n\n- one change\n\n"
+        "<details>\n<summary>notes</summary>\n\nfolded prose\n\n"
+        "## Validation\n\n- ran it\n"
+    )
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def meta(self) -> str:
+        entry = {
+            "index": 1,
+            "item": self.ITEM,
+            "status": "pending-ci",
+            "detail": "the lane has not run yet",
+            "kind": "test",
+        }
+        return "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
+
+    def test_the_turn_s_write_stands_the_body_down_and_names_the_disclosure(self) -> None:
+        with recorded_page():
+            written, errors = run_contributor.render_execution_summary_body(
+                self.FOLDED_BODY,
+                requested_evidence=[self.ITEM],
+                evidence_complete=["1 -- 214 tests passed"],
+                evidence_blocked=None,
+                evidence_pending_ci=None,
+            )
+        self.assertEqual(written, self.FOLDED_BODY)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("the page folds it away", errors[0])
+
+    def test_the_lane_write_announces_the_stand_down_where_its_author_reads(self) -> None:
+        evidence = self.evidence()
+        with recorded_page():
+            write = evidence.write_evidence_status_section(
+                self.meta() + self.FOLDED_BODY, ["- [complete] `swift test` passes -- 214 passed"]
+            )
+        self.assertEqual(write.body, self.meta() + self.FOLDED_BODY)
+        self.assertEqual(len(write.announcements), 1)
+        self.assertTrue(evidence.is_stood_down_announcement(write.announcements[0]))
+        self.assertIn("the page folds it away", write.announcements[0])
+
+    def test_the_same_write_goes_ahead_once_the_disclosure_is_closed(self) -> None:
+        # The control on the write itself: closing the element is the repair
+        # the refusal names, and the status lands under the page's own heading.
+        closed = self.FOLDED_BODY.replace(
+            "folded prose\n\n## Validation", "folded prose\n\n</details>\n\n## Validation"
+        )
+        with recorded_page():
+            write = self.evidence().write_evidence_status_section(
+                self.meta() + closed, ["- [complete] `swift test` passes -- 214 passed"]
+            )
+        self.assertIsNone(write.refusal)
+        self.assertIn("## Evidence Status", write.body)
+        self.assertIn("- [complete] `swift test` passes -- 214 passed", write.body)
+
+
+class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
+    """The recordings this suite reads, and that they are the gate's own.
+
+    The recordings live in one directory keyed by the sha256 of the body, so a
+    body either suite asks about is answered by whichever of them recorded it
+    first. What is checked here is that this suite's view of that directory is
+    the same view `test_pr_readiness.py` has -- the path, the index and the
+    naming rule -- because a second directory would age separately and neither
+    suite would notice.
+    """
+
+    def test_the_recordings_are_the_directory_the_gate_records_into(self) -> None:
+        readiness = load_module("pr_readiness_placement", REPO_ROOT / "scripts" / "pr-readiness.py")
+        self.assertTrue(RENDERED_FIXTURES.is_dir())
+        self.assertEqual(RENDERED_FIXTURES, REPO_ROOT / "scripts" / "tests" / "fixtures" / "rendered")
+        self.assertEqual(readiness.DEFAULT_REPOSITORY, helpers.DEFAULT_REPOSITORY)
+
+    def test_every_recording_this_suite_needs_is_committed(self) -> None:
+        index = rendered_index()
+        for label, (body, _) in ThePlacementAsksThePageWhetherASectionIsFoldedTests.SHAPES.items():
+            written = body + ThePlacementAsksThePageWhetherASectionIsFoldedTests.SECTION
+            line = helpers.section_heading_line(written, "Evidence Status")
+            if line is None or not helpers.could_be_folded(written, line):
+                continue
+            with self.subTest(shape=label):
+                self.assertIn(hashlib.sha256(written.encode("utf-8")).hexdigest(), index)
+                self.assertTrue(rendered_fixture_path(written).is_file())
+
+    def test_every_recording_names_the_body_it_answers(self) -> None:
+        for digest, text in rendered_index().items():
+            with self.subTest(digest=digest[:12]):
+                self.assertEqual(hashlib.sha256(text.encode("utf-8")).hexdigest(), digest)
+                self.assertTrue(rendered_fixture_path(text).is_file())
 
 
 if __name__ == "__main__":
