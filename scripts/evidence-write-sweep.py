@@ -39,6 +39,21 @@ ITEM = "`swift test` passes"
 DETAIL = "the lane has not run yet"
 RESOLVED_DETAIL = "214 tests passed"
 
+# The recorded item's own text, which the corpus varied over nothing until
+# #1751 round 3. Whose a status line is now depends on the ITEM matching, and
+# an item is matched through the page's reading of it, so an item carrying
+# markup the page resolves is the axis that question lives on: with only
+# `swift test` passes` in the corpus -- a code span, which the reading keeps
+# as written -- the fixed-point figure was measured over one item's markup and
+# could not see a write that stopped recognising its own line. The second item
+# carries the strongest form of the five that broke (bold, italic, underscore,
+# inline HTML, a backslash escape), plus an em-dash-free `--` nowhere, so the
+# only thing varying is the markup.
+ITEMS = {
+    "an item in a code span": ITEM,
+    "an item carrying resolved markup": "**Manual QA** on device",
+}
+
 # What sits under the status line. Each entry is a block the rewrite has to
 # carry to `## Evidence Notes`, or a hazard it has to decline -- the two
 # outcomes the count is about.
@@ -113,14 +128,20 @@ evidence = load("evidence", SKILL_SCRIPTS / "evidence.py")
 MARKDOWN_LINE_ENDING_RE = helpers.MARKDOWN_LINE_ENDING_RE
 
 
-def body(tail: str, successor: str, ending: str) -> str:
-    """One PR body: the metadata the writer reads, the section, the tail under it, and the author's next block."""
+def body(tail: str, successor: str, ending: str, item: str = ITEM) -> str:
+    """One PR body: the metadata the writer reads, the section, the tail under it, and the author's next block.
+
+    `item` is the recorded item, which the corpus varies since #1751 round 3:
+    the rule that decides whose a status line is matches the item, so an item
+    whose markup the page resolves is a body this instrument has to be able to
+    write twice without gaining a copy.
+    """
     meta = {
         "entries": [
-            {"index": 1, "item": ITEM, "status": "pending-ci", "detail": DETAIL, "kind": "test"}
+            {"index": 1, "item": item, "status": "pending-ci", "detail": DETAIL, "kind": "test"}
         ]
     }
-    section = f"- [pending-ci] {ITEM} -- {DETAIL}\n" + tail
+    section = f"- [pending-ci] {item} -- {DETAIL}\n" + tail
     text = (
         "<!-- evidence-status:v1\n"
         + json.dumps(meta)
@@ -383,22 +404,25 @@ def write_once(text: str) -> tuple[str, bool, tuple[str, ...]]:
 def sweep() -> list[Outcome]:
     """Every generated body, written twice, with what the write cost it."""
     outcomes = []
-    for tail_name, tail in SECTION_TAILS.items():
-        for successor_name, successor in SUCCESSORS.items():
-            for ending_name, ending in LINE_ENDINGS.items():
-                source = body(tail, successor, ending)
-                written, refused, said = write_once(source)
-                again, _, _ = write_once(written)
-                outcomes.append(
-                    Outcome(
-                        label=f"{tail_name} / {successor_name} / {ending_name}",
-                        refused=refused,
-                        lost=tuple(lines_lost(source, written)),
-                        closed=tuple(seams_closed(source, written)),
-                        announced=tuple(line for line in said if "not carried" in line),
-                        fixed_point=again == written,
+    for item_name, item in ITEMS.items():
+        for tail_name, tail in SECTION_TAILS.items():
+            for successor_name, successor in SUCCESSORS.items():
+                for ending_name, ending in LINE_ENDINGS.items():
+                    source = body(tail, successor, ending, item)
+                    written, refused, said = write_once(source)
+                    again, _, _ = write_once(written)
+                    outcomes.append(
+                        Outcome(
+                            label=(
+                                f"{item_name} / {tail_name} / {successor_name} / {ending_name}"
+                            ),
+                            refused=refused,
+                            lost=tuple(lines_lost(source, written)),
+                            closed=tuple(seams_closed(source, written)),
+                            announced=tuple(line for line in said if "not carried" in line),
+                            fixed_point=again == written,
+                        )
                     )
-                )
     return outcomes
 
 

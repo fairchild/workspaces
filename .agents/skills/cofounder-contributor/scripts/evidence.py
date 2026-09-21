@@ -2201,6 +2201,39 @@ def status_line_as_page_reads_it(line: str) -> str:
     return line
 
 
+def item_as_page_reads_it(item: str) -> str:
+    """One recorded item as the page reads it, in the shape a line's item comes back in.
+
+    The other side of `status_line_as_page_reads_it`, and the reason this
+    exists at all: a line reaches the rule below as the page reads it, and a
+    recorded item is raw source -- the contract's own characters, read off an
+    issue body (`_wrapped_bullets`). Comparing one against the other compares
+    two spellings of the same requirement, and for the five markup forms
+    `inline_text` resolves -- `**bold**`, `*italic*`, `_underscore_`, inline
+    HTML, a backslash escape -- the two never match. The write then read its
+    own freshly rendered status line as somebody else's, moved it to
+    `## Evidence Notes`, and did it again on the next run, so one requirement
+    showed a reader a stale `[pending-ci]` beside its `[complete]` and a copy
+    accumulated per write (#1751, round 3).
+
+    The shape of that defect is worth naming, because it is the one this pull
+    request was closing: #1751 closed an asymmetry between two readers of the
+    LINE and opened one between a reader of the line and no reader of the
+    ITEM. Before, `_is_status_list_item` matched the status token alone, so
+    the item's text never had to survive a round trip; requiring the item to
+    match put one side on that trip and left the other where it was.
+
+    So both sides come through the same reading -- rather than both raw, which
+    is not available: the line's item exists only after the page has resolved
+    the markup around it, which is what the round before this one established.
+    A form `inline_text` keeps -- a code span, a link, strikethrough -- reads
+    back as itself, so reading a recorded item costs those nothing.
+    """
+    tokens = MARKDOWN.parseInline(item.strip())
+    children = tokens[0].children if tokens else None
+    return inline_text(children).strip() if children else item.strip()
+
+
 def is_recorded_status_line(line: str, recorded_items: Iterable[str]) -> bool:
     """Whether a line under `## Evidence Status` is the machine's rather than the author's.
 
@@ -2215,6 +2248,11 @@ def is_recorded_status_line(line: str, recorded_items: Iterable[str]) -> bool:
     caller has the section parsed, `status_line_as_page_reads_it` where it has
     the bytes. One rule asked with two spellings of one line is two rules
     again, which is what a bold status token proved (#1751, round 2).
+
+    And of the page's reading of the ITEMS, by the same argument one step over
+    (`item_as_page_reads_it`). Everything this rule compares goes through one
+    reading; a side left raw is a second rule wearing the first one's name,
+    and that side was the recorded item until #1751, round 3.
 
     The writer read every status-shaped line under the heading as its own and
     the sweep that measures the writer read only the recorded ones as its own,
@@ -2232,7 +2270,7 @@ def is_recorded_status_line(line: str, recorded_items: Iterable[str]) -> bool:
     answer -- every line is the author's -- and it is the answer the sweep
     gives a body whose metadata records no entries.
     """
-    items = [str(item) for item in recorded_items if str(item).strip()]
+    items = [item_as_page_reads_it(str(item)) for item in recorded_items if str(item).strip()]
     if not items:
         return False
     reading = split_evidence_status_line(line.strip(), items)

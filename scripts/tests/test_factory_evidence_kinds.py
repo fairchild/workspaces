@@ -8658,9 +8658,11 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                         evidence.status_line_as_page_reads_it(line), [self.ITEM]
                     )
                 )
-        # A code span is not emphasis: the backticks are characters the page
-        # shows, so the reading keeps them and the line is the author's at both
-        # readers -- as it was before this rule existed.
+        # A code span is not emphasis: the reading keeps its backticks -- not
+        # because the page shows them, which it does not, but because
+        # `inline_text` re-emits them so an item naming its command in a span
+        # stays that item. The line is the author's at both readers, as it was
+        # before this rule existed.
         in_code = f"- `[pending-ci]` {self.ITEM} -- {self.DETAIL}"
         self.assertEqual(evidence.status_line_as_page_reads_it(in_code), in_code)
         self.assertFalse(
