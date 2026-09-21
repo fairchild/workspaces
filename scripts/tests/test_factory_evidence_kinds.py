@@ -8775,11 +8775,13 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
             start = at + len(needle)
         return True
 
-    # intent: guard
-    # Green on main and RED at `7fa240cc`: main does not have the sentence
-    # these fields reach, so this is a fix for a defect the branch made and a
-    # guard by the rule, which classifies against main. Named here rather
-    # than smoothed, because the marker cannot say both.
+    # intent: fix
+    # marker: measured at both ends rather than reasoned. RED at `7fa240cc`,
+    # its own base -- `FAILED (failures=4)` -- and red on main too,
+    # `FAILED (failures=1)` since `ea5ee399` rewrote the method. The note
+    # here used to say "green on main", which was true at `4b134858` and went
+    # stale one head later; markers are relative to the round's own base, and
+    # by that reading this is a fix (#1778, round 20).
     def test_every_pr_editable_field_reaches_a_comment_inert(self) -> None:
         """One rule for every field, walked rather than asserted (#1778, round 13).
 
@@ -9464,7 +9466,11 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
                 self.assertIsNotNone(unreadable, f"{name}: the reader took it")
                 self.assertEqual(lines, [], f"{name}: it answered with lines as well as a reason")
 
-    # intent: control
+    # intent: fix
+    # marker: `control` until round 20, and the measurement says otherwise --
+    # `FAILED (failures=1)` at `363d297a`, its own base, because the sentence
+    # it pins is round 15's change. A control is green at its base by
+    # definition (#1778, round 20).
     def test_a_scalar_with_nothing_replaced_says_nothing_about_replacing(self) -> None:
         # The control: the same record with no unowned line under the
         # heading. The write still happens, the bare value is still named,
