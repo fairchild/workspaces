@@ -1482,6 +1482,60 @@ def _indistinguishable(texts: list[str], context: str = "") -> list[str]:
     return duplicates
 
 
+def entries_recording_one_item(entries: object, context: str = "") -> list[tuple[int, str]]:
+    """Positions of the renderable entries of ONE list whose items read as one requirement.
+
+    The same question `_indistinguishable` asks of a contract's items, asked
+    of the ENTRIES a write renders from, and it is the other half of the
+    ownership rule. `rendered_entry_claims` keys on `(index, occurrence)`, so
+    two entries recording one item are two claims on identical bytes --
+    correct where the items genuinely differ and the ` -- ` boundary merely
+    falls in two places, and wrong here, because the second claim has no line
+    of the write's to own and takes the author's byte-identical copy instead.
+    Measured at five heads: one recorded entry leaves the author's line
+    carried, the same entry recorded twice or three times takes it with no
+    refusal, nothing on stderr and no note (#1751, round 16).
+
+    The question this answers is "is this record VALID?", which is not the
+    question the key answers. Ownership of a valid record is round 14's:
+    within one list no two claims share an owner. A record naming one
+    requirement twice is not valid, and what a write does with one is stand
+    down whole -- the collision family this arc already has.
+
+    Within ONE list, never across two. One entry offering its bytes from this
+    run and from the body being rewritten is one claim by design, and
+    comparing the two lists would read every unchanged verdict as a
+    collision.
+
+    Positions are 1-based and count every entry of the record, renderable or
+    not, so the number names the position an author reads in the metadata.
+    """
+    seen: dict[str, int] = {}
+    collisions: list[tuple[int, str]] = []
+    listed = entries if isinstance(entries, list) else []
+    for position, entry in enumerate(listed, start=1):
+        # Asked of the ONE definition of renderable, per entry, rather than
+        # re-derived here: `renderable_entries` normalises into new dicts, so
+        # there is nothing to match its answers back to by identity, and a
+        # second copy of the predicate is how two readers of one rule start.
+        rendered = renderable_entries([entry])
+        if not rendered:
+            continue
+        key = _normalize_evidence_key(item_as_page_reads_it(str(rendered[0]["item"]), context))
+        first = seen.get(key)
+        if first is None:
+            seen[key] = position
+            continue
+        # The first occurrence joins the list once, however many later ones
+        # name it: three entries recording one requirement are positions
+        # 1, 2, 3, not 1, 2, 1, 3.
+        named = {place for place, _ in collisions}
+        if first not in named:
+            collisions.append((first, str(rendered[0]["item"])))
+        collisions.append((position, str(rendered[0]["item"])))
+    return sorted(collisions)
+
+
 def _match_evidence_entries(
     requested_evidence: list[str],
     entries: dict[str, dict[str, str]],
@@ -3133,6 +3187,27 @@ def write_evidence_status_section(
             f"of them cannot be told apart: {', '.join(code_span(item) for item in collisions)}; "
             "make each requested item distinct",
         )
+    # And the same collision one level in: two renderable ENTRIES of one list
+    # recording one item. The key `rendered_entry_claims` builds gives each of
+    # them its own claim, so the second has no line of the write's to own and
+    # takes the author's byte-identical copy of the first -- measured at this
+    # head as 1 line written and 0 carried where one entry writes 2 and
+    # carries 1 (#1751, round 16). The record is what is wrong, so the write
+    # stands down whole and names both positions, the way a colliding index
+    # already does.
+    for side, listed in (("this run's entries", entries), ("the recorded entries", previous_entries)):
+        if (recording := entries_recording_one_item(
+            listed, markdown_section(source, EVIDENCE_STATUS_HEADING)
+        )):
+            places = ", ".join(str(position) for position, _ in recording)
+            item = code_span(recording[0][1])
+            return _stood_down(
+                source,
+                f"{side} record one requirement more than once -- {item} at position "
+                f"{places} -- so two claims stand on identical bytes and an author's own "
+                "copy of that line would be taken as the second one's; record the "
+                "requirement once",
+            )
     rendered = list(status_lines)
     # The lines this write owns, built from the ENTRIES at both ends of the
     # body: the ones this run renders and the ones the body it is rewriting

@@ -10348,6 +10348,272 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertTrue(owner.claim(lines[0]))
         self.assertTrue(owner.claim(lines[1]), "the second entry's line went unowned")
 
+    COLLIDING_ITEM = "run `swift test"
+    COLLIDING_DETAIL = "--filter QA` passed"
+    PLAIN_BODY = "## Summary\n\n- did the thing\n\n## Validation\n- local unit tests passed\n"
+
+    @property
+    def colliding_line(self) -> str:
+        return f"- [pending-ci] {self.COLLIDING_ITEM} -- {self.COLLIDING_DETAIL}"
+
+    def turn(self, body: str, published: str = "", item: str = "", detail: str = ""):
+        """The turn's entry point, driven the way production drives it."""
+        item = item or self.COLLIDING_ITEM
+        detail = detail or self.COLLIDING_DETAIL
+        with contextlib.redirect_stderr(io.StringIO()):
+            return run_contributor.render_execution_summary_body(
+                body,
+                requested_evidence=[item],
+                evidence_complete=None,
+                evidence_blocked=None,
+                evidence_pending_ci=[f"1 -- {detail}"],
+                published_body=published,
+            )
+
+    def published_recording(self, times: int, item: str = "", detail: str = "") -> str:
+        """A published body the WRITER wrote, with its recorded entry repeated.
+
+        Built from the writer's own output rather than hand-written JSON:
+        metadata this code did not write is metadata the parser may decline,
+        and a fixture the parser declines makes every assertion after it
+        vacuous. The read-back below is asserted for that reason.
+        """
+        published, _ = self.turn(self.PLAIN_BODY, "", item, detail)
+        if times == 1:
+            return published
+        found = re.search(r"<!-- evidence-status:v1\n(.*?)\n-->", published, re.S)
+        record = json.loads(found.group(1))
+        record["entries"] = record["entries"] * times
+        return published[: found.start(1)] + json.dumps(record, indent=2) + published[found.end(1) :]
+
+    # intent: fix
+    # marker: red at `35a13793`, its own base, behaviourally --
+    # `FAILED (failures=4)`, both items at both multiplicities: the write
+    # there returns a body with the author's copy gone, no error and nothing
+    # carried. Red on `016d94ba` on a name this branch adds (#1751, round 16).
+    def test_one_requirement_recorded_twice_stands_the_write_down(self) -> None:
+        """Two entries recording ONE item are two ownership claims on identical bytes.
+
+        The duplicate is in the RECORDED METADATA of the published body,
+        which no guard inspects: `entries_keyed_for` re-keys it into two
+        entries at index 1, `rendered_entry_claims` keys on
+        `(index, occurrence)` and gives each its own claim, and the second
+        claim has no line of the write's to own -- so it takes the author's
+        byte-identical copy. The contract's own guard never sees it because
+        `requested_evidence` holds ONE item throughout.
+
+        Measured through the turn's entry point with the author's copy in the
+        body BEING REWRITTEN and the published metadata built from the
+        writer's own output: at `35a13793` one recorded entry gives
+        `(status, notes) = (1, 1)` and owner claims `[True, False, False]`;
+        the same entry recorded twice gives `(1, 0)` and `[True, True,
+        False]`; three times `(1, 0)` and `[True, True, True]` -- no refusal,
+        nothing on stderr about the deletion, no `## Evidence Notes` entry.
+        `76c65118` and `7808a051` carry it at every multiplicity, and
+        `016d94ba` takes it at every multiplicity, so this is round 14's key
+        rather than a defect of main's.
+
+        The question it answers is "is this record VALID?". Ownership of a
+        valid record is round 14's and is unchanged -- two entries ARE two
+        claims. A record naming one requirement twice is not valid, and what
+        a write does with one is stand down whole and name both positions.
+        """
+        # The fixture read-back first: a published body whose metadata the
+        # parser declines makes everything below it vacuous.
+        evidence = self.evidence()
+        for item, detail in (("run the QA filter", "214 tests passed"),
+                             (self.COLLIDING_ITEM, self.COLLIDING_DETAIL)):
+            self.assertEqual(
+                len(evidence.evidence_entries_of(self.published_recording(1, item, detail)) or []),
+                1,
+                "the published body's metadata did not parse; the fixture is not built",
+            )
+        # The ordinary fixture first -- a plain item, which is what a contract
+        # carries -- and the pass's own item second, because it is the one
+        # where the end-to-end symptom is VISIBLE: with a plain item the
+        # duplicate line is deduplicated by the item-keyed rule anyway (the
+        # control below), so only an item that rule cannot own shows the
+        # author's copy leaving.
+        for label, item, detail in (
+            ("a plain item", "run the QA filter", "214 tests passed"),
+            ("an item the reader cannot own", self.COLLIDING_ITEM, self.COLLIDING_DETAIL),
+        ):
+            line = f"- [pending-ci] {item} -- {detail}"
+            model = (
+                "## Summary\n\n- did the thing\n\n## Evidence Status\n\n"
+                f"{line}\n{line}\n\n## Validation\n- local unit tests passed\n"
+            )
+            for times in (2, 3):
+                with self.subTest(item=label, recorded=times):
+                    published = self.published_recording(times, item, detail)
+                    keyed = evidence.entries_keyed_for(
+                        evidence.evidence_entries_of(published), [item]
+                    )
+                    self.assertEqual(len(keyed), times, "the duplicate did not survive the re-keying")
+                    # The owner-level tell, on identical bytes: the second
+                    # entry's claim is the one with no line of the write's
+                    # to own.
+                    owner = evidence.owned_lines(
+                        [{"index": 1, "item": item, "status": "pending-ci",
+                          "detail": detail, "kind": "test"}],
+                        keyed,
+                    )
+                    self.assertEqual(
+                        [owner.claim(line) for _ in range(3)],
+                        # One claim per recorded entry, on identical bytes.
+                        [True] * min(times, 3) + [False] * max(0, 3 - times),
+                    )
+                    written, errors = self.turn(model, published, item, detail)
+                    self.assertEqual(written, model, "the body did not stand whole")
+                    self.assertEqual(len(errors), 1, errors)
+                    self.assertIn("record one requirement more than once", errors[0])
+                    places = ", ".join(str(place) for place in range(1, times + 1))
+                    self.assertIn(f"at position {places}", errors[0], "both positions are not named")
+                    self.assertIn(sys.modules["_helpers"].code_span(item), errors[0])
+
+    # intent: control
+    # marker: green at `35a13793`, its own base -- `Ran 1 test ... OK` -- which
+    # is what makes it a control; behaviourally red on `016d94ba`, where the
+    # author's copy is taken at every multiplicity (#1751, round 16).
+    def test_one_recorded_entry_still_carries_the_author_s_copy(self) -> None:
+        # The multiplicity the refusal does not reach, and the reason the
+        # refusal is keyed on the RECORD rather than on the copy: one entry,
+        # two byte-identical lines, the entry owns one and the author's copy
+        # is carried. This is the behaviour the fix must not move.
+        evidence = self.evidence()
+        model = (
+            "## Summary\n\n- did the thing\n\n## Evidence Status\n\n"
+            f"{self.colliding_line}\n{self.colliding_line}\n\n"
+            "## Validation\n- local unit tests passed\n"
+        )
+        written, errors = self.turn(model, self.published_recording(1))
+        self.assertEqual(errors, [])
+        self.assertNotEqual(written, model, "the write did not happen")
+        self.assertIn(self.colliding_line, evidence.markdown_section(written, "Evidence Notes"))
+
+    # intent: control
+    # marker: green at `35a13793`, its own base, and constant at every head of
+    # this branch and on `016d94ba`: a readable item's duplicate line is
+    # deduplicated by the item-keyed rule wherever it sits, which is why the
+    # shape above needs an item the reader cannot own (#1751, round 16).
+    def test_a_readable_item_s_duplicate_is_the_machine_s_wherever_it_sits(self) -> None:
+        """The record that decided this round's scope, kept as a test.
+
+        With a READABLE item the second byte-identical copy of the machine's
+        line is replaced at every multiplicity -- one recorded entry
+        included, and whether the copy sits in the model's draft, in the
+        published body, or in both. Measured constant at `76c65118`,
+        `7808a051`, `5ee6769e`, `35a13793` and this head, so it is neither
+        this round's nor a regression: a line naming a recorded item is the
+        machine's by the item-keyed rule, and a byte-identical copy of the
+        machine's own line carries nothing of the author's -- the page keeps
+        the line they wrote, once.
+
+        It is recorded rather than folded into the finding above, because the
+        end-to-end symptom there belongs to the path where that rule cannot
+        answer -- an item the reader cannot own, where the byte-identical
+        claim is the only claim available.
+        """
+        item, detail = "run the QA filter", "214 tests passed"
+        line = f"- [pending-ci] {item} -- {detail}"
+
+        def turn(body: str, published: str = ""):
+            with contextlib.redirect_stderr(io.StringIO()):
+                return run_contributor.render_execution_summary_body(
+                    body, requested_evidence=[item], evidence_complete=None,
+                    evidence_blocked=None, evidence_pending_ci=[f"1 -- {detail}"],
+                    published_body=published,
+                )
+
+        published, _ = turn(self.PLAIN_BODY)
+        twice = published.replace(
+            f"## Evidence Status\n\n{line}", f"## Evidence Status\n\n{line}\n{line}", 1
+        )
+        model = (
+            "## Summary\n\n- did the thing\n\n## Evidence Status\n\n"
+            f"{line}\n{line}\n\n## Validation\n- local unit tests passed\n"
+        )
+        evidence = self.evidence()
+        for shape, body, source in (
+            ("the model's draft", model, published),
+            ("the published body", self.PLAIN_BODY, twice),
+            ("both", model, twice),
+        ):
+            with self.subTest(copy_in=shape):
+                written, errors = turn(body, source)
+                self.assertEqual(errors, [])
+                self.assertEqual(
+                    evidence.markdown_section(written, "Evidence Status").count(line), 1
+                )
+                self.assertEqual(
+                    evidence.markdown_section(written, "Evidence Notes").count(line), 0
+                )
+
+    # intent: guard
+    # marker: green at `35a13793`, its own base: the owner does what this says
+    # there, and the refusal above is what keeps an invalid record from ever
+    # reaching it. Red on `016d94ba` on a name (#1751, round 16).
+    def test_the_owner_grants_a_second_claim_on_identical_bytes(self) -> None:
+        """Where the refusal is, and where it is NOT: ownership is unchanged.
+
+        The tell one level below the write: offer the same bytes three times
+        to the owner of a record that names one requirement once, and to the
+        owner of one that names it twice. Measured at five heads --
+        `76c65118` and `7808a051` grant `[True, False, False]` at both
+        multiplicities; `5ee6769e` and `35a13793` grant `[True, False,
+        False]` for one entry and `[True, True, False]` for two, which is the
+        second claim that takes the author's copy.
+
+        This head grants the same as `35a13793`, deliberately: a claim is an
+        (entry, line) pair and two entries ARE two claims -- round 14's key,
+        which a valid record depends on. What this round changes is that a
+        record naming one requirement twice never reaches the owner, because
+        the write stands down first. Moving the fix into the owner would
+        undo round 14 and re-break the case above it.
+        """
+        evidence = self.evidence()
+        entry = {"index": 1, "item": self.COLLIDING_ITEM, "status": "complete",
+                 "detail": self.COLLIDING_DETAIL, "kind": "test-attested"}
+        for times, expected in ((1, [True, False, False]), (2, [True, True, False])):
+            with self.subTest(recorded=times):
+                entries = [dict(entry) for _ in range(times)]
+                line = evidence.rendered_entry_lines(entries)[0]
+                owner = evidence.owned_lines(entries, [])
+                self.assertEqual([owner.claim(line) for _ in range(3)], expected)
+
+    # intent: control
+    # marker: green at `35a13793`, its own base -- `Ran 1 test ... OK` -- which
+    # is what makes it a control; red on `016d94ba` on a NAME this branch adds,
+    # since the writer takes no `entries` there. The shape it holds is the one
+    # the refusal must not take, which is why the refusal keys on the ITEM and
+    # not on the rendered line (#1751, round 16).
+    def test_two_entries_whose_items_differ_still_write(self) -> None:
+        """Round 14's shape, and the one this refusal must leave alone.
+
+        `{item: "run `a", detail: "b -- c` ok"}` and
+        `{item: "run `a -- b", detail: "c` ok"}` render the SAME line because
+        the ` -- ` boundary falls in two places in one text, and their items
+        genuinely differ -- two requirements, two claims, and a write. A
+        refusal keyed on the rendered line rather than on the item would
+        stand this down and cost the author a verdict.
+        """
+        evidence = self.evidence()
+        entries = [
+            {"index": 1, "item": "run `a", "status": "complete", "detail": "b -- c` ok"},
+            {"index": 1, "item": "run `a -- b", "status": "complete", "detail": "c` ok"},
+        ]
+        lines = evidence.rendered_entry_lines(entries)
+        self.assertEqual(lines[0], lines[1], "the shape is not built: the lines differ")
+        write = evidence.write_evidence_status_section(
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            + "\n".join(lines) + "\n\n## Validation\n\n- ok\n",
+            lines,
+            recorded_items=[str(entry["item"]) for entry in entries],
+            entries=entries,
+            previous_entries=[],
+        )
+        self.assertIsNone(write.refusal, write.refusal)
+
     # intent: guard
     # marker: red at `15e80e9e`, its own round's base, by API alone and it cannot be otherwise --
     # the seam it pins is one that round ADDS, so there is no property to hold at the base and
