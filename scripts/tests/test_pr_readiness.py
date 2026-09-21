@@ -13,6 +13,7 @@ sections in a form GitHub Actions can surface cleanly.
 from __future__ import annotations
 
 import contextlib
+import datetime
 import hashlib
 import importlib.util
 import io
@@ -1756,13 +1757,40 @@ def rendered_index() -> dict[str, str]:
     return json.loads(RENDERED_INDEX.read_text(encoding="utf-8"))
 
 
+def indexed_body(entry: object) -> str:
+    """The body one index entry answers for, in either shape it has had.
+
+    Entries were the body text alone; they carry a recording stamp beside it
+    now, so a reader can tell how old an answer is. Both shapes are read
+    because the committed index holds both until every entry is re-asked
+    (#1773, round 8).
+    """
+    if isinstance(entry, dict):
+        return str(entry.get("body", ""))
+    return str(entry)
+
+
 def record_rendered(text: str) -> str:
-    """Ask the live renderer once and store what it said under this body's hash."""
+    """Ask the live renderer for this body and store what it said, overwriting any earlier answer.
+
+    RE-asks under the record flag rather than returning what is on disk. It
+    returned an existing recording untouched, so the command the drift test
+    names -- the one it hands an author when a recording no longer matches the
+    live renderer -- could not refresh the recording it was named for (#1790).
+    """
     rendered = _LIVE_RENDER(text)
     RENDERED_FIXTURES.mkdir(parents=True, exist_ok=True)
     rendered_fixture_path(text).write_text(rendered, encoding="utf-8")
     index = rendered_index()
-    index[hashlib.sha256(text.encode("utf-8")).hexdigest()] = text
+    index[hashlib.sha256(text.encode("utf-8")).hexdigest()] = {
+        "body": text,
+        # From the clock at the moment of the ask, which is the only stamp
+        # that says anything about the answer stored beside it.
+        "recorded_at": datetime.datetime.now(datetime.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+    }
     RENDERED_INDEX.write_text(
         json.dumps(index, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8"
     )
@@ -1790,10 +1818,11 @@ def recorded_page():
 
     def answer(text: str) -> str:
         path = rendered_fixture_path(text)
-        if path.is_file():
-            return path.read_text(encoding="utf-8")
+        # The flag first: see `record_rendered` (#1790).
         if os.environ.get(RECORD_ENV):
             return record_rendered(text)
+        if path.is_file():
+            return path.read_text(encoding="utf-8")
         raise AssertionError(
             f"No recorded renderer response for this body ({path.name}). Record it with:\n"
             f"  {RECORD_COMMAND}"
@@ -2326,7 +2355,8 @@ class RecordedRendererResponseTests(unittest.TestCase):
         self.assertIn(RECORD_COMMAND, str(raised.exception))
 
     def test_every_recording_names_the_body_it_answers(self) -> None:
-        for digest, text in rendered_index().items():
+        for digest, entry in rendered_index().items():
+            text = indexed_body(entry)
             with self.subTest(digest=digest[:12]):
                 self.assertEqual(hashlib.sha256(text.encode("utf-8")).hexdigest(), digest)
                 self.assertTrue(rendered_fixture_path(text).is_file())
@@ -2340,7 +2370,8 @@ class RecordedRendererResponseTests(unittest.TestCase):
     def test_the_recordings_still_match_the_live_renderer(self) -> None:
         if not (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")):
             self.skipTest("no GH_TOKEN or GITHUB_TOKEN: the live renderer cannot be asked")
-        for digest, text in rendered_index().items():
+        for digest, entry in rendered_index().items():
+            text = indexed_body(entry)
             with self.subTest(digest=digest[:12]):
                 self.assertEqual(
                     _LIVE_RENDER(text),
@@ -3576,9 +3607,9 @@ class TheLongSHeadingIsNotThisSectionInEitherReaderTests(unittest.TestCase):
         texts, refusal = owner.removed_section_texts(self.ALIASED, "Evidence Status")
         self.assertIsNone(refusal)
         self.assertEqual(len(texts), 1)
-        written = owner.insert_markdown_section(
+        written = owner.inserted_markdown_section(
             self.ALIASED, "Evidence Status", "- [complete] the real item -- re-checked"
-        )
+        ).body
         self.assertIn(self.LONG_S, written)
         self.assertIn("- [complete] the printer's heading -- not this section", written)
         self.assertIn("- [complete] the real item -- re-checked", written)

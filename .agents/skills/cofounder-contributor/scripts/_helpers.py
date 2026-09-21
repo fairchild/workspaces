@@ -1111,11 +1111,23 @@ class RendererUnavailable(Exception):
     Keyword-only and required: the next cause added here decides which family
     it belongs to at the raise site, where the cause is known, rather than
     inheriting a default nobody chose.
+
+    `repair` is what makes the two families different to the author, so a
+    refusing cause has to carry one: refusing without saying what to do is a
+    dead end, and a proceeding cause that implies the author should act sends
+    them after an outage they cannot fix. It is required when `transient` is
+    false and refused when it is true, which is that difference stated where
+    the cause is known rather than checked afterwards (#1773, round 8).
     """
 
-    def __init__(self, reason: str, *, transient: bool) -> None:
+    def __init__(self, reason: str, *, transient: bool, repair: str | None = None) -> None:
         super().__init__(reason)
+        if transient and repair is not None:
+            raise ValueError("a transient cause names no repair: the author cannot act on a blip")
+        if not transient and not repair:
+            raise ValueError("a permanent cause must name the action that resolves it")
         self.transient = transient
+        self.repair = repair
 
 
 def repository_context() -> str:
@@ -1123,13 +1135,57 @@ def repository_context() -> str:
     return os.environ.get("GITHUB_REPOSITORY") or DEFAULT_REPOSITORY
 
 
+def rate_limit_is_spent(error: urllib.error.HTTPError) -> bool:
+    """Whether this refusal is the rate limit rather than the token."""
+    headers = error.headers or {}
+    return error.code in {403, 429} and headers.get("x-ratelimit-remaining") == "0"
+
+
 def http_failure_reason(error: urllib.error.HTTPError) -> str:
     """Why a non-2xx answer arrived, naming the rate limit when that is the cause."""
-    headers = error.headers or {}
-    if error.code in {403, 429} and headers.get("x-ratelimit-remaining") == "0":
-        reset = headers.get("x-ratelimit-reset") or "the next window"
+    if rate_limit_is_spent(error):
+        reset = (error.headers or {}).get("x-ratelimit-reset") or "the next window"
         return f"the renderer's rate limit is spent (it resets at {reset})"
     return f"the renderer answered HTTP {error.code}"
+
+
+def http_failure_repair(error: urllib.error.HTTPError) -> str:
+    """What resolves a refusal the renderer will keep giving this token.
+
+    Named per status, because a repair that does not fit the cause is a dead
+    end wearing an instruction's clothes: "export a token the renderer
+    accepts" is the answer to no token at all and says nothing an author can
+    act on when the token they exported came back 401.
+    """
+    if error.code == 401:
+        return (
+            "the renderer rejected the token; export one it accepts "
+            "(`gh auth token` prints the signed-in account's) and run again"
+        )
+    return (
+        "the renderer refused the token for this repository; export one with access to it "
+        "and run again"
+    )
+
+
+def http_failure_is_transient(error: urllib.error.HTTPError) -> bool:
+    """Whether waiting could change this answer.
+
+    Permanence, not the cause site. Marking every `HTTPError` transient put a
+    REJECTED token in the fail-open family while an ABSENT one refused: an
+    expired or wrong token answered 401 on every placement and every write
+    went ahead unverified, under a refusal sentence that tells the author to
+    export a token the renderer accepts (#1773, round 8). A token the renderer
+    will not take is the same kind of condition as no token at all -- local,
+    permanent until the author acts -- so it gets the same answer.
+
+    A spent rate limit is a 403 that time fixes, so it stays transient with
+    5xx, timeouts and connection errors: there the harm is a reading defect
+    and refusing would turn a passing outage into a blocked pull request.
+    """
+    if rate_limit_is_spent(error):
+        return True
+    return error.code not in {401, 403}
 
 
 def render_markdown(text: str) -> str:
@@ -1146,7 +1202,9 @@ def render_markdown(text: str) -> str:
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
         raise RendererUnavailable(
-            "no GH_TOKEN or GITHUB_TOKEN in the environment", transient=False
+            "no GH_TOKEN or GITHUB_TOKEN in the environment",
+            transient=False,
+            repair="export GH_TOKEN or GITHUB_TOKEN and run again",
         )
     payload = json.dumps({"text": text, "mode": "gfm", "context": repository_context()})
     request = urllib.request.Request(
@@ -1165,7 +1223,12 @@ def render_markdown(text: str) -> str:
         with urllib.request.urlopen(request, timeout=RENDER_TIMEOUT_SECONDS) as response:
             return response.read().decode("utf-8")
     except urllib.error.HTTPError as error:
-        raise RendererUnavailable(http_failure_reason(error), transient=True) from error
+        transient = http_failure_is_transient(error)
+        raise RendererUnavailable(
+            http_failure_reason(error),
+            transient=transient,
+            repair=None if transient else http_failure_repair(error),
+        ) from error
     except (urllib.error.URLError, OSError) as error:
         raise RendererUnavailable(
             f"the renderer was unreachable ({error})", transient=True
@@ -1188,9 +1251,11 @@ class RenderedPage(NamedTuple):
 
     html: str = ""
     unverified: str | None = None
-    # Whether the cause was a blip. A permanent one -- no token exported --
-    # is not something to proceed past: see `RendererUnavailable`.
+    # Whether the cause was a blip. A permanent one -- no token exported, a
+    # token the renderer rejects -- is not something to proceed past, and it
+    # carries the action that resolves it: see `RendererUnavailable`.
     transient: bool = True
+    repair: str | None = None
 
 
 _RENDERED_PAGES: dict[str, RenderedPage] = {}
@@ -1214,7 +1279,11 @@ def rendered_page(text: str) -> RenderedPage:
         # the rest of the process -- so a turn that writes twice would take
         # the fallback on the second write after the renderer had come back
         # (#1773, round 2).
-        return RenderedPage(unverified=str(unavailable), transient=unavailable.transient)
+        return RenderedPage(
+            unverified=str(unavailable),
+            transient=unavailable.transient,
+            repair=unavailable.repair,
+        )
     _RENDERED_PAGES[text] = RenderedPage(html=html)
     return _RENDERED_PAGES[text]
 
@@ -1429,13 +1498,18 @@ def unverified_note(reason: str) -> str:
     )
 
 
-def _unasked_refusal(heading: str, reason: str) -> str:
-    """What an author is told when the page could not be asked and, as things stand, never can be."""
+def _unasked_refusal(heading: str, reason: str, repair: str) -> str:
+    """What an author is told when the page could not be asked and, as things stand, never can be.
+
+    The repair comes from the cause rather than from here: a sentence naming
+    one action for every permanent cause told an author whose token came back
+    401 to export a token the renderer accepts, which is what they did.
+    """
     return (
         f"the page could not be asked whether the `## {heading}` section this write places is "
         f"folded away: {reason}. That is a condition of this environment rather than a blip, so "
-        "the write stands down instead of placing a section on a weaker check than a lane runs -- "
-        "export a token the renderer accepts and run again"
+        f"the write stands down instead of placing a section on a weaker check than a lane runs -- "
+        f"{repair}"
     )
 
 
@@ -1625,7 +1699,9 @@ def placement_refusal(body: str, written: str, heading: str) -> PlacementAnswer:
         page = rendered_page(probe)
         if page.unverified is not None:
             if not page.transient:
-                return PlacementAnswer(refusal=_unasked_refusal(heading, page.unverified))
+                return PlacementAnswer(
+                    refusal=_unasked_refusal(heading, page.unverified, page.repair or "")
+                )
             return PlacementAnswer(unverified=unverified_note(page.unverified))
         shown = folded_headings_on_the_page(page.html, f"{heading} {mark}")
         if not shown:
@@ -1648,43 +1724,6 @@ def placement_refusal(body: str, written: str, heading: str) -> PlacementAnswer:
     return PlacementAnswer(refusal=_folded_refusal(written, heading) if shown[0] else None)
 
 
-def insert_markdown_section(
-    body: str,
-    heading: str,
-    content: str,
-    *,
-    before_heading: str | None = None,
-    after_heading: str | None = None,
-) -> str:
-    """The body with this section rewritten, where the author already had one.
-
-    A section that exists is replaced where it stands. Placement is a question
-    only about a section the body does not have yet: moving one an author
-    placed reorders their document for them, and it did -- the rewrite that
-    stopped deleting a `# Release blockers` heading under Evidence Status then
-    lifted Evidence Status out from under it, because the cut was shorter and
-    the re-insert went to the placement point rather than back to the offset
-    it came from (#1734, round 2). Keeping the content is the headline;
-    keeping it where its author put it is the property.
-
-    `before_heading` and `after_heading` place a NEW section: above a heading
-    the page shows, or directly below one, respectively. `after_heading` is
-    how a carried-notes section lands under the status list it was carried out
-    of, rather than merely somewhere above the next heading.
-    """
-    # Newlines only, at both ends. The first line's indentation is content
-    # where a block was written as indented code -- taking four spaces off it
-    # turns a `## Validation` a reviewer pasted as an example into a heading --
-    # and the trailing spaces on the last line are a line break on the page.
-    return inserted_markdown_section(
-        body,
-        heading,
-        content,
-        before_heading=before_heading,
-        after_heading=after_heading,
-    ).body
-
-
 class SectionInsert(NamedTuple):
     """The body an insert produced, why it stood down, and what it could not ask."""
 
@@ -1701,7 +1740,7 @@ def inserted_markdown_section(
     before_heading: str | None = None,
     after_heading: str | None = None,
 ) -> SectionInsert:
-    """`insert_markdown_section`, with the reason a stand-down happened beside the body.
+    """The body an insert produced, and the reason it declined, together.
 
     The reason comes back rather than only reaching a log, because the body an
     insert declines to write is a body with no such section -- so a caller
@@ -1709,6 +1748,13 @@ def inserted_markdown_section(
     heading on the page", and the fold that actually stopped the write stayed
     in a step log nobody opens. The specific reason is the one an author can
     act on (#1773).
+
+    This is the only insert now. A back-compat wrapper returned the body
+    alone, and every caller that took it dropped a refusal on the floor: an
+    author's `## Evidence Notes` went that way, and the `## Mergeability` and
+    `## Validation` seeds nearly did. When the last production caller took the
+    answer the wrapper had none left, so it is gone rather than kept for the
+    tests that found it convenient (#1773, round 8).
 
     `unverified` rides along for the same reason one step further: a write
     that went ahead without the page having been asked was decided by a

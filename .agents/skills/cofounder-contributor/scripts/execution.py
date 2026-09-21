@@ -12,7 +12,9 @@ import tempfile
 from pathlib import Path
 
 from _helpers import (
+    MARKDOWN,
     code_span_ranges,
+    inserted_markdown_section,
     AGENT_CLAIM_LABEL,
     AGENT_CLAIM_LABEL_COLOR,
     AGENT_CLAIM_LABEL_DESCRIPTION,
@@ -34,7 +36,6 @@ from _helpers import (
     branch_name_for_issue,
     has_markdown_section,
     rejected_heading_note,
-    insert_markdown_section,
     issue_label_names,
     issue_label_presence,
     log,
@@ -699,30 +700,36 @@ def _as_the_page_shows_it(text: str) -> str:
 COLLAPSED_BLOCK_RE = re.compile(r"(?is)<details\b.*</details>|<details\b.*\Z")
 
 
-def _paragraph_bounds(text: str) -> list[tuple[int, int]]:
-    """Where each run of non-blank lines begins and ends, in this text's own offsets.
+def _inline_block_bounds(text: str) -> list[tuple[int, int]]:
+    """Where each block with inline content begins and ends, in this text's own offsets.
 
-    A code span is an inline construct, so it lives inside one block and a
-    blank line ends it. This is the block boundary the scan below needs, and
-    it is deliberately coarse: a list item or a fence is read as one run of
-    lines rather than as its own container, which can only make the scan see
-    a span CommonMark does not -- the safe direction here, because a span it
-    invents leaves a `<details` unblanked and a note this runtime says again.
+    Taken from the parser the repo already reads markdown with, rather than
+    modelled here. A code span is an inline construct, so it lives inside one
+    block -- and "one block" is CommonMark's answer, not "a run of non-blank
+    lines". A heading, an HTML block, a fence and a list each INTERRUPT a
+    paragraph with no blank line between them, so splitting on blank lines
+    alone let two stray backticks either side of an interrupter pair into a
+    span, blank a real `<details` lying between them, and record a note the
+    page folds away as one a reader was shown (#1773, round 8). Every
+    hand-rolled model of this parser in this repository has been wrong in the
+    same direction; this one asks it.
+
+    `inline` tokens carry their parent block's line map, which is what puts a
+    heading's own span and a list item's own span each in their own block.
     """
-    bounds: list[tuple[int, int]] = []
-    start: int | None = None
-    end = offset = 0
+    starts, offset = [], 0
     for line in text.split("\n"):
-        if line.strip():
-            if start is None:
-                start = offset
-            end = offset + len(line)
-        elif start is not None:
-            bounds.append((start, end))
-            start = None
+        starts.append(offset)
         offset += len(line) + 1
-    if start is not None:
-        bounds.append((start, end))
+    bounds: list[tuple[int, int]] = []
+    for token in MARKDOWN.parse(text):
+        if token.type != "inline" or not token.map:
+            continue
+        first, last = token.map
+        if first >= len(starts):
+            continue
+        stop = starts[last] - 1 if last < len(starts) else len(text)
+        bounds.append((starts[first], min(stop, len(text))))
     return bounds
 
 
@@ -740,9 +747,9 @@ def _code_spans_blanked(text: str) -> str:
     as shown, which silences the next run about a note the write dropped.
     Anyone who can comment could plant it (#1773, round 5).
 
-    Per BLOCK, because that is the span a code span can occupy: it is an
-    inline construct, so a blank line ends it, and inside a paragraph it
-    crosses soft line breaks freely. Scanning the whole comment as one string
+    Per BLOCK as the PARSER reads a block, because that is the span a code
+    span can occupy: it is an inline construct, so it lives inside one block,
+    and inside a paragraph it crosses soft line breaks freely. Scanning the whole comment as one string
     called two backticks either side of a blank line a span; scanning it a
     line at a time called a span's continuation on the next line a span of its
     own, and the harm ran the other way -- `start ``open` / `here ``<details>``
@@ -752,7 +759,7 @@ def _code_spans_blanked(text: str) -> str:
     shown. Anyone who can comment could plant either (#1773, rounds 5 and 6).
     """
     chars = list(text)
-    for start, stop in _paragraph_bounds(text):
+    for start, stop in _inline_block_bounds(text):
         for open_at, close_at in code_span_ranges(text[start:stop]):
             chars[start + open_at : start + close_at] = " " * (close_at - open_at)
     return "".join(chars)
@@ -1041,7 +1048,9 @@ def _changed_surface_files(env: dict[str, str]) -> list[str]:
     return files
 
 
-def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) -> str:
+def seed_mergeability_section(
+    summary_body: str, *, changed_files: list[str], announcements: list[str] | None = None
+) -> str:
     """Seed the `## Mergeability` block scripts/pr-readiness.py requires when
     the agent omitted it.
 
@@ -1104,7 +1113,23 @@ def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) ->
     content = "\n".join(
         f"- {label}: {seeded.get(label, 'n/a')}" for label in mergeability_field_labels()
     )
-    return insert_markdown_section(summary_body, "Mergeability", content)
+    # Through the back-compat wrapper this insert's refusal reached a step log
+    # alone: at a 503 the section was appended below an unclosed `<details>`,
+    # into the fold, and the body came back looking written. Every insert
+    # takes the write's answer now (#1773, round 8). A refusal here loses
+    # nobody's words -- the section is simply not seeded, and the readiness
+    # gate fails the body loudly for it -- so the body stands and the reason
+    # is said.
+    placed = inserted_markdown_section(summary_body, "Mergeability", content)
+    if placed.unverified is not None and announcements is not None:
+        announcements.append(placed.unverified)
+    if placed.refusal is not None:
+        note = f"`## Mergeability` not seeded: {placed.refusal}"
+        log(note)
+        if announcements is not None:
+            announcements.append(note)
+        return summary_body
+    return placed.body
 
 
 def build_body(data: dict[str, object]) -> str:

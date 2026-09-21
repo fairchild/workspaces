@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import bisect
 import contextlib
+import datetime
 import hashlib
 import importlib.util
 import io
@@ -23,8 +24,12 @@ import itertools
 import os
 import json
 import random
+import email
 import re
+import subprocess
 import sys
+import urllib.error
+import urllib.request
 import time
 import unittest
 from pathlib import Path
@@ -76,6 +81,18 @@ RECORD_COMMAND = (
 _LIVE_RENDER = getattr(helpers, "render_markdown", None)
 
 
+def insert_markdown_section(*args, **kwargs) -> str:
+    """The body an insert produced, for tests that only assert on the body.
+
+    `_helpers` had this as a production wrapper and it discarded the refusal
+    and the unverified note, which cost an author their notes once and nearly
+    a Mergeability section twice. Every production caller takes the answer
+    now, so the convenience lives here, where dropping the rest of it is the
+    point (#1773, round 8).
+    """
+    return helpers.inserted_markdown_section(*args, **kwargs).body
+
+
 def rendered_fixture_path(text: str) -> Path:
     """Where the recorded answer for one body lives: its sha256, as HTML."""
     return RENDERED_FIXTURES / f"{hashlib.sha256(text.encode('utf-8')).hexdigest()}.html"
@@ -88,13 +105,40 @@ def rendered_index() -> dict[str, str]:
     return json.loads(RENDERED_INDEX.read_text(encoding="utf-8"))
 
 
+def indexed_body(entry: object) -> str:
+    """The body one index entry answers for, in either shape it has had.
+
+    Entries were the body text alone; they carry a recording stamp beside it
+    now, so a reader can tell how old an answer is. Both shapes are read
+    because the committed index holds both until every entry is re-asked
+    (#1773, round 8).
+    """
+    if isinstance(entry, dict):
+        return str(entry.get("body", ""))
+    return str(entry)
+
+
 def record_rendered(text: str) -> str:
-    """Ask the live renderer once and store what it said under this body's hash."""
+    """Ask the live renderer for this body and store what it said, overwriting any earlier answer.
+
+    RE-asks under the record flag rather than returning what is on disk. It
+    returned an existing recording untouched, so the command the drift test
+    names -- the one it hands an author when a recording no longer matches the
+    live renderer -- could not refresh the recording it was named for (#1790).
+    """
     rendered = _LIVE_RENDER(text)
     RENDERED_FIXTURES.mkdir(parents=True, exist_ok=True)
     rendered_fixture_path(text).write_text(rendered, encoding="utf-8")
     index = rendered_index()
-    index[hashlib.sha256(text.encode("utf-8")).hexdigest()] = text
+    index[hashlib.sha256(text.encode("utf-8")).hexdigest()] = {
+        "body": text,
+        # From the clock at the moment of the ask, which is the only stamp
+        # that says anything about the answer stored beside it.
+        "recorded_at": datetime.datetime.now(datetime.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+    }
     RENDERED_INDEX.write_text(
         json.dumps(index, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8"
     )
@@ -104,10 +148,13 @@ def record_rendered(text: str) -> str:
 def recorded_html(text: str) -> str:
     """One body's recorded answer, recorded now if the recorder is on."""
     path = rendered_fixture_path(text)
-    if path.is_file():
-        return path.read_text(encoding="utf-8")
+    # The flag first: a recording that has drifted is refreshed by the command
+    # the drift test names, which it could not be while an existing file was
+    # returned untouched (#1790).
     if os.environ.get(RECORD_ENV):
         return record_rendered(text)
+    if path.is_file():
+        return path.read_text(encoding="utf-8")
     raise AssertionError(
         f"No recorded renderer response for this body ({path.name}). Record it with:\n"
         f"  {RECORD_COMMAND}"
@@ -743,7 +790,7 @@ class SectionHeadingCaseTests(unittest.TestCase):
             "## evidence status\n- [pending-ci] the item\n\n"
             "## Validation\n- ran it\n"
         )
-        rendered = run_contributor.insert_markdown_section(
+        rendered = insert_markdown_section(
             body, "Evidence Status", "- [complete] the item -- proof", before_heading="Validation"
         )
         self.assertEqual(rendered.casefold().count("## evidence status"), 1)
@@ -755,7 +802,7 @@ class SectionHeadingCaseTests(unittest.TestCase):
         # case, placement finds nothing to insert before and the new section
         # is dropped without a word.
         body = "## Summary\nx\n\n## risks\n- none\n"
-        rendered = run_contributor.insert_markdown_section(
+        rendered = insert_markdown_section(
             body, "Validation", "- ran it", before_heading="Risks"
         )
         self.assertIn("## Validation\n- ran it", rendered)
@@ -766,7 +813,7 @@ class SectionHeadingCaseTests(unittest.TestCase):
         # reads a backslash in the section as one of its own escapes, and a
         # `\d` in a validation note raised instead of being inserted.
         note = r"- ran `rg '\d+ tests'` over the log"
-        rendered = run_contributor.insert_markdown_section(
+        rendered = insert_markdown_section(
             "## Risks\n- none\n", "Validation", note, before_heading="Risks"
         )
         self.assertIn(f"## Validation\n{note}\n\n## Risks", rendered)
@@ -5329,7 +5376,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         helpers = sys.modules["_helpers"]
         section = helpers.markdown_section(self.ORPHAN_BODY, "Evidence Status")
         self.assertEqual(section, "- [x] one - done")
-        rewritten = helpers.insert_markdown_section(
+        rewritten = insert_markdown_section(
             self.ORPHAN_BODY, "Evidence Status", "- [x] three - done"
         )
         self.assertNotIn("- [x] one - done", rewritten)
@@ -5354,7 +5401,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
                     continue
                 checked += 1
                 remainder = helpers.strip_markdown_section(body, heading)
-                rewritten = helpers.insert_markdown_section(body, heading, content)
+                rewritten = insert_markdown_section(body, heading, content)
                 refusal = self.write_refusal(helpers, body, heading)
                 with self.subTest(body=body[:50], heading=heading):
                     if refusal is not None:
@@ -5563,7 +5610,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
             with self.subTest(case=name):
                 refusal = self.write_refusal(helpers, body, "Evidence Status")
                 self.assertEqual(refusal is not None, refuses, refusal)
-                rewritten = helpers.insert_markdown_section(body, "Evidence Status", "- [x] written")
+                rewritten = insert_markdown_section(body, "Evidence Status", "- [x] written")
                 if refuses:
                     self.assertEqual(rewritten, body)
                 else:
@@ -5607,8 +5654,8 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
                 self.assertIsNotNone(refusal, opener)
                 self.assertIn(reason, refusal)
                 self.assertRegex(refusal, r"line \d+")
-                one = helpers.insert_markdown_section(body, "Evidence Status", "- [complete] item -- proof")
-                two = helpers.insert_markdown_section(one, "Performance", "Before: 1 ms\nAfter: 2 ms")
+                one = insert_markdown_section(body, "Evidence Status", "- [complete] item -- proof")
+                two = insert_markdown_section(one, "Performance", "Before: 1 ms\nAfter: 2 ms")
                 # Asked of the text, because under a block that never closes
                 # the page shows none of these headings as headings -- before
                 # the writes as much as after (#1730). The loss this is
@@ -5635,7 +5682,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
             with self.subTest(case=name):
                 refusal = self.write_refusal(helpers, body, "Evidence Status")
                 self.assertEqual(refusal is not None, refuses, refusal)
-                written = helpers.insert_markdown_section(body, "Evidence Status", "- [x] written")
+                written = insert_markdown_section(body, "Evidence Status", "- [x] written")
                 if refuses:
                     # The body stands, the fence opener with it, and the read
                     # still stops at the heading the repair found.
@@ -5717,7 +5764,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         helpers = sys.modules["_helpers"]
         captured = io.StringIO()
         with contextlib.redirect_stderr(captured):
-            out = helpers.insert_markdown_section(
+            out = insert_markdown_section(
                 self.UNTERMINATED_BLOCK_BODY, "Mergeability", "- Surface: agent-runtime"
             )
         self.assertEqual(out, self.UNTERMINATED_BLOCK_BODY)
@@ -5733,7 +5780,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         helpers = sys.modules["_helpers"]
         captured = io.StringIO()
         with contextlib.redirect_stderr(captured):
-            out = helpers.insert_markdown_section(
+            out = insert_markdown_section(
                 self.FENCED_EXAMPLE_BODY, "Mergeability", "- Surface: agent-runtime"
             )
         self.assertEqual(captured.getvalue(), "")
@@ -5743,7 +5790,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
             self.assertTrue(helpers.has_markdown_section(out, heading), heading)
         # A second write replaces what the first placed rather than adding a
         # third copy beside the example.
-        again = helpers.insert_markdown_section(out, "Mergeability", "- Surface: docs")
+        again = insert_markdown_section(out, "Mergeability", "- Surface: docs")
         self.assertEqual(again.count("## Mergeability"), 2)
         self.assertEqual(helpers.markdown_section(again, "Mergeability"), "- Surface: docs")
 
@@ -5833,7 +5880,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         refusal = self.write_refusal(helpers, self.STRIP_FLIP_BODY, "Evidence Status")
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
-            written = helpers.insert_markdown_section(
+            written = insert_markdown_section(
                 self.STRIP_FLIP_BODY, "Evidence Status", "- [complete] y -- checked"
             )
         # Two questions now, and a body that comes back unchanged answers to
@@ -5858,7 +5905,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         crlf = "## Summary\r\n\r\nnote\r\n\r\n## Evidence Status\r\n\r\n- [x] one\r\n"
         self.assertTrue(helpers.has_markdown_section(crlf, "Evidence Status"))
         self.assertEqual(helpers.markdown_section(crlf, "Evidence Status"), "- [x] one")
-        rewritten = helpers.insert_markdown_section(crlf, "Evidence Status", "- [x] written")
+        rewritten = insert_markdown_section(crlf, "Evidence Status", "- [x] written")
         self.assertEqual(rewritten.count("## Evidence Status"), 1)
         self.assertEqual(helpers.markdown_section(rewritten, "Evidence Status"), "- [x] written")
         self.assertEqual(
@@ -5909,8 +5956,8 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
             "## Risks\n\nNone.\n"
         )
         headings = ("Summary", "Evidence Status", "Performance", "Blocked By", "Risks")
-        one = helpers.insert_markdown_section(seed, "Evidence Status", "- [complete] the item -- proof")
-        two = helpers.insert_markdown_section(one, "Performance", "- Before: 1 ms\n- After: 2 ms")
+        one = insert_markdown_section(seed, "Evidence Status", "- [complete] the item -- proof")
+        two = insert_markdown_section(one, "Performance", "- Before: 1 ms\n- After: 2 ms")
         for heading in headings:
             with self.subTest(heading=heading):
                 self.assertTrue(helpers.has_markdown_section(two, heading))
@@ -5923,7 +5970,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         # next read finds.
         helpers = sys.modules["_helpers"]
         body = "## Evidence Status\n- [x] first\n\n## Risks\n\nNone.\n\n## Evidence Status\n- [x] second\n"
-        rewritten = helpers.insert_markdown_section(body, "Evidence Status", "- [x] written")
+        rewritten = insert_markdown_section(body, "Evidence Status", "- [x] written")
         self.assertEqual(rewritten.count("## Evidence Status"), 1)
         self.assertNotIn("- [x] second", rewritten)
 
@@ -6035,7 +6082,7 @@ class ASectionStartsAtAHeadingThePageShowsTests(unittest.TestCase):
         body = f"## Summary\n\nwhat.\n\nEvidence Status\n---------------\n\n{self.REAL}\n\n## Validation\n\n- ok\n"
         self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
         self.assertEqual(helpers.markdown_section(body, "Evidence Status"), self.REAL)
-        written = helpers.insert_markdown_section(body, "Evidence Status", "- [complete] y -- proof")
+        written = insert_markdown_section(body, "Evidence Status", "- [complete] y -- proof")
         self.assertEqual(helpers.markdown_section(written, "Evidence Status"), "- [complete] y -- proof")
         self.assertNotIn("---------------", written)
         self.assertNotIn(self.REAL, written)
@@ -6043,7 +6090,7 @@ class ASectionStartsAtAHeadingThePageShowsTests(unittest.TestCase):
         for heading in ("Summary", "Validation"):
             self.assertTrue(helpers.has_markdown_section(written, heading), heading)
         self.assertEqual(
-            helpers.insert_markdown_section(written, "Evidence Status", "- [complete] y -- proof"),
+            insert_markdown_section(written, "Evidence Status", "- [complete] y -- proof"),
             written,
         )
 
@@ -6097,7 +6144,7 @@ class ASectionStartsAtAHeadingThePageShowsTests(unittest.TestCase):
         }.items():
             with self.subTest(body=name):
                 self.assertEqual(helpers.markdown_section(body, "Evidence Status"), self.REAL)
-                written = helpers.insert_markdown_section(
+                written = insert_markdown_section(
                     body, "Evidence Status", "- [complete] z -- proof"
                 )
                 self.assertIn(self.EXAMPLE, written)
@@ -7285,7 +7332,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         # a body whose last line is that heading.
         helpers = sys.modules["_helpers"]
         body = "intro\n\n## Evidence Status"
-        written = helpers.insert_markdown_section(body, "Evidence Status", "- new")
+        written = insert_markdown_section(body, "Evidence Status", "- new")
         self.assertEqual(written.count("## Evidence Status"), 1)
         self.assertEqual(helpers.markdown_section(written, "Evidence Status"), "- new")
         pending = (
@@ -7321,11 +7368,11 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         # heading that used to end it -- which the rewrite sweep catches.
         helpers = sys.modules["_helpers"]
         body = "intro with hard break  \n## Evidence Status\nold\n\n## Validation\nkeep\n"
-        written = helpers.insert_markdown_section(body, "Evidence Status", "new")
+        written = insert_markdown_section(body, "Evidence Status", "new")
         self.assertIn("intro with hard break  \n", written)
         self.assertEqual(helpers.markdown_section(written, "Evidence Status"), "new")
         self.assertIn("## Validation\nkeep", written)
-        indented = helpers.insert_markdown_section(
+        indented = insert_markdown_section(
             "intro\n\n## Evidence Status\nold\n   ## Validation\nkeep\n",
             "Evidence Status",
             "- [complete] x -- proof",
@@ -9779,6 +9826,53 @@ class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
     suite would notice.
     """
 
+    def test_the_record_command_can_refresh_a_recording_that_drifted(self) -> None:
+        """The command the drift test names has to be able to fix what it names (#1790).
+
+        `recorded_html` returned an existing recording without re-asking, even
+        under the record flag -- so an author told "this recording no longer
+        matches the live renderer, re-record it with ..." ran a command that
+        read the stale file back and changed nothing.
+
+        Which half asks reality: none. The live renderer is stubbed, and what
+        is asserted is that the recorder ASKS it and overwrites.
+        """
+        body = "## a body no fixture answers for\n\nwith a line\n"
+        path = rendered_fixture_path(body)
+        self.addCleanup(lambda: path.unlink(missing_ok=True))
+        asked: list[str] = []
+
+        def live(text: str) -> str:
+            asked.append(text)
+            return f"<h2>answer {len(asked)}</h2>"
+
+        index_before = RENDERED_INDEX.read_text(encoding="utf-8")
+        self.addCleanup(lambda: RENDERED_INDEX.write_text(index_before, encoding="utf-8"))
+        with mock.patch.dict(os.environ, {RECORD_ENV: "1"}, clear=False):
+            with mock.patch.object(sys.modules["__main__"], "_LIVE_RENDER", live):
+                first = recorded_html(body)
+                second = recorded_html(body)
+        self.assertEqual(len(asked), 2, "the recorder returned the file instead of re-asking")
+        self.assertEqual(first, "<h2>answer 1</h2>")
+        self.assertEqual(second, "<h2>answer 2</h2>")
+        self.assertEqual(path.read_text(encoding="utf-8"), second)
+        entry = json.loads(RENDERED_INDEX.read_text(encoding="utf-8"))[
+            hashlib.sha256(body.encode("utf-8")).hexdigest()
+        ]
+        self.assertEqual(entry["body"], body)
+        self.assertRegex(entry["recorded_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+    def test_without_the_flag_a_recording_is_read_rather_than_re_asked(self) -> None:
+        # The control: an ordinary run reads the checkout and reaches nothing.
+        digest = next(iter(rendered_index()))
+        body = indexed_body(rendered_index()[digest])
+        with mock.patch.object(sys.modules["__main__"], "_LIVE_RENDER", None):
+            with mock.patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(
+                    recorded_html(body),
+                    rendered_fixture_path(body).read_text(encoding="utf-8"),
+                )
+
     def test_the_recordings_are_the_directory_the_gate_records_into(self) -> None:
         readiness = load_module("pr_readiness_placement", REPO_ROOT / "scripts" / "pr-readiness.py")
         self.assertTrue(RENDERED_FIXTURES.is_dir())
@@ -9825,7 +9919,8 @@ class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
                 self.assertTrue(rendered_fixture_path(written).is_file())
 
     def test_every_recording_names_the_body_it_answers(self) -> None:
-        for digest, text in rendered_index().items():
+        for digest, entry in rendered_index().items():
+            text = indexed_body(entry)
             with self.subTest(digest=digest[:12]):
                 self.assertEqual(hashlib.sha256(text.encode("utf-8")).hexdigest(), digest)
                 self.assertTrue(rendered_fixture_path(text).is_file())
@@ -9897,24 +9992,33 @@ class TheNotesPathTakesTheSameAnswerAsTheStatusPathTests(unittest.TestCase):
         self.assertIn(f"## {self.HEADING}", written.body)
         self.assertIn(self.NOTE, written.body)
 
-    def test_the_wrapper_has_two_callers_left_and_neither_cuts_first(self) -> None:
-        """Why the wrapper stays rather than going (#1773, round 6).
+    def test_no_production_caller_drops_an_inserts_answer(self) -> None:
+        """Counted over every tracked Python file, not over two of them (#1773, round 8).
 
-        Both remaining production callers ADD a section to a body they have
-        not cut anything out of, so a refusal there returns the body whole and
-        loses nobody's words -- the section is simply not added, and the
-        readiness gate fails the body loudly for it. The notes path was the
-        one that cut first.
+        The guard this replaces read `evidence.py` and `execution.py`, so a
+        third caller added anywhere else -- `run-contributor.py`, a new
+        script -- kept it green. `git ls-files` is the enumeration, the way
+        the pass counted it.
+
+        The back-compat wrapper is gone rather than kept for the callers that
+        could live with it: after round 8 there were none. Two production call
+        sites remained and both are now `inserted_markdown_section`, so the
+        function had only this suite's convenience left, and a production
+        function alive for its tests is the shape this branch keeps deleting.
         """
-        sources = {
-            path: path.read_text(encoding="utf-8")
-            for path in (SCRIPT_PATH.parent / "evidence.py", SCRIPT_PATH.parent / "execution.py")
+        tracked = subprocess.run(
+            ["git", "ls-files", "*.py"],
+            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+        ).stdout.split()
+        self.assertGreater(len(tracked), 50, "the enumeration found almost nothing")
+        callers = {
+            f"{path}:{number}": line.strip()
+            for path in tracked
+            if not path.startswith("scripts/tests/")
+            for number, line in enumerate((REPO_ROOT / path).read_text(encoding="utf-8").splitlines(), 1)
+            if re.search(r"(?<!ed)(?<![a-z_])insert_markdown_section\b", line)
         }
-        calls = sum(
-            len(re.findall(r"(?<!ed_markdown_section)(?<![a-z_])insert_markdown_section\(", text))
-            for text in sources.values()
-        )
-        self.assertEqual(calls, 2, "a caller was added or removed without this test noticing")
+        self.assertEqual(callers, {}, "an insert that drops its answer came back")
 
 
 class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
@@ -9969,6 +10073,58 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
             {self.NOTE},
         )
 
+    INTERRUPTERS = {
+        "an ATX heading": "## a heading",
+        "an HTML block": "<div>x</div>",
+        "a fence": "```\ncode\n```",
+        "a list": "- an item",
+    }
+
+    def interrupted(self, interrupter: str) -> str:
+        """Two stray backticks with a block boundary between them.
+
+        Blank lines are not the only thing that ends a paragraph: a heading,
+        an HTML block, a fence and a list each interrupt one with no blank
+        line at all. Splitting on blank lines alone paired these backticks
+        into a span and blanked the `<details` between them, so the fold went
+        unstripped and the note below it -- folded away on the page -- was
+        recorded as one a reader had been shown.
+        """
+        return (
+            f"{self.checked()}\n\nstart `open\n{interrupter}\n<details>more` end\n\n"
+            f"- {self.NOTE}\n"
+        )
+
+    def test_a_block_boundary_without_a_blank_line_still_ends_the_span(self) -> None:
+        # Models the parser: the bounds come from `MARKDOWN.parse`, so this
+        # asserts what CommonMark says a block is. The recorded fixture below
+        # is where the page is asked.
+        for label, interrupter in self.INTERRUPTERS.items():
+            with self.subTest(interrupter=label):
+                comment = self.interrupted(interrupter)
+                self.assertIn(
+                    "<details",
+                    self.execution()._code_spans_blanked(comment),
+                    f"{label}: a real disclosure was blanked as if it were quoted",
+                )
+                # The NOTE, not the whole set: a list interrupter is itself a
+                # `- ` line the page shows, and saying so is right.
+                self.assertNotIn(
+                    self.NOTE,
+                    self.execution()._notes_a_reader_has_been_shown(comment, self.checked()),
+                    f"{label}: a note the page folds away was recorded as shown",
+                )
+
+    def test_the_page_folds_the_note_in_every_interrupted_shape(self) -> None:
+        # Asks reality: the recorded answer from the live renderer for each
+        # of the four bodies above.
+        for label, interrupter in self.INTERRUPTERS.items():
+            with self.subTest(interrupter=label), recorded_page():
+                html = helpers.render_markdown(self.interrupted(interrupter))
+            folded = re.search(r"<details.*", html, re.S)
+            self.assertIsNotNone(folded, label)
+            self.assertIn(self.NOTE, folded.group(0), f"{label}: the page did not fold the note")
+
     def test_a_blank_line_ends_the_span_so_a_later_block_is_still_stripped(self) -> None:
         # The control the brief names: a span that closes on the next line,
         # and a `<details>` in a THIRD paragraph, which is still stripped
@@ -9991,6 +10147,73 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
         folded = re.search(r"<details.*?</details>", html, re.S)
         self.assertIsNotNone(folded)
         self.assertIn(self.NOTE, folded.group(0))
+
+
+class EveryInsertTakesTheWritesAnswerTests(unittest.TestCase):
+    """The last two inserts that dropped a refusal on the floor (#1773, round 8).
+
+    The status and notes paths take the answer; `## Mergeability` and the
+    `blocked on evidence` line in `## Validation` still went through the
+    back-compat wrapper, which returns the body alone. At a 503 with a token
+    the section was appended below an unclosed `<details>` -- into the fold --
+    and the caller was handed a body that looked written, with the reason on
+    stderr.
+    """
+
+    FOLDED = (
+        "## Summary\n\n- one change\n\n<details>\n<summary>notes</summary>\n\n"
+        "a note nobody closed\n"
+    )
+
+    def seeded(self, *, transient: bool):
+        execution = sys.modules["execution"]
+        said: list[str] = []
+
+        def refuse(text: str) -> str:
+            raise helpers.RendererUnavailable(
+                "the renderer answered HTTP 503" if transient else "the renderer answered HTTP 401",
+                transient=transient,
+                repair=None if transient else "export a token it accepts and run again",
+            )
+
+        with (
+            mock.patch.object(helpers, "render_markdown", side_effect=refuse),
+            mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            body = execution.seed_mergeability_section(
+                self.FOLDED, changed_files=["docs/x.md"], announcements=said
+            )
+        return body, said
+
+    def test_a_permanent_cause_leaves_the_body_alone_and_says_why(self) -> None:
+        body, said = self.seeded(transient=False)
+        self.assertEqual(body, self.FOLDED, "a section was placed into a fold")
+        self.assertTrue(any("Mergeability" in note for note in said), said)
+
+    def test_a_blip_places_it_and_announces_that_the_page_went_unread(self) -> None:
+        body, said = self.seeded(transient=True)
+        self.assertIn("## Mergeability", body)
+        self.assertTrue(any("unverified" in note for note in said), said)
+
+    def test_no_production_insert_returns_a_body_without_its_reason(self) -> None:
+        # The structural half, counted over every tracked Python file rather
+        # than over the two this round happened to touch.
+        tracked = subprocess.run(
+            ["git", "ls-files", "*.py"],
+            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+        ).stdout.split()
+        self.assertGreater(len(tracked), 50)
+        offenders = [
+            f"{path}:{number}"
+            for path in tracked
+            if not path.startswith("scripts/tests/")
+            for number, line in enumerate(
+                (REPO_ROOT / path).read_text(encoding="utf-8").splitlines(), 1
+            )
+            if re.search(r"(?<!ed)(?<![a-z_])insert_markdown_section\b", line)
+        ]
+        self.assertEqual(offenders, [])
 
 
 class AMissingTokenIsNotABlipTests(unittest.TestCase):
@@ -10028,12 +10251,14 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
     def test_no_token_refuses_and_says_what_to_do_about_it(self) -> None:
         answer = self.answer_when(
             helpers.RendererUnavailable(
-                "no GH_TOKEN or GITHUB_TOKEN in the environment", transient=False
+                "no GH_TOKEN or GITHUB_TOKEN in the environment",
+                transient=False,
+                repair="export GH_TOKEN or GITHUB_TOKEN and run again",
             )
         )
         self.assertIsNone(answer.unverified, "a permanent cause was announced as a blip")
         self.assertIn("no GH_TOKEN", answer.refusal)
-        self.assertIn("export a token", answer.refusal)
+        self.assertIn("export GH_TOKEN or GITHUB_TOKEN and run again", answer.refusal)
 
     def test_an_http_failure_and_an_unreachable_renderer_proceed_unverified(self) -> None:
         for label, reason in (
@@ -10045,21 +10270,124 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
                 self.assertIsNone(answer.refusal, f"{label}: a blip blocked the write")
                 self.assertIn(reason, answer.unverified)
 
+    def raised_by(self, error: Exception | None, environment: dict[str, str]):
+        """What `render_markdown` raises for one cause, at its own raise site."""
+        render = _LIVE_RENDER or helpers.render_markdown
+
+        def urlopen(request, timeout=None):
+            raise error
+
+        with mock.patch.dict(os.environ, environment, clear=True):
+            with (
+                mock.patch.object(urllib.request, "urlopen", side_effect=urlopen)
+                if error is not None
+                else contextlib.nullcontext()
+            ):
+                with self.assertRaises(helpers.RendererUnavailable) as raised:
+                    render("# body")
+        return raised.exception
+
+    def http_error(self, code: int, *, rate_limited: bool = False):
+        headers = {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "soon"} if rate_limited else {}
+        return urllib.error.HTTPError(
+            helpers.MARKDOWN_API_URL, code, "refused", email.message_from_string(
+                "\n".join(f"{name}: {value}" for name, value in headers.items())
+            ), None
+        )
+
     def test_each_raise_site_decides_which_family_it_is(self) -> None:
-        with mock.patch.dict(os.environ, {}, clear=True):
-            with self.assertRaises(helpers.RendererUnavailable) as raised:
-                (_LIVE_RENDER or helpers.render_markdown)("# body")
-        self.assertFalse(raised.exception.transient)
-        self.assertIn("GH_TOKEN", str(raised.exception))
+        """All THREE sites, and the permanence split inside one of them.
+
+        This named three raise sites and drove one, so flipping the HTTP
+        site's answer left the suite green -- and that site had every
+        `HTTPError` transient, which put a REJECTED token in the fail-open
+        family while an ABSENT one refused (#1773, round 8).
+
+        Which half asks reality: none of it. Each cause is raised at the seam
+        the runtime raises it from, with the environment as an input.
+        """
+        token = {"GH_TOKEN": "a-token", "GITHUB_REPOSITORY": "acme/thing"}
+        cases = (
+            ("no token at all", None, {}, False),
+            ("a rejected token (401)", self.http_error(401), token, False),
+            ("a forbidden token (403, not the rate limit)", self.http_error(403), token, False),
+            ("a spent rate limit (403)", self.http_error(403, rate_limited=True), token, True),
+            ("a spent rate limit (429)", self.http_error(429, rate_limited=True), token, True),
+            ("the renderer erroring (503)", self.http_error(503), token, True),
+            ("an unreachable renderer", urllib.error.URLError("timed out"), token, True),
+            ("a dropped connection", OSError("connection reset"), token, True),
+        )
+        for label, error, environment, transient in cases:
+            with self.subTest(cause=label):
+                raised = self.raised_by(error, environment)
+                self.assertEqual(raised.transient, transient, label)
         # And the type refuses to be raised without the decision being made.
         with self.assertRaises(TypeError):
             helpers.RendererUnavailable("a cause nobody classified")
+
+    def test_a_rejected_token_refuses_the_placement_like_an_absent_one(self) -> None:
+        # The consequence, at the placement: a token the renderer will not
+        # take is a local condition the author can act on, so it gets the
+        # answer no token gets rather than a write that went ahead unverified.
+        raised = self.raised_by(self.http_error(401), {"GH_TOKEN": "a-token"})
+        answer = self.answer_when(raised)
+        self.assertIsNone(answer.unverified)
+        self.assertIn("HTTP 401", answer.refusal)
+        # The repair fits the cause: telling an author whose token came back
+        # 401 to export a token the renderer accepts is what they just did.
+        self.assertIn("the renderer rejected the token", answer.refusal)
+        self.assertNotIn("export a token the renderer accepts", answer.refusal)
+
+    def test_every_refusing_cause_names_an_action_and_no_proceeding_one_does(self) -> None:
+        """The semantic difference between the families, as a property (#1773, round 8).
+
+        Driving each raise site pins the classification of the causes that
+        exist. This pins what the classification MEANS, so a cause added later
+        that refuses without saying what to do -- or proceeds while implying
+        the author should act -- goes red without anyone adding it to a list.
+
+        Which half asks reality: none. Every cause is raised at the seam, and
+        the assertion is about the sentence each family produces.
+        """
+        token = {"GH_TOKEN": "a-token", "GITHUB_REPOSITORY": "acme/thing"}
+        causes = (
+            ("no token at all", None, {}),
+            ("a rejected token (401)", self.http_error(401), token),
+            ("a forbidden token (403)", self.http_error(403), token),
+            ("a spent rate limit", self.http_error(403, rate_limited=True), token),
+            ("the renderer erroring (503)", self.http_error(503), token),
+            ("an unreachable renderer", urllib.error.URLError("timed out"), token),
+        )
+        for label, error, environment in causes:
+            with self.subTest(cause=label):
+                raised = self.raised_by(error, environment)
+                answer = self.answer_when(raised)
+                if raised.transient:
+                    self.assertIsNone(raised.repair, f"{label}: a blip named an action")
+                    self.assertIsNone(answer.refusal, f"{label}: a blip blocked the write")
+                    self.assertIn(str(raised), answer.unverified)
+                else:
+                    self.assertTrue(raised.repair, f"{label}: a refusal named no action")
+                    self.assertIsNone(answer.unverified, f"{label}: a refusal read as a blip")
+                    self.assertIn(raised.repair, answer.refusal, f"{label}: the action went unsaid")
+
+    def test_the_type_refuses_a_classification_that_says_nothing_useful(self) -> None:
+        # The property held where the cause is raised, so the sentence cannot
+        # be composed wrong in the first place.
+        with self.assertRaises(ValueError):
+            helpers.RendererUnavailable("permanent, with no way out", transient=False)
+        with self.assertRaises(ValueError):
+            helpers.RendererUnavailable("a blip", transient=True, repair="wait, then act")
 
     def test_the_page_carries_the_cause_through_rendered_page(self) -> None:
         for transient in (True, False):
             with self.subTest(transient=transient):
                 def raise_it(text: str) -> str:
-                    raise helpers.RendererUnavailable("a reason", transient=transient)
+                    raise helpers.RendererUnavailable(
+                        "a reason",
+                        transient=transient,
+                        repair=None if transient else "do the thing that fixes it",
+                    )
 
                 with (
                     mock.patch.object(helpers, "render_markdown", side_effect=raise_it),
