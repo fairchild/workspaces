@@ -68,7 +68,14 @@ def all_of(cases, expected: set[str], label: str):
     """
     names = set(cases)
     missing, unexpected = sorted(expected - names), sorted(names - expected)
-    if missing or unexpected or len(cases) != len(expected):
+    # Two terms decide and a third only describes. An unexpected name cannot
+    # be the ONLY signal: if a name arrived and none went missing then the
+    # table's names strictly contain the expected ones, so there are more
+    # distinct names than expected names and at least as many rows as
+    # distinct names -- the length term fires on every such table. It is in
+    # the message, where it says what arrived, and out of the decision, where
+    # it was a clause no input could reach alone (#1771, round 11).
+    if missing or len(cases) != len(expected):
         raise AssertionError(
             f"{label}: missing {missing}, unexpected {unexpected}, {len(cases)} rows for "
             f"{len(expected)} names -- the table this test's claim rests on was changed; "
@@ -155,7 +162,7 @@ class TheFixtureGuardNamesWhatItExpectsTests(unittest.TestCase):
             all_of(cases, self.NAMES if names is None else names, "T")
         return str(raised.exception)
 
-    # intent: fix
+    # intent: guard
     def test_a_row_swapped_for_another_of_the_same_size_is_loud(self) -> None:
         # The hole a count leaves: three shapes in, three shapes out, and the
         # one the claim rests on replaced by a weaker spelling. The guard
@@ -184,13 +191,42 @@ class TheFixtureGuardNamesWhatItExpectsTests(unittest.TestCase):
         self.assertIn("missing ['a punctuation gap after the token']", self.raised_by(trimmed))
 
     # intent: guard
-    def test_a_sequence_naming_one_shape_twice_is_a_shape_short(self) -> None:
-        # A set alone would call this table complete: three rows, two shapes.
+    def test_a_shape_replaced_by_a_repeat_of_its_neighbour_is_loud(self) -> None:
+        """The missing term, reached where the length term cannot help.
+
+        Rows `[a, a]` against `{a, b}`: two rows for two names, so counting
+        says the table is whole, and only asking WHICH names are there finds
+        that `b` is gone. The mutant that drops this term from the decision
+        is red here and nowhere else in the suite (#1771, round 11).
+        """
         message = self.raised_by(
-            ("a space inside the backticks", "double-backtick padding", "double-backtick padding"),
+            ("double-backtick padding", "double-backtick padding"),
+            {"double-backtick padding", "a space inside the backticks"},
         )
-        self.assertIn("missing ['a punctuation gap after the token']", message)
-        self.assertIn("3 rows for 3 names", message)
+        self.assertIn("missing ['a space inside the backticks']", message)
+        self.assertIn("2 rows for 2 names", message)
+
+    # intent: guard
+    def test_a_sequence_naming_one_shape_twice_is_a_shape_short(self) -> None:
+        """The length clause, reached where no name is missing or extra.
+
+        Round 10's version of this test named three shapes against a
+        two-shape sequence, so it fired through `missing` and the length
+        clause could be deleted with the suite green (#1771, round 11). The
+        rows here are `[a, a, b]` against `{a, b}`: the NAMES agree, and only
+        counting the rows can tell that a shape is gone.
+
+        Every table this file guards is a mapping today, where a duplicate
+        key cannot survive the literal, so the clause is about the helper's
+        contract for a sequence caller rather than about a table that exists
+        -- which is why it needs a test of its own rather than a table's.
+        """
+        message = self.raised_by(
+            ("double-backtick padding", "double-backtick padding", "a space inside the backticks"),
+            {"double-backtick padding", "a space inside the backticks"},
+        )
+        self.assertIn("missing [], unexpected []", message)
+        self.assertIn("3 rows for 2 names", message)
 
 
 class PRReadinessTests(unittest.TestCase):
@@ -1813,7 +1849,17 @@ class HtmlBlockStatusLineTests(unittest.TestCase):
         The over-refusals this brings back land on malformed markup alone, and
         each names the run it matched, which is the cost the rule accepts.
         """
-        for name, under in self.UNPARSED_TAGS.items():
+        for name, under in all_of(
+            self.UNPARSED_TAGS,
+            {
+                "two attributes with no space between them",
+                "an attribute with an empty value",
+                "a slash inside the name",
+                "a quote inside an unquoted value",
+                "a namespaced name",
+            },
+            "HtmlBlockStatusLineTests.UNPARSED_TAGS",
+        ).items():
             with self.subTest(shape=name):
                 failures = self.failures(self.body(f"{under}\n"))
                 pending = [text for text in failures if text.startswith(self.PENDING)]
@@ -2243,7 +2289,11 @@ class ThePageReaderMayOnlyAddRefusalsTests(unittest.TestCase):
     }
 
     def test_an_unclosed_container_before_the_heading_hides_nothing(self) -> None:
-        for shape, container in self.UNCLOSED_BEFORE_THE_HEADING.items():
+        for shape, container in all_of(
+            self.UNCLOSED_BEFORE_THE_HEADING,
+            {"a blockquote", "a list item"},
+            "ThePageReaderMayOnlyAddRefusalsTests.UNCLOSED_BEFORE_THE_HEADING",
+        ).items():
             with self.subTest(shape=shape), recorded_page():
                 body = GOOD_BODY + f"\n{container}\n\n## Evidence Status\n\n{self.BR_STATUS}\n"
                 failures = self.failures(body)
@@ -2702,7 +2752,20 @@ class ThisGateFindsASectionWherePageShowsOneTests(unittest.TestCase):
 
     def test_every_heading_the_page_shows_is_a_section_to_this_gate(self) -> None:
         owner = self.owner()
-        for name, heading in self.SHOWN_BUT_UNMATCHED.items():
+        for name, heading in all_of(
+            self.SHOWN_BUT_UNMATCHED,
+            {
+                "emphasis",
+                "underscore emphasis",
+                "indented three spaces",
+                "setext dashes",
+                "trailing spaces",
+                "trailing tab",
+                "closing hash run",
+                "tab separator",
+            },
+            "ThisGateFindsASectionWherePageShowsOneTests.SHOWN_BUT_UNMATCHED",
+        ).items():
             with self.subTest(shape=name):
                 body = f"{self.OPENING}{heading}\n\n{self.FIELDS}\n{self.EVIDENCE}"
                 self.assertTrue(owner.has_markdown_section(body, "Mergeability"))
@@ -2717,7 +2780,11 @@ class ThisGateFindsASectionWherePageShowsOneTests(unittest.TestCase):
 
     def test_a_heading_only_the_source_holds_is_no_section_to_either(self) -> None:
         owner = self.owner()
-        for name, heading in self.MATCHED_BUT_UNSHOWN.items():
+        for name, heading in all_of(
+            self.MATCHED_BUT_UNSHOWN,
+            {"in a fenced example", "in an indented code block"},
+            "ThisGateFindsASectionWherePageShowsOneTests.MATCHED_BUT_UNSHOWN",
+        ).items():
             with self.subTest(shape=name):
                 body = f"{self.OPENING}{heading}\n\n{self.FIELDS}\n{self.EVIDENCE}"
                 self.assertEqual(
@@ -2739,7 +2806,11 @@ class ThisGateFindsASectionWherePageShowsOneTests(unittest.TestCase):
 
     def test_a_tagged_heading_is_not_this_section_in_either_reader(self) -> None:
         owner = self.owner()
-        for name, heading in self.TAGGED.items():
+        for name, heading in all_of(
+            self.TAGGED,
+            {"del", "details", "br", "span", "trailing comment"},
+            "ThisGateFindsASectionWherePageShowsOneTests.TAGGED",
+        ).items():
             with self.subTest(shape=name):
                 body = f"{self.OPENING}{heading}\n\n{self.FIELDS}\n{self.EVIDENCE}"
                 self.assertFalse(owner.has_markdown_section(body, "Mergeability"))
@@ -2747,7 +2818,11 @@ class ThisGateFindsASectionWherePageShowsOneTests(unittest.TestCase):
 
     def test_a_heading_the_page_shows_as_something_else_is_not_this_section(self) -> None:
         owner = self.owner()
-        for name, heading in self.SHOWN_AS_SOMETHING_ELSE.items():
+        for name, heading in all_of(
+            self.SHOWN_AS_SOMETHING_ELSE,
+            {"code span", "link", "image"},
+            "ThisGateFindsASectionWherePageShowsOneTests.SHOWN_AS_SOMETHING_ELSE",
+        ).items():
             with self.subTest(shape=name):
                 body = f"{self.OPENING}{heading}\n\n{self.FIELDS}\n{self.EVIDENCE}"
                 self.assertFalse(owner.has_markdown_section(body, "Mergeability"))
@@ -2889,7 +2964,20 @@ class WhatTheParsedStartCostsTheEvidenceRefusalTests(unittest.TestCase):
         "- Residual risk or follow-up: none\n"
         "```\n"
     )
-    WIDENED_SPELLINGS = ("## **{h}**", "## _{h}_", "   ## {h}", "{h}\n---", "## {h}  ", "## {h}\t", "## {h} ##", "##\t{h}")
+    # The eight spellings of the heading the widened read reaches. Named
+    # rather than positional so the guard can say WHICH one went (#1771,
+    # round 11); the names are the ones the sibling class uses for the same
+    # eight shapes.
+    WIDENED_SPELLINGS = {
+        "emphasis": "## **{h}**",
+        "underscore emphasis": "## _{h}_",
+        "indented three spaces": "   ## {h}",
+        "setext dashes": "{h}\n---",
+        "trailing spaces": "## {h}  ",
+        "trailing tab": "## {h}\t",
+        "closing hash run": "## {h} ##",
+        "tab separator": "##\t{h}",
+    }
 
     def test_a_positive_field_read_still_credits_fenced_text(self) -> None:
         # `field_value` searches the section's raw text, so the page showing
@@ -2899,8 +2987,21 @@ class WhatTheParsedStartCostsTheEvidenceRefusalTests(unittest.TestCase):
         literal = f"{self.OPENING}## Mergeability\n\n{self.FENCED_FIELDS}\n{self.EVIDENCE}"
         self.assertEqual(pr_readiness.evaluate(pr(literal), self.FILES).failures, [])
         reached = [
-            shape
-            for shape in self.WIDENED_SPELLINGS
+            name
+            for name, shape in all_of(
+                self.WIDENED_SPELLINGS,
+                {
+                    "emphasis",
+                    "underscore emphasis",
+                    "indented three spaces",
+                    "setext dashes",
+                    "trailing spaces",
+                    "trailing tab",
+                    "closing hash run",
+                    "tab separator",
+                },
+                "WhatTheParsedStartCostsTheEvidenceRefusalTests.WIDENED_SPELLINGS",
+            ).items()
             if not pr_readiness.evaluate(
                 pr(f"{self.OPENING}{shape.format(h='Mergeability')}\n\n{self.FENCED_FIELDS}\n{self.EVIDENCE}"),
                 self.FILES,
@@ -2923,8 +3024,21 @@ class WhatTheParsedStartCostsTheEvidenceRefusalTests(unittest.TestCase):
         literal = f"{self.OPENING}{folded}## Mergeability\n\n{fields}\n{self.EVIDENCE}"
         self.assertEqual(pr_readiness.evaluate(pr(literal), self.FILES).failures, [])
         reached = [
-            shape
-            for shape in self.WIDENED_SPELLINGS
+            name
+            for name, shape in all_of(
+                self.WIDENED_SPELLINGS,
+                {
+                    "emphasis",
+                    "underscore emphasis",
+                    "indented three spaces",
+                    "setext dashes",
+                    "trailing spaces",
+                    "trailing tab",
+                    "closing hash run",
+                    "tab separator",
+                },
+                "WhatTheParsedStartCostsTheEvidenceRefusalTests.WIDENED_SPELLINGS",
+            ).items()
             if not pr_readiness.evaluate(
                 pr(f"{self.OPENING}{folded}{shape.format(h='Mergeability')}\n\n{fields}\n{self.EVIDENCE}"),
                 self.FILES,
@@ -3120,7 +3234,16 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
     }
 
     def test_a_heading_inside_an_html_block_is_refused_by_name(self) -> None:
-        for name, opener in self.SWALLOWED.items():
+        for name, opener in all_of(
+            self.SWALLOWED,
+            {
+                "a details closer with no blank line after it",
+                "an img tag",
+                "a div around the heading and the status",
+                "a comment a browser closes at --!>",
+            },
+            "AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests.SWALLOWED",
+        ).items():
             with self.subTest(shape=name):
                 body = self.body(f"{opener}\n\n{self.BLOCKED}\n\n")
                 # No candidate: the parse does not see a heading at all.
@@ -3458,7 +3581,15 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
                 self.assertIsNone(pr_readiness.PRINTED_PENDING_RE.match(line), line)
 
     def test_a_swallowed_heading_with_no_pending_status_under_it_is_silent(self) -> None:
-        for name, block in self.SWALLOWED_WITH_NOTHING_PENDING.items():
+        for name, block in all_of(
+            self.SWALLOWED_WITH_NOTHING_PENDING,
+            {
+                "a closed comment holding only the heading",
+                "a closed comment holding a complete item",
+                "a pre block holding a complete item",
+            },
+            "AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests.SWALLOWED_WITH_NOTHING_PENDING",
+        ).items():
             with self.subTest(shape=name):
                 body = self.body(f"{block}\n\n")
                 self.assertEqual(pr_readiness.status_heading_candidates(body), [])
@@ -3476,7 +3607,11 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
     }
 
     def test_a_heading_shaped_line_inside_the_block_does_not_hide_the_status_below_it(self) -> None:
-        for name, block in self.INNER_HEADING.items():
+        for name, block in all_of(
+            self.INNER_HEADING,
+            {"a pre block", "a closed comment"},
+            "AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests.INNER_HEADING",
+        ).items():
             with self.subTest(shape=name):
                 body = self.body(f"{block}\n{self.BLOCKED}\n\n")
                 failure = pr_readiness.unread_status_heading_failure(body)
@@ -3782,22 +3917,23 @@ class HeadingIdentityFoldsCaseAndNotLettersTests(unittest.TestCase):
         REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "_helpers.py"
     )
 
-    # (left, right, one heading?) -- read off the rule rather than recalled,
-    # one member per branch of it.
-    PAIRS = (
-        ("Evidence Status", "Evidence Status", True),
-        ("Evidence Status", "EVIDENCE STATUS", True),
-        ("Evidence Status", "evidence status", True),
-        ("Evidence  Status", "Evidence Status", True),
-        ("Evidence\tStatus", "Evidence Status", True),
+    # name -> (left, right, one heading?) -- read off the rule rather than
+    # recalled, one member per branch of it. Named rather than positional so
+    # the guard below says WHICH pair went (#1771, round 11).
+    PAIRS = {
+        "identical": ("Evidence Status", "Evidence Status", True),
+        "upper case": ("Evidence Status", "EVIDENCE STATUS", True),
+        "lower case": ("Evidence Status", "evidence status", True),
+        "a double space": ("Evidence  Status", "Evidence Status", True),
+        "a tab separator": ("Evidence\tStatus", "Evidence Status", True),
         # Every one of these is a fold that changes letters, not case.
-        ("Evidence Statu\u017f", "Evidence Status", False),
-        ("Evidence Statu\uff33", "Evidence Status", False),
-        ("Stra\u00dfe", "STRASSE", False),
-        ("O\ufb01ce", "Ofice", False),
+        "a long s": ("Evidence Statu\u017f", "Evidence Status", False),
+        "a fullwidth S": ("Evidence Statu\uff33", "Evidence Status", False),
+        "an eszett against a double s": ("Stra\u00dfe", "STRASSE", False),
+        "an fi ligature": ("O\ufb01ce", "Ofice", False),
         # And the one the gate's old `(?i)` pattern matched and no parse did.
-        ("MERGEAB\u0130LITY", "Mergeability", False),
-    )
+        "a dotted capital I": ("MERGEAB\u0130LITY", "Mergeability", False),
+    }
 
     def owner(self):
         spec = importlib.util.spec_from_file_location("contributor_helpers", self.HELPERS_PATH)
@@ -3807,8 +3943,23 @@ class HeadingIdentityFoldsCaseAndNotLettersTests(unittest.TestCase):
         return module
 
     def test_the_fold_calls_two_texts_one_heading_only_when_a_reader_would(self) -> None:
-        for left, right, same in self.PAIRS:
-            with self.subTest(left=left, right=right):
+        for name, (left, right, same) in all_of(
+            self.PAIRS,
+            {
+                "identical",
+                "upper case",
+                "lower case",
+                "a double space",
+                "a tab separator",
+                "a long s",
+                "a fullwidth S",
+                "an eszett against a double s",
+                "an fi ligature",
+                "a dotted capital I",
+            },
+            "HeadingIdentityFoldsCaseAndNotLettersTests.PAIRS",
+        ).items():
+            with self.subTest(pair=name):
                 self.assertEqual(
                     pr_readiness.heading_identity(left) == pr_readiness.heading_identity(right),
                     same,
@@ -3818,7 +3969,22 @@ class HeadingIdentityFoldsCaseAndNotLettersTests(unittest.TestCase):
         # Written twice for the reason `MARKDOWN` is: this gate is a PEP 723
         # entry point with its own pin and no package for the skill to import.
         owner = self.owner()
-        for left, right, _ in self.PAIRS:
+        for name, (left, right, _) in all_of(
+            self.PAIRS,
+            {
+                "identical",
+                "upper case",
+                "lower case",
+                "a double space",
+                "a tab separator",
+                "a long s",
+                "a fullwidth S",
+                "an eszett against a double s",
+                "an fi ligature",
+                "a dotted capital I",
+            },
+            "HeadingIdentityFoldsCaseAndNotLettersTests.PAIRS",
+        ).items():
             for text in (left, right):
                 with self.subTest(text=text):
                     self.assertEqual(
@@ -3870,7 +4036,22 @@ class HeadingIdentityFoldsCaseAndNotLettersTests(unittest.TestCase):
         # pair above that `casefold()` called one heading.
         aliased = [
             (left, right)
-            for left, right, same in self.PAIRS
+            for left, right, same in all_of(
+                self.PAIRS,
+                {
+                    "identical",
+                    "upper case",
+                    "lower case",
+                    "a double space",
+                    "a tab separator",
+                    "a long s",
+                    "a fullwidth S",
+                    "an eszett against a double s",
+                    "an fi ligature",
+                    "a dotted capital I",
+                },
+                "HeadingIdentityFoldsCaseAndNotLettersTests.PAIRS",
+            ).values()
             if not same
             and " ".join(left.split()).casefold() == " ".join(right.split()).casefold()
         ]
@@ -4240,8 +4421,65 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         sections of one body -- an axis the first derivation missed because it
         generated only the two endings anyone types (#1734, round 2).
         """
-        for construct_name, construct in self.BOUNDARY_CONSTRUCTS.items():
-            for context_name, context in self.BOUNDARY_CONTEXTS.items():
+        for construct_name, construct in all_of(
+            self.BOUNDARY_CONSTRUCTS,
+            {
+                "atx h1",
+                "atx h2",
+                "atx h3",
+                "atx h1 indented one",
+                "atx h1 indented three",
+                "atx h1 indented four",
+                "atx h2 indented three",
+                "bare hash",
+                "bare double hash",
+                "hash tab",
+                "hash nonbreaking space",
+                "hash no space",
+                "atx h1 trailing spaces",
+                "atx h1 closed form",
+                "setext h1 three equals",
+                "setext h1 one equal",
+                "setext h1 trailing spaces",
+                "setext h1 indented three",
+                "setext h2 dashes",
+                "setext h2 five dashes",
+                "setext h2 indented",
+                "dash rule",
+                "dash rule four",
+                "dash rule spaced",
+                "dash rule trailing spaces",
+                "dash rule indented",
+                "asterisk rule",
+                "underscore rule",
+            },
+            "SectionBoundaryAgreementBetweenTheGateAndTheSkillTests.BOUNDARY_CONSTRUCTS",
+        ).items():
+            for context_name, context in all_of(
+                self.BOUNDARY_CONTEXTS,
+                {
+                    "bare",
+                    "in a closed backtick fence",
+                    "in a closed tilde fence",
+                    "in a closed fence indented three",
+                    "in a closed four backtick fence",
+                    "under a voided fence opener, above a real one",
+                    "under a runaway backtick fence",
+                    "under a runaway tilde fence",
+                    "under a runaway four backtick fence",
+                    "under a nested four then three fence",
+                    "under a runaway tilde fence with a backtick info",
+                    "after a closed comment",
+                    "under an unclosed comment",
+                    "in a list item",
+                    "in a block quote",
+                    "in an indented code block",
+                    "under a runaway fence nested in a list item",
+                    "under a runaway fence nested in a block quote",
+                    "under a fence opener indented four",
+                },
+                "SectionBoundaryAgreementBetweenTheGateAndTheSkillTests.BOUNDARY_CONTEXTS",
+            ).items():
                 for ending in ("\n", "\r\n", "\r"):
                     candidate = self.in_context(construct, context)
                     body = (self.STATUS + candidate + "\n" + self.CANDIDATE_TAIL).replace("\n", ending)
@@ -4257,7 +4495,20 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
 
     def test_both_files_bound_the_section_identically_on_every_boundary_kind(self) -> None:
         owner = self.owner_reader()
-        for name, body in self.FIXTURES.items():
+        for name, body in all_of(
+            self.FIXTURES,
+            {
+                "an h1 after the section",
+                "an h2 after the section",
+                "a dash rule after the section",
+                "a body title h1 above the section",
+                "an h3 inside the section",
+                "an h1 inside a closed fence",
+                "an h2 inside a closed fence",
+                "the heading itself written as an h1",
+            },
+            "SectionBoundaryAgreementBetweenTheGateAndTheSkillTests.FIXTURES",
+        ).items():
             with self.subTest(fixture=name):
                 self.assertEqual(
                     pr_readiness.extract_section(body, "Evidence Status"),
@@ -4370,11 +4621,62 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         # a list item or a quote -- diverge on none. And one context splits,
         # which is the cell the old one-axis list could not express.
         owner = self.owner_reader()
-        measured: dict[str, set[bool]] = {name: set() for name in self.BOUNDARY_CONTEXTS}
+        measured: dict[str, set[bool]] = {
+            name: set()
+            for name in all_of(
+                self.BOUNDARY_CONTEXTS,
+                {
+                    "bare",
+                    "in a closed backtick fence",
+                    "in a closed tilde fence",
+                    "in a closed fence indented three",
+                    "in a closed four backtick fence",
+                    "under a voided fence opener, above a real one",
+                    "under a runaway backtick fence",
+                    "under a runaway tilde fence",
+                    "under a runaway four backtick fence",
+                    "under a nested four then three fence",
+                    "under a runaway tilde fence with a backtick info",
+                    "after a closed comment",
+                    "under an unclosed comment",
+                    "in a list item",
+                    "in a block quote",
+                    "in an indented code block",
+                    "under a runaway fence nested in a list item",
+                    "under a runaway fence nested in a block quote",
+                    "under a fence opener indented four",
+                },
+                "SectionBoundaryAgreementBetweenTheGateAndTheSkillTests.BOUNDARY_CONTEXTS",
+            )
+        }
         for _, context, _, body in self.candidate_bodies():
             gate = self._lf(pr_readiness.extract_section(body, "Evidence Status"))
             measured[context].add(gate != self._lf(owner.markdown_section(body, "Evidence Status")))
-        for context, verdict in self.CONTEXT_VERDICTS.items():
+        for context, verdict in all_of(
+            self.CONTEXT_VERDICTS,
+            {
+                "bare",
+                "in a closed backtick fence",
+                "in a closed tilde fence",
+                "in a closed fence indented three",
+                "in a closed four backtick fence",
+                "under a voided fence opener, above a real one",
+                "under a runaway backtick fence",
+                "under a runaway tilde fence",
+                "under a runaway four backtick fence",
+                "under a nested four then three fence",
+                "under a runaway tilde fence with a backtick info",
+                "after a closed comment",
+                "under an unclosed comment",
+                "in a list item",
+                "in a block quote",
+                "in an indented code block",
+                "under a runaway fence nested in a list item",
+                "under a runaway fence nested in a block quote",
+                "under a fence opener indented four",
+            },
+            "SectionBoundaryAgreementBetweenTheGateAndTheSkillTests.CONTEXT_VERDICTS",
+        ).items():
             with self.subTest(context=context):
                 expected = {
                     "agree": {False},
@@ -5665,7 +5967,14 @@ class ThePagePlaneIsAskedAboutTheInvisibleClassTests(unittest.TestCase):
     """
 
     FILES = ["Sources/WorkspaceManager/Foo.swift"]
-    MARKS = (0x034F, 0x17B4, 0x17B5, *range(0x180B, 0x180E), *range(0xFE00, 0xFE10))
+    # The 22 default-ignorable marks, keyed by the spelling a reader looks
+    # them up under: the members come from the ranges, the names are written
+    # out at the reader below, so a range that moves by one is loud rather
+    # than merely a different set (#1771, round 11).
+    MARKS = {
+        f"U+{code:04X}": code
+        for code in (0x034F, 0x17B4, 0x17B5, *range(0x180B, 0x180E), *range(0xFE00, 0xFE10))
+    }
     # The frontier as it stands AFTER the property replaced the category: the
     # Hangul filler is default-ignorable, so this round closed it and #1794
     # narrows to the two below (#1771, round 6).
@@ -5680,9 +5989,37 @@ class ThePagePlaneIsAskedAboutTheInvisibleClassTests(unittest.TestCase):
 
     # intent: guard
     def test_the_page_prints_the_status_behind_every_one_of_the_marks(self) -> None:
-        self.assertEqual(len(self.MARKS), 22, "the marks this claim is about")
-        for code in self.MARKS:
-            with self.subTest(mark=f"U+{code:04X}"), recorded_page():
+        # The count this claim was about is the set now: 22 names, each one
+        # the mark it is about.
+        for mark, code in all_of(
+            self.MARKS,
+            {
+                "U+034F",
+                "U+17B4",
+                "U+17B5",
+                "U+180B",
+                "U+180C",
+                "U+180D",
+                "U+FE00",
+                "U+FE01",
+                "U+FE02",
+                "U+FE03",
+                "U+FE04",
+                "U+FE05",
+                "U+FE06",
+                "U+FE07",
+                "U+FE08",
+                "U+FE09",
+                "U+FE0A",
+                "U+FE0B",
+                "U+FE0C",
+                "U+FE0D",
+                "U+FE0E",
+                "U+FE0F",
+            },
+            "ThePagePlaneIsAskedAboutTheInvisibleClassTests.MARKS",
+        ).items():
+            with self.subTest(mark=mark), recorded_page():
                 page = pr_readiness.page_view(self.body(f"- &#{code};[blocked] waiting"))
             self.assertTrue(page.lines, f"U+{code:04X}: the page showed no line at all")
             self.assertTrue(
