@@ -287,22 +287,59 @@ MEASURED_UNIDATA_VERSION = "15.1.0"
 MEASURED_LEADING_RUN_SIZE = 4223
 
 
-def unicode_data_notice() -> str | None:
-    """Whether this interpreter's Unicode data has moved past the transcription.
+def _unicode_version_key(version: str) -> tuple[int, ...]:
+    """A Unicode version as numbers, so `14.0.0` sorts below `15.1.0`."""
+    parts = []
+    for piece in version.split("."):
+        parts.append(int(piece) if piece.isdigit() else 0)
+    return tuple(parts)
 
-    Loud, not fatal: a newer interpreter is not a defect, and a gate that
+
+def unicode_data_notice() -> str | None:
+    """Whether this interpreter's Unicode data differs from the transcription, and which way.
+
+    Loud, not fatal: a supported interpreter is not a defect, and a gate that
     refused to run on one would be worse than the drift it is warning about.
-    What it names is what to re-derive.
+
+    The DIRECTION is the part worth saying, and the first version of this
+    sentence got it backwards: under an interpreter OLDER than the
+    transcription it said "re-derive the ranges from DerivedCoreProperties
+    14.0.0", which is re-deriving a newer table from older data (#1771,
+    round 7). The two directions ask for different things:
+
+    interpreter NEWER -- Unicode has moved and the transcription has not, so
+    the table is the stale half: re-transcribe it and re-measure the size.
+
+    interpreter OLDER -- the table leads the data the `Cf` and `Zs` halves
+    come from, which is not wrong and not fixable by editing the table: the
+    run is simply smaller here, so the size to expect is that interpreter's,
+    and the pin belongs to the version it was measured against.
     """
     running = unicodedata.unidata_version
     if running == DEFAULT_IGNORABLE_TRANSCRIBED_FROM:
         return None
+    pinned = (
+        f"MEASURED_LEADING_RUN_SIZE is pinned at {MEASURED_LEADING_RUN_SIZE} against "
+        f"{MEASURED_UNIDATA_VERSION}"
+    )
+    if _unicode_version_key(running) > _unicode_version_key(DEFAULT_IGNORABLE_TRANSCRIBED_FROM):
+        return (
+            f"Unicode data moved AHEAD of this gate: this interpreter's UCD is {running}, "
+            f"newer than the {DEFAULT_IGNORABLE_TRANSCRIBED_FROM} the default-ignorable table "
+            f"was transcribed from. The cost: any default-ignorable code point added since "
+            f"{DEFAULT_IGNORABLE_TRANSCRIBED_FROM} is missing from the table, so the gate "
+            f"accepts a status hidden behind one. Re-transcribe DEFAULT_IGNORABLE_RANGES from "
+            f"DerivedCoreProperties {running} and re-measure the run ({pinned})."
+        )
     return (
-        f"Unicode data moved: the default-ignorable ranges were transcribed from "
-        f"{DEFAULT_IGNORABLE_TRANSCRIBED_FROM} and this interpreter carries {running}. "
-        f"Re-derive DEFAULT_IGNORABLE_RANGES from DerivedCoreProperties {running} and "
-        f"re-measure MEASURED_LEADING_RUN_SIZE (pinned at {MEASURED_LEADING_RUN_SIZE} "
-        f"against {MEASURED_UNIDATA_VERSION})."
+        f"This interpreter's Unicode data is BEHIND the gate's table: its UCD is {running}, "
+        f"older than the {DEFAULT_IGNORABLE_TRANSCRIBED_FROM} the default-ignorable table was "
+        f"transcribed from. The table itself is unaffected, but `Cf` and `Zs` come from the "
+        f"interpreter, so the run here is SMALLER than the one this gate was measured with: "
+        f"format and space characters added since {running} are not covered and a status "
+        f"hidden behind one is accepted. Nothing to re-transcribe -- run the gate on "
+        f"{DEFAULT_IGNORABLE_TRANSCRIBED_FROM} data or later, and expect this interpreter's "
+        f"own size rather than the pin ({pinned})."
     )
 
 
