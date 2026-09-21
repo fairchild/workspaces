@@ -9195,6 +9195,101 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
         self.assertIn(f"- [pending-ci] {self.LONG_ITEM} -- waiting", written)
         self.assertEqual([note for note in said if "replaced this line" in note], [])
 
+    # intent: fix
+    def test_an_item_carrying_inline_markdown_matches_its_own_line(self) -> None:
+        """Like compared with like: both sides read by the page reader.
+
+        `before` holds the page's reading of each line, with inline markdown
+        resolved; the items and lines this write knows about are raw. So an
+        item carrying `*…*` or `**…**` never matched the line the write had
+        just rendered for it, and the author was told "replaced this line
+        with nothing" about a line sitting in the body -- following which
+        duplicates it on the next run. Measured at `fdcf39ef`: emphasis and
+        strong bite, a code span and a link do not, and the plain item is the
+        control (#1778, round 20).
+        """
+        for shape, item in (
+            ("emphasis", "verify *the signing profile*"),
+            ("strong", "verify **the lane**"),
+            ("a code span", "verify `swift test`"),
+            ("a link", "verify [the run](https://example.invalid/r)"),
+            ("plain (the control)", "verify the signing profile"),
+        ):
+            with self.subTest(item=shape):
+                entries = [
+                    {"index": 1, "item": item, "status": "pending-ci",
+                     "detail": "waiting", "kind": "ci"},
+                    "legacy",
+                ]
+                _, written, said = self.written_under(entries, "green")
+                self.assertIn(f"- [complete] {item} -- green", written, f"{shape}: not written")
+                self.assertEqual(
+                    [note for note in said if "replaced this line" in note],
+                    [],
+                    f"{shape}: a line the write rendered back was named as replaced",
+                )
+
+    # intent: fix
+    def test_a_hyphen_inside_a_word_is_not_the_detail_separator(self) -> None:
+        """The separator contract, asked of the contract rather than re-derived.
+
+        The tail after the item was `.lstrip()`ed before its first character
+        was tested, which discards exactly the whitespace `EVIDENCE_SEPARATOR_RE`
+        requires on both sides. So `run tests-ios` read as a line rendered for
+        the item `run tests`, and the author's line left the body with nothing
+        said -- the silence, not the false accusation (#1778, round 20). All
+        five spellings the pass named, each with its own subtest.
+        """
+        for spelling, item, author in (
+            ("a hyphen mid-word", "run tests", "run tests-ios"),
+            ("a hyphenated word", "verify", "verify-build"),
+            ("an en dash", "verify", "verify\u2013build"),
+            ("an em dash", "verify", "verify\u2014build"),
+            ("two hyphens, no spaces", "verify", "verify--build"),
+        ):
+            with self.subTest(spelling=spelling):
+                unowned = f"- [pending-ci] {author} -- queued"
+                entries = [
+                    {"index": 1, "item": item, "status": "pending-ci",
+                     "detail": "waiting", "kind": "ci"},
+                    "legacy",
+                ]
+                source = self.body(entries).replace(
+                    "\n\n## Validation", f"\n{unowned}\n\n## Validation", 1
+                )
+                said: list[str] = []
+                with contextlib.redirect_stderr(io.StringIO()):
+                    written = self.evidence().update_evidence_entries(
+                        source, {1: {"status": "complete", "detail": "green"}},
+                        announcements=said,
+                    )
+                self.assertNotIn(unowned.lstrip("- "), written, f"{spelling}: the line stayed")
+                self.assertEqual(len(said), 1, said)
+                self.assertIn(
+                    f"replaced this line with nothing: `[pending-ci] {author} -- queued`",
+                    said[0],
+                    f"{spelling}: the author's line left in silence",
+                )
+
+    # intent: control
+    def test_the_spaced_separator_is_still_the_boundary(self) -> None:
+        # The control for the two above: an author line that really IS the
+        # entry's own, separator spaced as the contract says, is still read as
+        # rewritten and is not named.
+        entries = [
+            {"index": 1, "item": "run tests", "status": "pending-ci",
+             "detail": "waiting", "kind": "ci"},
+            "legacy",
+        ]
+        source = self.body(entries)
+        said: list[str] = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            written = self.evidence().update_evidence_entries(
+                source, {1: {"status": "complete", "detail": "green"}}, announcements=said
+            )
+        self.assertIn("- [complete] run tests -- green", written)
+        self.assertEqual([note for note in said if "replaced this line" in note], [])
+
     # intent: guard
     def test_a_line_that_extends_a_rendered_item_is_not_that_item(self) -> None:
         """Where the item match has to stop, and why the tail is checked.

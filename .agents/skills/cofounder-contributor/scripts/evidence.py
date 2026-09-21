@@ -4010,7 +4010,25 @@ def _render_structured_entries(
     # builds the line the write emits, so this set is already stripped. Its
     # mutant is EQUIVALENT by that construction rather than by a sample
     # (#1778, round 18).
-    items = {str(entry["item"]).strip() for entry in rendered_entries}
+    def _as_the_page_reads(text: str) -> str:
+        """This module's own reading of a fragment, the one `before` came through.
+
+        `before` holds what the page reader made of each line -- inline
+        markdown resolved -- and the items and lines this write knows about
+        are RAW. Comparing the two is the round-17 defect in a second shape:
+        an item carrying `*…*` or `**…**` never matched its own line, so the
+        author was told a line was replaced with nothing while the write put
+        it in the body, and following that instruction duplicates it on the
+        next run (#1778, round 20). Same parser, same inline reader, both
+        sides.
+        """
+        return " ".join(
+            inline_text(token.children).strip()
+            for token in MARKDOWN.parse(text)
+            if token.type == "inline"
+        ).strip()
+
+    items = {_as_the_page_reads(str(entry["item"]).strip()) for entry in rendered_entries}
 
     def _rewritten(line: str) -> bool:
         prefix = EVIDENCE_STATUS_PREFIX_RE.match(f"- {line}")
@@ -4018,14 +4036,26 @@ def _render_structured_entries(
             return False
         rest = prefix.group("rest").strip()
         for item in items:
-            if not rest.startswith(item):
+            if not item or not rest.startswith(item):
                 continue
-            tail = rest[len(item) :].lstrip()
-            if tail == "" or tail[0] in "-\u2013\u2014":
+            tail = rest[len(item) :]
+            if tail == "":
+                return True
+            # The separator contract itself (:55) rather than a re-derivation
+            # of it: the boundary is a separator with whitespace on BOTH
+            # sides, so the item has to end where the separator's whitespace
+            # begins. `.lstrip()` here discarded exactly that whitespace, and
+            # `run tests-ios` then read as a line rendered for `run tests` --
+            # the author's line left the body in silence (#1778, round 20).
+            separator = EVIDENCE_SEPARATOR_RE.search(tail)
+            if separator is not None and not tail[: separator.start()].strip():
                 return True
         return False
 
-    rendered_text = {line.strip().lstrip("-").strip() for line in rendered_lines}
+    rendered_as_read, _ = _rendered_status_lines(
+        f"## {EVIDENCE_STATUS_HEADING}\n\n" + "\n".join(rendered_lines) + "\n"
+    )
+    rendered_text = set(rendered_as_read)
 
     def _still_written(line: str) -> bool:
         """A line this write itself put back is not a line that left the body.
@@ -4041,17 +4071,22 @@ def _render_structured_entries(
         took `unreadable_after` out of the condition to avoid.
 
         Subsumed today, and kept for the reason the BEFORE half below is
-        kept. The containment, at the grain the `.strip()` argument above is
-        made at: `rendered_text` (:4028) is built from `rendered_lines`
-        (:3944), whose every member is `f"- [{status}] {item} -- {detail}"`
-        for an entry of `rendered_entries`; stripped of its marker each is
-        `[status] item -- detail`, which `EVIDENCE_STATUS_PREFIX_RE` (:50)
-        matches, whose item is in `items` (:4013) -- the same
-        `rendered_entries` -- and whose tail begins ` -- `. So every member
-        of `rendered_text` is a line `_rewritten` (:4015) answers True for,
-        and the mutant dropping this term is EQUIVALENT by that containment
-        rather than by a sample. It states the requirement that question is
-        one route to: a line that is there was not replaced with nothing.
+        kept -- but not for the reason round 19 gave. That argument was a
+        universal over `rendered_text` ("every member is a line `_rewritten`
+        answers True for"), and it is FALSE: a renderable item or detail
+        carrying a newline renders a member the prefix reader cannot match,
+        so `_rewritten` answers False for it.
+
+        The verdict holds for a narrower reason, and it is about which
+        members can be COMPARED rather than about all of them. The members
+        `_rewritten` rejects are exactly the ones whose line the page reader
+        cannot read -- an item that runs onto a second line makes
+        `_rendered_status_lines` answer with no lines at all -- so those
+        members are never in `before`, and a term that only ever fires on a
+        member of `before` cannot fire on them. Every member that CAN be in
+        `before` is one `_rewritten` answers True for, which is why the
+        mutant dropping this term stays EQUIVALENT, measured (#1778, rounds
+        19 and 20).
         """
         return line.strip() in rendered_text
 
