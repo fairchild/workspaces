@@ -3977,13 +3977,22 @@ def _render_structured_entries(
     # module's own parser, bound to the items the write rendered, which is a
     # reading of the line rather than an ownership rule; ownership is #1779's.
     #
-    # `unreadable_after` was in this condition and guards nothing: after a
-    # successful write the section is a plain list this reader takes, because
-    # the write moves every other block out to `## Evidence Notes` and refuses
-    # rather than writing a section it cannot place. Six shapes were tried --
-    # a table, a sub-heading, a quote, an indented code block, inline HTML in
-    # an item, a bare paragraph -- and every one is unreadable BEFORE and
-    # readable after.
+    # The AFTER page can be unreadable, and only the BEFORE half is in the
+    # fail-closed condition below. Both halves of that were once said the
+    # other way round: round 16 called an unreadable after page unreachable
+    # on six shapes of the SECTION, none of which varied the DETAIL this
+    # write renders. A detail carrying inline HTML, a line break or an HTML
+    # comment makes the write succeed and leaves a section the reader
+    # refuses -- measured on this branch and on `main`, so the writer hazard
+    # is pre-existing (#1799). When that happens `after` is empty by the
+    # reader's contract, so every before-line this write did not render back
+    # is named, which is the right answer: the write rewrites the section
+    # wholesale, and those lines really did leave the body. Putting
+    # `unreadable_after` in the condition beside `unreadable_before` would
+    # make exactly that write say nothing while the author's line left --
+    # measured, not reasoned -- so it is out, and
+    # `test_a_write_whose_own_detail_hides_the_section_still_names_what_left`
+    # holds it out.
     rendered_items = sorted({str(entry["item"]).strip() for entry in rendered_entries})
     items = set(rendered_items)
 
@@ -3991,13 +4000,15 @@ def _render_structured_entries(
         split = split_evidence_status_line(f"- {line}", rendered_items)
         return split is not None and split[1].strip() in items
 
-    # The fail-closed condition is redundant TODAY and kept deliberately:
-    # this reader answers an unreadable section with no lines at all, so the
-    # list would be empty anyway (its mutant is equivalent, measured). It
-    # stays because the redundancy is the reader's contract rather than this
-    # function's, and a reader that later returns partial lines with a reason
-    # would otherwise start naming them. The contract is pinned by
-    # `test_an_unreadable_section_answers_with_no_lines`.
+    # The BEFORE half is redundant TODAY and kept deliberately: this reader
+    # answers an unreadable section with no lines at all, so the list would
+    # be empty anyway (its mutant is equivalent, measured). It stays because
+    # the redundancy is the reader's contract rather than this function's,
+    # and a reader that later returns partial lines with a reason would
+    # otherwise start naming lines it could not read. The contract is pinned
+    # by `test_an_unreadable_section_answers_with_no_lines`. The AFTER half
+    # is a different question and is answered above: it is absent because
+    # adding it changes an answer, not because it could not fire.
     replaced = (
         []
         if unreadable_before is not None

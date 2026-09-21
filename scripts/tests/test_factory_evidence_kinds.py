@@ -9035,39 +9035,68 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
         self.assertNotIn(self.ITEM, said[0].split("replaced this line")[1])
 
     # intent: guard
-    def test_a_written_section_is_always_one_this_reader_can_take(self) -> None:
-        """Why the fail-closed condition names only the BEFORE body.
+    def test_a_write_whose_own_detail_hides_the_section_still_names_what_left(self) -> None:
+        """The after page CAN be unreadable, and round 16 said it could not.
 
-        `unreadable_after` guarded nothing and is gone. Six shapes were tried
-        to construct a write that succeeds and leaves a section the page
-        reader refuses — a table, a sub-heading, a quote, an indented code
-        block, inline HTML in an item, a bare paragraph under the heading —
-        and every one is unreadable BEFORE and readable after, because the
-        write moves every non-status block to `## Evidence Notes` and refuses
-        rather than writing a section it cannot place. The attempt is the
-        test (#1778, round 16).
+        Six shapes were tried there — a table, a sub-heading, a quote, an
+        indented code block, inline HTML in an item, a bare paragraph — and
+        every one is a shape of the SECTION the write reads. None varied the
+        DETAIL the write itself renders, and a detail carrying inline HTML,
+        a line break or an HTML comment makes the write SUCCEED and leaves a
+        section this reader refuses. Measured on this branch and on `main`,
+        so the writer hazard is pre-existing and is #1799's; a sampled
+        absence is not a structural argument, and the disposition that
+        deletes a fail-closed guard is the one that needs the argument.
+
+        What the measurement does then is what this pins. `after` is empty by
+        the reader's contract, so every before-line the write did not render
+        back is named — the right answer, because the write rewrites the
+        section wholesale and those lines really did leave. Putting
+        `unreadable_after` into the fail-closed condition beside
+        `unreadable_before` makes this very write say NOTHING while the
+        author's line leaves the body, which is the criterion this change is
+        about — so that mutant is red here rather than equivalent
+        (#1778, round 17).
         """
         evidence = self.evidence()
-        for name, tail in (
-            ("a table", "\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n"),
-            ("a sub-heading", "\n### notes\n\nprose\n\n"),
-            ("a quote", "\n> quoted\n\n"),
-            ("an indented code block", "\n    code\n\n"),
-            ("inline html in an item", "\n- [pending-ci] x <b>y</b> -- d\n\n"),
-            ("a bare paragraph", "\nprose under the heading\n\n"),
+        unowned = "- [pending-ci] the line no entry owns -- waiting"
+        for name, detail in (
+            ("inline HTML", "green <b>now</b>"),
+            ("a line break", "green\nnow"),
+            ("an HTML comment", "green <!-- now --> now"),
         ):
-            with self.subTest(shape=name):
-                entries = [{"index": 1, "item": self.ITEM, "status": "pending-ci",
-                            "detail": "queued", "kind": "ci"}]
-                source = self.body(entries).replace("\n\n## Validation", f"\n{tail}## Validation", 1)
+            with self.subTest(detail=name):
+                entries = [
+                    {"index": 1, "item": self.ITEM, "status": "complete",
+                     "detail": "green on head aaaa", "kind": "ci"},
+                    "legacy",
+                ]
+                source = self.body(entries).replace(
+                    "\n\n## Validation", f"\n{unowned}\n\n## Validation", 1
+                )
                 _, unreadable_before = evidence._rendered_status_lines(source)
+                said: list[str] = []
                 with contextlib.redirect_stderr(io.StringIO()):
                     written = evidence.update_evidence_entries(
-                        source, {1: {"status": "complete", "detail": "green"}}
+                        source, {1: {"status": "complete", "detail": detail}},
+                        announcements=said,
                     )
                 _, unreadable_after = evidence._rendered_status_lines(written)
-                self.assertIsNotNone(unreadable_before, f"{name}: the before body was readable")
-                self.assertIsNone(unreadable_after, f"{name}: the write left an unreadable section")
+                self.assertIsNone(unreadable_before, f"{name}: the before body was unreadable")
+                self.assertNotEqual(written, source, f"{name}: the write did not happen")
+                self.assertIsNotNone(
+                    unreadable_after, f"{name}: the after page was readable after all"
+                )
+                # The author's line is gone from the body, and one sentence
+                # says so, with the line itself inert inside a code span.
+                self.assertNotIn(unowned.lstrip("- "), written)
+                self.assertEqual(len(said), 1, said)
+                self.assertIn("replaced this line with nothing", said[0])
+                self.assertIn("the line no entry owns", said[0])
+                self.assertTrue(self.inside_a_code_span(said[0], "the line no entry owns"))
+                # And the entry's own line, which the write rendered back, is
+                # not named as replaced even with the page refusing to read it.
+                self.assertNotIn(self.ITEM, said[0].split("replaced this line")[1])
 
     # intent: guard
     def test_an_unreadable_section_answers_with_no_lines(self) -> None:
