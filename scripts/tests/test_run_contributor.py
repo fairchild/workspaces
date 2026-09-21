@@ -66,7 +66,9 @@ def setUpModule() -> None:
     helpers = sys.modules["_helpers"]
 
     def refuse_for_the_skill(text: str) -> str:
-        raise helpers.RendererUnavailable("this suite does not reach the renderer")
+        raise helpers.RendererUnavailable(
+            "this suite does not reach the renderer", transient=True
+        )
 
     helpers.render_markdown = refuse_for_the_skill
 

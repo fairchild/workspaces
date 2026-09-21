@@ -157,7 +157,7 @@ def setUpModule() -> None:
         return
 
     def refuse(text: str) -> str:
-        raise helpers.RendererUnavailable(SUITE_UNVERIFIED)
+        raise helpers.RendererUnavailable(SUITE_UNVERIFIED, transient=True)
 
     _RENDERER_REFUSED = mock.patch.object(helpers, "render_markdown", side_effect=refuse)
     _RENDERER_REFUSED.start()
@@ -8964,7 +8964,7 @@ class AFailedRenderIsNotAnAnswerAboutThisBodyTests(unittest.TestCase):
         def flaky(text: str) -> str:
             attempts.append(text)
             if len(attempts) == 1:
-                raise helpers.RendererUnavailable("the renderer answered HTTP 503")
+                raise helpers.RendererUnavailable("the renderer answered HTTP 503", transient=True)
             return recorded_html(text)
 
         with (
@@ -9518,7 +9518,7 @@ class TheTwoLowerFindingsTests(unittest.TestCase):
         def flaky(text: str) -> str:
             attempts.append(text)
             if len(attempts) == 1:
-                raise helpers.RendererUnavailable("the renderer answered HTTP 503")
+                raise helpers.RendererUnavailable("the renderer answered HTTP 503", transient=True)
             return recorded_html(text)
 
         with (
@@ -9829,6 +9829,245 @@ class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
             with self.subTest(digest=digest[:12]):
                 self.assertEqual(hashlib.sha256(text.encode("utf-8")).hexdigest(), digest)
                 self.assertTrue(rendered_fixture_path(text).is_file())
+
+
+class TheNotesPathTakesTheSameAnswerAsTheStatusPathTests(unittest.TestCase):
+    """The failure this branch closed on the status path, kept on the notes path (#1773, round 6).
+
+    `write_evidence_status_section` cuts the author's blocks out of the
+    section BEFORE it places anything, then restored them through
+    `insert_markdown_section` -- the back-compat wrapper, which discards both
+    the refusal and the unverified note. So when that insert stood down the
+    author's own words were already gone: a placed status section, no notes
+    section, an empty announcement list, no refusal on the write, and the
+    reason in a step log nobody opens.
+
+    It calls `inserted_markdown_section` now and takes the same answer the
+    status path takes: a refusal stands the whole write down, so the notes are
+    not cut when they cannot be placed, and it is announced where the author
+    reads it.
+    """
+
+    NOTE = "A note the author wrote under the heading."
+    STATUS = "- [complete] run `swift test` -- passed"
+    HEADING = "Evidence Notes"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def body(self, *, colliding: bool) -> str:
+        mark = helpers.PLACEMENT_PROBE_MARK
+        # Three rendered-only aliases of the notes heading's probe name: the
+        # source scan sees no mark in any of them and the page shows each.
+        aliases = "\n\n".join(
+            [
+                f"## {self.HEADING} {mark[:-1]}&#101;",
+                f"## {self.HEADING} {mark[:-4]}<!---->{mark[-4:]}1",
+                f"## {self.HEADING} {mark.upper()}2",
+            ]
+        ) if colliding else "## Notes\n\nnothing that collides"
+        return (
+            "## Summary\n\n<details>\n<summary>notes</summary>\n\n- one change\n\n</details>\n\n"
+            f"{aliases}\n\n## Evidence Status\n\n{self.STATUS}\n\n{self.NOTE}\n\n"
+            "## Validation\n\n- ran it\n"
+        )
+
+    def write(self, *, colliding: bool):
+        with recorded_page():
+            return self.evidence().write_evidence_status_section(
+                self.body(colliding=colliding), [self.STATUS]
+            )
+
+    def test_a_notes_section_the_page_would_not_show_stands_the_write_down(self) -> None:
+        written = self.write(colliding=True)
+        self.assertIsNotNone(written.refusal, "the notes insert refused and the write did not")
+        self.assertIn(self.NOTE, written.body, "the author's note was cut and never restored")
+        self.assertTrue(
+            any(self.HEADING in note for note in written.announcements),
+            f"nothing said why: {written.announcements}",
+        )
+
+    def test_the_refusal_names_the_notes_section_rather_than_the_status_one(self) -> None:
+        written = self.write(colliding=True)
+        self.assertIn(f"`## {self.HEADING}`", written.refusal)
+
+    def test_a_body_whose_notes_can_be_placed_is_written_as_before(self) -> None:
+        written = self.write(colliding=False)
+        self.assertIsNone(written.refusal)
+        self.assertIn(f"## {self.HEADING}", written.body)
+        self.assertIn(self.NOTE, written.body)
+
+    def test_the_wrapper_has_two_callers_left_and_neither_cuts_first(self) -> None:
+        """Why the wrapper stays rather than going (#1773, round 6).
+
+        Both remaining production callers ADD a section to a body they have
+        not cut anything out of, so a refusal there returns the body whole and
+        loses nobody's words -- the section is simply not added, and the
+        readiness gate fails the body loudly for it. The notes path was the
+        one that cut first.
+        """
+        sources = {
+            path: path.read_text(encoding="utf-8")
+            for path in (SCRIPT_PATH.parent / "evidence.py", SCRIPT_PATH.parent / "execution.py")
+        }
+        calls = sum(
+            len(re.findall(r"(?<!ed_markdown_section)(?<![a-z_])insert_markdown_section\(", text))
+            for text in sources.values()
+        )
+        self.assertEqual(calls, 2, "a caller was added or removed without this test noticing")
+
+
+class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
+    """Round 5 closed over-stripping and opened under-stripping (#1773, round 6).
+
+    The dedup blanks code spans before it looks for a folded block, so a
+    quoted `<details` is read as the text it is. Round 5 scanned line by line,
+    and a CommonMark code span crosses soft line breaks inside a paragraph: a
+    backtick opening on one line and closing on the next is ONE span to the
+    page, while the per-line read sees the next line's leftover backticks as a
+    span of their own and blanks a real `<details` between them. The block is
+    then not stripped, a note the page folds away is recorded as shown, and
+    the next run says nothing about a note the write dropped -- which the
+    review lane's comment reader turns into an approval decision.
+
+    The scan is per BLOCK now, which is the span a code span can occupy.
+    """
+
+    NOTE = "a heading a reader cannot see"
+
+    def execution(self):
+        return sys.modules["execution"]
+
+    def checked(self) -> str:
+        return self.execution().uncarried_notes_checked_line("a" * 40)
+
+    def comment(self, middle: str) -> str:
+        return f"{self.checked()}\n\n{middle}\n<summary>click</summary>\n\n- {self.NOTE}\n\n</details>\n"
+
+    def test_a_span_crossing_a_soft_break_does_not_hide_a_real_details(self) -> None:
+        # `start `open` / `here `<details>` more` end`: two spans to the page,
+        # with the tag as literal text between them, so the page folds the
+        # note. Red at `61c5199f`, where the per-line read blanked the tag.
+        comment = self.comment("start `open\nhere `<details>` more` end")
+        stripped = self.execution()._without_collapsed_blocks(comment)
+        self.assertNotIn("<details", stripped, "a real disclosure survived the strip")
+        self.assertNotIn(self.NOTE, stripped)
+        self.assertEqual(
+            self.execution()._notes_a_reader_has_been_shown(comment, self.checked()),
+            set(),
+            "a note the page folds away was recorded as shown",
+        )
+
+    def test_a_quoted_tag_inside_one_span_is_still_read_as_text(self) -> None:
+        # The round-5 property, unbroken: a `<details` genuinely inside a span
+        # is not a disclosure, so the note beside it IS shown.
+        comment = (
+            f"{self.checked()}\n\nthe writer emits `<details>` when it folds\n\n- {self.NOTE}\n"
+        )
+        self.assertEqual(
+            self.execution()._notes_a_reader_has_been_shown(comment, self.checked()),
+            {self.NOTE},
+        )
+
+    def test_a_blank_line_ends_the_span_so_a_later_block_is_still_stripped(self) -> None:
+        # The control the brief names: a span that closes on the next line,
+        # and a `<details>` in a THIRD paragraph, which is still stripped
+        # because a code span cannot cross a blank line.
+        comment = (
+            f"{self.checked()}\n\nstart `open\nhere` end\n\n<details>\n"
+            f"<summary>click</summary>\n\n- {self.NOTE}\n\n</details>\n"
+        )
+        stripped = self.execution()._without_collapsed_blocks(comment)
+        self.assertNotIn("<details", stripped)
+        self.assertEqual(
+            self.execution()._notes_a_reader_has_been_shown(comment, self.checked()), set()
+        )
+
+    def test_the_page_agrees_that_the_crossing_shape_folds_the_note(self) -> None:
+        # The claim the module makes, asked of the renderer once and recorded.
+        with recorded_page():
+            html = helpers.render_markdown(self.comment("start `open\nhere `<details>` more` end"))
+        self.assertIn("<details", html)
+        folded = re.search(r"<details.*?</details>", html, re.S)
+        self.assertIsNotNone(folded)
+        self.assertIn(self.NOTE, folded.group(0))
+
+
+class AMissingTokenIsNotABlipTests(unittest.TestCase):
+    """Which causes of an unreadable page proceed, and which refuse (#1773, round 6).
+
+    `RendererUnavailable` carried only a message, so every cause read the same
+    way and the placement check took the fail-open branch for all of them --
+    including no token, which on a developer's laptop is every placement
+    rather than a rare one.
+
+    A missing token refuses because it is a permanent condition of the
+    environment and one the author can act on. An HTTP failure or an
+    unreachable renderer proceeds unverified with the announcement, because
+    the harm there is a reading defect and refusing would turn a passing
+    outage into a blocked PR.
+    """
+
+    HEADING = "Evidence Status"
+    BODY = "## Summary\n\n- one change\n\n## Validation\n\n- ran it\n"
+    WRITTEN = (
+        "## Summary\n\n- one change\n\n<details>\n<summary>d</summary>\n\n"
+        "## Evidence Status\n\n- [complete] a -- b\n\n</details>\n\n## Validation\n\n- ran it\n"
+    )
+
+    def answer_when(self, error: Exception):
+        def raise_it(text: str) -> str:
+            raise error
+
+        with (
+            mock.patch.object(helpers, "render_markdown", side_effect=raise_it),
+            mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
+        ):
+            return helpers.placement_refusal(self.BODY, self.WRITTEN, self.HEADING)
+
+    def test_no_token_refuses_and_says_what_to_do_about_it(self) -> None:
+        answer = self.answer_when(
+            helpers.RendererUnavailable(
+                "no GH_TOKEN or GITHUB_TOKEN in the environment", transient=False
+            )
+        )
+        self.assertIsNone(answer.unverified, "a permanent cause was announced as a blip")
+        self.assertIn("no GH_TOKEN", answer.refusal)
+        self.assertIn("export a token", answer.refusal)
+
+    def test_an_http_failure_and_an_unreachable_renderer_proceed_unverified(self) -> None:
+        for label, reason in (
+            ("a spent rate limit", "the renderer's rate limit is spent (it resets at soon)"),
+            ("unreachable", "the renderer was unreachable (timed out)"),
+        ):
+            with self.subTest(cause=label):
+                answer = self.answer_when(helpers.RendererUnavailable(reason, transient=True))
+                self.assertIsNone(answer.refusal, f"{label}: a blip blocked the write")
+                self.assertIn(reason, answer.unverified)
+
+    def test_each_raise_site_decides_which_family_it_is(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(helpers.RendererUnavailable) as raised:
+                (_LIVE_RENDER or helpers.render_markdown)("# body")
+        self.assertFalse(raised.exception.transient)
+        self.assertIn("GH_TOKEN", str(raised.exception))
+        # And the type refuses to be raised without the decision being made.
+        with self.assertRaises(TypeError):
+            helpers.RendererUnavailable("a cause nobody classified")
+
+    def test_the_page_carries_the_cause_through_rendered_page(self) -> None:
+        for transient in (True, False):
+            with self.subTest(transient=transient):
+                def raise_it(text: str) -> str:
+                    raise helpers.RendererUnavailable("a reason", transient=transient)
+
+                with (
+                    mock.patch.object(helpers, "render_markdown", side_effect=raise_it),
+                    mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
+                ):
+                    page = helpers.rendered_page("anything")
+                self.assertEqual(page.transient, transient)
+                self.assertEqual(page.unverified, "a reason")
 
 
 if __name__ == "__main__":

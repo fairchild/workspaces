@@ -1096,7 +1096,26 @@ RENDERER_USER_AGENT = "workspaces-contributor"
 
 
 class RendererUnavailable(Exception):
-    """GitHub did not render the body. The message is why, in one clause."""
+    """GitHub did not render the body. The message is why, in one clause.
+
+    `transient` is the discriminator a caller needs to decide what a missing
+    answer MEANS, and the message alone was not one -- every cause read the
+    same way, so a laptop run with no token exported took the fail-open branch
+    on every placement rather than on a rare one. A missing token is a
+    permanent condition of the environment and one the author can act on, so
+    it refuses; an HTTP failure or an unreachable renderer is a blip whose
+    harm is a reading defect, and refusing there would turn a passing outage
+    into a blocked PR, so those proceed unverified with the announcement
+    (#1773, round 6).
+
+    Keyword-only and required: the next cause added here decides which family
+    it belongs to at the raise site, where the cause is known, rather than
+    inheriting a default nobody chose.
+    """
+
+    def __init__(self, reason: str, *, transient: bool) -> None:
+        super().__init__(reason)
+        self.transient = transient
 
 
 def repository_context() -> str:
@@ -1126,7 +1145,9 @@ def render_markdown(text: str) -> str:
     """
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
-        raise RendererUnavailable("no GH_TOKEN or GITHUB_TOKEN in the environment")
+        raise RendererUnavailable(
+            "no GH_TOKEN or GITHUB_TOKEN in the environment", transient=False
+        )
     payload = json.dumps({"text": text, "mode": "gfm", "context": repository_context()})
     request = urllib.request.Request(
         MARKDOWN_API_URL,
@@ -1144,9 +1165,11 @@ def render_markdown(text: str) -> str:
         with urllib.request.urlopen(request, timeout=RENDER_TIMEOUT_SECONDS) as response:
             return response.read().decode("utf-8")
     except urllib.error.HTTPError as error:
-        raise RendererUnavailable(http_failure_reason(error)) from error
+        raise RendererUnavailable(http_failure_reason(error), transient=True) from error
     except (urllib.error.URLError, OSError) as error:
-        raise RendererUnavailable(f"the renderer was unreachable ({error})") from error
+        raise RendererUnavailable(
+            f"the renderer was unreachable ({error})", transient=True
+        ) from error
 
 
 class RenderedPage(NamedTuple):
@@ -1165,6 +1188,9 @@ class RenderedPage(NamedTuple):
 
     html: str = ""
     unverified: str | None = None
+    # Whether the cause was a blip. A permanent one -- no token exported --
+    # is not something to proceed past: see `RendererUnavailable`.
+    transient: bool = True
 
 
 _RENDERED_PAGES: dict[str, RenderedPage] = {}
@@ -1188,7 +1214,7 @@ def rendered_page(text: str) -> RenderedPage:
         # the rest of the process -- so a turn that writes twice would take
         # the fallback on the second write after the renderer had come back
         # (#1773, round 2).
-        return RenderedPage(unverified=str(unavailable))
+        return RenderedPage(unverified=str(unavailable), transient=unavailable.transient)
     _RENDERED_PAGES[text] = RenderedPage(html=html)
     return _RENDERED_PAGES[text]
 
@@ -1403,6 +1429,16 @@ def unverified_note(reason: str) -> str:
     )
 
 
+def _unasked_refusal(heading: str, reason: str) -> str:
+    """What an author is told when the page could not be asked and, as things stand, never can be."""
+    return (
+        f"the page could not be asked whether the `## {heading}` section this write places is "
+        f"folded away: {reason}. That is a condition of this environment rather than a blip, so "
+        "the write stands down instead of placing a section on a weaker check than a lane runs -- "
+        "export a token the renderer accepts and run again"
+    )
+
+
 # The base of the token appended to the heading this write places, so the page
 # can be asked about THAT heading and no other. Renaming a heading cannot
 # change what folds it, so the probe body's fold structure is the real one.
@@ -1452,6 +1488,8 @@ def placement_probe_mark(written: str, attempt: int = 0) -> str:
                 return mark
             seen += 1
         suffix += 1
+
+
 SETEXT_UNDERLINE_RE = re.compile(r"^[ \t]{0,3}(=+|-+)[ \t]*$")
 
 
@@ -1586,6 +1624,8 @@ def placement_refusal(body: str, written: str, heading: str) -> PlacementAnswer:
             return PlacementAnswer(refusal=_unshown_refusal(body, heading))
         page = rendered_page(probe)
         if page.unverified is not None:
+            if not page.transient:
+                return PlacementAnswer(refusal=_unasked_refusal(heading, page.unverified))
             return PlacementAnswer(unverified=unverified_note(page.unverified))
         shown = folded_headings_on_the_page(page.html, f"{heading} {mark}")
         if not shown:
