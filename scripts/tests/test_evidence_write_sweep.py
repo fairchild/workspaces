@@ -461,6 +461,10 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         self.assertNotEqual(written, prose)
         self.assertEqual(sweep_script.lines_lost(prose, written), [])
 
+    # intent: guard
+    # marker: red at `016d94ba`, its own round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
+    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_an_unrecorded_status_bullet_under_the_heading_survives_the_write(self) -> None:
         """The body the two readings disagreed about, written for real (#1751).
 
@@ -494,6 +498,10 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
                         sweep_script.MARKDOWN_LINE_ENDING_RE.sub("\n", written),
                     )
 
+    # intent: guard
+    # marker: red at `016d94ba`, its own round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
+    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_instrument_and_the_writer_ask_one_function_whose_line_it_is(self) -> None:
         # Identical by construction rather than by two docstrings agreeing:
         # `_entry_line_numbers` and the writer's `_is_status_list_item` both
@@ -554,6 +562,7 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
             "\n",
         )
 
+    # intent: fix
     def test_the_two_readers_agree_on_a_status_line_however_it_is_written(self) -> None:
         """The rule is one function, and it is asked of the page's reading at both readers.
 
@@ -583,6 +592,10 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
                     self.assertNotIn(line, written)
                     self.assertNotIn(line, sweep_script.author_lines(source))
 
+    # intent: guard
+    # marker: red at `e6934e95`, its own round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
+    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_reading_the_rule_is_asked_of_is_one_function(self) -> None:
         # Where the two readers stop differing: each produces the page's
         # reading of the line, and the sweep's comes from `evidence` rather
@@ -751,6 +764,7 @@ class TheTwoProducersOfOneReadingAgreeAcrossTheGrammarTests(unittest.TestCase):
     # intent: guard
     # Guards: the generated grammar covers every axis the suite claims -- a property
     # of the fixture generator, which main's generator also had.
+    # intent: control
     def test_the_product_covers_every_axis_it_claims_to(self) -> None:
         # The size is quoted in the pull request body, so it is pinned here
         # rather than left to be recounted, and every value of every axis is
@@ -775,6 +789,7 @@ class TheTwoProducersOfOneReadingAgreeAcrossTheGrammarTests(unittest.TestCase):
             },
         )
 
+    # intent: guard
     def test_the_two_producers_read_every_form_the_same_way(self) -> None:
         evidence = sys.modules["evidence"]
         disagreements = [
@@ -785,6 +800,7 @@ class TheTwoProducersOfOneReadingAgreeAcrossTheGrammarTests(unittest.TestCase):
         # The count is the finding, including when it is zero.
         self.assertEqual(len(disagreements), 0, disagreements[:5])
 
+    # intent: fix
     def test_the_rule_classifies_every_form_the_way_its_axis_says(self) -> None:
         # The half that catches #1751 round 3: a line naming a recorded item
         # is the machine's whatever markup the ITEM carries, and a status
@@ -798,6 +814,7 @@ class TheTwoProducersOfOneReadingAgreeAcrossTheGrammarTests(unittest.TestCase):
         ]
         self.assertEqual(len(wrong), 0, wrong[:5])
 
+    # intent: guard
     def test_a_crlf_line_reads_the_same_as_its_lf_form(self) -> None:
         evidence = sys.modules["evidence"]
         form = next(f for f in self.forms if f.axes["item markup"] == "bold")
@@ -831,6 +848,10 @@ class AWriteOverTheGeneratedFormsKeepsEveryLineTests(unittest.TestCase):
                 chosen.setdefault((axis, value), index)
         return [forms[index] for index in sorted(set(chosen.values()))]
 
+    # intent: guard
+    # marker: red at `d037e850`, its own round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
+    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_every_axis_value_is_written_without_losing_or_duplicating_a_line(self) -> None:
         sample = self.covering_sample()
         # Anti-vacuity, said as the property rather than as a size: a sample
