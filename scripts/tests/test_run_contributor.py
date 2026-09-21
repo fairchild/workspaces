@@ -52,12 +52,23 @@ def setUpModule() -> None:
     a rate limit, and would answer one way on a machine with a token and
     another way without one. Refused here, so the gate takes the fallback it
     takes offline and the tests measure what they were written to measure.
+
+    The skill's placement check holds its own copy of that seam and asks the
+    page whether a write it is about to make would land inside a fold
+    (#1773), so it is refused on the same terms and takes the same fallback.
     """
 
     def refuse(text: str) -> str:
         raise pr_readiness.RendererUnavailable("this suite does not reach the renderer")
 
     pr_readiness.render_markdown = refuse
+
+    helpers = sys.modules["_helpers"]
+
+    def refuse_for_the_skill(text: str) -> str:
+        raise helpers.RendererUnavailable("this suite does not reach the renderer")
+
+    helpers.render_markdown = refuse_for_the_skill
 
 
 class RunContributorEvidenceTests(unittest.TestCase):

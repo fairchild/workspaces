@@ -29,6 +29,7 @@ from _helpers import (
     log,
     markdown_section,
     removed_section_texts,
+    inserted_markdown_section,
     placement_refusal,
     rejected_section_headings,
     reparsed_without_runaway,
@@ -2511,12 +2512,18 @@ def write_evidence_status_section(
     # refusal, in the same log. It also made the note the writer's, and the
     # writer runs more than once in a turn. It belongs to whatever reports the
     # turn, composed from the body the write returned (#1730, round 2).
-    written = insert_markdown_section(
+    # The reason comes back with the body: an insert that stands down returns
+    # a body with no such section, so asking `placed` about it answers "not a
+    # heading on the page" and the fold that stopped the write reaches the
+    # author as a weaker sentence than the one the check made (#1773).
+    written, stood_down = inserted_markdown_section(
         strip_markdown_section(body, EVIDENCE_NOTES_HEADING) if kept else body,
         EVIDENCE_STATUS_HEADING,
         "\n".join(status_lines),
         before_heading="Validation",
     )
+    if stood_down is not None:
+        return _stood_down(source, stood_down)
     if not blocks:
         # Nothing to hold, and no heading left behind: an empty one is a
         # section this writer would place next run and a reader would find

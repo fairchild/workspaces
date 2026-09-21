@@ -24,6 +24,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -2346,6 +2347,140 @@ class RecordedRendererResponseTests(unittest.TestCase):
                     rendered_fixture_path(text).read_text(encoding="utf-8"),
                     f"the renderer's output changed; re-record with {RECORD_COMMAND}",
                 )
+
+
+class TheGateAndTheOwnerAskTheRendererTheSameThingTests(unittest.TestCase):
+    """One renderer seam, written twice, pinned here the way the parsers are (#1773).
+
+    The contributor skill's placement check asks GitHub whether the section a
+    write places is folded away behind a `<details>`, which is the question
+    the gate already asks about line starts. Each script writes its own copy
+    -- they are standalone PEP 723 scripts with their own pins and their own
+    import graphs, the same trade `ParserDefinitionTests` covers for the
+    markdown parser -- and the cost of that is two places to change, so a
+    change to one of them fails here.
+
+    Compared as the REQUEST rather than as source text: the endpoint, the
+    method, the render mode, the repository context, the token the two read
+    and every header but one. The exception is `User-Agent`, where each names
+    itself, because a caller a rate limit traced back to should be the caller
+    that made the call.
+    """
+
+    HELPERS_PATH = (
+        REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "_helpers.py"
+    )
+    ENVIRONMENT = {"GH_TOKEN": "a-token", "GITHUB_REPOSITORY": "acme/thing"}
+    BODY = "## Evidence Status\n\n- [complete] swift test -- 1992 tests passed\n"
+
+    def owner(self):
+        spec = importlib.util.spec_from_file_location("contributor_helpers", self.HELPERS_PATH)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["contributor_helpers"] = module
+        spec.loader.exec_module(module)
+        return module
+
+    @staticmethod
+    @contextlib.contextmanager
+    def captured():
+        """Every request one renderer call made, with the timeout it passed."""
+        seen: list[tuple[urllib.request.Request, float | None]] = []
+
+        class Answer:
+            def read(self) -> bytes:
+                return b"<p>rendered</p>"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_: object) -> bool:
+                return False
+
+        def urlopen(request, timeout=None):
+            seen.append((request, timeout))
+            return Answer()
+
+        with mock.patch.object(urllib.request, "urlopen", urlopen):
+            yield seen
+
+    def requests(self, environment: dict[str, str] | None = None):
+        """What each copy sends for the same body, in the same environment."""
+        made = []
+        for render in (_LIVE_RENDER, self.owner().render_markdown):
+            with (
+                mock.patch.dict(os.environ, environment or self.ENVIRONMENT, clear=True),
+                self.captured() as seen,
+            ):
+                render(self.BODY)
+            made.append(seen[0])
+        return made
+
+    def test_both_copies_post_the_same_body_to_the_same_endpoint(self) -> None:
+        (gate, gate_timeout), (owner, owner_timeout) = self.requests()
+        self.assertEqual(gate.full_url, owner.full_url)
+        self.assertEqual(gate.full_url, "https://api.github.com/markdown")
+        self.assertEqual(gate.get_method(), owner.get_method())
+        self.assertEqual(json.loads(gate.data), json.loads(owner.data))
+        self.assertEqual(
+            json.loads(gate.data),
+            {"text": self.BODY, "mode": "gfm", "context": "acme/thing"},
+        )
+        self.assertEqual(gate_timeout, owner_timeout)
+
+    def test_both_copies_send_the_same_headers_but_their_own_name(self) -> None:
+        (gate, _), (owner, _) = self.requests()
+        self.assertEqual(sorted(gate.headers), sorted(owner.headers))
+        shared = {name: value for name, value in gate.headers.items() if name != "User-agent"}
+        self.assertEqual(
+            shared, {name: value for name, value in owner.headers.items() if name != "User-agent"}
+        )
+        self.assertEqual(shared["Authorization"], "Bearer a-token")
+        for request in (gate, owner):
+            self.assertIn("workspaces", request.headers["User-agent"])
+        self.assertNotEqual(gate.headers["User-agent"], owner.headers["User-agent"])
+
+    def test_both_copies_read_the_same_tokens_in_the_same_order(self) -> None:
+        for environment, expected in (
+            ({"GH_TOKEN": "first", "GITHUB_TOKEN": "second"}, "Bearer first"),
+            ({"GITHUB_TOKEN": "second"}, "Bearer second"),
+        ):
+            with self.subTest(environment=sorted(environment)):
+                for request, _ in self.requests({**environment, "GITHUB_REPOSITORY": "acme/thing"}):
+                    self.assertEqual(request.headers["Authorization"], expected)
+
+    def test_both_copies_refuse_rather_than_spend_the_anonymous_allowance(self) -> None:
+        # The anonymous allowance is 60 an hour shared across the host, so a
+        # tokenless call would refuse one author's body and place the next
+        # with nothing changed between them. Neither copy makes one.
+        for module, error in ((pr_readiness, pr_readiness.RendererUnavailable), (owner := self.owner(), owner.RendererUnavailable)):
+            with self.subTest(module=module.__name__):
+                render = _LIVE_RENDER if module is pr_readiness else module.render_markdown
+                with mock.patch.dict(os.environ, {}, clear=True), self.captured() as seen:
+                    with self.assertRaises(error) as raised:
+                        render(self.BODY)
+                self.assertEqual(seen, [])
+                self.assertIn("GH_TOKEN", str(raised.exception))
+
+    def test_both_copies_name_a_spent_rate_limit_the_same_way(self) -> None:
+        owner = self.owner()
+        error = urllib.error.HTTPError(
+            pr_readiness.MARKDOWN_API_URL,
+            403,
+            "rate limited",
+            {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1789759202"},
+            None,
+        )
+        self.assertEqual(
+            pr_readiness.http_failure_reason(error), owner.http_failure_reason(error)
+        )
+        self.assertIn("rate limit", owner.http_failure_reason(error))
+
+    def test_the_two_constants_that_decide_the_call_agree(self) -> None:
+        owner = self.owner()
+        for name in ("MARKDOWN_API_URL", "MARKDOWN_API_VERSION", "RENDER_TIMEOUT_SECONDS", "DEFAULT_REPOSITORY"):
+            with self.subTest(constant=name):
+                self.assertEqual(getattr(pr_readiness, name), getattr(owner, name))
 
 
 class ParserDefinitionTests(unittest.TestCase):
