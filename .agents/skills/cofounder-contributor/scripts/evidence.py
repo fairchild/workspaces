@@ -3622,13 +3622,13 @@ def _render_structured_entries(
     for entry in updated_entries:
         if not isinstance(entry, dict):
             continue
-        index = entry_index(entry)
+        index = usable_entry_index(entry)
         if index is None:
             continue
         item = _encodable(str(entry.get("item", "")).strip())
         status = str(entry.get("status", "")).strip()
         detail = _encodable(str(entry.get("detail", "")).strip())
-        if index < 1 or not item or status not in {"complete", "blocked", "pending-ci"} or not detail:
+        if not item or status not in {"complete", "blocked", "pending-ci"} or not detail:
             continue
         rendered_entries.append(
             {
@@ -3691,6 +3691,32 @@ def entry_index(entry: object) -> int | None:
         return int(entry["index"])
     except (KeyError, TypeError, ValueError, OverflowError):
         return None
+
+
+def usable_entry_index(entry: object) -> int | None:
+    """The index this entry claims, when it is one anything can act on.
+
+    Two rules, kept apart on purpose, because they answer different questions
+    and were three rules answering them inconsistently (#1778, round 7).
+
+    `entry_index` answers what index an entry CLAIMS. That is an identity, so
+    it takes any integer: two entries claiming index 0 are two entries at one
+    index, the write fans an update across both of them, and the collision
+    guard has to see that.
+
+    This one answers whether anything can act on the claim. An index numbers a
+    line in a rendered list and the first line is 1, so 0 and negatives name
+    no line: the write renders none, the review-response lane names none to
+    the author, and the verifier looks up no check for one. Before this the
+    verifier returned an index-0 entry to look up while that lane ignored it,
+    which is one contract read two ways.
+
+    The third rule is about an index and a CONTRACT rather than about an index
+    -- it must fall within the requested items -- and it stays where the
+    contract is in hand, named separately.
+    """
+    index = entry_index(entry)
+    return index if index is not None and index >= 1 else None
 
 
 def entries_by_index(entries: object) -> dict[int, list[dict[str, object]]]:
@@ -3762,8 +3788,8 @@ def update_evidence_entries(
     if not isinstance(metadata, dict) or not isinstance(metadata.get("entries"), list):
         return body
     if (shared := colliding_indexes(metadata["entries"])):
-        refusal = (
-            "`## Evidence Status` was left as written: evidence entries share index(es) "
+        refusal = STOOD_DOWN_ANNOUNCEMENT_PREFIX + (
+            "evidence entries share index(es) "
             f"{', '.join(str(index) for index in shared)}, so an update aimed at one would "
             "land on every entry carrying it; leaving the contract for the author"
         )

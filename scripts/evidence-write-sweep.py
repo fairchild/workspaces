@@ -361,12 +361,22 @@ def write_once(text: str) -> tuple[str, bool, tuple[str, ...]]:
     change that stops announcing something shows up here as silence.
     """
     spoke = io.StringIO()
+    announced: list[str] = []
     with contextlib.redirect_stderr(spoke):
         written = evidence.update_evidence_entries(
-            text, {1: {"status": "complete", "detail": RESOLVED_DETAIL}}
+            text, {1: {"status": "complete", "detail": RESOLVED_DETAIL}}, announcements=announced
         )
     said = tuple(line for line in spoke.getvalue().splitlines() if line.strip())
-    refused = any("refusing to rewrite" in line for line in said)
+    # By VALUE, through the predicate the writer exposes, rather than by
+    # grepping stderr for a sentence. This matched "refusing to rewrite",
+    # which the collision stand-down does not print: a body the write refused
+    # came back byte-identical with `refused=False` and `silent=False`, so
+    # rewording a refusal blinded the instrument to it (#1778, round 7). What
+    # a refusal SAYS is still read from what the runtime printed -- that is
+    # the thing this instrument exists to notice going quiet.
+    refused = any(evidence.is_stood_down_announcement(one) for one in announced) or any(
+        "refusing to rewrite" in line for line in said
+    )
     return written, refused, said
 
 
