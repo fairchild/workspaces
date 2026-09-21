@@ -214,6 +214,19 @@ this proof; CI success alone is insufficient. Release tooling must still match
 current main during qualification and publication, so a newer hardening fix
 cannot be paired with an older source copy of its scripts.
 
+Where a merged PR carries no such approval, the maintainer can sign for it
+themselves by naming it in the `maintainer_reviewed_prs` dispatch input
+(`gh workflow run release.yml --ref main -f channel=stable -f
+maintainer_reviewed_prs=101,102`). Those PRs pass qualification without the
+approval test and are recorded apart from the reviewed ones, as
+`maintainerReviewedPullRequests` in the sealed candidate manifest and by number
+in the readiness summary, so the run's page shows who signed what; a PR that
+would have passed on its own review is recorded as reviewed rather than signed.
+A number naming no commit in the release range fails qualification, so a list is
+per release and is never carried forward. The automatic path receives no inputs
+and therefore no allowlist: an unattended release still requires an independent
+approval on every merged head.
+
 The workflow jobs are:
 
 | Job | Boundary |

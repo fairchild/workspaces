@@ -70,6 +70,28 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("/releases/latest/download/appcast.xml", final["run"])
         self.assertIn("cmp release-downloads/appcast.xml release-downloads/stable-appcast.xml", final["run"])
 
+    def test_only_a_dispatched_release_can_supply_a_maintainer_allowlist(self):
+        inputs = WORKFLOW["on"]["workflow_dispatch"]["inputs"]
+        self.assertEqual(inputs["maintainer_reviewed_prs"]["default"], "")
+        self.assertNotIn("inputs", WORKFLOW["on"]["workflow_run"])
+        qualify = JOBS["qualify"]
+        self.assertIn("maintainer_reviewed_prs", qualify["outputs"])
+        source = next(s for s in qualify["steps"] if s.get("id") == "source")
+        self.assertEqual(source["env"]["MAINTAINER_REVIEWED_PRS"], "${{ inputs.maintainer_reviewed_prs }}")
+        self.assertIn('--maintainer-reviewed-prs "$MAINTAINER_REVIEWED_PRS"', source["run"])
+        seal = next(s for s in JOBS["build-sign-notarize-release"]["steps"] if s.get("id") == "seal")
+        self.assertEqual(seal["env"]["MAINTAINER_REVIEWED_PRS"], "${{ needs.qualify.outputs.maintainer_reviewed_prs }}")
+        self.assertIn('--maintainer-reviewed-prs "$MAINTAINER_REVIEWED_PRS"', seal["run"])
+
+    def test_every_check_of_the_sealed_candidate_is_handed_the_same_allowlist(self):
+        qualified = "${{ needs.qualify.outputs.maintainer_reviewed_prs }}"
+        for job, command in (("validate-candidate", "summary"), ("publish-github-release", "publish"), ("validate-published-release-assets", "verify_publication")):
+            with self.subTest(job=job):
+                step = next(s for s in JOBS[job]["steps"] if f"release-candidate.py {command}" in s.get("run", ""))
+                scope = {**JOBS[job].get("env", {}), **step.get("env", {})}
+                self.assertEqual(scope["MAINTAINER_REVIEWED_PRS"], qualified)
+                self.assertIn('--maintainer-reviewed-prs "$MAINTAINER_REVIEWED_PRS"', step["run"])
+
     def test_perf_gate_grades_the_candidate_version_without_measuring(self):
         step = next(s for s in JOBS["build-sign-notarize-release"]["steps"] if s.get("name") == "Verify release performance benchmarks are current")
         self.assertIn('--tag "$(./scripts/release-version.sh print-tag)"', step["run"])
