@@ -1180,12 +1180,8 @@ def _structured_evidence_entries(
         if not isinstance(raw_entry, dict):
             invalid_lines.append(f"entry {position} is not an object")
             continue
-        try:
-            index = int(raw_entry["index"])
-        except (KeyError, TypeError, ValueError, OverflowError):
-        # OverflowError too: `1e9999` in the PR-editable metadata parses as
-        # infinity, and `int()` of that raises a class the other two do not
-        # cover.
+        index = entry_index(raw_entry)
+        if index is None:
             invalid_lines.append(f"entry {position} is missing a valid integer index")
             continue
         if index < 1 or index > len(requested_evidence):
@@ -2585,8 +2581,9 @@ def render_execution_summary_body(
         return summary_body, errors
 
     evidence_map = {
-        int(entry["index"]): entry
+        index: entry
         for entry in complete_entries + blocked_entries + pending_ci_entries
+        if (index := entry_index(entry)) is not None
     }
     evidence_map.update(
         _owner_written_entries(published_body, requested_evidence, mark_carried=True)
@@ -2597,13 +2594,13 @@ def render_execution_summary_body(
     ]
     structured_entries = [
         {
-            "index": entry["index"],
+            "index": index,
             "item": entry["item"],
             "status": entry["status"],
             "detail": entry["detail"],
             "kind": _evidence_item_kind(str(entry["item"])),
         }
-        for _, entry in sorted(evidence_map.items())
+        for index, entry in sorted(evidence_map.items())
     ]
 
     stripped_body = _strip_evidence_metadata(summary_body)
@@ -3625,9 +3622,8 @@ def _render_structured_entries(
     for entry in updated_entries:
         if not isinstance(entry, dict):
             continue
-        try:
-            index = int(entry["index"])
-        except (KeyError, TypeError, ValueError, OverflowError):
+        index = entry_index(entry)
+        if index is None:
             continue
         item = _encodable(str(entry.get("item", "")).strip())
         status = str(entry.get("status", "")).strip()
@@ -3648,7 +3644,7 @@ def _render_structured_entries(
             _strip_evidence_metadata(body),
             [
                 f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
-                for entry in sorted(rendered_entries, key=lambda entry: int(entry["index"]))
+                for entry in sorted(rendered_entries, key=lambda entry: entry["index"])
             ],
         )
         reconciled, refusal = write.body, write.refusal
@@ -3674,8 +3670,17 @@ def _render_structured_entries(
     return reconciled
 
 
-def evidence_entry_index(entry: object) -> int | None:
+def entry_index(entry: object) -> int | None:
     """The index this entry claims, or None if it claims none a reader can take.
+
+    ONE definition, in the module where the fan-out below lives, and the
+    verifier imports it. Three readers there had three of these, and the gap
+    between them was not theoretical: one index carrying a `ci` entry and a
+    non-`ci` one passed the duplicate guard, and the write applied the update
+    to EVERY entry at that index (#1778, round 3, filed as #1784). Round 5
+    gave them one definition each side of the module boundary -- which is two
+    definitions agreeing by copy, the shape this family is named for, so
+    round 6 made it one function both modules CALL.
 
     `OverflowError` too: `1e9999` in the PR-editable metadata parses as
     infinity, and `int()` of that raises a class the others do not cover.
@@ -3688,22 +3693,39 @@ def evidence_entry_index(entry: object) -> int | None:
         return None
 
 
-def colliding_entry_indexes(entries: object) -> list[int]:
+def entries_by_index(entries: object) -> dict[int, list[dict[str, object]]]:
+    """Every entry a reader can take, grouped by the index it claims -- ALL kinds."""
+    grouped: dict[int, list[dict[str, object]]] = {}
+    for entry in entries if isinstance(entries, list) else []:
+        index = entry_index(entry)
+        if index is not None:
+            grouped.setdefault(index, []).append(entry)  # type: ignore[arg-type]
+    return grouped
+
+
+def colliding_indexes(entries: object) -> list[int]:
     """Indexes more than one entry claims, of ANY kind.
 
-    An entry's index is its identity to this writer: the updates map is keyed
-    by it, and the write below applies `updates[index]` to every entry
-    carrying it. Two entries at one index therefore make one verdict land on
-    both lines, and which one the verdict belongs to is decided by the order
-    the entries happen to be written in -- which is not a fact about the
-    evidence.
+    An entry's index is its identity to everything downstream: the updates
+    map is keyed by it, and the write below applies `updates[index]` to every
+    entry carrying it. A second entry at one index means one verdict lands on
+    both lines, and which one it belongs to is decided by the order the
+    entries happen to be written in -- which is not a fact about the evidence.
+
+    ANY kind, not `ci` alone. Scoping it to `ci` was this guard's own defect
+    in the verifier: a mixed-kind index passed it, and one green run
+    manufactured a completion on a line no check covers. The kinds change
+    nothing about the ambiguity -- what is ambiguous is which entry the
+    verdict belongs to (#1778, round 3).
+
+    So neither verdict is acted on. The same answer `_indistinguishable`
+    gives two requested items that read alike: two answers nothing can choose
+    between are reported as malformed rather than resolved, where the author
+    can still fix it.
     """
-    seen: dict[int, int] = {}
-    for entry in entries if isinstance(entries, list) else []:
-        index = evidence_entry_index(entry)
-        if index is not None:
-            seen[index] = seen.get(index, 0) + 1
-    return sorted(index for index, count in seen.items() if count > 1)
+    return sorted(
+        index for index, at in entries_by_index(entries).items() if len(at) > 1
+    )
 
 
 def update_evidence_entries(
@@ -3739,7 +3761,7 @@ def update_evidence_entries(
     metadata = _extract_evidence_metadata(body)
     if not isinstance(metadata, dict) or not isinstance(metadata.get("entries"), list):
         return body
-    if (shared := colliding_entry_indexes(metadata["entries"])):
+    if (shared := colliding_indexes(metadata["entries"])):
         refusal = (
             "`## Evidence Status` was left as written: evidence entries share index(es) "
             f"{', '.join(str(index) for index in shared)}, so an update aimed at one would "
@@ -3756,9 +3778,8 @@ def update_evidence_entries(
             updated_entries.append(raw_entry)
             continue
         entry = dict(raw_entry)
-        try:
-            index = int(entry["index"])
-        except (KeyError, TypeError, ValueError, OverflowError):
+        index = entry_index(entry)
+        if index is None:
             updated_entries.append(entry)
             continue
         update = updates.get(index)
