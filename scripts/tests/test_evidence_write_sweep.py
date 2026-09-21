@@ -504,6 +504,86 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
             f"- [pending-ci] {sweep_script.ITEM} -- {sweep_script.DETAIL}",
             sweep_script.author_lines(source),
         )
+    # One status line, written every way a reader can write one, against what
+    # each reader of the section says about it. The write's answer is read off
+    # a real write; the instrument's is `lines_lost`, which is the number the
+    # headline is made of. "carried" is a line the write leaves to the author
+    # and moves to `## Evidence Notes`; either way the page keeps the line, so
+    # no row loses one (#1751, round 2).
+    WRAPPED_FORMS = {
+        "plain": ("- [pending-ci] {item} -- {detail}", "replaced"),
+        "a bold status token": ("- **[pending-ci]** {item} -- {detail}", "replaced"),
+        "an italic status token": ("- _[pending-ci]_ {item} -- {detail}", "replaced"),
+        "a bold item": ("- [pending-ci] **{item}** -- {detail}", "replaced"),
+        "an ordered marker": ("1. [pending-ci] {item} -- {detail}", "replaced"),
+        "a star marker": ("* [pending-ci] {item} -- {detail}", "replaced"),
+        # A code span is characters the page shows, not markup it resolves, so
+        # this line is the author's at both readers and moves to the notes.
+        "a status token in code": ("- `[pending-ci]` {item} -- {detail}", "carried"),
+        # The author's own, wrapped: unrecorded whatever it is written in.
+        "a wrapped unrecorded bullet": (
+            "- **[blocked]** release approval -- the signing profile is missing",
+            "carried",
+        ),
+    }
+
+    def _wrapped_body(self, line: str) -> str:
+        """The corpus body with one more status line under the heading, written as given."""
+        return sweep_script.body(
+            sweep_script.SECTION_TAILS["a plain note"] + line + "\n",
+            sweep_script.SUCCESSORS["one h2 below"],
+            "\n",
+        )
+
+    def test_the_two_readers_agree_on_a_status_line_however_it_is_written(self) -> None:
+        """The rule is one function, and it is asked of the page's reading at both readers.
+
+        They asked it with different text instead: the write with the parser's
+        inline reading of the item, this instrument with the raw source line.
+        On `- **[pending-ci]** <recorded item> -- d` the first said the
+        machine's and replaced the line, the second said the author's and
+        counted the replacement a silent loss -- #1751's own disagreement, on
+        the wrapped form. Five of the eight rows below read differently at the
+        merge base.
+        """
+        for name, (template, outcome) in self.WRAPPED_FORMS.items():
+            with self.subTest(form=name):
+                line = template.format(item=sweep_script.ITEM, detail=sweep_script.DETAIL)
+                source = self._wrapped_body(line)
+                written, refused, said = sweep_script.write_once(source)
+                self.assertFalse(refused)
+                # The headline's two halves, on every row: nothing left the
+                # page, and nothing the author wrote was pushed together.
+                self.assertEqual(sweep_script.lines_lost(source, written), [], name)
+                self.assertEqual(sweep_script.seams_closed(source, written), [], name)
+                self.assertEqual([note for note in said if "not carried" in note], [])
+                if outcome == "carried":
+                    self.assertIn(line, written)
+                    self.assertIn(line, sweep_script.author_lines(source))
+                else:
+                    self.assertNotIn(line, written)
+                    self.assertNotIn(line, sweep_script.author_lines(source))
+
+    def test_the_reading_the_rule_is_asked_of_is_one_function(self) -> None:
+        # Where the two readers stop differing: each produces the page's
+        # reading of the line, and the sweep's comes from `evidence` rather
+        # than from a normalisation of this file's own.
+        evidence = sys.modules["evidence"]
+        plain = f"- [pending-ci] {sweep_script.ITEM} -- {sweep_script.DETAIL}"
+        for name, (template, _) in self.WRAPPED_FORMS.items():
+            if "unrecorded" in name or "code" in name:
+                continue
+            with self.subTest(form=name):
+                line = template.format(item=sweep_script.ITEM, detail=sweep_script.DETAIL)
+                self.assertEqual(evidence.status_line_as_page_reads_it(line), plain)
+        # And the line the instrument REPORTS is still the author's own bytes:
+        # the reading decides ownership, it does not become what a loss quotes.
+        theirs = self.WRAPPED_FORMS["a wrapped unrecorded bullet"][0]
+        source = self._wrapped_body(theirs)
+        self.assertIn(theirs, sweep_script.author_lines(source))
+        self.assertEqual(
+            sweep_script.lines_lost(source, source.replace(theirs + "\n", "")), [theirs]
+        )
 
 if __name__ == "__main__":
     unittest.main()

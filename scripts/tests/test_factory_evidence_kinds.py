@@ -8632,6 +8632,78 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         # Not status-shaped at all: a note is a note however it opens.
         self.assertFalse(evidence.is_recorded_status_line("- a plain bullet", [self.ITEM]))
 
+    # Every way a reader can write one status line, and the reading the page
+    # gives it. The rule takes the page's reading, so these are one line to it
+    # -- and where the two readers handed it different text instead, a wrapped
+    # line naming a recorded item was the machine's to one and the author's to
+    # the other, which is #1751 again on the wrapped form (round 2).
+    WRAPPED = {
+        "plain": "- [pending-ci] {item} -- {detail}",
+        "a bold status token": "- **[pending-ci]** {item} -- {detail}",
+        "an italic status token": "- _[pending-ci]_ {item} -- {detail}",
+        "a bold item": "- [pending-ci] **{item}** -- {detail}",
+        "an ordered marker": "1. [pending-ci] {item} -- {detail}",
+        "a star marker": "* [pending-ci] {item} -- {detail}",
+    }
+
+    def test_the_rule_reads_a_line_the_way_the_page_reads_it(self) -> None:
+        evidence = self.evidence()
+        plain = f"- [pending-ci] {self.ITEM} -- {self.DETAIL}"
+        for name, template in self.WRAPPED.items():
+            with self.subTest(form=name):
+                line = template.format(item=self.ITEM, detail=self.DETAIL)
+                self.assertEqual(evidence.status_line_as_page_reads_it(line), plain)
+                self.assertTrue(
+                    evidence.is_recorded_status_line(
+                        evidence.status_line_as_page_reads_it(line), [self.ITEM]
+                    )
+                )
+        # A code span is not emphasis: the backticks are characters the page
+        # shows, so the reading keeps them and the line is the author's at both
+        # readers -- as it was before this rule existed.
+        in_code = f"- `[pending-ci]` {self.ITEM} -- {self.DETAIL}"
+        self.assertEqual(evidence.status_line_as_page_reads_it(in_code), in_code)
+        self.assertFalse(
+            evidence.is_recorded_status_line(
+                evidence.status_line_as_page_reads_it(in_code), [self.ITEM]
+            )
+        )
+        # A line that is not a list item at all comes back as it was: it names
+        # no item the rule can read either way.
+        for line in (f"[pending-ci] {self.ITEM} -- {self.DETAIL}", "", "    an indented block"):
+            with self.subTest(line=line):
+                self.assertEqual(evidence.status_line_as_page_reads_it(line), line)
+        # And a task box stays the author's, however the status is wrapped.
+        boxed = f"- [x] **[pending-ci]** {self.ITEM} -- {self.DETAIL}"
+        self.assertFalse(
+            evidence.is_recorded_status_line(
+                evidence.status_line_as_page_reads_it(boxed), [self.ITEM]
+            )
+        )
+
+    def test_a_wrapped_line_naming_a_recorded_item_is_the_machines(self) -> None:
+        # The writer's half of the pair, pinned: it read the page all along,
+        # and this says so rather than leaving it to the docstring.
+        for name, template in self.WRAPPED.items():
+            with self.subTest(form=name):
+                line = template.format(item=self.ITEM, detail=self.DETAIL)
+                written, said = self.written(self.body(tail=f"{self.NOTE}\n{line}\n"))
+                self.assertNotIn(line, written)
+                self.assertEqual(
+                    self.section_of(written), f"- [complete] {self.ITEM} -- {self.RESOLVED}"
+                )
+                self.assertIn(f"## Evidence Notes\n{self.NOTE}", self.flat(written))
+                self.assertEqual(said, [])
+
+    def test_a_wrapped_line_naming_no_recorded_item_is_the_authors(self) -> None:
+        # The other half on the same shapes: wrapping a status token does not
+        # hand the write a line it does not record.
+        theirs = "- **[blocked]** release approval -- the signing profile is missing"
+        written, said = self.written(self.body(tail=f"{self.NOTE}\n{theirs}\n"))
+        self.assertIn(theirs, self.flat(written))
+        self.assertIn(f"## Evidence Notes\n{self.NOTE}\n\n{theirs}", self.flat(written))
+        self.assertEqual(said, [])
+
     def test_the_items_are_read_once_however_the_caller_holds_them(self) -> None:
         # They are walked for every line of every section, so a generator
         # handed in is spent on the first of them -- after which every status

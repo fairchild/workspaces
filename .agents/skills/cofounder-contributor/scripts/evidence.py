@@ -2151,6 +2151,56 @@ EVIDENCE_STATUS_HEADING = "Evidence Status"
 EVIDENCE_NOTES_HEADING = "Evidence Notes"
 
 
+def _status_item_reading(tokens: list[Token], index: int) -> str | None:
+    """The page's reading of the list item opening at `index`, or None if it opens with no line of text.
+
+    The text a reader sees, in the one shape the rule reads: `- [status] rest`,
+    whatever marker the item was written with and whatever markup the status
+    token or the item was wrapped in. Emphasis is resolved because the page
+    resolves it; a code span keeps its backticks because the page shows them.
+
+    One composer, because the answer has to be the same text at both readers.
+    An item opening with something that is not its own line of text -- a table,
+    a quote, a nested list -- has no reading here: reading the first inline
+    inside one of those took a table's header row for the item's text and
+    deleted the table with it.
+    """
+    shape = [tokens[index + offset].type for offset in range(1, 3) if index + offset < len(tokens)]
+    if shape != ["paragraph_open", "inline"]:
+        return None
+    return f"- {inline_text(tokens[index + 2].children).strip()}"
+
+
+def status_line_as_page_reads_it(line: str) -> str:
+    """One source line as the page reads it, for a caller that holds source bytes.
+
+    The rule below takes the page's reading of a line, and the two readers of
+    this section come by that reading differently: the write has the section
+    parsed already and reads the item's inline tokens, while a caller holding
+    the body's own bytes -- `scripts/evidence-write-sweep.py`, which reports
+    what a write cost in the author's characters and not in a rendering --
+    has this.
+
+    Handing the rule raw bytes from one and a reading from the other is how
+    `- **[pending-ci]** <recorded item> -- d` came to be the machine's to the
+    write, which replaced it, and the author's to the sweep, which counted the
+    replacement a silent loss: #1751's own disagreement, one markup form over
+    (#1751, round 2). Normalising the wrappers around the status token instead
+    would have closed that line and left the four other forms that differ --
+    emphasis inside the item, an ordered marker, a `*` marker -- reading two
+    ways.
+
+    A line that is not a single list item comes back unchanged: it names no
+    item the rule can read, whichever reader asks.
+    """
+    tokens = MARKDOWN.parse(line)
+    for index, token in enumerate(tokens):
+        if token.type != "list_item_open":
+            continue
+        return _status_item_reading(tokens, index) or line
+    return line
+
+
 def is_recorded_status_line(line: str, recorded_items: Iterable[str]) -> bool:
     """Whether a line under `## Evidence Status` is the machine's rather than the author's.
 
@@ -2160,6 +2210,11 @@ def is_recorded_status_line(line: str, recorded_items: Iterable[str]) -> bool:
     it moves to `## Evidence Notes` like any other block. A line naming an item
     the write records is the machine's and is replaced from the entries in
     hand.
+
+    Asked of the page's READING of the line -- `_status_item_reading` where the
+    caller has the section parsed, `status_line_as_page_reads_it` where it has
+    the bytes. One rule asked with two spellings of one line is two rules
+    again, which is what a bold status token proved (#1751, round 2).
 
     The writer read every status-shaped line under the heading as its own and
     the sweep that measures the writer read only the recorded ones as its own,
@@ -2202,15 +2257,8 @@ def _is_status_list_item(tokens: list[Token], index: int, recorded_items: Iterab
     `**[complete]**` are one shape. Everything else under the heading -- a
     `- [x]` box, a bullet naming no status -- is the author's and moves.
     """
-    shape = [tokens[index + offset].type for offset in range(1, 3) if index + offset < len(tokens)]
-    if shape != ["paragraph_open", "inline"]:
-        # The item opens with something that is not its own line of text -- a
-        # table, a quote, a nested list. Reading the first inline inside one of
-        # those took a table's header row for the item's text and deleted the
-        # table with it.
-        return False
-    text = inline_text(tokens[index + 2].children).strip()
-    return is_recorded_status_line(f"- {text}", recorded_items)
+    reading = _status_item_reading(tokens, index)
+    return reading is not None and is_recorded_status_line(reading, recorded_items)
 
 
 def _without_edge_blank_lines(text: str) -> str:

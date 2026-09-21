@@ -171,14 +171,20 @@ def _entry_line_numbers(lines: list[str], text: str, recorded: set[str]) -> set[
     naming the item in prose is the author's sentence about it.
 
     It names an item the metadata RECORDS -- asked of `evidence`, which is the
-    same function the write asks (`is_recorded_status_line`). A status-shaped
-    line inside the section that names no recorded item is the author's,
-    wherever it sits, and the write moves it to `## Evidence Notes` like any
-    other block. Answering it here in a pattern of this file's own was two
-    definitions of one rule, and on the author's own `- [blocked] release
+    same function the write asks (`is_recorded_status_line`), and asked of the
+    page's reading of the line, which is where the write asks it from. A
+    status-shaped line inside the section that names no recorded item is the
+    author's, wherever it sits, and the write moves it to `## Evidence Notes`
+    like any other block. Answering it here in a pattern of this file's own was
+    two definitions of one rule, and on the author's own `- [blocked] release
     approval -- the signing profile is missing` written under the heading they
     disagreed: the write replaced it and this instrument called the
-    replacement a silent loss (#1751).
+    replacement a silent loss (#1751). Asking the one rule with the raw line
+    while the write asked it with the parser's reading was the same
+    disagreement one markup form over -- a bold status token, an emphasised
+    item, an ordered or `*` marker -- so the reading comes from `evidence` too
+    (#1751, round 2). What a loss REPORTS is still the author's own bytes:
+    this decides ownership, not what a line looks like when it goes.
 
     And it sits INSIDE the section, so an author's copy of a recorded item
     under their own `## Validation` stays theirs.
@@ -205,7 +211,9 @@ def _entry_line_numbers(lines: list[str], text: str, recorded: set[str]) -> set[
         index
         for index, start in enumerate(starts)
         if bounds[1] <= start < bounds[2]
-        and evidence.is_recorded_status_line(lines[index], recorded)
+        and evidence.is_recorded_status_line(
+            evidence.status_line_as_page_reads_it(lines[index]), recorded
+        )
     }
 
 
