@@ -2374,8 +2374,8 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
     return carried, announcements
 
 
-def _placement_a_reader_cannot_see(written: str) -> str | None:
-    """Why the page would not show the `## Evidence Status` this write just placed, or None.
+def _placement_a_reader_cannot_see(written: str):
+    """Why the page would not show the `## Evidence Status` this write just placed, and what went unasked.
 
     The placement walks to the first `## Validation` the page shows as a
     heading and falls back to the end of the body when it shows none. Below a
@@ -2432,7 +2432,27 @@ def is_stood_down_announcement(announcement: str) -> bool:
     return announcement.startswith(STOOD_DOWN_ANNOUNCEMENT_PREFIX)
 
 
-def _stood_down(source: str, refusal: str) -> SectionWrite:
+# The third claim these sentences can make, and it is about neither the
+# author's text nor this write: a question the check could not ask. The
+# surface that posts them has to tell it from the other two, because a
+# deletion and a stand-down each name an edit the author can make and this
+# one names a condition of the run (#1773, round 2).
+UNVERIFIED_ANNOUNCEMENT_PREFIX = "the page could not be asked about this write: "
+
+
+def is_unverified_announcement(announcement: str) -> bool:
+    """Whether this sentence says a check could not be run rather than what a write did."""
+    return announcement.startswith(UNVERIFIED_ANNOUNCEMENT_PREFIX)
+
+
+def _announce_unverified(announcements: list[str], note: str) -> None:
+    """Put the unread-page note in the list the author's surface is composed from, once."""
+    sentence = f"{UNVERIFIED_ANNOUNCEMENT_PREFIX}{note}"
+    if sentence not in announcements:
+        announcements.append(sentence)
+
+
+def _stood_down(source: str, refusal: str, announcements: list[str] | None = None) -> SectionWrite:
     """The body standing whole, with the reason said as the author's to act on.
 
     A stand-down is a loss of the same kind as a deleted note and larger: the
@@ -2442,7 +2462,8 @@ def _stood_down(source: str, refusal: str) -> SectionWrite:
     of them until #1740 round 3: both returned on an unchanged body before
     they posted, and an unchanged body is exactly what a stand-down produces.
     """
-    return SectionWrite(source, refusal, [f"{STOOD_DOWN_ANNOUNCEMENT_PREFIX}{refusal}"])
+    said = [note for note in announcements or [] if is_unverified_announcement(note)]
+    return SectionWrite(source, refusal, [*said, f"{STOOD_DOWN_ANNOUNCEMENT_PREFIX}{refusal}"])
 
 
 def write_evidence_status_section(
@@ -2500,9 +2521,14 @@ def write_evidence_status_section(
 
     def placed(candidate: str) -> SectionWrite:
         """The rewritten body, or the source standing whole and why."""
-        unseen = _placement_a_reader_cannot_see(candidate)
-        if unseen:
-            return _stood_down(source, unseen)
+        answer = _placement_a_reader_cannot_see(candidate)
+        if answer.unverified is not None:
+            # On an accepted write as much as a refused one: the write went
+            # ahead under a weaker check than a lane runs, and the author is
+            # the one who has to know that (#1773, round 2).
+            _announce_unverified(announcements, answer.unverified)
+        if answer.refusal:
+            return _stood_down(source, answer.refusal, announcements)
         return SectionWrite(candidate, None, announcements)
 
     # The note about a heading this reader declined is NOT said here. It was,
@@ -2516,14 +2542,16 @@ def write_evidence_status_section(
     # a body with no such section, so asking `placed` about it answers "not a
     # heading on the page" and the fold that stopped the write reaches the
     # author as a weaker sentence than the one the check made (#1773).
-    written, stood_down = inserted_markdown_section(
+    written, stood_down, unverified = inserted_markdown_section(
         strip_markdown_section(body, EVIDENCE_NOTES_HEADING) if kept else body,
         EVIDENCE_STATUS_HEADING,
         "\n".join(status_lines),
         before_heading="Validation",
     )
+    if unverified is not None:
+        _announce_unverified(announcements, unverified)
     if stood_down is not None:
-        return _stood_down(source, stood_down)
+        return _stood_down(source, stood_down, announcements)
     if not blocks:
         # Nothing to hold, and no heading left behind: an empty one is a
         # section this writer would place next run and a reader would find

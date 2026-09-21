@@ -55,6 +55,7 @@ from evidence import (
     _rendered_status_lines,
     classify_evidence_errors,
     is_stood_down_announcement,
+    is_unverified_announcement,
     resolve_named_ci_evidence,
     requested_evidence_contract,
     render_execution_summary_body,
@@ -534,6 +535,12 @@ STOOD_DOWN_NOTES_HEADLINE = "**Your `## Evidence Status` section was left as wri
 # assumes otherwise says one of the two and drops the other, which is the
 # failure this whole issue is about.
 MIXED_NOTES_HEADLINE = "**Part of your `## Evidence Status` section did not survive this run.**"
+# The third claim, and it is about the run rather than about the body: the
+# renderer could not be reached, so whether this write lands somewhere a
+# reader arrives at was decided by the source model alone. Said under either
+# headline above it would be a claim about the author's text, which it is not
+# (#1773, round 2).
+UNVERIFIED_NOTES_HEADLINE = "**A check on your `## Evidence Status` section could not be run.**"
 
 # What GitHub stores for one issue comment. A body past it is refused whole,
 # so the notes are chunked under it rather than posted and lost (#1740,
@@ -577,13 +584,20 @@ def compose_uncarried_notes_comment(
     would be worse than none.
     """
     stood_down = [note for note in notes if is_stood_down_announcement(note)]
-    uncarried = [note for note in notes if not is_stood_down_announcement(note)]
+    unverified = [note for note in notes if is_unverified_announcement(note)]
+    uncarried = [
+        note
+        for note in notes
+        if not is_stood_down_announcement(note) and not is_unverified_announcement(note)
+    ]
     if stood_down and uncarried:
         headline = MIXED_NOTES_HEADLINE
     elif stood_down:
         headline = STOOD_DOWN_NOTES_HEADLINE
-    else:
+    elif uncarried:
         headline = UNCARRIED_NOTES_HEADLINE
+    else:
+        headline = UNVERIFIED_NOTES_HEADLINE
     parts: list[str] = [*([f"*{persona}*", ""] if persona else []), headline, ""]
     if uncarried:
         parts += [
@@ -604,6 +618,16 @@ def compose_uncarried_notes_comment(
             "\n".join(f"- {note}" for note in stood_down),
             "",
             "Closing the block named above lets the next run write the section.",
+            "",
+        ]
+    if unverified:
+        parts += [
+            "One check on this write could not run, so what it would have refused went "
+            "unasked. Nothing here says anything was lost:",
+            "",
+            "\n".join(f"- {note}" for note in unverified),
+            "",
+            "A later run that reaches the renderer decides the question this one could not.",
             "",
         ]
     return "\n".join([*parts, uncarried_notes_checked_line(head_sha)]) + "\n"
