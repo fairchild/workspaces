@@ -4010,21 +4010,39 @@ def _render_structured_entries(
     # builds the line the write emits, so this set is already stripped. Its
     # mutant is EQUIVALENT by that construction rather than by a sample
     # (#1778, round 18).
+    # The document context the LINE is read in, and no more: parsing the body
+    # once fills this with its link reference definitions, which is what an
+    # item's `[the run][r1]` resolves against on the page. Narrower than that
+    # and the item is read in a document that has no definitions while the
+    # line is read in one that has them; wider -- re-reading the body per item
+    # -- would let a paragraph edited elsewhere change an item's rendering
+    # (#1778, round 21).
+    reading_context: dict[str, object] = {}
+    MARKDOWN.parse(body, reading_context)
+
     def _as_the_page_reads(text: str) -> str:
-        """This module's own reading of a fragment, the one `before` came through.
+        """This module's own reading of an ITEM, the one `before` came through.
 
         `before` holds what the page reader made of each line -- inline
         markdown resolved -- and the items and lines this write knows about
         are RAW. Comparing the two is the round-17 defect in a second shape:
         an item carrying `*…*` or `**…**` never matched its own line, so the
         author was told a line was replaced with nothing while the write put
-        it in the body, and following that instruction duplicates it on the
-        next run (#1778, round 20). Same parser, same inline reader, both
-        sides.
+        it in the body (#1778, round 20).
+
+        INLINE, in the body's context. Round 20 read the item as a standalone
+        DOCUMENT, which is a different reader: a document parse gives the
+        block phase a chance at the text, so an item the author wrote as
+        `1. verify the lane` lost its `1. ` to a list marker while the line
+        holding it kept it as text -- and the write then named its own
+        rendered-back line as replaced with nothing. An item is inline
+        content of a line, never a block of its own, so it is read with the
+        inline parser, which has no block phase to eat a marker, in the
+        context the line's own reading has (#1778, round 21).
         """
         return " ".join(
             inline_text(token.children).strip()
-            for token in MARKDOWN.parse(text)
+            for token in MARKDOWN.parseInline(text, reading_context)
             if token.type == "inline"
         ).strip()
 
@@ -4071,22 +4089,29 @@ def _render_structured_entries(
         took `unreadable_after` out of the condition to avoid.
 
         Subsumed today, and kept for the reason the BEFORE half below is
-        kept -- but not for the reason round 19 gave. That argument was a
-        universal over `rendered_text` ("every member is a line `_rewritten`
-        answers True for"), and it is FALSE: a renderable item or detail
-        carrying a newline renders a member the prefix reader cannot match,
-        so `_rewritten` answers False for it.
+        kept -- but for neither reason the earlier rounds gave. Round 19's
+        was a universal over `rendered_text` ("every member is a line
+        `_rewritten` answers True for") and round 20's was a narrower
+        universal ("the members it rejects are exactly the ones whose line
+        the page reader cannot read"). Both are false, and the second is
+        false HERE: `rendered_text` is the page's reading of the rendered
+        lines ALONE, and that document carries none of the body's link
+        reference definitions, so an item resolving a reference renders a
+        member reading `[complete] verify [the run][r1] -- green` while
+        `items` -- read in the body, where the definition is -- holds
+        `verify [the run](https://example.invalid/1)`. Four such members are
+        constructible at this head (a full, a collapsed and a shortcut
+        reference, and a reference image), measured, and the page reader
+        handles every one of them.
 
-        The verdict holds for a narrower reason, and it is about which
-        members can be COMPARED rather than about all of them. The members
-        `_rewritten` rejects are exactly the ones whose line the page reader
-        cannot read -- an item that runs onto a second line makes
-        `_rendered_status_lines` answer with no lines at all -- so those
-        members are never in `before`, and a term that only ever fires on a
-        member of `before` cannot fire on them. Every member that CAN be in
-        `before` is one `_rewritten` answers True for, which is why the
-        mutant dropping this term stays EQUIVALENT, measured (#1778, rounds
-        19 and 20).
+        The argument is about which readings can MEET rather than about all
+        members. A member `_rewritten` rejects is a reading of a line in a
+        document that does not exist: the body is what `before` is read
+        from, and in the body that line resolves its reference the way
+        `items` does. So such a member is never in `before` -- and this term
+        only ever fires on a member of `before`. That is why the mutant
+        dropping it stays EQUIVALENT, measured over the five suites at this
+        head (#1778, rounds 19, 20 and 21).
         """
         return line.strip() in rendered_text
 
