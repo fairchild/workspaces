@@ -2869,6 +2869,7 @@ class RevisionTurnTests(unittest.TestCase):
         self.assertIn("</pre>", comments[0])
         self.assertIn(self.PERSONA, comments[0])
 
+    # intent: guard
     def test_the_seeds_note_reaches_the_comment_the_turn_posts(self) -> None:
         """End to end, because the seam is not where this can go wrong (#1773, round 10).
 

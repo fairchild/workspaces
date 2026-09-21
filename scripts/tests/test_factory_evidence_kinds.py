@@ -8680,6 +8680,10 @@ class ThePlacementAsksThePageWhetherASectionIsFoldedTests(unittest.TestCase):
     def placement(self, body: str) -> str | None:
         return self.answer(body).refusal
 
+    # intent: guard
+    # marker: red at `016d94ba`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_every_placement_shape_gets_the_answer_the_page_supports(self) -> None:
         for label, (body, expected) in self.SHAPES.items():
             with self.subTest(shape=label), recorded_page():
@@ -8690,6 +8694,10 @@ class ThePlacementAsksThePageWhetherASectionIsFoldedTests(unittest.TestCase):
                     self.assertIsNotNone(refusal, label)
                     self.assertIn(expected, refusal, label)
 
+    # intent: guard
+    # marker: red at `016d94ba`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_the_refusal_names_the_disclosure_and_the_repair(self) -> None:
         # The headline shape, and what an author is owed about it: which
         # element folded the section, where it was opened, and the one edit
@@ -8702,6 +8710,10 @@ class ThePlacementAsksThePageWhetherASectionIsFoldedTests(unittest.TestCase):
         self.assertIn("the page folds it away", refusal)
         self.assertIn("closing that element above the section", refusal)
 
+    # intent: guard
+    # marker: red at `016d94ba`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_a_section_the_page_shows_unfolded_is_placed(self) -> None:
         # The control, stated on its own rather than only in the table: the
         # same body with the disclosure closed is a placement, so the check
@@ -8710,6 +8722,10 @@ class ThePlacementAsksThePageWhetherASectionIsFoldedTests(unittest.TestCase):
         with recorded_page():
             self.assertIsNone(self.placement(body))
 
+    # intent: guard
+    # marker: red at `016d94ba`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_a_disclosure_inside_the_section_is_not_a_placement_question(self) -> None:
         # The page decides it now rather than a gate that looked only above
         # the heading: `could_be_folded` reads the whole body, so this one IS
@@ -8724,6 +8740,7 @@ class ThePlacementAsksThePageWhetherASectionIsFoldedTests(unittest.TestCase):
         self.assertIsNone(answer.refusal)
         self.assertIsNone(answer.unverified)
 
+    # intent: fix
     def test_the_page_is_asked_only_where_something_above_could_fold_the_heading(self) -> None:
         # A request per write on every body would spend a rate limit on
         # bodies where no fold is possible. The precondition is textual and
@@ -8751,6 +8768,10 @@ class ThePlacementAsksThePageWhetherASectionIsFoldedTests(unittest.TestCase):
             },
         )
 
+    # intent: guard
+    # marker: red at `016d94ba`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_the_page_is_asked_once_per_body(self) -> None:
         body, _ = self.SHAPES["an unclosed disclosure above the section"]
         seen: list[str] = []
@@ -8765,6 +8786,10 @@ class ThePlacementAsksThePageWhetherASectionIsFoldedTests(unittest.TestCase):
                     self.placement(body)
         self.assertEqual(len(seen), 1, seen)
 
+    # intent: guard
+    # marker: red at `016d94ba`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_with_no_renderer_every_shape_falls_back_to_the_source_model(self) -> None:
         # The fallback, stated as the cost it is: with no page the check is
         # exactly the check that shipped before this change, so the fold
@@ -8777,6 +8802,7 @@ class ThePlacementAsksThePageWhetherASectionIsFoldedTests(unittest.TestCase):
                 else:
                     self.assertIsNone(refusal, label)
 
+    # intent: fix
     def test_with_no_renderer_the_note_comes_back_to_the_caller(self) -> None:
         # Never a silent accept, and never only a log line: the body the page
         # would have refused is placed, and the sentence saying which question
@@ -8788,6 +8814,10 @@ class ThePlacementAsksThePageWhetherASectionIsFoldedTests(unittest.TestCase):
         self.assertIn(SUITE_UNVERIFIED, answer.unverified)
         self.assertIn("decided by the source model alone", answer.unverified)
 
+    # intent: guard
+    # marker: red at `016d94ba`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_a_body_with_nothing_to_fold_says_nothing_about_the_renderer(self) -> None:
         # The note is about a question that was asked and went unanswered. A
         # body no fold can reach asks nothing, so a tokenless run on ordinary
@@ -8828,6 +8858,7 @@ class TheWriterStandsDownOnAFoldedPlacementTests(unittest.TestCase):
         }
         return "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
 
+    # intent: fix
     def test_the_turn_s_write_stands_the_body_down_and_names_the_disclosure(self) -> None:
         with recorded_page():
             written, errors = run_contributor.render_execution_summary_body(
@@ -8841,6 +8872,7 @@ class TheWriterStandsDownOnAFoldedPlacementTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("the page folds it away", errors[0])
 
+    # intent: fix
     def test_the_lane_write_announces_the_stand_down_where_its_author_reads(self) -> None:
         evidence = self.evidence()
         with recorded_page():
@@ -8853,7 +8885,6 @@ class TheWriterStandsDownOnAFoldedPlacementTests(unittest.TestCase):
         self.assertIn("the page folds it away", write.announcements[0])
 
     # intent: control
-    # Green on main: the unchanged case beside the stand-down.
     def test_the_same_write_goes_ahead_once_the_disclosure_is_closed(self) -> None:
         # The control on the write itself: closing the element is the repair
         # the refusal names, and the status lands under the page's own heading.
@@ -8921,6 +8952,10 @@ class ThePageIsAskedAboutTheSectionAndNotAHeadingBesideItTests(unittest.TestCase
     def answer(self, body: str):
         return helpers.placement_refusal(body, body + self.SECTION, self.HEADING)
 
+    # intent: guard
+    # marker: red at `5efad74e`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_a_tagged_heading_above_a_folded_section_no_longer_answers_for_it(self) -> None:
         with recorded_page():
             answer = self.answer(self.TAGGED_ABOVE_A_FOLDED_SECTION)
@@ -8928,6 +8963,10 @@ class ThePageIsAskedAboutTheSectionAndNotAHeadingBesideItTests(unittest.TestCase
         self.assertIn("the page folds it away", answer.refusal)
         self.assertIn("`## Evidence Status`", answer.refusal)
 
+    # intent: guard
+    # marker: red at `5efad74e`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_the_page_shows_both_headings_and_only_one_of_them_is_folded(self) -> None:
         # The measurement the rule rests on, asserted rather than described:
         # the struck-out heading reads as this heading on the page and is not
@@ -8938,6 +8977,10 @@ class ThePageIsAskedAboutTheSectionAndNotAHeadingBesideItTests(unittest.TestCase
         self.assertIsNone(page.unverified)
         self.assertEqual(helpers.folded_headings_on_the_page(page.html, self.HEADING), [False, True])
 
+    # intent: guard
+    # marker: red at `5efad74e`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_a_heading_the_renderer_decorates_is_not_this_heading_and_still_places(self) -> None:
         # The other branch, and the body this round must not start refusing:
         # the renderer gives `<details>` in a heading a `<summary>Details</summary>`,
@@ -8950,6 +8993,10 @@ class ThePageIsAskedAboutTheSectionAndNotAHeadingBesideItTests(unittest.TestCase
         self.assertEqual(helpers.folded_headings_on_the_page(page.html, self.HEADING), [False])
         self.assertIsNone(answer.refusal)
 
+    # intent: guard
+    # marker: red at `5efad74e`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_the_notes_section_is_asked_the_same_question(self) -> None:
         # The other heading a placement asks about (`## Evidence Notes`), and
         # the same defect: one rule, so one fix, and this is what says so.
@@ -8975,6 +9022,10 @@ class TheAuthorsOwnTagCannotBreakOutOfTheSentenceTests(unittest.TestCase):
     HEADING = "Evidence Status"
     SECTION = "\n## Evidence Status\n\n- [complete] `swift test` -- 1992 tests passed\n"
 
+    # intent: guard
+    # marker: red at `5efad74e`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_a_backtick_in_the_tag_does_not_close_the_span(self) -> None:
         body = (
             "## Summary\n\n- one change\n\n"
@@ -9006,6 +9057,7 @@ class AFailedRenderIsNotAnAnswerAboutThisBodyTests(unittest.TestCase):
     BODY = "## Summary\n\n- one change\n\n<details>\n<summary>notes</summary>\n\nfolded\n"
     SECTION = "\n## Evidence Status\n\n- [complete] `swift test` -- 1992 tests passed\n"
 
+    # intent: fix
     def test_a_failure_is_not_remembered_and_a_later_answer_is(self) -> None:
         written = self.BODY + self.SECTION
         attempts: list[str] = []
@@ -9029,6 +9081,7 @@ class AFailedRenderIsNotAnAnswerAboutThisBodyTests(unittest.TestCase):
         self.assertIsNone(second.unverified)
         self.assertIn("the page folds it away", second.refusal)
 
+    # intent: guard
     def test_an_answer_is_still_asked_once(self) -> None:
         written = self.BODY + self.SECTION
         asked: list[str] = []
@@ -9057,6 +9110,7 @@ class TheNamedRepairIsOneThatRepairsTests(unittest.TestCase):
     HEADING = "Evidence Status"
     SECTION = "\n## Evidence Status\n\n- [complete] `swift test` -- 1992 tests passed\n"
 
+    # intent: guard
     def test_a_commented_out_disclosure_is_not_the_one_that_folds_it(self) -> None:
         body = (
             "## Summary\n\n- one change\n\n"
@@ -9067,6 +9121,7 @@ class TheNamedRepairIsOneThatRepairsTests(unittest.TestCase):
         # The real one is on line 10 (one-based); the commented one is line 5.
         self.assertEqual(helpers.open_disclosure_line(body + self.SECTION, line), 9)
 
+    # intent: fix
     def test_the_outermost_open_disclosure_is_the_one_named(self) -> None:
         body = (
             "## Summary\n\n- one change\n\n"
@@ -9123,6 +9178,7 @@ class TheUnreadPageReachesTheSurfaceTheAuthorReadsTests(unittest.TestCase):
             self.meta() + body, ["- [complete] `swift test` passes -- 214 passed"]
         )
 
+    # intent: fix
     def test_an_accepted_write_with_no_page_still_announces_the_unread_check(self) -> None:
         # The renderer is refused file-wide, so this is the 503 case: the
         # write goes ahead on the source model's answer and says so where the
@@ -9136,6 +9192,7 @@ class TheUnreadPageReachesTheSurfaceTheAuthorReadsTests(unittest.TestCase):
         self.assertEqual(len(unverified), 1, write.announcements)
         self.assertIn(SUITE_UNVERIFIED, unverified[0])
 
+    # intent: guard
     def test_a_stood_down_write_carries_both_sentences(self) -> None:
         # A stand-down returns early, and the note about the unread check is
         # not the stand-down's reason -- both have to survive, because they
@@ -9148,7 +9205,6 @@ class TheUnreadPageReachesTheSurfaceTheAuthorReadsTests(unittest.TestCase):
         )
 
     # intent: control
-    # Green on main: nothing to say when the page answers.
     def test_the_page_answering_leaves_no_note(self) -> None:
         with recorded_page():
             write = self.write(self.PLACEABLE_BODY)
@@ -9157,6 +9213,10 @@ class TheUnreadPageReachesTheSurfaceTheAuthorReadsTests(unittest.TestCase):
             [n for n in write.announcements if self.evidence().is_unverified_announcement(n)], []
         )
 
+    # intent: guard
+    # marker: red at `5efad74e`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_the_comment_the_author_reads_says_which_claim_this_is(self) -> None:
         # The composer's three buckets. Said under either of the other two
         # headlines this would be a claim about the author's text, which it is
@@ -9174,6 +9234,10 @@ class TheUnreadPageReachesTheSurfaceTheAuthorReadsTests(unittest.TestCase):
         self.assertIn("Nothing here says anything was lost", comment)
         self.assertIn("HTTP 503", comment)
 
+    # intent: guard
+    # marker: red at `5efad74e`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_a_deletion_and_an_unread_check_are_still_told_apart(self) -> None:
         execution = sys.modules["execution"]
         evidence = self.evidence()
@@ -9244,6 +9308,7 @@ class ThePageIsAskedAboutTheHeadingThisWritePlacesTests(unittest.TestCase):
     def answer(self, body: str):
         return helpers.placement_refusal(body, body + self.SECTION, self.HEADING)
 
+    # intent: fix
     def test_a_folded_heading_the_parser_never_reads_does_not_refuse_the_write(self) -> None:
         for label, body in (
             ("a raw h2 inside a closed disclosure", self.A_RAW_H2_IN_A_CLOSED_DISCLOSURE),
@@ -9252,6 +9317,7 @@ class ThePageIsAskedAboutTheHeadingThisWritePlacesTests(unittest.TestCase):
             with self.subTest(shape=label), recorded_page():
                 self.assertIsNone(self.answer(body).refusal, label)
 
+    # intent: guard
     def test_the_page_does_show_a_folded_heading_of_this_name_in_both(self) -> None:
         # The measurement the rule used to act on, asserted so the test is not
         # vacuous: the page really does show two headings of this name, one of
@@ -9266,8 +9332,7 @@ class ThePageIsAskedAboutTheHeadingThisWritePlacesTests(unittest.TestCase):
                     helpers.folded_headings_on_the_page(page.html, self.HEADING), [True, False]
                 )
 
-    # intent: guard
-    # Green on main: a property of main's own flagger.
+    # intent: control
     def test_neither_shape_is_one_the_rejected_heading_note_flags(self) -> None:
         # Why the round-2 justification did not hold: that note reads h2
         # TOKENS, and a raw `<h2>` inside raw HTML is not one.
@@ -9275,12 +9340,17 @@ class ThePageIsAskedAboutTheHeadingThisWritePlacesTests(unittest.TestCase):
             with self.subTest(body=body[:40]):
                 self.assertIsNone(helpers.rejected_heading_note(body + self.SECTION, self.HEADING))
 
+    # intent: guard
     def test_a_placement_inside_a_fold_is_still_refused(self) -> None:
         with recorded_page():
             refusal = self.answer(self.A_FOLD_AROUND_THE_SECTION).refusal
         self.assertIsNotNone(refusal)
         self.assertIn("the page folds it away", refusal)
 
+    # intent: guard
+    # marker: red at `a0bf18f3`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_the_probe_renames_one_heading_and_leaves_the_body_alone(self) -> None:
         written = self.A_RAW_H2_IN_A_CLOSED_DISCLOSURE + self.SECTION
         line = helpers.section_heading_line(written, self.HEADING)
@@ -9299,6 +9369,10 @@ class ThePageIsAskedAboutTheHeadingThisWritePlacesTests(unittest.TestCase):
             [index for index, (a, b) in enumerate(zip(before, after)) if a != b], [line]
         )
 
+    # intent: guard
+    # marker: red at `a0bf18f3`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_a_setext_heading_is_renamed_without_leaving_its_underline(self) -> None:
         written = f"{self.SUMMARY}Evidence Status\n---------------\n\n- [complete] x -- y\n"
         line = helpers.section_heading_line(written, self.HEADING)
@@ -9307,6 +9381,10 @@ class ThePageIsAskedAboutTheHeadingThisWritePlacesTests(unittest.TestCase):
         self.assertEqual(lines[line], f"## {self.HEADING} {helpers.PLACEMENT_PROBE_MARK}")
         self.assertEqual(lines[line + 1], "")
 
+    # intent: guard
+    # marker: red at `b94239eb`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_a_body_already_carrying_the_mark_is_placed(self) -> None:
         """Uniqueness is by construction, so carrying the base mark costs nothing (#1773, round 4).
 
@@ -9339,6 +9417,10 @@ class ThePageIsAskedAboutTheHeadingThisWritePlacesTests(unittest.TestCase):
         self.assertIsNone(answer.refusal)
         self.assertIsNone(answer.unverified)
 
+    # intent: guard
+    # marker: red at `b94239eb`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_the_mark_is_the_base_where_the_body_does_not_carry_it(self) -> None:
         self.assertEqual(
             helpers.placement_probe_mark("## Summary\n\n- one change\n"),
@@ -9350,6 +9432,10 @@ class ThePageIsAskedAboutTheHeadingThisWritePlacesTests(unittest.TestCase):
             helpers.placement_probe_mark(crowded), f"{helpers.PLACEMENT_PROBE_MARK}2"
         )
 
+    # intent: guard
+    # marker: red at `b94239eb`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_a_page_showing_the_chosen_name_twice_is_refused(self) -> None:
         """The guard behind the construction, fed two matches at the seam (#1773, round 4).
 
@@ -9380,6 +9466,10 @@ class ThePageIsAskedAboutTheHeadingThisWritePlacesTests(unittest.TestCase):
         self.assertIsNotNone(answer.refusal, "an ambiguous find accepted the placement")
         self.assertIn("is not a heading on the page", answer.refusal)
 
+    # intent: guard
+    # marker: red at `a0bf18f3`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_the_gate_and_the_question_are_about_the_same_text(self) -> None:
         # `could_be_folded` read only the text ABOVE the heading, so the same
         # folded duplicate produced a refusal or not depending on where an
@@ -9411,6 +9501,7 @@ class AnOpenDisclosureIsNotAFoldTests(unittest.TestCase):
     def answer(self, body: str):
         return helpers.placement_refusal(body, body + self.SECTION, self.HEADING)
 
+    # intent: fix
     def test_a_section_inside_an_open_disclosure_is_placed(self) -> None:
         with recorded_page():
             answer = self.answer(self.OPEN)
@@ -9418,6 +9509,7 @@ class AnOpenDisclosureIsNotAFoldTests(unittest.TestCase):
         self.assertEqual(helpers.folded_headings_on_the_page(page.html, self.HEADING), [False])
         self.assertIsNone(answer.refusal)
 
+    # intent: guard
     def test_a_closed_disclosure_inside_an_open_one_still_folds(self) -> None:
         with recorded_page():
             answer = self.answer(self.CLOSED_INSIDE_OPEN)
@@ -9426,6 +9518,7 @@ class AnOpenDisclosureIsNotAFoldTests(unittest.TestCase):
         self.assertIsNotNone(answer.refusal)
         self.assertIn("the page folds it away", answer.refusal)
 
+    # intent: fix
     def test_the_reader_answers_off_the_attribute_the_renderer_emits(self) -> None:
         # GitHub writes `open=""`, so the reader must not require a value.
         for html, folded in (
@@ -9473,6 +9566,7 @@ class TheRefusalSurvivesTheCommentsDedupTests(unittest.TestCase):
         self.assertIn("<details", refusal)
         return f"{self.evidence().STOOD_DOWN_ANNOUNCEMENT_PREFIX}{refusal}"
 
+    # intent: fix
     def test_the_checked_line_survives_a_comment_quoting_a_tag(self) -> None:
         execution = self.execution()
         comment = execution.compose_uncarried_notes_comment(None, [self.note()], self.HEAD)
@@ -9482,6 +9576,7 @@ class TheRefusalSurvivesTheCommentsDedupTests(unittest.TestCase):
         self.assertNotEqual(shown, set(), "the checked line was stripped with the quoted tag")
         self.assertEqual(len(shown), 1)
 
+    # intent: fix
     def test_a_second_run_at_the_same_head_is_suppressed(self) -> None:
         execution = self.execution()
         note = self.note()
@@ -9492,7 +9587,6 @@ class TheRefusalSurvivesTheCommentsDedupTests(unittest.TestCase):
         self.assertIn(execution._as_the_page_shows_it(note), shown)
 
     # intent: control
-    # Green on main: the case the strip must keep answering.
     def test_a_real_folded_block_is_still_stripped(self) -> None:
         # The property the strip exists for, unchanged: a note behind a
         # summary is a note nobody read, so it suppresses nothing.
@@ -9507,6 +9601,10 @@ class TheRefusalSurvivesTheCommentsDedupTests(unittest.TestCase):
         )
         self.assertEqual(shown, set())
 
+    # intent: guard
+    # marker: red at `a0bf18f3`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_the_blanking_keeps_every_offset(self) -> None:
         execution = self.execution()
         text = "a `<details open>` b ``a `tick` inside`` c"
@@ -9540,6 +9638,7 @@ class TheTwoLowerFindingsTests(unittest.TestCase):
     def evidence(self):
         return sys.modules["evidence"]
 
+    # intent: fix
     def test_a_refusal_quoting_a_huge_tag_still_fits_a_comment(self) -> None:
         execution = sys.modules["execution"]
         tag = '<details data-note="' + "x" * 65_000 + '">'
@@ -9558,6 +9657,7 @@ class TheTwoLowerFindingsTests(unittest.TestCase):
         self.assertIn("<details data-note=", refusal)
         self.assertLess(len(refusal), 1_000)
 
+    # intent: guard
     def test_a_short_tag_is_quoted_whole(self) -> None:
         body = "## Summary\n\n- one change\n\n<details>\n<summary>n</summary>\n\nfolded\n"
         refusal = helpers._folded_refusal(
@@ -9566,6 +9666,7 @@ class TheTwoLowerFindingsTests(unittest.TestCase):
         self.assertIn(helpers.code_span("<details>"), refusal)
         self.assertNotIn("…", refusal)
 
+    # intent: fix
     def test_a_later_answer_in_the_same_run_retracts_the_unverified_note(self) -> None:
         evidence = self.evidence()
         body = (
@@ -9596,6 +9697,7 @@ class TheTwoLowerFindingsTests(unittest.TestCase):
             write.announcements,
         )
 
+    # intent: fix
     def test_a_run_that_never_reaches_the_renderer_still_says_so(self) -> None:
         # The retraction must not swallow the note when nothing answered.
         evidence = self.evidence()
@@ -9647,6 +9749,7 @@ class UniquenessIsAClaimAboutThePageTests(unittest.TestCase):
     def body(self, heading: str) -> str:
         return f"{self.SUMMARY}{self.FOLD}{heading}\n\nsomeone wrote this\n"
 
+    # intent: guard
     def test_the_source_scan_calls_every_one_of_them_clean(self) -> None:
         # The premise, asserted so the tests below are not vacuous: the scan
         # the mark used to rest on sees nothing in any of these.
@@ -9658,6 +9761,7 @@ class UniquenessIsAClaimAboutThePageTests(unittest.TestCase):
                     helpers.placement_probe_mark(written), helpers.PLACEMENT_PROBE_MARK
                 )
 
+    # intent: guard
     def test_a_rendered_heading_equal_to_the_mark_is_what_the_page_shows(self) -> None:
         # The test the suite could not express: a body whose RAW spelling
         # lacks the mark and whose RENDERED heading equals it.
@@ -9679,6 +9783,7 @@ class UniquenessIsAClaimAboutThePageTests(unittest.TestCase):
                     f"{label}: the page did not show the name twice",
                 )
 
+    # intent: fix
     def test_each_one_is_placed_rather_than_refused(self) -> None:
         for label, heading in self.COLLIDING.items():
             with self.subTest(spelling=label), recorded_page():
@@ -9686,6 +9791,10 @@ class UniquenessIsAClaimAboutThePageTests(unittest.TestCase):
                 answer = helpers.placement_refusal(body, body + self.SECTION, self.HEADING)
                 self.assertIsNone(answer.refusal, label)
 
+    # intent: guard
+    # marker: red at `3f2d0980`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_the_next_candidate_is_deterministic_and_skips_the_source(self) -> None:
         base = helpers.PLACEMENT_PROBE_MARK
         plain = "## Summary\n\n- one change\n"
@@ -9702,6 +9811,10 @@ class UniquenessIsAClaimAboutThePageTests(unittest.TestCase):
             helpers.placement_probe_mark(crowded, 1), helpers.placement_probe_mark(crowded, 1)
         )
 
+    # intent: guard
+    # marker: red at `3f2d0980`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_a_body_colliding_with_every_candidate_refuses_rather_than_spins(self) -> None:
         # The bound. The page is made to answer "twice" whatever is asked, so
         # the loop runs out and refuses instead of rendering forever.
@@ -9726,6 +9839,7 @@ class UniquenessIsAClaimAboutThePageTests(unittest.TestCase):
         self.assertIsNotNone(answer.refusal)
         self.assertIn("is not a heading on the page", answer.refusal)
 
+    # intent: guard
     def test_an_ordinary_body_still_asks_once(self) -> None:
         body = f"{self.SUMMARY}{self.FOLD}"
         asked: list[str] = []
@@ -9783,15 +9897,13 @@ class TheDedupUsesTheScannerThatAlreadyExistsTests(unittest.TestCase):
             comment, execution.uncarried_notes_checked_line(self.HEAD)
         )
 
-    # intent: guard
-    # Green on main: a regression this branch introduced in round 8 and fixed inside itself, so main never had it to fail on.
+    # intent: fix
     def test_a_folded_note_is_never_recorded_as_shown(self) -> None:
         for label, prefix in {"no stray backtick": "", **self.BYPASSES}.items():
             with self.subTest(shape=label):
                 self.assertEqual(self.shown(self.comment(prefix)), set(), label)
 
     # intent: control
-    # Green on main: the unchanged case beside it.
     def test_a_note_in_the_open_is_still_recorded_as_shown(self) -> None:
         # The property the strip exists beside: a note a reader can see does
         # suppress the next run's copy.
@@ -9802,6 +9914,7 @@ class TheDedupUsesTheScannerThatAlreadyExistsTests(unittest.TestCase):
         )
         self.assertEqual(len(self.shown(comment)), 1)
 
+    # intent: guard
     def test_a_tag_inside_a_real_code_span_is_still_text(self) -> None:
         # The other direction, unchanged: a `<details` a note QUOTES is not a
         # disclosure, which is what round 3 fixed.
@@ -9813,6 +9926,7 @@ class TheDedupUsesTheScannerThatAlreadyExistsTests(unittest.TestCase):
         )
         self.assertEqual(len(self.shown(comment)), 1)
 
+    # intent: fix
     def test_the_scanner_is_one_function_both_callers_share(self) -> None:
         helpers_source = (
             REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "_helpers.py"
@@ -9843,8 +9957,7 @@ class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
     suite would notice.
     """
 
-    # intent: guard
-    # Green on main: recorder tooling.
+    # intent: control
     def test_the_record_command_can_refresh_a_recording_that_drifted(self) -> None:
         """The command the drift test names has to be able to fix what it names (#1790).
 
@@ -9881,8 +9994,7 @@ class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
         self.assertEqual(entry["body"], body)
         self.assertRegex(entry["recorded_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
-    # intent: guard
-    # Green on main: recorder tooling: no run invents its own fixtures.
+    # intent: control
     def test_without_the_flag_a_recording_is_read_rather_than_re_asked(self) -> None:
         # The control: an ordinary run reads the checkout and reaches nothing.
         digest = next(iter(rendered_index()))
@@ -9894,6 +10006,10 @@ class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
                     rendered_fixture_path(body).read_text(encoding="utf-8"),
                 )
 
+    # intent: guard
+    # marker: red at `016d94ba`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_the_recordings_are_the_directory_the_gate_records_into(self) -> None:
         readiness = load_module("pr_readiness_placement", REPO_ROOT / "scripts" / "pr-readiness.py")
         self.assertTrue(RENDERED_FIXTURES.is_dir())
@@ -9914,6 +10030,10 @@ class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
         }
     )
 
+    # intent: guard
+    # marker: red at `5efad74e`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_this_suite_names_the_shapes_that_need_a_recording(self) -> None:
         # The enumeration and the function are compared, so a change to either
         # fails here. A shape that stops asking the page is a shape whose
@@ -9927,8 +10047,7 @@ class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
                 asking.add(label)
         self.assertEqual(asking, set(self.SHAPES_THAT_ASK_THE_PAGE))
 
-    # intent: guard
-    # Green on main: green on main only because this head's recordings are copied in with the tests; against a clean base tree it fails.
+    # intent: control
     def test_every_recording_this_suite_needs_is_committed(self) -> None:
         index = rendered_index()
         shapes = ThePlacementAsksThePageWhetherASectionIsFoldedTests.SHAPES
@@ -9941,8 +10060,7 @@ class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
                 self.assertIn(hashlib.sha256(written.encode("utf-8")).hexdigest(), index)
                 self.assertTrue(rendered_fixture_path(written).is_file())
 
-    # intent: guard
-    # Green on main: the recorder's own bookkeeping, which main has too.
+    # intent: control
     def test_every_recording_names_the_body_it_answers(self) -> None:
         for digest, entry in rendered_index().items():
             text = indexed_body(entry)
@@ -9998,6 +10116,7 @@ class TheNotesPathTakesTheSameAnswerAsTheStatusPathTests(unittest.TestCase):
                 self.body(colliding=colliding), [self.STATUS]
             )
 
+    # intent: fix
     def test_a_notes_section_the_page_would_not_show_stands_the_write_down(self) -> None:
         written = self.write(colliding=True)
         self.assertIsNotNone(written.refusal, "the notes insert refused and the write did not")
@@ -10007,16 +10126,22 @@ class TheNotesPathTakesTheSameAnswerAsTheStatusPathTests(unittest.TestCase):
             f"nothing said why: {written.announcements}",
         )
 
+    # intent: fix
     def test_the_refusal_names_the_notes_section_rather_than_the_status_one(self) -> None:
         written = self.write(colliding=True)
         self.assertIn(f"`## {self.HEADING}`", written.refusal)
 
+    # intent: guard
     def test_a_body_whose_notes_can_be_placed_is_written_as_before(self) -> None:
         written = self.write(colliding=False)
         self.assertIsNone(written.refusal)
         self.assertIn(f"## {self.HEADING}", written.body)
         self.assertIn(self.NOTE, written.body)
 
+    # intent: guard
+    # marker: red at `0b66add5`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_every_production_insert_reaches_an_announcement_channel(self) -> None:
         """The property, driven, not the name, grepped (#1773, round 9).
 
@@ -10087,6 +10212,7 @@ class TheNotesPathTakesTheSameAnswerAsTheStatusPathTests(unittest.TestCase):
                     f"{name}: the page went unread and the author was told nothing: {said}",
                 )
 
+    # intent: fix
     def test_the_seed_has_no_announcement_channel_to_hand_it(self) -> None:
         """The shape the defect took, twice, and what removed the choice.
 
@@ -10137,6 +10263,7 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
     def comment(self, middle: str) -> str:
         return f"{self.checked()}\n\n{middle}\n<summary>click</summary>\n\n- {self.NOTE}\n\n</details>\n"
 
+    # intent: fix
     def test_a_span_crossing_a_soft_break_does_not_hide_a_real_details(self) -> None:
         # `start `open` / `here `<details>` more` end`: two spans to the page,
         # with the tag as literal text between them, so the page folds the
@@ -10151,6 +10278,7 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
             "a note the page folds away was recorded as shown",
         )
 
+    # intent: guard
     def test_a_quoted_tag_inside_one_span_is_still_read_as_text(self) -> None:
         # The round-5 property, unbroken: a `<details` genuinely inside a span
         # is not a disclosure, so the note beside it IS shown.
@@ -10184,6 +10312,7 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
             f"- {self.NOTE}\n"
         )
 
+    # intent: fix
     def test_a_block_boundary_without_a_blank_line_still_ends_the_span(self) -> None:
         # Models the parser: the bounds come from `MARKDOWN.parse`, so this
         # asserts what CommonMark says a block is. The recorded fixture below
@@ -10246,7 +10375,7 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
         self.assertEqual(blocks["cr"], blocks["lf"], blocks)
         self.assertEqual(blocks["crlf"], blocks["lf"], blocks)
 
-    # intent: guard
+    # intent: control
     def test_the_dedup_reads_a_comment_the_same_way_however_its_lines_end(self) -> None:
         # The other half of the boundary: a note shown in the open is shown
         # under all three endings, and a note behind a disclosure is hidden
@@ -10286,6 +10415,7 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
             self.assertIsNotNone(folded, label)
             self.assertIn(self.NOTE, folded.group(0), f"{label}: the page did not fold the note")
 
+    # intent: fix
     def test_a_table_row_gives_each_cell_its_own_span(self) -> None:
         """A row's cells shared the row's map (#1773, round 9).
 
@@ -10324,6 +10454,7 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
             self.execution()._notes_a_reader_has_been_shown(quoted, self.checked()),
         )
 
+    # intent: guard
     def test_two_cells_holding_one_text_keep_their_order(self) -> None:
         """The cursor's claim, pinned (#1773, round 10).
 
@@ -10344,6 +10475,7 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
         self.assertLess(bounds[first][0], bounds[second][0], "in the order they appear")
         self.assertEqual(spans[first + 1], "<details>more", "and the cell between them is its own")
 
+    # intent: guard
     def test_a_cell_whose_text_is_not_in_its_row_takes_its_row_rather_than_another_block(
         self,
     ) -> None:
@@ -10370,9 +10502,58 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
             self.assertLessEqual(stop, paragraph_at, f"a span reached past its block: {body[start:stop]!r}")
         self.assertIn("and later: a | b appears again here", spans)
 
+    # intent: guard
+    # marker: green at `87df0a5f`, this round's base, which is what a guard over round 11's
     # intent: fix
+    def test_every_path_into_the_block_map_crosses_the_normalisation(self) -> None:
+        """"Normalise once at the boundary" has a precondition, asserted here.
+
+        Normalising once is sound only while the boundary is UPSTREAM of
+        every path into what it protects; otherwise it is a guard on the
+        function you wish callers used. So the call graph says it rather than
+        a comment: `_inline_block_bounds`, which builds its offset table with
+        `split("\n")`, is reached from `_code_spans_blanked` alone;
+        `_code_spans_blanked` from `_without_collapsed_blocks` alone; and the
+        first statement of `_without_collapsed_blocks` is the substitution
+        that makes every ending an LF. A second caller of either makes this
+        red, and that is the day the normalisation belongs lower down
+        (#1773, round 12).
+        """
+        source = (
+            REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "execution.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        callers: dict[str, set[str]] = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name):
+                    callers.setdefault(inner.func.id, set()).add(node.name)
+        self.assertEqual(callers.get("_inline_block_bounds"), {"_code_spans_blanked"})
+        self.assertEqual(callers.get("_code_spans_blanked"), {"_without_collapsed_blocks"})
+        # And the boundary itself is the first thing that function does.
+        boundary = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_without_collapsed_blocks"
+        )
+        statements = [node for node in boundary.body if not isinstance(node, ast.Expr)]
+        self.assertEqual(
+            ast.unparse(statements[0]),
+            'comment = MARKDOWN_LINE_ENDING_RE.sub(\'\\n\', comment)',
+        )
+
+    # intent: guard
     def test_the_page_does_not_fold_the_note_below_that_table(self) -> None:
         """A test named "asks reality" passed under the opposite of its claim.
+
+        MARKER, measured: this is a `control` rather than a `fix`. It is green
+        at `9a5db027` and on main, because what it asserts -- where this page
+        folds and where it does not -- was true before this branch and is true
+        after it. Round 11 labelled it `fix` and the label said the wrong
+        thing: the ASSERTION it replaced was false, and a corrected assertion
+        of an unchanged behaviour is a control (#1773, round 12).
 
         The slice was `<details.*` with `re.S`, which runs to the END of the
         document -- so "the note is inside the disclosure" was satisfied by a
@@ -10410,6 +10591,7 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
             "the module's answer moved; the body's residual needs restating",
         )
 
+    # intent: guard
     def test_a_blank_line_ends_the_span_so_a_later_block_is_still_stripped(self) -> None:
         # The control the brief names: a span that closes on the next line,
         # and a `<details>` in a THIRD paragraph, which is still stripped
@@ -10424,6 +10606,7 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
             self.execution()._notes_a_reader_has_been_shown(comment, self.checked()), set()
         )
 
+    # intent: guard
     def test_the_page_agrees_that_the_crossing_shape_folds_the_note(self) -> None:
         # The claim the module makes, asked of the renderer once and recorded.
         with recorded_page():
@@ -10469,11 +10652,19 @@ class EveryInsertTakesTheWritesAnswerTests(unittest.TestCase):
             )
         return seeded.body, list(seeded.announcements)
 
+    # intent: guard
+    # marker: red at `cbacea60`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_a_permanent_cause_leaves_the_body_alone_and_says_why(self) -> None:
         body, said = self.seeded(transient=False)
         self.assertEqual(body, self.FOLDED, "a section was placed into a fold")
         self.assertTrue(any("Mergeability" in note for note in said), said)
 
+    # intent: guard
+    # marker: red at `cbacea60`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_a_blip_places_it_and_announces_that_the_page_went_unread(self) -> None:
         body, said = self.seeded(transient=True)
         self.assertIn("## Mergeability", body)
@@ -10507,27 +10698,71 @@ class EveryInsertTakesTheWritesAnswerTests(unittest.TestCase):
 
     # intent: fix
     def test_two_sections_unchecked_for_one_reason_are_two_notes(self) -> None:
-        # The dedup keys on the whole sentence, and the sentence carries the
-        # heading now: without it the second section's note collapsed into the
-        # first's and the author heard about one section when two went
-        # unchecked (#1773, round 11).
+        """Two sections placed by one write, under one blip (#1773, round 12).
+
+        The dedup keys on the whole sentence and the sentence carries the
+        heading now: without it the second section's note collapsed into the
+        first's and the author heard about one section when two went
+        unchecked (#1773, round 11).
+
+        Round 11 drove that at `evidence._announce_unverified`, a private
+        name the previous head does not have, so it was red there for a
+        reason nobody using this module can reach. `write_evidence_status_section`
+        is the public one: it places `## Evidence Status` and moves the
+        author's block to `## Evidence Notes` in the same call, so a single
+        renderer blip leaves both unchecked and the author reads two notes in
+        one comment. The cost of the public path is the fixture -- a body
+        carrying a block to move and an unclosed fold to make the placement
+        a question, plus the renderer patch: eight lines of setup where the
+        seam took two.
+        """
         helpers_module = sys.modules["_helpers"]
         evidence = sys.modules["evidence"]
-        announcements: list[str] = []
-        for heading in ("Evidence Status", "Evidence Notes"):
-            evidence._announce_unverified(
-                announcements, helpers_module.unverified_announcement(heading, "a reason")
-            )
-        # And once each, however many times a run asks.
-        evidence._announce_unverified(
-            announcements, helpers_module.unverified_announcement("Evidence Status", "a reason")
-        )
-        self.assertEqual(len(announcements), 2, announcements)
-        self.assertEqual(
-            [helpers_module.unverified_heading(note) for note in announcements],
-            ["Evidence Status", "Evidence Notes"],
+        execution = sys.modules["execution"]
+        body = (
+            "## Summary\n\n- one change\n\n"
+            "## Evidence Status\n\n- [pending-ci] item -- waiting\n\n"
+            "a note the author wrote under the heading\n\n"
+            "<details>\n<summary>log</summary>\n\na fold nobody closed\n"
         )
 
+        def refuse(text: str) -> str:
+            raise helpers.RendererUnavailable(
+                "the renderer answered HTTP 503", cause="server error"
+            )
+
+        with (
+            mock.patch.object(helpers, "render_markdown", side_effect=refuse),
+            mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            write = evidence.write_evidence_status_section(body, ["- [complete] item -- proof"])
+        self.assertIsNone(write.refusal, "a blip stood the write down")
+        said = list(write.announcements)
+        self.assertTrue(
+            all(evidence.is_unverified_announcement(note) for note in said), said
+        )
+        # One note per section, and each section once however many times the
+        # write asks about it. Read as the author reads it -- the heading is
+        # IN the sentence -- rather than through a helper, so the assertion
+        # is about behaviour at any head rather than about a name this branch
+        # adds.
+        self.assertEqual(len(said), 2, said)
+        for heading in ("Evidence Status", "Evidence Notes"):
+            self.assertEqual(
+                [note for note in said if f"`## {heading}`" in note].__len__(),
+                1,
+                f"{heading}: {said}",
+            )
+        # And the author reads both in the one comment the turn posts.
+        comment = execution.compose_uncarried_notes_comment(None, said, "abc1234")
+        for heading in ("Evidence Status", "Evidence Notes"):
+            self.assertIn(f"`## {heading}`", comment)
+
+    # intent: guard
+    # marker: red at `0b66add5`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_the_seed_hands_its_caller_the_reason_rather_than_a_step_log(self) -> None:
         """The property this class is for, driven at the seam (#1773, round 9).
 
@@ -10589,6 +10824,7 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
         ):
             return helpers.placement_refusal(self.BODY, self.WRITTEN, self.HEADING)
 
+    # intent: fix
     def test_no_token_refuses_and_says_what_to_do_about_it(self) -> None:
         answer = self.answer_when(
             helpers.RendererUnavailable(
@@ -10599,6 +10835,7 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
         self.assertIn("no GH_TOKEN", answer.refusal)
         self.assertIn("export GH_TOKEN or GITHUB_TOKEN and run again", answer.refusal)
 
+    # intent: fix
     def test_an_http_failure_and_an_unreachable_renderer_proceed_unverified(self) -> None:
         for label, reason in (
             ("a spent rate limit", "the renderer's rate limit is spent (it resets at soon)"),
@@ -10684,7 +10921,7 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
                     "secondary rate limit",
                 )
 
-    # intent: control
+    # intent: guard
     def test_a_header_less_403_that_says_nothing_is_still_the_token(self) -> None:
         # The control the decision needs: a forbidden token also has quota
         # remaining and no `Retry-After`, so without the message the answer is
@@ -10699,6 +10936,9 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
         )
 
     # intent: guard
+    # marker: red at `9a5db027`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_reading_the_body_leaves_it_readable(self) -> None:
         # The body is a stream: reading it to classify consumed it, so a
         # caller that reads it afterwards for its own message got nothing.
@@ -10707,6 +10947,7 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
         self.assertTrue(helpers.says_secondary_rate_limit(error))
         self.assertIn("secondary rate limit", error._body_text)
 
+    # intent: fix
     def test_each_raise_site_decides_which_family_it_is(self) -> None:
         """All THREE sites, and the permanence split inside one of them.
 
@@ -10747,6 +10988,10 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             helpers.RendererUnavailable("a cause the table does not hold", cause="a new thing")
 
+    # intent: guard
+    # marker: red at `cbacea60`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_a_rejected_token_refuses_the_placement_like_an_absent_one(self) -> None:
         # The consequence, at the placement: a token the renderer will not
         # take is a local condition the author can act on, so it gets the
@@ -10769,6 +11014,10 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
         self.assertIn("the renderer rejected the token", answer.refusal)
         self.assertNotIn("export a token the renderer accepts", answer.refusal)
 
+    # intent: guard
+    # marker: red at `cbacea60`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_every_refusing_cause_names_an_action_and_no_proceeding_one_does(self) -> None:
         """The semantic difference between the families, as a property (#1773, round 8).
 
@@ -10803,6 +11052,10 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
                     self.assertIsNone(answer.unverified, f"{label}: a refusal read as a blip")
                     self.assertIn(raised.repair, answer.refusal, f"{label}: the action went unsaid")
 
+    # intent: guard
+    # marker: red at `0b66add5`, its round's base, by API alone and it cannot be otherwise --
+    # the seam it pins is one that round ADDS, so there is no property to hold there and no
+    # drive that makes it behaviourally red (#1773, round 12).
     def test_every_cause_in_the_table_carries_its_family_and_its_repair(self) -> None:
         """The table is the only constructor input (#1773, round 9).
 
@@ -10820,12 +11073,14 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
                 self.assertEqual(raised.repair, repair)
                 self.assertEqual(bool(repair), not transient, "a family without its repair")
 
+    # intent: fix
     def test_a_raise_site_cannot_choose_a_family_or_a_repair(self) -> None:
         with self.assertRaises(TypeError):
             helpers.RendererUnavailable("x", transient=True)
         with self.assertRaises(TypeError):
             helpers.RendererUnavailable("x", cause="no token", repair="something else")
 
+    # intent: fix
     def test_the_page_carries_the_cause_through_rendered_page(self) -> None:
         for transient in (True, False):
             with self.subTest(transient=transient):
