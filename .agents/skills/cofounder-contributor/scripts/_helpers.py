@@ -1131,13 +1131,19 @@ def rendered_page(text: str) -> RenderedPage:
     section beside it, and both writes ask this question of a body that may
     already have been rendered.
     """
-    if text not in _RENDERED_PAGES:
-        try:
-            html = render_markdown(text)
-        except RendererUnavailable as unavailable:
-            _RENDERED_PAGES[text] = RenderedPage(unverified=str(unavailable))
-        else:
-            _RENDERED_PAGES[text] = RenderedPage(html=html)
+    if text in _RENDERED_PAGES:
+        return _RENDERED_PAGES[text]
+    try:
+        html = render_markdown(text)
+    except RendererUnavailable as unavailable:
+        # Not cached. A failure is not an answer about this body: a 503, a
+        # spent minute of a rate limit or a dropped connection says nothing
+        # about the text, and storing it disabled the check for that body for
+        # the rest of the process -- so a turn that writes twice would take
+        # the fallback on the second write after the renderer had come back
+        # (#1773, round 2).
+        return RenderedPage(unverified=str(unavailable))
+    _RENDERED_PAGES[text] = RenderedPage(html=html)
     return _RENDERED_PAGES[text]
 
 
@@ -1146,40 +1152,52 @@ def rendered_page(text: str) -> RenderedPage:
 # `<` there is followed by `/`, which this cannot match.
 DISCLOSURE_OPEN_RE = re.compile(r"<details(?=[\s>/]|$)", re.IGNORECASE)
 DISCLOSURE_CLOSE_RE = re.compile(r"</details(?=[\s>]|$)", re.IGNORECASE)
+# An HTML comment, including one nobody closed -- which runs to the end of the
+# text it was opened in, exactly as CommonMark and the page read it.
+HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
+
+
+def _blanked(match: re.Match[str]) -> str:
+    """The match with every character but its line breaks replaced, so later lines keep their numbers."""
+    return "".join(char if char == "\n" else " " for char in match.group(0))
 
 
 class FoldedSectionReader(HTMLParser):
-    """Where the page puts a section's heading: at the document's level, or inside a fold.
+    """Every heading the page shows that reads as this section, and whether a fold holds it.
 
-    One question and two answers, because they are different refusals: a
-    heading the page does not show at all is the shape `placement_refusal`
-    already refuses, and a heading the page shows inside a `<details>` is the
-    one this reader exists for.
+    A LIST rather than the first match, because the question a placement asks
+    is not "is a heading of this name folded" but "is THE heading this write
+    is about to land on folded". Those differ on a body carrying the name
+    twice: `section_heading_index` skips a heading carrying inline HTML, so
+    with `## Evidence <del>Status</del>` at the top level and a plain
+    `## Evidence Status` below an unclosed `<details>`, a reader that answered
+    about the first match said "not folded" about the struck-out one and the
+    write landed in the fold -- and the rewrite took the `</details>` with it,
+    folding `## Validation` too (#1773, round 2, reproduced against GitHub's
+    own renderer).
 
-    Which h2 is this section: the first whose text reads as the heading under
-    `heading_identity`, the repo's one rule for when two headings are one. A
-    `<br>` inside the heading breaks the text, and a heading broken across two
-    lines is not this heading -- the same answer `section_heading_index` gives
-    a body for `## Evidence<br>Status`, reached here without a tag list
-    because the page has already resolved the tag.
+    The identity of the target is carried into the question instead: the
+    caller knows which of the body's headings of this name the source model
+    chose, and asks about that one by position. So this enumerates the SAME
+    SET the source enumerates rather than applying the source's acceptance
+    rule -- a `<br>` is a space here because `inline_text` makes it one there,
+    and a heading carrying a tag is counted here because it is counted there,
+    even though neither reader would choose it.
 
     Depth rather than presence, so a `<details>` nested inside another still
     folds what it holds. `<summary>` needs no case of its own: it is inside
     the element like everything else, and a page does not put an h2 in one.
-
-    Where the two readers can disagree is a body that writes this heading
-    twice, once carrying inline HTML and once plain. The parse skips the
-    tagged one and this reader does not, so a tagged heading above a plain one
-    can be the h2 answered about here. That direction costs a refusal on a
-    body `rejected_heading_note` is already telling its author to repair, and
-    a refusal is the side a placement check errs on.
+    A `<details>` written INSIDE a heading opens after the `h2` start tag, so
+    the heading's own depth is taken before it and such a heading is not its
+    own fold.
     """
 
     def __init__(self, heading: str) -> None:
         super().__init__(convert_charrefs=True)
         self.wanted = heading_identity(heading)
-        self.found = False
-        self.folded = False
+        # One entry per heading the page shows that reads as this section, in
+        # document order: True where a fold holds it.
+        self.folded: list[bool] = []
         self._fold_depth = 0
         self._heading: list[str] | None = None
         self._heading_fold_depth = 0
@@ -1189,7 +1207,9 @@ class FoldedSectionReader(HTMLParser):
         if name == "details":
             self._fold_depth += 1
         elif name == "br" and self._heading is not None:
-            self._heading.append("\n")
+            # A space, which is what `inline_text` makes of a break in a
+            # heading. The two readers have to enumerate one set.
+            self._heading.append(" ")
         elif name == "h2":
             self._heading = []
             self._heading_fold_depth = self._fold_depth
@@ -1203,21 +1223,20 @@ class FoldedSectionReader(HTMLParser):
             self._fold_depth = max(self._fold_depth - 1, 0)
         elif name == "h2" and self._heading is not None:
             text, self._heading = "".join(self._heading), None
-            if not self.found and "\n" not in text and heading_identity(text) == self.wanted:
-                self.found = True
-                self.folded = self._heading_fold_depth > 0
+            if heading_identity(text) == self.wanted:
+                self.folded.append(self._heading_fold_depth > 0)
 
     def handle_data(self, data: str) -> None:
         if self._heading is not None:
             self._heading.append(data)
 
 
-def folded_on_the_page(html: str, heading: str) -> tuple[bool, bool]:
-    """Whether the page shows this section's heading, and whether a fold holds it."""
+def folded_headings_on_the_page(html: str, heading: str) -> list[bool]:
+    """One entry per heading the page shows reading as this section: True where a fold holds it."""
     reader = FoldedSectionReader(heading)
     reader.feed(html)
     reader.close()
-    return reader.found, reader.folded
+    return reader.folded
 
 
 def section_heading_line(body: str, heading: str) -> int | None:
@@ -1238,6 +1257,18 @@ def open_disclosure_line(body: str, before_line: int) -> int | None:
     so a fold from one is a refusal that names no line, which is the whole of
     what it costs.
 
+    A commented-out disclosure is not one. The factory writes its own metadata
+    as an HTML comment and authors leave notes in them, so a `<details>` a
+    comment holds counted toward the nesting and named a line whose repair
+    does nothing (#1773, round 2). The comment's text is blanked rather than
+    removed, so the line numbers of everything after it still hold.
+
+    The OUTERMOST of the ones still open is named, not the innermost. The
+    refusal tells an author which element to close, and closing an inner
+    disclosure inside an outer one that is also open leaves the section
+    folded by the outer one -- a repair that does not repair. The outermost is
+    the one whose closing puts the section back on the page.
+
     This counts opening tags against closing ones, which is the nesting model
     the page is asked to replace. It decides nothing: the page has already
     said the section is folded, and this only looks for the line to name.
@@ -1246,7 +1277,7 @@ def open_disclosure_line(body: str, before_line: int) -> int | None:
     for token in _parsed(body):
         if token.type != "html_block" or token.map is None or token.map[0] >= before_line:
             continue
-        content = token.content
+        content = HTML_COMMENT_RE.sub(_blanked, token.content)
         tags = sorted(
             [(match.start(), True) for match in DISCLOSURE_OPEN_RE.finditer(content)]
             + [(match.start(), False) for match in DISCLOSURE_CLOSE_RE.finditer(content)]
@@ -1256,7 +1287,7 @@ def open_disclosure_line(body: str, before_line: int) -> int | None:
                 opened.append(token.map[0] + content.count("\n", 0, offset))
             elif opened:
                 opened.pop()
-    return opened[-1] if opened else None
+    return opened[0] if opened else None
 
 
 def _unshown_refusal(body: str, heading: str) -> str:
@@ -1282,12 +1313,27 @@ def _folded_refusal(written: str, heading: str) -> str:
     if at is None:
         where = "inside a `<details>`"
     else:
+        # `code_span`, not a pair of backticks: the opening line is the
+        # author's characters, this sentence reaches a comment the app posts,
+        # and a backtick inside the tag closes a hand-written span early --
+        # after which an `@name` in the same tag is a mention GitHub delivers
+        # to someone with nothing to do with this (#1730, round 2; #1773,
+        # round 2).
         opening = MARKDOWN_LINE_ENDING_RE.split(written)[at].strip()
-        where = f"inside the `<details>` opened at line {at + 1} (`{opening}`)"
+        where = f"inside the `<details>` opened at line {at + 1} ({code_span(opening)})"
     return (
         f"the `## {heading}` section this write places renders {where}, so the page folds it "
         "away and a reader sees a disclosure where the section should be; closing that element "
         "above the section is what puts the section back on the page"
+    )
+
+
+def unverified_note(reason: str) -> str:
+    """The sentence an author is owed when the page could not be asked about their write."""
+    return (
+        f"rendered view unverified: {reason}. Whether the section this write places is folded "
+        "away behind a disclosure was decided by the source model alone, which cannot see a "
+        "fold"
     )
 
 
@@ -1308,7 +1354,22 @@ def could_be_folded(written: str, heading_line: int) -> bool:
     return DISCLOSURE_OPEN_RE.search(above) is not None
 
 
-def placement_refusal(body: str, written: str, heading: str) -> str | None:
+class PlacementAnswer(NamedTuple):
+    """What a placement check decided, and what it could not ask.
+
+    Two fields because they are two different things a caller owes an author.
+    `refusal` is why this write did not happen. `unverified` is a question
+    that went unasked -- the renderer was unreachable, so the check that ran
+    is weaker than the one a lane runs -- and it travels on an ACCEPTED write
+    too, which is the case it exists for: a renderer 503 used to accept a
+    folded placement with nothing visible anywhere (#1773, round 2).
+    """
+
+    refusal: str | None = None
+    unverified: str | None = None
+
+
+def placement_refusal(body: str, written: str, heading: str) -> PlacementAnswer:
     """Why the page would not show the section this write places, or None.
 
     A write is a write when a reader can see it. Every placement is either
@@ -1332,7 +1393,21 @@ def placement_refusal(body: str, written: str, heading: str) -> str | None:
     page rather than modelled -- the move the readiness gate made for the
     status lines it reads (#1745), with the same fallback: no page means the
     source model's answer and a sentence saying the page went unread, never a
-    silent accept of something the model would not accept on its own.
+    silent accept of something the model would not accept on its own. That
+    sentence comes BACK to the caller rather than going to a log, because
+    every plane that runs this check runs it where stderr is a step log and
+    the author is somewhere else (#1740, #1773 round 2).
+
+    What the page is asked is whether it folds ANY heading reading as this
+    section, not whether it folds the one this write lands on. The first
+    version asked about the first heading of that name, which is a true answer
+    about the wrong element: a struck-out `## Evidence <del>Status</del>` above
+    a plain heading inside a fold answered "not folded" for a write that landed
+    in the fold, and took the `</details>` with it so `## Validation` folded too
+    (#1773, round 2). Picking the right one instead needs a model of what the
+    renderer does to a heading carrying a tag -- it decorates some and leaves
+    others -- and that model is the thing this seam exists not to build. The
+    question with no index in it has neither problem and errs toward refusing.
 
     A section is refused for the fold the page shows, not for the fold its own
     text makes. A `<details>` an author opens INSIDE the section folds that
@@ -1343,20 +1418,34 @@ def placement_refusal(body: str, written: str, heading: str) -> str | None:
     placed whatever its section then holds.
     """
     if not has_markdown_section(written, heading):
-        return _unshown_refusal(body, heading)
+        return PlacementAnswer(refusal=_unshown_refusal(body, heading))
     heading_line = section_heading_line(written, heading)
     if heading_line is None or not could_be_folded(written, heading_line):
-        return None
+        return PlacementAnswer()
     page = rendered_page(written)
     if page.unverified is not None:
-        log(f"rendered view unverified: {page.unverified}")
-        return None
-    found, folded = folded_on_the_page(page.html, heading)
-    if not found:
+        return PlacementAnswer(unverified=unverified_note(page.unverified))
+    shown = folded_headings_on_the_page(page.html, heading)
+    if not shown:
         # A heading the parse reads and the page does not show at all. The
         # same refusal as a swallowed section, because that is what it is.
-        return _unshown_refusal(body, heading)
-    return _folded_refusal(written, heading) if folded else None
+        return PlacementAnswer(refusal=_unshown_refusal(body, heading))
+    # ANY of them, rather than the one this write lands on. Which one that is
+    # cannot be decided without a model of GitHub's sanitizer, and the
+    # measurement says so: `## <details>Evidence Status</details>` comes back
+    # as `<h2><details><summary>Details</summary>Evidence Status</details></h2>`
+    # -- the renderer ADDS a summary, so that heading's text is no longer this
+    # heading and the page shows one match where the body has two; while
+    # `## Evidence <del>Status</del>` comes back reading as this heading and
+    # the page shows two. An index into one list read against the other names
+    # some other heading, which is the defect this round exists to close, and
+    # it is unsafe counted from either end (#1773, round 2).
+    #
+    # So no index is taken. A body whose page folds a heading of this name
+    # away is refused, whichever heading it is. That can only ADD refusals,
+    # and the one it adds needs two headings a reader sees under one name --
+    # the shape `rejected_heading_note` already tells an author to repair.
+    return PlacementAnswer(refusal=_folded_refusal(written, heading) if any(shown) else None)
 
 
 def insert_markdown_section(
@@ -1393,7 +1482,15 @@ def insert_markdown_section(
         content,
         before_heading=before_heading,
         after_heading=after_heading,
-    )[0]
+    ).body
+
+
+class SectionInsert(NamedTuple):
+    """The body an insert produced, why it stood down, and what it could not ask."""
+
+    body: str
+    refusal: str | None = None
+    unverified: str | None = None
 
 
 def inserted_markdown_section(
@@ -1403,7 +1500,7 @@ def inserted_markdown_section(
     *,
     before_heading: str | None = None,
     after_heading: str | None = None,
-) -> tuple[str, str | None]:
+) -> SectionInsert:
     """`insert_markdown_section`, with the reason a stand-down happened beside the body.
 
     The reason comes back rather than only reaching a log, because the body an
@@ -1412,6 +1509,11 @@ def inserted_markdown_section(
     heading on the page", and the fold that actually stopped the write stayed
     in a step log nobody opens. The specific reason is the one an author can
     act on (#1773).
+
+    `unverified` rides along for the same reason one step further: a write
+    that went ahead without the page having been asked was decided by a
+    weaker check than a lane runs, and a caller with a surface the author
+    reads is the only place that fact is worth anything (#1773, round 2).
     """
     section = f"## {heading}\n{content.strip(chr(10))}".rstrip("\n")
     # The author's body, untrimmed, because that is the text the cut is made
@@ -1424,12 +1526,15 @@ def inserted_markdown_section(
         # whose old one could not be removed would leave two, and returning
         # the body without saying so let a caller believe it had written.
         log(f"refusing to rewrite the `{heading}` section: {refusal}")
-        return body, refusal
+        return SectionInsert(body, refusal)
     written = _rewritten(body, bounds, removed, section, heading, before_heading, after_heading)
-    if (unshown := placement_refusal(body, written, heading)) is not None:
-        log(f"refusing to write the `{heading}` section: {unshown}")
-        return body, unshown
-    return written, None
+    answer = placement_refusal(body, written, heading)
+    if answer.unverified is not None:
+        log(answer.unverified)
+    if answer.refusal is not None:
+        log(f"refusing to write the `{heading}` section: {answer.refusal}")
+        return SectionInsert(body, answer.refusal, answer.unverified)
+    return SectionInsert(written, None, answer.unverified)
 
 
 def _rewritten(

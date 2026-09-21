@@ -101,6 +101,19 @@ def record_rendered(text: str) -> str:
     return rendered
 
 
+def recorded_html(text: str) -> str:
+    """One body's recorded answer, recorded now if the recorder is on."""
+    path = rendered_fixture_path(text)
+    if path.is_file():
+        return path.read_text(encoding="utf-8")
+    if os.environ.get(RECORD_ENV):
+        return record_rendered(text)
+    raise AssertionError(
+        f"No recorded renderer response for this body ({path.name}). Record it with:\n"
+        f"  {RECORD_COMMAND}"
+    )
+
+
 @contextlib.contextmanager
 def recorded_page():
     """Answer the placement check from checked-in renderer responses instead of the network.
@@ -119,19 +132,8 @@ def recorded_page():
         yield
         return
 
-    def answer(text: str) -> str:
-        path = rendered_fixture_path(text)
-        if path.is_file():
-            return path.read_text(encoding="utf-8")
-        if os.environ.get(RECORD_ENV):
-            return record_rendered(text)
-        raise AssertionError(
-            f"No recorded renderer response for this body ({path.name}). Record it with:\n"
-            f"  {RECORD_COMMAND}"
-        )
-
     with (
-        mock.patch.object(helpers, "render_markdown", side_effect=answer),
+        mock.patch.object(helpers, "render_markdown", side_effect=recorded_html),
         mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
     ):
         yield
@@ -4969,7 +4971,7 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertIn("- [complete] `swift test` passes -- 214 tests passed", written)
         self.assertLess(written.index("## Evidence Status"), written.index("# Release blockers"))
-        self.assertIsNone(self.evidence()._placement_a_reader_cannot_see(written))
+        self.assertIsNone(self.evidence()._placement_a_reader_cannot_see(written).refusal)
 
     def test_a_new_section_the_page_would_not_show_stands_the_body_down(self) -> None:
         # The postcondition's own case: no section to replace, and every
@@ -5036,7 +5038,7 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
         )
         self.assertEqual(errors, [])
         self.assertIn("- [complete] `swift test` passes -- 214 tests passed", written)
-        self.assertIsNone(evidence._placement_a_reader_cannot_see(written))
+        self.assertIsNone(evidence._placement_a_reader_cannot_see(written).refusal)
         # And the plain shape, with no HTML at all, still reads back whole.
         plain, plain_errors = run_contributor.render_execution_summary_body(
             "## Summary\n\n- did the thing\n\n"
@@ -8624,8 +8626,12 @@ class ThePlacementAsksThePageWhetherASectionIsFoldedTests(unittest.TestCase):
         "- [complete] `swift test` -- 1992 tests passed\n"
     )
 
-    def placement(self, body: str) -> str | None:
+    def answer(self, body: str):
+        """The whole answer: why the write stood down, and what went unasked."""
         return helpers.placement_refusal(body, body + self.SECTION, self.HEADING)
+
+    def placement(self, body: str) -> str | None:
+        return self.answer(body).refusal
 
     def test_every_placement_shape_gets_the_answer_the_page_supports(self) -> None:
         for label, (body, expected) in self.SHAPES.items():
@@ -8661,10 +8667,10 @@ class ThePlacementAsksThePageWhetherASectionIsFoldedTests(unittest.TestCase):
         asked: list[str] = []
         with recorded_page():
             with mock.patch.object(helpers, "render_markdown", side_effect=asked.append):
-                refusal = helpers.placement_refusal(
+                answer = helpers.placement_refusal(
                     self.SUMMARY, self.SECTION_FOLDS_ITSELF, self.HEADING
                 )
-        self.assertIsNone(refusal)
+        self.assertIsNone(answer.refusal)
         self.assertEqual(asked, [], "the page was asked about a fold below the heading")
 
     def test_the_page_is_asked_only_where_something_above_could_fold_the_heading(self) -> None:
@@ -8720,23 +8726,24 @@ class ThePlacementAsksThePageWhetherASectionIsFoldedTests(unittest.TestCase):
                 else:
                     self.assertIsNone(refusal, label)
 
-    def test_with_no_renderer_the_run_says_the_page_went_unread(self) -> None:
-        # Never a silent accept: the body the page would have refused is
-        # placed, and the run says which question went unanswered and why.
+    def test_with_no_renderer_the_note_comes_back_to_the_caller(self) -> None:
+        # Never a silent accept, and never only a log line: the body the page
+        # would have refused is placed, and the sentence saying which question
+        # went unanswered is RETURNED, so a caller with a surface the author
+        # reads can put it there (#1773, round 2).
         body, _ = self.SHAPES["an unclosed disclosure above the section"]
-        spoke = io.StringIO()
-        with contextlib.redirect_stderr(spoke):
-            self.assertIsNone(self.placement(body))
-        self.assertIn(f"rendered view unverified: {SUITE_UNVERIFIED}", spoke.getvalue())
+        answer = self.answer(body)
+        self.assertIsNone(answer.refusal)
+        self.assertIn(SUITE_UNVERIFIED, answer.unverified)
+        self.assertIn("decided by the source model alone", answer.unverified)
 
     def test_a_body_with_nothing_to_fold_says_nothing_about_the_renderer(self) -> None:
         # The note is about a question that was asked and went unanswered. A
         # body no fold can reach asks nothing, so a tokenless run on ordinary
-        # bodies stays quiet rather than printing a line per write.
-        spoke = io.StringIO()
-        with contextlib.redirect_stderr(spoke):
-            self.assertIsNone(self.placement(self.SUMMARY))
-        self.assertNotIn("rendered view unverified", spoke.getvalue())
+        # bodies carries no note rather than one per write.
+        answer = self.answer(self.SUMMARY)
+        self.assertIsNone(answer.refusal)
+        self.assertIsNone(answer.unverified)
 
 
 class TheWriterStandsDownOnAFoldedPlacementTests(unittest.TestCase):
@@ -8809,6 +8816,328 @@ class TheWriterStandsDownOnAFoldedPlacementTests(unittest.TestCase):
         self.assertIn("- [complete] `swift test` passes -- 214 passed", write.body)
 
 
+class ThePageIsAskedAboutTheSectionAndNotAHeadingBesideItTests(unittest.TestCase):
+    """The check asked a true question about the wrong element (#1773, round 2).
+
+    `placement_refusal` answered from the FIRST rendered heading whose text
+    reads as this section, while `section_heading_index` skips a heading
+    carrying inline HTML. A body with both -- a struck-out
+    `## Evidence <del>Status</del>` at the top level and the plain heading
+    below an unclosed `<details>` -- got a true answer about the struck-out
+    one ("not folded") for a write that landed in the fold; the rewrite then
+    took the `</details>` with it and `## Validation` folded too.
+
+    The defect has the same shape as #1751's regression one lane over: a
+    reading compared against something adjacent to the thing being acted on.
+    Here the fix is not to pick the right heading but to stop picking. Which
+    rendered heading corresponds to which source heading cannot be decided
+    without modelling what the renderer does to a heading carrying a tag, and
+    the measurement says that model would have to have two branches:
+
+    - `## Evidence <del>Status</del>` renders as `<h2>Evidence <del>Status</del></h2>`,
+      whose text still reads as this heading, so the page shows two matches
+      where the body has two;
+    - `## <details>Evidence Status</details>` renders as
+      `<h2><details><summary>Details</summary>Evidence Status</details></h2>`
+      -- the renderer ADDS a summary -- so its text no longer reads as this
+      heading and the page shows one match where the body has two.
+
+    An index into one list read against the other names some other heading in
+    the second case, counted from either end. So no index is taken: a page
+    that folds a heading of this name away refuses the write, whichever
+    heading it is. That direction can only add refusals, and the one it adds
+    needs two headings a reader sees under one name.
+    """
+
+    HEADING = "Evidence Status"
+    SECTION = "\n## Evidence Status\n\n- [complete] `swift test` -- 1992 tests passed\n"
+    SUMMARY = "## Summary\n\n- one change\n\n"
+    FOLD = "<details>\n<summary>notes</summary>\n\nfolded prose\n"
+
+    # The reproduction, byte for byte: a tagged heading the source model skips
+    # sits at the top level, and the heading it chooses is below an unclosed
+    # disclosure. Red at `c717e7ef`, where the refusal was None.
+    TAGGED_ABOVE_A_FOLDED_SECTION = f"{SUMMARY}## Evidence <del>Status</del>\n\nstruck\n\n{FOLD}"
+    # And the body the renderer treats the other way: the source model skips
+    # this heading too, but the page does not read it as this heading at all.
+    # It placed before this round and it places now.
+    DECORATED_ABOVE_A_PLAIN_SECTION = (
+        f"{SUMMARY}## <details>Evidence Status</details>\n\ntagged\n"
+    )
+
+    def answer(self, body: str):
+        return helpers.placement_refusal(body, body + self.SECTION, self.HEADING)
+
+    def test_a_tagged_heading_above_a_folded_section_no_longer_answers_for_it(self) -> None:
+        with recorded_page():
+            answer = self.answer(self.TAGGED_ABOVE_A_FOLDED_SECTION)
+        self.assertIsNotNone(answer.refusal)
+        self.assertIn("the page folds it away", answer.refusal)
+        self.assertIn("`## Evidence Status`", answer.refusal)
+
+    def test_the_page_shows_both_headings_and_only_one_of_them_is_folded(self) -> None:
+        # The measurement the rule rests on, asserted rather than described:
+        # the struck-out heading reads as this heading on the page and is not
+        # folded, and the one the write lands on is.
+        written = self.TAGGED_ABOVE_A_FOLDED_SECTION + self.SECTION
+        with recorded_page():
+            page = helpers.rendered_page(written)
+        self.assertIsNone(page.unverified)
+        self.assertEqual(helpers.folded_headings_on_the_page(page.html, self.HEADING), [False, True])
+
+    def test_a_heading_the_renderer_decorates_is_not_this_heading_and_still_places(self) -> None:
+        # The other branch, and the body this round must not start refusing:
+        # the renderer gives `<details>` in a heading a `<summary>Details</summary>`,
+        # so that heading's text is no longer this heading, the page shows one
+        # match, and it is not folded.
+        written = self.DECORATED_ABOVE_A_PLAIN_SECTION + self.SECTION
+        with recorded_page():
+            page = helpers.rendered_page(written)
+            answer = self.answer(self.DECORATED_ABOVE_A_PLAIN_SECTION)
+        self.assertEqual(helpers.folded_headings_on_the_page(page.html, self.HEADING), [False])
+        self.assertIsNone(answer.refusal)
+
+    def test_the_notes_section_is_asked_the_same_question(self) -> None:
+        # The other heading a placement asks about (`## Evidence Notes`), and
+        # the same defect: one rule, so one fix, and this is what says so.
+        body = f"{self.SUMMARY}## Evidence <del>Notes</del>\n\nstruck\n\n{self.FOLD}"
+        written = body + "\n## Evidence Notes\n\na carried note\n"
+        with recorded_page():
+            answer = helpers.placement_refusal(body, written, "Evidence Notes")
+        self.assertIsNotNone(answer.refusal)
+        self.assertIn("the page folds it away", answer.refusal)
+        self.assertIn("`## Evidence Notes`", answer.refusal)
+
+
+class TheAuthorsOwnTagCannotBreakOutOfTheSentenceTests(unittest.TestCase):
+    """The refusal quotes the author's opening line, so it goes through `code_span` (#1773, round 2).
+
+    The sentence reaches a comment the app posts. A backtick inside the tag
+    closes a hand-written span early and what follows it is live markdown --
+    an `@name` after one is a mention GitHub delivers to a person with nothing
+    to do with this (#1730, round 2). `code_span` is the helper that exists
+    for exactly this and its docstring names this failure.
+    """
+
+    HEADING = "Evidence Status"
+    SECTION = "\n## Evidence Status\n\n- [complete] `swift test` -- 1992 tests passed\n"
+
+    def test_a_backtick_in_the_tag_does_not_close_the_span(self) -> None:
+        body = (
+            "## Summary\n\n- one change\n\n"
+            '<details data-note="a `tick` and @nobody">\n<summary>notes</summary>\n\nfolded\n'
+        )
+        with recorded_page():
+            refusal = helpers.placement_refusal(body, body + self.SECTION, self.HEADING).refusal
+        self.assertIsNotNone(refusal)
+        quoted = helpers.code_span('<details data-note="a `tick` and @nobody">')
+        self.assertIn(quoted, refusal)
+        # The whole quotation is one code span to the parser, so the `@nobody`
+        # inside it is text rather than a mention.
+        rendered = helpers.MARKDOWN.parseInline(refusal)[0].children or []
+        self.assertTrue(
+            any(child.type == "code_inline" and "@nobody" in child.content for child in rendered),
+            [(child.type, child.content) for child in rendered],
+        )
+
+
+class AFailedRenderIsNotAnAnswerAboutThisBodyTests(unittest.TestCase):
+    """A `RendererUnavailable` is not cached (#1773, round 2).
+
+    Caching it disabled the check for that body for the rest of the process:
+    a turn writes the status section and then the notes section beside it, and
+    a 503 on the first write meant the second took the fallback even after the
+    renderer came back. A failure says nothing about the text.
+    """
+
+    BODY = "## Summary\n\n- one change\n\n<details>\n<summary>notes</summary>\n\nfolded\n"
+    SECTION = "\n## Evidence Status\n\n- [complete] `swift test` -- 1992 tests passed\n"
+
+    def test_a_failure_is_not_remembered_and_a_later_answer_is(self) -> None:
+        written = self.BODY + self.SECTION
+        attempts: list[str] = []
+
+        def flaky(text: str) -> str:
+            attempts.append(text)
+            if len(attempts) == 1:
+                raise helpers.RendererUnavailable("the renderer answered HTTP 503")
+            return recorded_html(text)
+
+        with (
+            mock.patch.object(helpers, "render_markdown", side_effect=flaky),
+            mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
+        ):
+            first = helpers.placement_refusal(self.BODY, written, "Evidence Status")
+            second = helpers.placement_refusal(self.BODY, written, "Evidence Status")
+        self.assertIn("503", first.unverified)
+        self.assertIsNone(first.refusal)
+        # The second call asks again and gets the answer the first could not.
+        self.assertEqual(len(attempts), 2)
+        self.assertIsNone(second.unverified)
+        self.assertIn("the page folds it away", second.refusal)
+
+    def test_an_answer_is_still_asked_once(self) -> None:
+        written = self.BODY + self.SECTION
+        asked: list[str] = []
+        with recorded_page():
+            recorded = helpers.render_markdown
+            with mock.patch.object(
+                helpers, "render_markdown", side_effect=lambda text: asked.append(text) or recorded(text)
+            ):
+                for _ in range(3):
+                    helpers.placement_refusal(self.BODY, written, "Evidence Status")
+        self.assertEqual(len(asked), 1, asked)
+
+
+class TheNamedRepairIsOneThatRepairsTests(unittest.TestCase):
+    """Which disclosure the refusal names (#1773, round 2).
+
+    Two ways the first version named the wrong line. A `<details>` inside an
+    HTML COMMENT counted toward the nesting, so the refusal pointed at a tag
+    nobody can see and closing it does nothing -- and the factory writes its
+    own metadata as a comment, so this is a shape every body it touches has.
+    And of several disclosures left open, it named the innermost: closing that
+    one leaves the section folded by the outer one, which is a repair that
+    does not repair.
+    """
+
+    HEADING = "Evidence Status"
+    SECTION = "\n## Evidence Status\n\n- [complete] `swift test` -- 1992 tests passed\n"
+
+    def test_a_commented_out_disclosure_is_not_the_one_that_folds_it(self) -> None:
+        body = (
+            "## Summary\n\n- one change\n\n"
+            "<!-- an earlier draft:\n<details>\n<summary>old</summary>\n-->\n\n"
+            "<details>\n<summary>notes</summary>\n\nfolded prose\n"
+        )
+        line = helpers.section_heading_line(body + self.SECTION, self.HEADING)
+        # The real one is on line 10 (one-based); the commented one is line 5.
+        self.assertEqual(helpers.open_disclosure_line(body + self.SECTION, line), 9)
+
+    def test_the_outermost_open_disclosure_is_the_one_named(self) -> None:
+        body = (
+            "## Summary\n\n- one change\n\n"
+            "<details>\n<summary>outer</summary>\n\n"
+            "<details>\n<summary>inner</summary>\n\nprose\n"
+        )
+        written = body + self.SECTION
+        line = helpers.section_heading_line(written, self.HEADING)
+        self.assertEqual(helpers.open_disclosure_line(written, line), 4)
+        with recorded_page():
+            refusal = helpers.placement_refusal(body, written, self.HEADING).refusal
+        # Named by the line the OUTER one opened on: closing the inner one
+        # leaves the section folded.
+        self.assertIn("opened at line 5", refusal)
+
+
+class TheUnreadPageReachesTheSurfaceTheAuthorReadsTests(unittest.TestCase):
+    """The note has a channel where the check actually runs (#1773, round 2).
+
+    `log()` is stderr, and every automated caller of this check runs where
+    stderr is a step log nobody opens -- which is the whole of #1740. So the
+    sentence comes back to the caller and travels in the announcements list,
+    the surface that already carries a note about text a write could not keep
+    (#1756). It travels on an ACCEPTED write as much as a refused one: that
+    is the case it exists for, since a renderer 503 used to accept a folded
+    placement with nothing visible anywhere.
+    """
+
+    ITEM = "`swift test` passes"
+    FOLDED_BODY = (
+        "## Summary\n\n- one change\n\n"
+        "<details>\n<summary>notes</summary>\n\nfolded prose\n\n"
+        "## Validation\n\n- ran it\n"
+    )
+    PLACEABLE_BODY = FOLDED_BODY.replace(
+        "folded prose\n\n## Validation", "folded prose\n\n</details>\n\n## Validation"
+    )
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def meta(self) -> str:
+        entry = {
+            "index": 1,
+            "item": self.ITEM,
+            "status": "pending-ci",
+            "detail": "the lane has not run yet",
+            "kind": "test",
+        }
+        return "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
+
+    def write(self, body: str):
+        return self.evidence().write_evidence_status_section(
+            self.meta() + body, ["- [complete] `swift test` passes -- 214 passed"]
+        )
+
+    def test_an_accepted_write_with_no_page_still_announces_the_unread_check(self) -> None:
+        # The renderer is refused file-wide, so this is the 503 case: the
+        # write goes ahead on the source model's answer and says so where the
+        # author reads, rather than nowhere.
+        write = self.write(self.PLACEABLE_BODY)
+        self.assertIsNone(write.refusal)
+        self.assertIn("## Evidence Status", write.body)
+        unverified = [
+            note for note in write.announcements if self.evidence().is_unverified_announcement(note)
+        ]
+        self.assertEqual(len(unverified), 1, write.announcements)
+        self.assertIn(SUITE_UNVERIFIED, unverified[0])
+
+    def test_a_stood_down_write_carries_both_sentences(self) -> None:
+        # A stand-down returns early, and the note about the unread check is
+        # not the stand-down's reason -- both have to survive, because they
+        # are different claims about the same run.
+        with recorded_page():
+            write = self.write(self.FOLDED_BODY)
+        self.assertIsNotNone(write.refusal)
+        self.assertTrue(
+            any(self.evidence().is_stood_down_announcement(n) for n in write.announcements)
+        )
+
+    def test_the_page_answering_leaves_no_note(self) -> None:
+        with recorded_page():
+            write = self.write(self.PLACEABLE_BODY)
+        self.assertIsNone(write.refusal)
+        self.assertEqual(
+            [n for n in write.announcements if self.evidence().is_unverified_announcement(n)], []
+        )
+
+    def test_the_comment_the_author_reads_says_which_claim_this_is(self) -> None:
+        # The composer's three buckets. Said under either of the other two
+        # headlines this would be a claim about the author's text, which it is
+        # not: nothing was deleted and nothing was left unwritten.
+        execution = sys.modules["execution"]
+        note = f"{self.evidence().UNVERIFIED_ANNOUNCEMENT_PREFIX}the renderer answered HTTP 503"
+        comment = execution.compose_uncarried_notes_comment(None, [note], "abc1234")
+        self.assertIn(execution.UNVERIFIED_NOTES_HEADLINE, comment)
+        self.assertNotIn(execution.UNCARRIED_NOTES_HEADLINE, comment)
+        self.assertNotIn(execution.STOOD_DOWN_NOTES_HEADLINE, comment)
+        self.assertIn("Nothing here says anything was lost", comment)
+        self.assertIn("HTTP 503", comment)
+
+    def test_a_deletion_and_an_unread_check_are_still_told_apart(self) -> None:
+        execution = sys.modules["execution"]
+        evidence = self.evidence()
+        notes = [
+            f"{evidence.UNVERIFIED_ANNOUNCEMENT_PREFIX}the renderer was unreachable",
+            "not carried to `## Evidence Notes`: a fence with no closing line",
+        ]
+        comment = execution.compose_uncarried_notes_comment(None, notes, "abc1234")
+        # One headline, and it is the one about the author's text -- which is
+        # the claim that names an edit. The unread check gets its own block
+        # under its own sentence, so the two are not read as one loss.
+        self.assertIn(execution.UNCARRIED_NOTES_HEADLINE, comment)
+        self.assertNotIn(execution.UNVERIFIED_NOTES_HEADLINE, comment)
+        self.assertIn("could not be moved to `## Evidence Notes`", comment)
+        self.assertIn("a fence with no closing line", comment)
+        self.assertIn("Nothing here says anything was lost", comment)
+        self.assertIn("the renderer was unreachable", comment)
+        self.assertLess(
+            comment.index("a fence with no closing line"),
+            comment.index("the renderer was unreachable"),
+        )
+
+
 class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
     """The recordings this suite reads, and that they are the gate's own.
 
@@ -8826,13 +9155,41 @@ class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
         self.assertEqual(RENDERED_FIXTURES, REPO_ROOT / "scripts" / "tests" / "fixtures" / "rendered")
         self.assertEqual(readiness.DEFAULT_REPOSITORY, helpers.DEFAULT_REPOSITORY)
 
-    def test_every_recording_this_suite_needs_is_committed(self) -> None:
-        index = rendered_index()
+    # Which shapes reach the renderer, written down here rather than asked of
+    # the code under test. It used to call `could_be_folded` to decide which
+    # bodies needed a recording, so regressing that function to always-False
+    # emptied this test instead of failing it -- a guard that agrees with
+    # whatever it is guarding (#1773, round 2).
+    SHAPES_THAT_ASK_THE_PAGE = frozenset(
+        {
+            "an unclosed disclosure above the section",
+            "a disclosure closed above the section",
+            "a disclosure inside another, the outer left open",
+            "a fenced example of a disclosure above the section",
+        }
+    )
+
+    def test_this_suite_names_the_shapes_that_need_a_recording(self) -> None:
+        # The enumeration and the function are compared, so a change to either
+        # fails here. A shape that stops asking the page is a shape whose
+        # recording is dead, and a shape that starts asking is one nobody
+        # recorded -- both are this test's business.
+        asking = set()
         for label, (body, _) in ThePlacementAsksThePageWhetherASectionIsFoldedTests.SHAPES.items():
             written = body + ThePlacementAsksThePageWhetherASectionIsFoldedTests.SECTION
             line = helpers.section_heading_line(written, "Evidence Status")
-            if line is None or not helpers.could_be_folded(written, line):
-                continue
+            if line is not None and helpers.could_be_folded(written, line):
+                asking.add(label)
+        self.assertEqual(asking, set(self.SHAPES_THAT_ASK_THE_PAGE))
+
+    def test_every_recording_this_suite_needs_is_committed(self) -> None:
+        index = rendered_index()
+        shapes = ThePlacementAsksThePageWhetherASectionIsFoldedTests.SHAPES
+        # Anti-vacuity: the enumeration is this test's own, so a typo in it
+        # must fail rather than skip.
+        self.assertEqual(self.SHAPES_THAT_ASK_THE_PAGE - set(shapes), set())
+        for label in sorted(self.SHAPES_THAT_ASK_THE_PAGE):
+            written = shapes[label][0] + ThePlacementAsksThePageWhetherASectionIsFoldedTests.SECTION
             with self.subTest(shape=label):
                 self.assertIn(hashlib.sha256(written.encode("utf-8")).hexdigest(), index)
                 self.assertTrue(rendered_fixture_path(written).is_file())
