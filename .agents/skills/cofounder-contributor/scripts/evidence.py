@@ -3674,6 +3674,38 @@ def _render_structured_entries(
     return reconciled
 
 
+def evidence_entry_index(entry: object) -> int | None:
+    """The index this entry claims, or None if it claims none a reader can take.
+
+    `OverflowError` too: `1e9999` in the PR-editable metadata parses as
+    infinity, and `int()` of that raises a class the others do not cover.
+    """
+    if not isinstance(entry, dict):
+        return None
+    try:
+        return int(entry["index"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def colliding_entry_indexes(entries: object) -> list[int]:
+    """Indexes more than one entry claims, of ANY kind.
+
+    An entry's index is its identity to this writer: the updates map is keyed
+    by it, and the write below applies `updates[index]` to every entry
+    carrying it. Two entries at one index therefore make one verdict land on
+    both lines, and which one the verdict belongs to is decided by the order
+    the entries happen to be written in -- which is not a fact about the
+    evidence.
+    """
+    seen: dict[int, int] = {}
+    for entry in entries if isinstance(entries, list) else []:
+        index = evidence_entry_index(entry)
+        if index is not None:
+            seen[index] = seen.get(index, 0) + 1
+    return sorted(index for index, count in seen.items() if count > 1)
+
+
 def update_evidence_entries(
     body: str,
     updates: dict[int, dict[str, object]],
@@ -3686,9 +3718,36 @@ def update_evidence_entries(
     use this to flip entries without hand-editing markdown. Fail-closed:
     bodies without valid structured metadata, unknown indexes, and invalid
     statuses are left unchanged.
+
+    And a colliding index is left unchanged, HERE, because this is the
+    function that fans an update out. It applies `updates[index]` to every
+    entry carrying that index, so a body where two entries share one takes
+    one check's verdict on both lines -- and the callers that knew this had
+    to refuse every such body on every read they made. Three of them kept
+    that property by hand: one missed a collision arriving on a retry read at
+    an index the run held no update for (#1778, round 5), and one let a green
+    `Web CI` run rewrite a `pending-ci` `diff` entry sharing an index (#1784).
+    A safety property stated over an open set of callers is one this codebase
+    cannot keep true, so it moves to the one place that can hold it. The
+    callers' own guards stay where they are: they stop the WORK (check-run
+    reads) and name the condition where an author can act on it, which a
+    refusal here cannot do.
+
+    The stand-down shape every caller already handles: the body comes back
+    byte-identical and the reason goes to `announcements`.
     """
     metadata = _extract_evidence_metadata(body)
     if not isinstance(metadata, dict) or not isinstance(metadata.get("entries"), list):
+        return body
+    if (shared := colliding_entry_indexes(metadata["entries"])):
+        refusal = (
+            "`## Evidence Status` was left as written: evidence entries share index(es) "
+            f"{', '.join(str(index) for index in shared)}, so an update aimed at one would "
+            "land on every entry carrying it; leaving the contract for the author"
+        )
+        log(refusal)
+        if announcements is not None:
+            announcements.append(refusal)
         return body
     updated_entries: list[object] = []
     changed = False

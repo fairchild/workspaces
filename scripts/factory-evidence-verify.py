@@ -158,11 +158,8 @@ def ci_entries_needing_verification(
         check_name = _ci_check_name(item)
         if check_name is None:
             continue
-        try:
-            index = int(entry["index"])
-        # OverflowError too: `1e9999` in the PR-editable metadata parses as
-        # infinity, and `int()` of that raises a class the others do not cover.
-        except (KeyError, TypeError, ValueError, OverflowError):
+        index = entry_index(entry)
+        if index is None:
             continue
         needed.append((index, check_name))
     return needed
@@ -356,6 +353,17 @@ def should_clear_blocked_label(
     """
     if not entries:
         return False
+    # Before anything about kinds. The guard widened to any kind in round 3
+    # and this did not widen with it: the loop below skips a non-`ci` entry
+    # before it ever reads an index, so two complete non-`ci` entries at one
+    # index answered "every entry complete" and took the label off a contract
+    # whose entries no reader can tell apart -- one definition of an index,
+    # two definitions of which entries COUNT (#1778, round 5). A colliding
+    # index is the same unanswerable question here as it is at the write, so
+    # it gets the same answer: the label stays and the author is left the
+    # contract.
+    if colliding_indexes(entries):
+        return False
     confirmed = verified or {}
     for entry in entries:
         if not isinstance(entry, dict):
@@ -482,18 +490,36 @@ def _apply_ci_updates(
     head: when it has moved the note goes unsaid, and the next event says it
     against the head it belongs to.
 
-    A collision arriving on the retry read -- an owner giving two entries one
-    index between this run's first read and its write -- is refused by
-    `_updates_targeting_unchanged_entries`, which keys on the same definition
-    of an index and hands a colliding one no check name, so every update
-    aimed at it is dropped and the loop returns the body untouched. A second
-    guard was added in the loop for that case and then measured redundant:
-    two guards for one condition on one path is the shape this family keeps
-    taking, so the redundant one is gone rather than kept as depth (#1778,
-    round 4). The guard before the write stays, because it is what stops the
-    check-run READS, which no narrowing can.
+    Three guards, one condition, and they are not depth: each covers a case
+    the others cannot reach. The guard BEFORE the loop is what stops the
+    check-run reads, which no narrowing can. The narrowing
+    (`_updates_targeting_unchanged_entries`) refuses a collision arriving on
+    the retry read at an index this run holds an update for, because it hands
+    a colliding index no check name and drops the update. The guard INSIDE
+    the loop covers what the narrowing structurally cannot see: a collision at
+    an index this run holds NO update for. The narrowing only drops updates it
+    holds, so on `{1: ci pending-ci, 2: diff complete}` with a twin injected
+    at index 2, it has nothing to drop, the run writes and the label comes
+    off with the collision intact. Round 4 measured this guard redundant and
+    deleted it, and the measurement was of the suite rather than of the code:
+    a surviving mutant means the code is redundant OR the suite cannot reach
+    the case it covers, and only the second was true -- the fixture built
+    collisions on the update's own index and nowhere else (#1778, round 5).
     """
     for attempt in range(1, MAX_WRITE_ATTEMPTS + 1):
+        # Re-run on every body this loop is about to write, not once before
+        # it. The retry re-reads a body an owner may have edited in between,
+        # and a collision arriving there at an index this run holds no update
+        # for reaches neither the pre-write guard (it had its turn) nor the
+        # narrowing (it has no update to drop) -- so the run wrote the body
+        # and cleared the label with the collision standing (#1778, rounds 3
+        # and 5).
+        if (shared := colliding_indexes(evidence_entries(body))):
+            log(
+                f"PR #{pr_number}: evidence entries share index(es) "
+                f"{', '.join(str(index) for index in shared)}; leaving the contract for the author"
+            )
+            return body
         safe_updates = _updates_targeting_unchanged_entries(body, updates)
         if not safe_updates:
             return body
@@ -502,6 +528,14 @@ def _apply_ci_updates(
         current = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
         current_head = current.get("head") if isinstance(current, dict) else None
         current_sha = str(current_head.get("sha", "")) if isinstance(current_head, dict) else ""
+        # Read here, ABOVE both early returns, because both of them return a
+        # body the caller decides the label on. Extracted below them, a
+        # stand-down returned the PRE-EDIT body and the clear was decided on
+        # it: an owner adding a `pending-ci` requirement mid-run had
+        # `blocked:evidence` taken off against a live body recording an unmet
+        # requirement -- this lane having fetched the truth and dropped it
+        # (#1778, round 5, and the stand-down half of #1786).
+        current_body = str(current.get("body") or "") if isinstance(current, dict) else ""
         if new_body == body:
             # Same reason as the review-time completion: the write stands down
             # whole on a block whose closer never came, which returns the body
@@ -515,11 +549,14 @@ def _apply_ci_updates(
                 post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
             else:
                 log(f"PR #{pr_number} advanced during verification; leaving the stand-down unsaid")
-            return body
+            # The live body, so the label is decided on what the PR holds now
+            # rather than on the copy this run started from. A read that told
+            # us nothing leaves the body we have, which is the answer we had
+            # anyway.
+            return current_body or body
         if current_sha != head_sha:
             log(f"PR #{pr_number} advanced during verification; skipping write")
             return None
-        current_body = str(current.get("body") or "") if isinstance(current, dict) else ""
         if current_body != body:
             log(
                 f"PR #{pr_number} body changed during verification "

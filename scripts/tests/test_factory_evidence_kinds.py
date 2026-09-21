@@ -8430,5 +8430,93 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
         self.assertIn(execution.UNCARRIED_NOTES_HEADLINE, sent[0])
 
 
+class TheWriterRefusesACollidingIndexItself(unittest.TestCase):
+    """The safety property lives where the fan-out is (#1778, round 5).
+
+    `update_evidence_entries` applies `updates[index]` to EVERY entry carrying
+    that index, so a body where two entries share one takes a single check's
+    verdict on both lines. Every caller that knew this had to refuse such a
+    body on every read it made, and a property stated over an open set of
+    callers is one nobody keeps: the verifier missed a collision arriving on
+    a retry read at an index it held no update for, and a mixed-kind index
+    let one green run manufacture a completion (#1784).
+
+    So the refusal is here. The callers' guards stay as diagnosis -- they stop
+    the check-run reads and name the condition where an author can act on it.
+    """
+
+    ITEM = "CI: `Web CI` green on the PR head"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def body(self, entries: list[dict[str, object]]) -> str:
+        lines = "\n".join(
+            f"- [{entry['status']}] {entry['item']} -- {entry['detail']}" for entry in entries
+        )
+        return (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": entries}) + "\n-->\n\n"
+            "## Summary\n\n- one change\n\n"
+            f"## Evidence Status\n\n{lines}\n\n## Validation\n\n- ran it\n"
+        )
+
+    def entry(self, index: int, **over: object) -> dict[str, object]:
+        return {
+            "index": index,
+            "item": self.ITEM,
+            "status": "pending-ci",
+            "detail": "waiting for checks",
+            "kind": "ci",
+            **over,
+        }
+
+    def write(self, entries: list[dict[str, object]]):
+        evidence = self.evidence()
+        said: list[str] = []
+        source = self.body(entries)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            written = evidence.update_evidence_entries(
+                source, {1: {"status": "complete", "detail": "green on the head"}},
+                announcements=said,
+            )
+        return source, written, said, stderr.getvalue()
+
+    def test_a_colliding_index_leaves_the_body_byte_identical(self) -> None:
+        source, written, said, stderr = self.write(
+            [self.entry(1), self.entry(1, item="a second requirement at the same index")]
+        )
+        self.assertEqual(written, source)
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("share index(es) 1", said[0])
+        self.assertIn("share index(es) 1", stderr)
+
+    def test_the_collision_need_not_be_at_the_updated_index(self) -> None:
+        # What the verifier's narrowing structurally cannot see: it drops
+        # updates it HOLDS, and it holds none for index 2.
+        source, written, said, _ = self.write(
+            [self.entry(1), self.entry(2, kind="diff"), self.entry(2, kind="diff", detail="again")]
+        )
+        self.assertEqual(written, source)
+        self.assertIn("share index(es) 2", said[0])
+
+    def test_entries_at_distinct_indexes_are_written_as_before(self) -> None:
+        source, written, said, _ = self.write([self.entry(1), self.entry(2, kind="diff")])
+        self.assertNotEqual(written, source)
+        self.assertIn("- [complete] ", written)
+        self.assertEqual(said, [])
+
+    def test_an_index_no_reader_can_take_is_not_a_collision(self) -> None:
+        evidence = self.evidence()
+        self.assertEqual(
+            evidence.colliding_entry_indexes(
+                [self.entry(1), {"item": "no index at all", "status": "blocked", "detail": "d"},
+                 {"index": "not a number", "item": "x", "status": "blocked", "detail": "d"}]
+            ),
+            [],
+        )
+        self.assertIsNone(evidence.evidence_entry_index({"index": float("inf")}))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -13,7 +13,9 @@ and SHA-current.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import sys
 import unittest
@@ -1149,14 +1151,25 @@ class TheNarrowingRefusesACollisionOnTheRetryReadTests(unittest.TestCase):
     same check, so the narrowing kept the update and the write landed a
     `[complete]` on both lines.
 
+    Round 5 moved the refusal into `update_evidence_entries` itself, so the
+    OUTCOME below is now held by the writer and this test stays green with
+    the narrowing broken; `test_all_three_readers_take_one_definition_of_an_index`
+    is what fails then. The narrowing is kept because it keeps a stale
+    verdict off an entry an owner RETARGETED, which is not a collision and
+    which no refusal covers.
+
     `_updates_targeting_unchanged_entries` is what refuses it now: keyed on
     the one definition of an index, a colliding index has no single check
     name, so every update aimed at it is dropped and the loop returns the
     body untouched. Round 3 added a second guard inside the loop for the same
     condition and this test could not tell them apart — it went red only when
-    both were broken. The redundant guard is gone, and this test fails when
-    the narrowing alone is broken, which is the isolation each guard owes:
-    the pre-write guard is covered by `test_neither_order_writes_verifies_or_clears`
+    both were broken. This test fails when the narrowing alone is broken,
+    which is the isolation each guard owes; the in-loop guard has its own
+    test now, on the case only it reaches (a collision at an index this run
+    holds no update for), because round 4 read a surviving mutant as
+    redundancy when it was a fixture the suite could not build (#1778,
+    round 5):
+    the pre-write guard is covered by `test_neither_order_makes_a_check_run_read`
     (which asserts no check-run READS, the thing only it can stop).
     """
 
@@ -1226,6 +1239,261 @@ class TheNarrowingRefusesACollisionOnTheRetryReadTests(unittest.TestCase):
         ):
             verify.process_pr(321, {})
         self.assertIn("- [complete] ", written.get("body", ""))
+
+
+class TheInLoopGuardCoversWhatTheNarrowingCannotSeeTests(unittest.TestCase):
+    """The case that made the in-loop guard look redundant, and was not (#1778, round 5).
+
+    The writer is unconditionally dangerous: `update_evidence_entries` has no
+    notion of a collision and applies `updates[index]` to EVERY entry carrying
+    that index, so every safety property in this subsystem belongs to a
+    caller, and it holds only while every caller refuses a collision on every
+    body it hands in.
+
+    The narrowing refuses a collision only at an index this run HOLDS an
+    update for -- it works by dropping updates, so an index it holds none for
+    is invisible to it. A run over `{1: ci pending-ci, 2: diff complete}`
+    holds one update, for index 1; a twin injected at index 2 on the retry
+    read reaches neither the pre-write guard (which had its turn on the first
+    body) nor the narrowing (which has nothing to drop), and the run wrote the
+    body and cleared the label with the collision standing.
+
+    Round 4 deleted the in-loop guard because its mutant survived. A
+    surviving mutant means the code is redundant OR the suite cannot reach
+    the case it covers, and only the second was true: every collision fixture
+    landed on the update's own index.
+    """
+
+    GREEN = [
+        {
+            "status": "completed",
+            "conclusion": "success",
+            "completed_at": "2026-08-27T00:00:00Z",
+            "html_url": "https://example.invalid/run/1",
+        }
+    ]
+    OTHER = {
+        "index": 2,
+        "item": DIFF_ITEM,
+        "status": "complete",
+        "detail": "the diff shows it",
+        "kind": "diff",
+    }
+
+    def run_with_injection(self, injected_entries):
+        clean = body_with_entries([ci_entry(index=1), dict(self.OTHER)])
+        injected = body_with_entries(injected_entries)
+        pr = pr_payload(clean, labels=["blocked:evidence"])
+        reads = {"n": 0}
+        written: dict[str, str] = {}
+        gh_calls: list[list[str]] = []
+
+        def fake_gh_json(args, env):
+            if not any("pulls/321" in arg for arg in args):
+                return None
+            reads["n"] += 1
+            # 1: `process_pr`'s own read, clean. 2 onward: the live read the
+            # write path makes, by which time the owner's edit has landed.
+            pr["body"] = clean if reads["n"] == 1 else injected
+            return pr
+
+        said = io.StringIO()
+        with (
+            contextlib.redirect_stderr(said),
+            mock.patch.object(verify, "_gh_json", side_effect=fake_gh_json),
+            mock.patch.object(verify, "check_runs_for", return_value=self.GREEN),
+            mock.patch.object(
+                verify, "_write_pr_body", side_effect=lambda n, b, e: written.update(body=b) or True
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+        return written, gh_calls, said.getvalue()
+
+    def test_a_collision_at_an_index_this_run_holds_no_update_for_is_not_written(self) -> None:
+        """The outcome, which `update_evidence_entries` now holds on its own.
+
+        This is the property, and after round 5's decision it is not this
+        guard's signature: the writer refuses a colliding body itself, so this
+        stays green with the in-loop guard deleted. It is kept as the
+        end-to-end statement of what the run does, and the test below is what
+        fails when only this guard is gone.
+        """
+        written, gh_calls, _ = self.run_with_injection(
+            [
+                ci_entry(index=1),
+                dict(self.OTHER),
+                dict(self.OTHER, detail="a second line the owner added at the same index"),
+            ]
+        )
+        self.assertNotIn("body", written, "a body carrying a collision was written")
+        self.assertNotIn(
+            ["pr", "edit", "321", "--remove-label", "blocked:evidence"], gh_calls, gh_calls
+        )
+
+    def test_the_lane_names_the_collision_in_its_own_voice(self) -> None:
+        """The in-loop guard's own signature, which is diagnosis (#1778, round 5).
+
+        With the refusal in the writer, what this guard adds is the sentence
+        an operator reads in the lane's log, naming the PR and the indexes,
+        before a write attempt nobody needs. That is worth keeping and worth
+        testing for what it is, rather than for a safety property it no longer
+        owns alone.
+        """
+        _, _, said = self.run_with_injection(
+            [
+                ci_entry(index=1),
+                dict(self.OTHER),
+                dict(self.OTHER, detail="a second line the owner added at the same index"),
+            ]
+        )
+        self.assertIn("PR #321: evidence entries share index(es) 2", said)
+
+    def test_the_same_body_without_the_twin_is_written_as_before(self) -> None:
+        # The control: the guard re-running refuses collisions, not edits.
+        written, _, _ = self.run_with_injection(
+            [ci_entry(index=1), dict(self.OTHER, detail="the owner reworded this")]
+        )
+        self.assertIn("- [complete] ", written.get("body", ""))
+
+
+class AStoodDownWriteDecidesTheLabelOnTheLiveBodyTests(unittest.TestCase):
+    """The live body was fetched and dropped (#1778, round 5; the stand-down half of #1786).
+
+    `_apply_ci_updates` read the live PR to decide whether to say anything
+    about a stand-down, then returned the body it STARTED from, and
+    `process_pr` decided `blocked:evidence` on that. So an owner adding a
+    requirement mid-run had the label taken off against a live body recording
+    an unmet one -- this lane having fetched the truth and discarded it,
+    which is worse than main's ignorance, not better.
+
+    Every refused-write fixture before this one held the live body constant,
+    so none of them could see it.
+    """
+
+    GREEN = [
+        {
+            "status": "completed",
+            "conclusion": "success",
+            "completed_at": "2026-08-27T00:00:00Z",
+            "html_url": "https://example.invalid/run/1",
+        }
+    ]
+
+    def settled_entry(self) -> dict[str, object]:
+        """An entry already recording exactly what a green run confirms.
+
+        Which is what makes the write a stand-down: the re-render reproduces
+        the body it was handed, so `new_body == body` and the loop returns
+        before it writes anything.
+        """
+        return dict(
+            ci_entry(index=1, status="complete", verified_head_sha=HEAD),
+            detail=f"`Web CI` green on head {HEAD[:12]} — https://example.invalid/run/1",
+            check_name="Web CI",
+            proof_url="https://example.invalid/run/1",
+        )
+
+    def test_a_requirement_added_mid_run_keeps_the_label(self) -> None:
+        settled = body_with_entries([self.settled_entry()])
+        # What the owner has since added, live on the PR.
+        live = body_with_entries(
+            [
+                self.settled_entry(),
+                {
+                    "index": 2,
+                    "item": DIFF_ITEM,
+                    "status": "pending-ci",
+                    "detail": "waiting on the owner",
+                    "kind": "diff",
+                },
+            ]
+        )
+        pr = pr_payload(settled, labels=["blocked:evidence"])
+        reads = {"n": 0}
+        gh_calls: list[list[str]] = []
+        written: list[str] = []
+
+        def fake_gh_json(args, env):
+            if not any("pulls/321" in arg for arg in args):
+                return None
+            reads["n"] += 1
+            pr["body"] = settled if reads["n"] == 1 else live
+            return pr
+
+        with (
+            mock.patch.object(verify, "_gh_json", side_effect=fake_gh_json),
+            mock.patch.object(verify, "check_runs_for", return_value=self.GREEN),
+            mock.patch.object(
+                verify, "_write_pr_body", side_effect=lambda n, b, e: written.append(b) or True
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+
+        self.assertGreater(reads["n"], 1, "the live body was never read")
+        self.assertEqual(written, [], "this is the stand-down path; nothing should be written")
+        self.assertNotIn(
+            ["pr", "edit", "321", "--remove-label", "blocked:evidence"],
+            gh_calls,
+            "the label was cleared against a live body recording an unmet requirement",
+        )
+
+    def test_a_live_body_that_still_says_complete_still_clears(self) -> None:
+        # The control: reading the live body is not a reason to stop clearing.
+        settled = body_with_entries([self.settled_entry()])
+        pr = pr_payload(settled, labels=["blocked:evidence"])
+        gh_calls: list[list[str]] = []
+        with (
+            mock.patch.object(
+                verify,
+                "_gh_json",
+                side_effect=lambda args, env: pr if any("pulls/321" in a for a in args) else None,
+            ),
+            mock.patch.object(verify, "check_runs_for", return_value=self.GREEN),
+            mock.patch.object(verify, "_write_pr_body", return_value=True),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+        self.assertIn(["pr", "edit", "321", "--remove-label", "blocked:evidence"], gh_calls)
+
+
+class TheClearRefusesACollidingIndexTooTests(unittest.TestCase):
+    """One definition of an index, two definitions of which entries COUNT (#1778, round 5).
+
+    Round 3 widened the duplicate guard to any kind. `should_clear_blocked_label`
+    did not widen with it: it skips a non-`ci` entry BEFORE it ever reads an
+    index, so two complete non-`ci` entries at one index answered "every entry
+    complete, no ci entry unverified" and the label came off -- zero check-run
+    reads, no write, and a clear on a contract no reader can tell apart.
+    """
+
+    TWIN = {
+        "index": 1,
+        "item": DIFF_ITEM,
+        "status": "complete",
+        "detail": "the diff shows it",
+        "kind": "diff",
+    }
+
+    def test_two_complete_non_ci_entries_at_one_index_keep_the_label(self) -> None:
+        entries = [dict(self.TWIN), dict(self.TWIN, detail="and the owner said so again")]
+        self.assertEqual(verify.colliding_indexes(entries), [1])
+        self.assertFalse(verify.should_clear_blocked_label(entries, HEAD, verified={}))
+
+    def test_the_same_two_entries_at_distinct_indexes_still_clear(self) -> None:
+        entries = [dict(self.TWIN), dict(self.TWIN, index=2)]
+        self.assertEqual(verify.colliding_indexes(entries), [])
+        self.assertTrue(verify.should_clear_blocked_label(entries, HEAD, verified={}))
 
 
 class VerdictDefinitenessTests(unittest.TestCase):
