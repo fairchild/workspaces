@@ -1357,14 +1357,42 @@ def unverified_note(reason: str) -> str:
     )
 
 
-# A token no author writes, appended to the heading this write places so the
-# page can be asked about THAT heading and no other. Renaming a heading cannot
+# The base of the token appended to the heading this write places, so the page
+# can be asked about THAT heading and no other. Renaming a heading cannot
 # change what folds it, so the probe body's fold structure is the real one.
 PLACEMENT_PROBE_MARK = "wsx7placementprobe"
+
+
+def placement_probe_mark(written: str) -> str:
+    """A mark this body does not already carry, chosen the same way every time.
+
+    Uniqueness by construction rather than by hoping. The base is a string no
+    author writes, which is not the same as one no author CAN write -- by
+    accident, or by someone who has read this code -- and a body already
+    carrying it puts two matches on the page and draws the ambiguity refusal:
+    safe, but a refusal on a legitimate body with a message about a heading
+    the author cannot see (#1773, round 4).
+
+    Deterministic, never random: the recorded renderer responses are keyed by
+    the sha256 of the probe body, so the same body has to produce the same
+    probe on every run or no fixture ever matches. Counting up terminates
+    because the body is finite and the candidates are not.
+
+    With the mark absent by construction, the exactly-one check downstream is
+    a guard against the renderer showing something the source does not, rather
+    than the thing uniqueness rests on.
+    """
+    mark, suffix = PLACEMENT_PROBE_MARK, 0
+    while mark in written:
+        suffix += 1
+        mark = f"{PLACEMENT_PROBE_MARK}{suffix}"
+    return mark
 SETEXT_UNDERLINE_RE = re.compile(r"^[ \t]{0,3}(=+|-+)[ \t]*$")
 
 
-def probe_body_naming_one_heading(written: str, heading: str, heading_line: int) -> str | None:
+def probe_body_naming_one_heading(
+    written: str, heading: str, heading_line: int, mark: str = PLACEMENT_PROBE_MARK
+) -> str | None:
     """`written` with the heading this write places renamed to something unique, or None.
 
     The page cannot be asked "is the heading I placed folded" while several
@@ -1383,7 +1411,7 @@ def probe_body_naming_one_heading(written: str, heading: str, heading_line: int)
     lines = MARKDOWN_LINE_ENDING_RE.split(written)
     if not 0 <= heading_line < len(lines):
         return None
-    lines[heading_line] = f"## {heading} {PLACEMENT_PROBE_MARK}"
+    lines[heading_line] = f"## {heading} {mark}"
     following = heading_line + 1
     if following < len(lines) and SETEXT_UNDERLINE_RE.match(lines[following]):
         lines[following] = ""
@@ -1480,22 +1508,24 @@ def placement_refusal(body: str, written: str, heading: str) -> PlacementAnswer:
     heading_line = section_heading_line(written, heading)
     if heading_line is None or not could_be_folded(written):
         return PlacementAnswer()
-    probe = probe_body_naming_one_heading(written, heading, heading_line)
+    mark = placement_probe_mark(written)
+    probe = probe_body_naming_one_heading(written, heading, heading_line, mark)
     if probe is None:
         return PlacementAnswer(refusal=_unshown_refusal(body, heading))
     page = rendered_page(probe)
     if page.unverified is not None:
         return PlacementAnswer(unverified=unverified_note(page.unverified))
-    marked = f"{heading} {PLACEMENT_PROBE_MARK}"
+    marked = f"{heading} {mark}"
     shown = folded_headings_on_the_page(page.html, marked)
     if not shown:
         # A heading the parse reads and the page does not show at all. The
         # same refusal as a swallowed section, because that is what it is.
         return PlacementAnswer(refusal=_unshown_refusal(body, heading))
     if len(shown) != 1:
-        # The mark is not a name an author writes, so more than one heading
-        # carrying it is a body this check cannot reason about. Refusing says
-        # so rather than picking one.
+        # The mark is absent from the body by construction, so more than one
+        # heading carrying it is the PAGE showing what the source does not --
+        # a defensive guard rather than the thing uniqueness rests on.
+        # Refusing says so rather than picking one.
         return PlacementAnswer(refusal=_unshown_refusal(body, heading))
     # Exactly the heading this write places, because the probe gave it a name
     # nothing else has. "Any heading of this name" was the round-2 answer and

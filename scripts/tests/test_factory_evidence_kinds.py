@@ -9249,6 +9249,79 @@ class ThePageIsAskedAboutTheHeadingThisWritePlacesTests(unittest.TestCase):
         self.assertEqual(lines[line], f"## {self.HEADING} {helpers.PLACEMENT_PROBE_MARK}")
         self.assertEqual(lines[line + 1], "")
 
+    def test_a_body_already_carrying_the_mark_is_placed(self) -> None:
+        """Uniqueness is by construction, so carrying the base mark costs nothing (#1773, round 4).
+
+        The base is a string no author writes, which is not a string no author
+        CAN write -- by accident, or by someone who has read this code. When
+        it was fixed, such a body put two headings of the probe's name on the
+        page and drew the ambiguity refusal: safe, and a refusal on a
+        legitimate body carrying a message about a heading its author cannot
+        see.
+
+        The mark now counts up until it is absent from the body, so this body
+        is placed like any other, and the probe still names exactly one
+        heading.
+        """
+        body = (
+            f"{self.SUMMARY}"
+            "<details>\n<summary>notes</summary>\n\nfolded prose\n\n</details>\n\n"
+            f"## Evidence Status {helpers.PLACEMENT_PROBE_MARK}\n\nsomeone wrote this\n"
+        )
+        written = body + self.SECTION
+        mark = helpers.placement_probe_mark(written)
+        self.assertNotEqual(mark, helpers.PLACEMENT_PROBE_MARK)
+        self.assertNotIn(mark, written)
+        self.assertTrue(mark.startswith(helpers.PLACEMENT_PROBE_MARK))
+        # The same body chooses the same mark every time, or no recording ever
+        # matches: the fixtures are keyed by the sha256 of the probe body.
+        self.assertEqual(helpers.placement_probe_mark(written), mark)
+        with recorded_page():
+            answer = self.answer(body)
+        self.assertIsNone(answer.refusal)
+        self.assertIsNone(answer.unverified)
+
+    def test_the_mark_is_the_base_where_the_body_does_not_carry_it(self) -> None:
+        self.assertEqual(
+            helpers.placement_probe_mark("## Summary\n\n- one change\n"),
+            helpers.PLACEMENT_PROBE_MARK,
+        )
+        # And counts past every spelling the body does carry.
+        crowded = f"{helpers.PLACEMENT_PROBE_MARK} {helpers.PLACEMENT_PROBE_MARK}1"
+        self.assertEqual(
+            helpers.placement_probe_mark(crowded), f"{helpers.PLACEMENT_PROBE_MARK}2"
+        )
+
+    def test_a_page_showing_the_chosen_name_twice_is_refused(self) -> None:
+        """The guard behind the construction, fed two matches at the seam (#1773, round 4).
+
+        With the mark absent from the body, only the renderer can put two
+        headings of that name on the page. That is what the exactly-one check
+        is for, and `if not shown:` -- which catches none rather than
+        "not exactly one" -- leaves it unproven.
+
+        The two matches are handed in at the renderer seam the suite already
+        owns, not by patching anything the runtime decides with.
+        """
+        body = f"{self.SUMMARY}<details>\n<summary>notes</summary>\n\nfolded prose\n\n</details>\n"
+        written = body + self.SECTION
+        mark = helpers.placement_probe_mark(written)
+        doubled = (
+            "<h2>Summary</h2>"
+            f"<h2>Evidence Status {mark}</h2>"
+            f"<h2>Evidence Status {mark}</h2>"
+        )
+        with (
+            mock.patch.object(helpers, "render_markdown", return_value=doubled),
+            mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
+        ):
+            answer = self.answer(body)
+        self.assertEqual(
+            helpers.folded_headings_on_the_page(doubled, f"Evidence Status {mark}"), [False, False]
+        )
+        self.assertIsNotNone(answer.refusal, "an ambiguous find accepted the placement")
+        self.assertIn("is not a heading on the page", answer.refusal)
+
     def test_the_gate_and_the_question_are_about_the_same_text(self) -> None:
         # `could_be_folded` read only the text ABOVE the heading, so the same
         # folded duplicate produced a refusal or not depending on where an
