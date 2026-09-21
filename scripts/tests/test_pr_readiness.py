@@ -5184,6 +5184,59 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
         # the pin above checks where it can.
 
     # intent: guard
+    def test_the_gate_says_the_drift_wherever_it_is_run(self) -> None:
+        """The WIRING, felt on the interpreter the suite runs under (#1771, round 7).
+
+        `evaluate` appends the drift notice to what it returns, and on the
+        interpreter this suite runs under the versions match — so the notice
+        never fires and the hook could be deleted with every test still
+        green. The version is patched here instead of hoped for, so the
+        wiring is pinned wherever the suite runs and in both directions.
+        """
+        body = GOOD_BODY
+        self.assertNotIn(
+            "Unicode data", " ".join(pr_readiness.evaluate(pr(body), self.FILES).notices)
+        )
+        for version, expected in (("14.0.0", "BEHIND"), ("16.0.0", "AHEAD")):
+            with self.subTest(running=version):
+                with mock.patch.object(unicodedata, "unidata_version", version):
+                    result = pr_readiness.evaluate(pr(body), self.FILES)
+                    notice = pr_readiness.unicode_data_notice()
+                said = " ".join(result.notices)
+                self.assertIsNotNone(notice)
+                self.assertIn(expected, notice, "the notice does not name its direction")
+                self.assertIn(notice, said, "the gate did not carry the drift into its output")
+                self.assertTrue(result.ok, "a drift notice must not fail the body")
+
+    # intent: guard
+    def test_the_two_directions_ask_for_different_things(self) -> None:
+        # Backwards in round 6: under an OLDER interpreter the notice said to
+        # re-derive the table from older data, which is re-deriving a newer
+        # table from the thing it already leads. Each direction names what it
+        # actually wants.
+        with mock.patch.object(unicodedata, "unidata_version", "16.0.0"):
+            ahead = pr_readiness.unicode_data_notice()
+        with mock.patch.object(unicodedata, "unidata_version", "14.0.0"):
+            behind = pr_readiness.unicode_data_notice()
+        # AHEAD: the table is the stale half, and the cost is a code point
+        # it does not know about.
+        self.assertIn("Re-transcribe DEFAULT_IGNORABLE_RANGES", ahead)
+        self.assertIn("16.0.0", ahead)
+        self.assertIn("missing from the table", ahead)
+        # BEHIND: the table is fine and the INTERPRETER is the smaller half,
+        # so the run refuses fewer shapes than the gate was measured with.
+        # Round 6's sentence said "re-derive the table from 14.0.0", which is
+        # rebuilding a newer table out of older data.
+        self.assertNotIn("Re-transcribe DEFAULT_IGNORABLE_RANGES", behind)
+        self.assertIn("Nothing to re-transcribe", behind)
+        self.assertIn("SMALLER", behind)
+        self.assertIn("are not covered", behind)
+        # And the ordering is numeric rather than lexical, so 9.0.0 is older
+        # than 15.1.0 rather than newer.
+        with mock.patch.object(unicodedata, "unidata_version", "9.0.0"):
+            self.assertIn("BEHIND", pr_readiness.unicode_data_notice())
+
+    # intent: guard
     def test_a_newer_unicode_is_loud_rather_than_fatal(self) -> None:
         # A newer -- or older -- interpreter is not a defect, so the drift
         # notice says what to re-derive and the gate keeps running. Asserted
