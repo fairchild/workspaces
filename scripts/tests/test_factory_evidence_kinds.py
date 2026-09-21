@@ -8673,7 +8673,9 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
                 # lines still in the comment.
                 self.assertNotIn("<!--", comment)
                 self.assertNotIn("-->", comment)
-                self.assertIn("Closing the block named above", comment)
+                # The recovery line for THIS family: a malformed record is
+                # corrected in the block, not closed (#1778, round 13).
+                self.assertIn("Correcting the entry named above", comment)
                 self.assertIn("Not carried from this PR's body", comment)
                 note = next(line for line in comment.splitlines() if "position 2" in line)
                 self.assertEqual(note.count("`") % 2, 0, f"the span is unbalanced: {note}")
@@ -8743,6 +8745,127 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
             )
         self.assertEqual(errors, [])
         self.assertIn(f"- [complete] {self.ITEM} -- green on head abc", self.section_of(rendered))
+
+    HOSTILE_VALUES = {
+        "a mention, an image beacon and a link": (
+            "@fairchild ![x](https://evil.example/pixel.png) [click](https://evil.example)"
+        ),
+        "a backtick run": "a`b``c```d",
+        "an html comment": "a<!-- swallow",
+        "a comment closer": "a--> and more",
+        "a newline and a heading": "a\n\n## Not a heading",
+        "a carriage return": "a\rb",
+    }
+
+    @staticmethod
+    def inside_a_code_span(comment: str, needle: str) -> bool:
+        """Whether every occurrence of `needle` sits inside a backtick span.
+
+        Counted rather than eyeballed: the text before an occurrence holds an
+        odd number of backticks exactly when the occurrence is inside a span.
+        """
+        start = 0
+        while (at := comment.find(needle, start)) != -1:
+            if comment[:at].count("`") % 2 == 0:
+                return False
+            start = at + len(needle)
+        return True
+
+    # intent: guard
+    # Green on main and RED at `7fa240cc`: main does not have the sentence
+    # these fields reach, so this is a fix for a defect the branch made and a
+    # guard by the rule, which classifies against main. Named here rather
+    # than smoothed, because the marker cannot say both.
+    def test_every_pr_editable_field_reaches_a_comment_inert(self) -> None:
+        """One rule for every field, walked rather than asserted (#1778, round 13).
+
+        Round 12 routed the field it was told about and left its siblings:
+        `index` and `status` got the CONTAIN half and not the RENDER half, so
+        a status of `@name ![x](url) [click](url)` was posted verbatim — an
+        active mention, an image the owner's browser fetches on view, and a
+        link. Reproduced at `7fa240cc` for both.
+
+        Every PR-editable value that can reach a bot-authored comment is
+        driven here with each hostile value, and the assertion is structural:
+        the value lands INSIDE a code span, and no comment marker survives at
+        all. This walk is the red-first evidence; the guard that survives
+        someone adding a field is the `Quoted` type beside it.
+        """
+        execution = load_module(
+            "execution_for_field_walk",
+            REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "execution.py",
+        )
+        fields = ("index", "status", "item", "detail", "kind", "check_name", "proof_url")
+        self.assertEqual(len(fields), 7, "the fields this walk claims to cover")
+        for field in fields:
+            for name, hostile in self.HOSTILE_VALUES.items():
+                with self.subTest(field=field, value=name):
+                    entries = self.entries("2")
+                    entries[1][field] = hostile
+                    _, _, said, _ = self.write(entries)
+                    comment = (
+                        execution.compose_uncarried_notes_comment(None, said, "a" * 40)
+                        if said
+                        else ""
+                    )
+                    self.assertNotIn("<!--", comment)
+                    self.assertNotIn("-->", comment)
+                    for marker in ("![x](", "[click](", "@fairchild", "## Not a heading"):
+                        if marker in comment:
+                            self.assertTrue(
+                                self.inside_a_code_span(comment, marker),
+                                f"{field}/{name}: {marker} reached the comment active",
+                            )
+
+    # intent: guard
+    def test_the_recovery_line_fits_the_reason_the_write_stood_down(self) -> None:
+        # Round 12 routed a new family into a frame that always ended
+        # "Closing the block named above", so an author told to fix an index
+        # was also told to close a block they never opened (#1778, round 13).
+        execution = load_module(
+            "execution_for_repair_line",
+            REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "execution.py",
+        )
+        evidence = self.evidence()
+        record = evidence.unrenderable_record_refusal(self.entries("2"))
+        block = (
+            f"{evidence.STOOD_DOWN_ANNOUNCEMENT_PREFIX}a ```` ``` ```` code fence with no "
+            "closing line at line 4 of the `Evidence Status` section"
+        )
+        for name, notes, expected in (
+            ("a malformed record", [record], "Correcting the entry named above in the"),
+            ("an unclosed block", [block], "Closing the block named above"),
+            ("both at once", [record, block], "Correcting the entry named above, and closing"),
+        ):
+            with self.subTest(reason=name):
+                comment = execution.compose_uncarried_notes_comment(None, notes, "a" * 40)
+                self.assertIn(expected, comment)
+
+    # intent: guard
+    def test_an_unquoted_value_cannot_reach_a_comment_at_all(self) -> None:
+        """The structural guard, chosen over a longer list (#1778, round 13).
+
+        A test that walks an enumeration agrees with whatever the enumeration
+        says, and the enumeration is what was wrong last round. `Quoted` is a
+        type only `quoted_for_comment` produces and `quoted_sentence` takes
+        nothing else — so a field added next month is a `TypeError` at the
+        call site rather than a finding six weeks later. The alternative was
+        a composer that takes a mapping and quotes every value itself; it
+        fails loudly on a forgotten field but cannot tell a value that has
+        been through the rule from one that has not, which is the fact this
+        needs to carry.
+        """
+        evidence = self.evidence()
+        self.assertIsInstance(evidence.quoted_for_comment("x"), evidence.Quoted)
+        self.assertNotIsInstance(evidence.comment_safe("x"), evidence.Quoted)
+        self.assertEqual(
+            evidence.quoted_sentence("a {v}", v=evidence.quoted_for_comment("x")), "a `x`"
+        )
+        with self.assertRaises(TypeError) as raised:
+            evidence.quoted_sentence("a {v}", v="raw")
+        self.assertIn("unquoted", str(raised.exception))
+        with self.assertRaises(TypeError):
+            evidence.quoted_sentence("a {v}", v=evidence.comment_safe("raw"))
 
     # intent: guard
     def test_every_field_that_reaches_a_comment_goes_through_one_rule(self) -> None:

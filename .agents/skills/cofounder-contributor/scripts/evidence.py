@@ -3645,22 +3645,37 @@ def entry_as_rendered(entry: object) -> tuple[dict[str, object] | None, str | No
     string rather than as the number the author meant.
     """
     if not isinstance(entry, dict):
-        return None, None
+        # NAMED, not exempt. Round 12 called this a tolerated loss on the
+        # ground that a scalar carries no item to recognise it by -- and then
+        # the re-verify-everything change made it a REGRESSION: one complete
+        # `ci` entry bound to the head beside a scalar sibling makes no write
+        # on main and one here, and the author's second status line goes with
+        # `announcements` empty (#1778, round 13). "Nothing to recognise it
+        # by" is a weaker reason than a silent deletion: the position is what
+        # a reader needs to find it in the block, and it is what the sentence
+        # gives them.
+        return None, "no object to read as an entry (the record holds a bare value here)"
     claimed = entry.get("index")
     index = usable_entry_index(entry)
     if index is None:
         if _claimed_index(entry) is None:
-            return None, f"index {comment_safe(json.dumps(claimed), 80)}, which is not an integer"
-        return None, f"index {comment_safe(str(claimed), 80)}, which numbers no line"
+            return None, quoted_sentence(
+                "index {value}, which is not an integer",
+                value=quoted_for_comment(json.dumps(claimed), 80),
+            )
+        return None, quoted_sentence(
+            "index {value}, which numbers no line",
+            value=quoted_for_comment(str(claimed), 80),
+        )
     item = _encodable(str(entry.get("item", "")).strip())
     status = str(entry.get("status", "")).strip()
     detail = _encodable(str(entry.get("detail", "")).strip())
     if not item:
         return None, "no item text"
     if status not in RENDERABLE_STATUSES:
-        return None, (
-            f"status {comment_safe(json.dumps(status), 80)}, "
-            f"which is not {', '.join(RENDERABLE_STATUSES)}"
+        return None, quoted_sentence(
+            "status {value}, which is not " + ", ".join(RENDERABLE_STATUSES),
+            value=quoted_for_comment(json.dumps(status), 80),
         )
     if not detail:
         return None, "no detail"
@@ -3699,6 +3714,42 @@ def comment_safe(text: str, limit: int = COMMENT_QUOTE_LIMIT) -> str:
     return flattened[: limit - 1].rstrip() + "\u2026"
 
 
+class Quoted(str):
+    """Text that has been through `quoted_for_comment` and nothing else.
+
+    The structural half of the injection rule, and it is a TYPE rather than a
+    list because the list was the thing that was wrong: round 12 routed the
+    field it was told about (`item`) and left `index` and `status` half-done,
+    and a test that walks an enumeration agrees with whatever the enumeration
+    says -- the next field somebody adds is not in it (#1778, round 13).
+
+    `quoted_sentence` accepts only these, so an unquoted field cannot reach a
+    comment: a new field interpolated raw is a `TypeError` at the call site
+    rather than a finding six weeks later. A `str` subclass rather than a
+    dataclass because these sentences are built by f-string in half a dozen
+    places and a wrapper that is not a string would rewrite all of them --
+    the type is the gate, the string is the convenience.
+    """
+
+    __slots__ = ()
+
+
+def quoted_sentence(template: str, **values: object) -> str:
+    """One sentence, with every PR-editable value in it already quoted.
+
+    The composer that takes a mapping and applies the rule to EVERY value it
+    is given: forgetting a field is a loud failure here rather than a quiet
+    escape in a posted comment.
+    """
+    for name, value in values.items():
+        if not isinstance(value, Quoted):
+            raise TypeError(
+                f"{name} reaches a comment unquoted: pass quoted_for_comment({name!r}) "
+                "rather than the raw value"
+            )
+    return template.format(**values)
+
+
 def as_code_span(text: str) -> str:
     """Text already flattened by `comment_safe`, wrapped so none of it can act.
 
@@ -3725,7 +3776,7 @@ def quoted_for_comment(text: str, limit: int = COMMENT_QUOTE_LIMIT) -> str:
     so the same hazard was live one field over from a lane that had closed it
     (#1778, round 12).
     """
-    return as_code_span(comment_safe(text, limit))
+    return Quoted(as_code_span(comment_safe(text, limit)))
 
 
 def unrenderable_entries(entries: object) -> list[str]:
@@ -3734,15 +3785,14 @@ def unrenderable_entries(entries: object) -> list[str]:
     By POSITION in the record rather than by index, because the index is the
     thing that may be unreadable.
 
-    A record entry that is not an object at all -- a bare string or number in
-    the entries list -- is NOT named here, and the honest way to put it is as
-    a loss rather than as a safe exemption. Such an entry renders no line, so
-    a status line the author wrote for it is dropped on the next rewrite with
-    nothing said, exactly as it is on main. It is tolerated for one reason: a
-    scalar carries no item, so this code cannot say which line on the page
-    stood for it, and a sentence naming "the entry at position 3" with nothing
-    to recognise it by is not a sentence an author can act on. Filed rather
-    than fixed here; every entry that IS an object is named (#1778, round 12).
+    EVERY entry the renderer cannot render is named, including one that is not
+    an object at all -- a bare string or number in the entries list. Round 12
+    exempted those as a tolerated loss; the re-verify-everything change on
+    this branch turned the same shape into a regression, because a record
+    holding a scalar beside a complete `ci` entry is now rewritten where main
+    left it alone, and the author's status line went with nothing said. The
+    position is what a reader needs to find such an entry in the block, and it
+    is what the sentence gives them (#1778, round 13).
     """
     named: list[str] = []
     for position, entry in enumerate(entries if isinstance(entries, list) else [], start=1):
@@ -3755,6 +3805,25 @@ def unrenderable_entries(entries: object) -> list[str]:
             f"the entry at position {position}" + (f" ({quoted})" if quoted else "") + f" has {reason}"
         )
     return named
+
+
+def colliding_record_refusal(entries: object) -> str | None:
+    """The sentence a record with two entries at one index earns, or None.
+
+    Composed here for the same reason the unrenderable one is: the write and
+    the lane both refuse such a record, and the lane could only say so
+    through the write -- which it never reaches, because a colliding record
+    produces no updates. So the collision was the one refusal with no path to
+    the author at all, where the malformed case had gained one a round
+    earlier: the same defect, one branch over (#1778, round 13).
+    """
+    if not (shared := colliding_indexes(entries)):
+        return None
+    return STOOD_DOWN_ANNOUNCEMENT_PREFIX + (
+        "evidence entries share index(es) "
+        f"{', '.join(str(index) for index in shared)}, so an update aimed at one would "
+        "land on every entry carrying it; leaving the contract for the author"
+    )
 
 
 def unrenderable_record_refusal(entries: object) -> str | None:
@@ -3971,12 +4040,7 @@ def update_evidence_entries(
     metadata = _extract_evidence_metadata(body)
     if not isinstance(metadata, dict) or not isinstance(metadata.get("entries"), list):
         return body
-    if (shared := colliding_indexes(metadata["entries"])):
-        refusal = STOOD_DOWN_ANNOUNCEMENT_PREFIX + (
-            "evidence entries share index(es) "
-            f"{', '.join(str(index) for index in shared)}, so an update aimed at one would "
-            "land on every entry carrying it; leaving the contract for the author"
-        )
+    if (refusal := colliding_record_refusal(metadata["entries"])) is not None:
         log(refusal)
         if announcements is not None:
             announcements.append(refusal)

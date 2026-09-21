@@ -2910,13 +2910,176 @@ class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
         self.assertEqual(len(posted), 1, f"the author was told nothing: {posted}")
         self.assertEqual(len(posted[0]), 1, posted[0])
         self.assertIn("position 1", posted[0][0])
-        self.assertIn('index "1"', posted[0][0])
+        # Quoted, because `index` is as PR-editable as the item: the value is
+        # inside a code span now (#1778, round 13).
+        self.assertIn('`"1"`', posted[0][0])
         self.assertTrue(
             sys.modules["evidence"].is_stood_down_announcement(posted[0][0]), posted[0][0]
         )
         # And the label stays, because nothing was verified.
         self.assertNotIn(
             ["pr", "edit", "321", "--remove-label", "blocked:evidence"], gh_calls, gh_calls
+        )
+
+    # intent: fix
+    def test_a_colliding_record_with_nothing_else_to_do_is_said_too(self) -> None:
+        """The sibling branch round 12 left logging (#1778, round 13).
+
+        A malformed record with no other work gained a comment last round; a
+        COLLIDING one kept logging into a step log the author does not read,
+        posting nothing and keeping the label. Same defect, one branch over.
+        Measured at `7fa240cc`: zero comments.
+        """
+        entries = [
+            ci_entry(index=1),
+            dict(ci_entry(index=1), item="CI: `Other CI` green on the PR head"),
+        ]
+        body = body_with_contract([CI_ITEM], entries)
+        pr = pr_payload(body, labels=["blocked:evidence"])
+        posted: list[list[str]] = []
+        gh_calls: list[list[str]] = []
+        with (
+            mock.patch.object(
+                verify,
+                "_gh_json",
+                side_effect=lambda args, env: pr if any("pulls/321" in a for a in args) else None,
+            ),
+            mock.patch.object(verify, "check_runs_for", return_value=[]),
+            mock.patch.object(verify, "_write_pr_body", return_value=True),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+            mock.patch.object(
+                verify,
+                "post_uncarried_notes",
+                side_effect=lambda pr_number, persona, notes, head, env: posted.append(list(notes))
+                or True,
+            ),
+        ):
+            verify.process_pr(321, {})
+        self.assertEqual(len(posted), 1, f"the author was told nothing: {posted}")
+        self.assertIn("share index(es) 1", posted[0][0])
+        self.assertTrue(
+            sys.modules["evidence"].is_stood_down_announcement(posted[0][0]), posted[0][0]
+        )
+        self.assertNotIn(
+            ["pr", "edit", "321", "--remove-label", "blocked:evidence"], gh_calls, gh_calls
+        )
+
+    # intent: fix
+    def test_a_scalar_beside_a_complete_entry_keeps_the_page_whole(self) -> None:
+        """The non-object exemption became a regression (#1778, round 13).
+
+        One complete `ci` entry bound to the head plus a bare value in the
+        entries list: main makes no write at all, and this branch
+        re-verifies every `ci` entry whatever it records — so it reached the
+        writer, rewrote the section, and dropped the author's second status
+        line with `announcements` empty. The scalar is named by position now
+        and the record refused.
+        """
+        entries = [ci_entry(status="complete", verified_head_sha=HEAD), "a bare value"]
+        body = body_with_contract(
+            [CI_ITEM],
+            entries,
+            lines=[
+                f"- [complete] {CI_ITEM} -- `Web CI` green on head {HEAD[:12]}",
+                "- [pending-ci] the line the scalar stood for -- waiting",
+            ],
+        )
+        pr = pr_payload(body, labels=[])
+        written: dict[str, str] = {}
+        posted: list[list[str]] = []
+        with (
+            mock.patch.object(
+                verify,
+                "_gh_json",
+                side_effect=lambda args, env: pr if any("pulls/321" in a for a in args) else None,
+            ),
+            mock.patch.object(
+                verify,
+                "check_runs_for",
+                return_value=[
+                    {
+                        "status": "completed",
+                        "conclusion": "success",
+                        "completed_at": "2026-08-27T00:00:00Z",
+                        "html_url": "https://example.invalid/run/1",
+                    }
+                ],
+            ),
+            mock.patch.object(
+                verify,
+                "_write_pr_body",
+                side_effect=lambda number, new_body, env: written.update(body=new_body) or True,
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(verify, "_gh", return_value=True),
+            mock.patch.object(
+                verify,
+                "post_uncarried_notes",
+                side_effect=lambda pr_number, persona, notes, head, env: posted.append(list(notes))
+                or True,
+            ),
+        ):
+            verify.process_pr(321, {})
+        self.assertNotIn("body", written, "the record was rewritten with a bare value in it")
+        self.assertEqual(len(posted), 1, f"nothing was said: {posted}")
+        self.assertIn("position 2", posted[0][0])
+        self.assertIn("bare value", posted[0][0])
+
+    # intent: guard
+    def test_the_note_is_composed_from_the_body_the_decision_is_about(self) -> None:
+        """An author who repairs the record mid-run was told to fix it again.
+
+        The stand-down note was built over the copy the attempt started with,
+        while the decision is taken on the LIVE read: an owner who closes the
+        block between the two reads got a comment naming a block that is
+        already closed. Round 9's rule — every return hands back what the
+        pull request holds now — applied to what is SAID (#1778, round 13).
+        """
+        unclosed = body_with_contract([CI_ITEM], [ci_entry()]).replace(
+            "\n\n## Validation\n", "\n\n<pre>\nthe run log nobody closed\n\n## Validation\n", 1
+        )
+        repaired = body_with_contract([CI_ITEM], [ci_entry()])
+        reads = [pr_payload(unclosed, labels=[]), pr_payload(repaired, labels=[])]
+        posted: list[list[str]] = []
+
+        def fake_gh_json(args, env):
+            if any("pulls/321" in a for a in args):
+                return reads.pop(0) if reads else pr_payload(repaired, labels=[])
+            return None
+
+        with (
+            mock.patch.object(verify, "_gh_json", side_effect=fake_gh_json),
+            mock.patch.object(
+                verify,
+                "check_runs_for",
+                return_value=[
+                    {
+                        "status": "completed",
+                        "conclusion": "success",
+                        "completed_at": "2026-08-27T00:00:00Z",
+                        "html_url": "https://example.invalid/run/1",
+                    }
+                ],
+            ),
+            mock.patch.object(verify, "_write_pr_body", return_value=True),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(verify, "_gh", return_value=True),
+            mock.patch.object(
+                verify,
+                "post_uncarried_notes",
+                side_effect=lambda pr_number, persona, notes, head, env: posted.append(list(notes))
+                or True,
+            ),
+        ):
+            verify.process_pr(321, {})
+        said = [note for notes in posted for note in notes]
+        self.assertEqual(
+            [note for note in said if "code fence" in note or "never came" in note or "<pre" in note],
+            [],
+            f"the author was told to close a block they had already closed: {said}",
         )
 
     # intent: control
