@@ -2522,13 +2522,28 @@ class RenderedLines:
     matching a rendered line is that line's; a second copy is the author's,
     and it is carried and announced like any other line no reader can parse.
 
+    One line per ENTRY, which is not the same as one per source. The owner is
+    built from the lines this run renders AND the lines the last run
+    rendered, and when a verdict has not changed those two are the same bytes
+    for the same entry -- so the entry owned its line twice and the second
+    identical copy was deleted after all. An unchanged verdict is the common
+    case, not the rare one: #1782 re-verifies every recorded CI completion, so
+    every run is a rewrite and most rewrites conclude what the last one did
+    (#1751, round 10). The same bytes are therefore owned once however many
+    sources offer them; a previous line that DIFFERS is a second line that
+    entry owns, which is what lets a changed verdict replace its own old line.
+
     One owner per write, shared by the write's reader and by the instrument
     that measures the write, so the two cannot disagree about how many lines
     one entry owns.
     """
 
     def __init__(self, rendered: Iterable[str]) -> None:
-        self._remaining: list[str] = [str(one) for one in rendered]
+        # Order-preserving, and deduplicated on the bytes: two renderable
+        # entries cannot render one line (the turn refuses a contract whose
+        # items read alike), so identical bytes are always one entry's line
+        # offered twice.
+        self._remaining: list[str] = list(dict.fromkeys(str(one) for one in rendered))
 
     def claim(self, line: str) -> bool:
         """Whether one of the lines still unclaimed is this one, byte for byte."""

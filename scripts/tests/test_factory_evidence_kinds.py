@@ -9655,13 +9655,13 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
     def line(self) -> str:
         return f"- [pending-ci] {self.ITEM} -- {self.DETAIL}"
 
-    def body(self, copies: int) -> str:
-        entry = {"index": 1, "item": self.ITEM, "status": "pending-ci",
+    def body(self, copies: int, recorded: str = "pending-ci") -> str:
+        entry = {"index": 1, "item": self.ITEM, "status": recorded,
                  "detail": self.DETAIL, "kind": "test"}
         return (
             "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
             "## Summary\n\n- one change\n\n## Evidence Status\n\n"
-            + "\n".join([self.line] * copies)
+            + "\n".join([f"- [{recorded}] {self.ITEM} -- {self.DETAIL}"] * copies)
             + "\n\n## Validation\n\n- ran it\n"
         )
 
@@ -9674,11 +9674,11 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
             for heading in ("Evidence Status", "Evidence Notes")
         )
 
-    def written(self, copies: int) -> tuple[str, str]:
+    def written(self, copies: int, recorded: str = "pending-ci") -> tuple[str, str]:
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
             body = self.evidence().update_evidence_entries(
-                self.body(copies), {1: {"status": "complete", "detail": self.DETAIL}}
+                self.body(copies, recorded), {1: {"status": "complete", "detail": self.DETAIL}}
             )
         return body, stderr.getvalue()
 
@@ -9687,18 +9687,54 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertEqual(self.counts(written), (1, 1), f"stderr said {said!r}")
         self.assertIn("not readable back", said)
 
+    def test_the_same_holds_when_the_verdict_has_not_changed(self) -> None:
+        """The shape round 9's fixture could not reach (#1751, round 10).
+
+        That fixture always changed the verdict, so this run's rendered line
+        and the last run's reconstructed line were two distinct lines and the
+        owner never had to decide what to do with the same bytes offered
+        twice. On a re-run they ARE the same bytes -- and #1782 re-verifies
+        every recorded CI completion, so every run is a rewrite and most
+        rewrites conclude what the last one did. The entry owned its line
+        twice and the second identical copy was deleted after all, with
+        nothing said about the deletion.
+        """
+        written, said = self.written(2, recorded="complete")
+        self.assertEqual(self.counts(written), (1, 1), f"stderr said {said!r}")
+
+    def test_a_third_copy_is_the_authors_too(self) -> None:
+        written, _ = self.written(3, recorded="complete")
+        self.assertEqual(self.counts(written), (1, 2))
+
     def test_one_copy_is_still_the_machines_and_is_replaced(self) -> None:
         written, _ = self.written(1)
         self.assertEqual(self.counts(written), (1, 0))
         self.assertIn("- [complete] ", written)
 
-    def test_the_owner_hands_out_each_line_once(self) -> None:
-        owner = self.evidence().owned_lines([self.line, self.line, "- [complete] other -- d"])
-        self.assertTrue(owner.claim(self.line))
+    def test_the_owner_hands_out_each_line_once_however_often_it_is_offered(self) -> None:
+        # One line per ENTRY, not per source. The owner is built from this
+        # run's rendered lines AND the last run's, and an unchanged verdict
+        # makes those the same bytes for the same entry -- so offering them
+        # twice must not buy a second body line (#1751, round 10).
+        evidence = self.evidence()
+        owner = evidence.owned_lines([self.line, self.line, "- [complete] other -- d"])
         self.assertTrue(owner.claim(self.line))
         self.assertFalse(owner.claim(self.line))
         self.assertTrue(owner.claim("- [complete] other -- d"))
         self.assertFalse(owner.claim("- [complete] other -- d"))
+
+    def test_a_previous_line_that_differs_is_a_second_line_that_entry_owns(self) -> None:
+        # The other half: a changed verdict means last run's line and this
+        # run's are two distinct lines for one entry, and the write owns both
+        # -- which is what lets it replace the line it wrote last time.
+        evidence = self.evidence()
+        previous = self.line  # `- [pending-ci] ...`, what the last run rendered
+        current = f"- [complete] {self.ITEM} -- {self.DETAIL}"
+        owner = evidence.owned_lines([current, previous])
+        self.assertTrue(owner.claim(previous))
+        self.assertTrue(owner.claim(current))
+        self.assertFalse(owner.claim(previous))
+        self.assertFalse(owner.claim(current))
 
     def test_the_instrument_calls_the_second_copy_the_authors_too(self) -> None:
         # The sweep's sight, restored by construction: it builds the same
@@ -9709,7 +9745,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         sweep = load_module(
             "evidence_write_sweep_multiset", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
         )
-        source = sweep.MARKDOWN_LINE_ENDING_RE.sub("\n", self.body(2))
+        source = sweep.MARKDOWN_LINE_ENDING_RE.sub("\n", self.body(2, recorded="complete"))
         normalized = evidence._strip_evidence_metadata(source)
         lines = normalized.split("\n")
         owned = sweep._entry_line_numbers(lines, normalized, source)
