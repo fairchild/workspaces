@@ -1095,6 +1095,35 @@ DEFAULT_REPOSITORY = "fairchild/workspaces"
 RENDERER_USER_AGENT = "workspaces-contributor"
 
 
+# Every way the renderer can fail to answer, and for each: whether waiting
+# could change it, and the action that resolves it when waiting cannot. One
+# table, read by the constructor, so a cause's family and its repair are
+# chosen together or not at all (#1773, round 9).
+RENDERER_CAUSES: dict[str, tuple[bool, str | None]] = {
+    "no token": (
+        False,
+        "export GH_TOKEN or GITHUB_TOKEN and run again",
+    ),
+    "rejected token": (
+        False,
+        "the renderer rejected the token; export one it accepts "
+        "(`gh auth token` prints the signed-in account's) and run again",
+    ),
+    "forbidden token": (
+        False,
+        "the renderer refused the token for this repository; export one with access to it "
+        "and run again",
+    ),
+    # A secondary rate limit is the renderer asking for a pause, not refusing
+    # the token: `Retry-After` is time fixing it, so waiting is exactly what
+    # changes the answer.
+    "secondary rate limit": (True, None),
+    "spent rate limit": (True, None),
+    "server error": (True, None),
+    "unreachable": (True, None),
+}
+
+
 class RendererUnavailable(Exception):
     """GitHub did not render the body. The message is why, in one clause.
 
@@ -1120,12 +1149,18 @@ class RendererUnavailable(Exception):
     the cause is known rather than checked afterwards (#1773, round 8).
     """
 
-    def __init__(self, reason: str, *, transient: bool, repair: str | None = None) -> None:
+    def __init__(self, reason: str, *, cause: str) -> None:
+        # The TABLE is the only input. A raise site names the cause and
+        # nothing else, so it cannot pair a family with a repair that does not
+        # fit: the type enforced that a permanent cause HAS a repair, and a
+        # secondary rate limit -- a 403 with `Retry-After` and a remaining
+        # quota -- was still classified as a rejected token and told the
+        # author to export a different one, which is a message and a
+        # classification disagreeing (#1773, round 9). Unconstructible beats
+        # untested.
+        transient, repair = RENDERER_CAUSES[cause]
         super().__init__(reason)
-        if transient and repair is not None:
-            raise ValueError("a transient cause names no repair: the author cannot act on a blip")
-        if not transient and not repair:
-            raise ValueError("a permanent cause must name the action that resolves it")
+        self.cause = cause
         self.transient = transient
         self.repair = repair
 
@@ -1146,46 +1181,31 @@ def http_failure_reason(error: urllib.error.HTTPError) -> str:
     if rate_limit_is_spent(error):
         reset = (error.headers or {}).get("x-ratelimit-reset") or "the next window"
         return f"the renderer's rate limit is spent (it resets at {reset})"
+    if (retry := (error.headers or {}).get("retry-after")) is not None:
+        return f"the renderer asked for a pause (HTTP {error.code}, retry after {retry})"
     return f"the renderer answered HTTP {error.code}"
 
 
-def http_failure_repair(error: urllib.error.HTTPError) -> str:
-    """What resolves a refusal the renderer will keep giving this token.
+def http_failure_cause(error: urllib.error.HTTPError) -> str:
+    """Which cause in `RENDERER_CAUSES` this non-2xx answer is.
 
-    Named per status, because a repair that does not fit the cause is a dead
-    end wearing an instruction's clothes: "export a token the renderer
-    accepts" is the answer to no token at all and says nothing an author can
-    act on when the token they exported came back 401.
-    """
-    if error.code == 401:
-        return (
-            "the renderer rejected the token; export one it accepts "
-            "(`gh auth token` prints the signed-in account's) and run again"
-        )
-    return (
-        "the renderer refused the token for this repository; export one with access to it "
-        "and run again"
-    )
-
-
-def http_failure_is_transient(error: urllib.error.HTTPError) -> bool:
-    """Whether waiting could change this answer.
-
-    Permanence, not the cause site. Marking every `HTTPError` transient put a
-    REJECTED token in the fail-open family while an ABSENT one refused: an
-    expired or wrong token answered 401 on every placement and every write
-    went ahead unverified, under a refusal sentence that tells the author to
-    export a token the renderer accepts (#1773, round 8). A token the renderer
-    will not take is the same kind of condition as no token at all -- local,
-    permanent until the author acts -- so it gets the same answer.
-
-    A spent rate limit is a 403 that time fixes, so it stays transient with
-    5xx, timeouts and connection errors: there the harm is a reading defect
-    and refusing would turn a passing outage into a blocked pull request.
+    Permanence, not the status class. A 401 and a 403 that is not a rate
+    limit are the renderer refusing this token, which waiting does not fix. A
+    spent primary limit and a SECONDARY limit are both time: the first says
+    the window is exhausted, the second carries `Retry-After` and asks for a
+    pause, and reading it as a rejected token refused the write and told the
+    author to export a different token, which would not have helped (#1773,
+    round 9).
     """
     if rate_limit_is_spent(error):
-        return True
-    return error.code not in {401, 403}
+        return "spent rate limit"
+    if (error.headers or {}).get("retry-after") is not None:
+        return "secondary rate limit"
+    if error.code == 401:
+        return "rejected token"
+    if error.code == 403:
+        return "forbidden token"
+    return "server error"
 
 
 def render_markdown(text: str) -> str:
@@ -1202,9 +1222,7 @@ def render_markdown(text: str) -> str:
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
         raise RendererUnavailable(
-            "no GH_TOKEN or GITHUB_TOKEN in the environment",
-            transient=False,
-            repair="export GH_TOKEN or GITHUB_TOKEN and run again",
+            "no GH_TOKEN or GITHUB_TOKEN in the environment", cause="no token"
         )
     payload = json.dumps({"text": text, "mode": "gfm", "context": repository_context()})
     request = urllib.request.Request(
@@ -1223,15 +1241,12 @@ def render_markdown(text: str) -> str:
         with urllib.request.urlopen(request, timeout=RENDER_TIMEOUT_SECONDS) as response:
             return response.read().decode("utf-8")
     except urllib.error.HTTPError as error:
-        transient = http_failure_is_transient(error)
         raise RendererUnavailable(
-            http_failure_reason(error),
-            transient=transient,
-            repair=None if transient else http_failure_repair(error),
+            http_failure_reason(error), cause=http_failure_cause(error)
         ) from error
     except (urllib.error.URLError, OSError) as error:
         raise RendererUnavailable(
-            f"the renderer was unreachable ({error})", transient=True
+            f"the renderer was unreachable ({error})", cause="unreachable"
         ) from error
 
 
