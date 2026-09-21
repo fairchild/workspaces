@@ -71,17 +71,14 @@ def ci_entry(
 
 
 def body_with_entries(entries: list[dict[str, object]]) -> str:
-    payload = json.dumps({"entries": entries}, indent=2, ensure_ascii=False)
-    lines = "\n".join(
-        f"- [{entry['status']}] {entry['item']} -- {entry['detail']}" for entry in entries
-    )
-    return (
-        "*Persona*\n\n## Summary\n- change\n\n"
-        f"<!-- evidence-status:v1\n{payload}\n-->\n\n"
-        f"## Evidence Status\n{lines}\n\n"
-        "## Validation\n- blocked on evidence: waiting for checks\n\n"
-        "Closes #99\n\n<!-- contributor:issue=99;agent=test -->"
-    )
+    """A body whose contract is derived from its entries -- the shape to avoid.
+
+    Kept as a one-line wrapper over `body_with_contract` so the migration is
+    visible rather than silent: anything still calling this is a fixture that
+    cannot express a contract and an entries list disagreeing, which is where
+    every defect of that family lives (#1778, round 10).
+    """
+    return body_with_contract([str(entry.get("item", "")) for entry in entries], entries)
 
 
 def body_with_contract(
@@ -1890,6 +1887,72 @@ class ADecisionIsTakenOnWhatThePullRequestHoldsNowTests(unittest.TestCase):
             "the label was cleared on the read BEFORE the one this return was taken from",
         )
 
+    def test_the_collision_return_hands_back_this_read_too(self) -> None:
+        """The one return round 9's property did not pin (#1778, round 10).
+
+        The collision branch returns the live body like every other return,
+        and it looked unpinnable because a colliding body never clears
+        anyway — the clear refuses a colliding index of its own accord. The
+        two answers separate when the collision is in the body IN HAND and
+        the pull request has since been FIXED:
+
+        - read 0 records a pending `ci` entry, so the run has a write to make;
+        - the owner gives two entries one index, so the retry takes that body;
+        - the owner then fixes it, leaving one complete `diff` entry;
+        - the next attempt's collision check fires on the body in hand and
+          returns.
+
+        Returning the live body decides on the fixed contract and the label
+        comes off; returning the body in hand decides on the collision and it
+        stays. Measured both ways in a disposable worktree: cleared here, not
+        cleared under the mutant.
+        """
+        diff_complete = {
+            "index": 1,
+            "item": DIFF_ITEM,
+            "status": "complete",
+            "detail": "the diff shows it",
+            "kind": "diff",
+        }
+        colliding = body_with_contract(
+            [CI_ITEM], [self.settled(), diff_complete]
+        )
+        fixed = body_with_contract([CI_ITEM], [diff_complete])
+        first = body_with_contract([CI_ITEM], [ci_entry(index=1)])
+        pr = pr_payload(first, labels=["blocked:evidence"])
+        reads = {"n": 0}
+        gh_calls: list[list[str]] = []
+        written: list[str] = []
+
+        def fake_gh_json(args, env):
+            if not any("pulls/321" in arg for arg in args):
+                return None
+            reads["n"] += 1
+            pr["head"] = {"sha": HEAD}
+            pr["body"] = (
+                first if reads["n"] == 1 else colliding if reads["n"] == 2 else fixed
+            )
+            return pr
+
+        with (
+            mock.patch.object(verify, "_gh_json", side_effect=fake_gh_json),
+            mock.patch.object(verify, "check_runs_for", return_value=self.GREEN),
+            mock.patch.object(
+                verify, "_write_pr_body", side_effect=lambda n, b, e: written.append(b) or True
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+
+        self.assertGreaterEqual(reads["n"], 3, "the run never reached the fixed contract")
+        self.assertTrue(
+            self.cleared(gh_calls),
+            "the label was decided on the colliding body rather than on what the PR holds",
+        )
+
     def test_a_requirement_deleted_from_the_metadata_is_not_seen_here(self) -> None:
         """What the clear quantifies over, asserted rather than assumed.
 
@@ -1939,6 +2002,39 @@ class TheIdentityRuleIsNotReachableFromASiteThatActsTests(unittest.TestCase):
     module. That is the property; the test below names the intent.
     """
 
+    def test_an_acting_site_reads_no_key_it_has_not_checked(self) -> None:
+        """The property, not the private name (#1778, round 10).
+
+        `entries_by_index` is public and applies the IDENTITY rule, and the
+        verifier imports it — so a guard that greps for `_claimed_index` says
+        nothing about a future acting use of the public grouping. The property
+        is that a key an acting site reads out of that grouping has been
+        through `usable_entry_index` first.
+
+        Asked of behaviour rather than of text: the grouping is handed entries
+        whose indexes nothing can act on, and every acting seam is driven over
+        the same body. None of them may touch those entries.
+        """
+        evidence = sys.modules["evidence"]
+        unusable = [
+            {"index": value, "item": CI_ITEM, "status": "complete", "detail": "d", "kind": "ci"}
+            for value in (0, -1, True, 1.0, "1")
+        ]
+        # The identity rule still groups the ones it can read -- that is what
+        # it is for, since two entries at one unusable index are still a
+        # collision. It reads 0 and -1 and rejects `True`, `1.0` and `"1"`,
+        # because an index is an int and a bool is not one.
+        self.assertEqual(sorted(evidence.entries_by_index(unusable)), [-1, 0])
+        # And no acting seam takes one.
+        self.assertEqual(verify.ci_entries_needing_verification(unusable, HEAD), [])
+        self.assertFalse(verify.should_clear_blocked_label(unusable, HEAD, verified={}))
+        body = body_with_contract([CI_ITEM], unusable)
+        self.assertEqual(
+            evidence.update_evidence_entries(body, {0: {"status": "complete", "detail": "x"}}),
+            body,
+            "the write acted on an index nothing renders",
+        )
+
     def test_no_module_that_acts_imports_the_identity_rule(self) -> None:
         tracked = subprocess.run(
             ["git", "ls-files", "*.py"],
@@ -1972,12 +2068,100 @@ class TheIdentityRuleIsNotReachableFromASiteThatActsTests(unittest.TestCase):
         evidence = sys.modules["evidence"]
         entry = {"index": 0, "item": "release approval", "status": "pending-ci",
                  "detail": "waiting", "kind": "manual"}
-        body = body_with_contract(["release approval"], [entry])
+        # `lines=` given explicitly, because the visible line IS the thing
+        # under test here: the defect was the metadata moving to complete
+        # while this line stayed as it is (#1778, round 10).
+        body = body_with_contract(
+            ["release approval"],
+            [entry],
+            lines=["- [pending-ci] release approval -- waiting"],
+        )
         said: list[str] = []
         written = evidence.update_evidence_entries(
             body, {0: {"status": "complete", "detail": "done"}}, announcements=said
         )
         self.assertEqual(written, body, "the metadata moved while the visible line did not")
+
+    def test_a_visible_line_disagreeing_with_its_metadata_is_expressible(self) -> None:
+        """What `lines=` is for, demonstrated rather than claimed (#1778, round 10).
+
+        `body_with_entries` derives the visible line FROM the entry, so a body
+        whose page says one thing and whose metadata says another was not a
+        fixture this suite could write — and that disagreement is the shape
+        the lane's defects keep taking. Here the metadata records a complete
+        `ci` entry while the line a reader sees still says `pending-ci`, which
+        is what an owner's hand edit to the block leaves behind.
+        """
+        recorded = dict(
+            ci_entry(index=1, status="complete", verified_head_sha=HEAD),
+            detail=f"`Web CI` green on head {HEAD[:12]} — https://example.invalid/run/1",
+            check_name="Web CI",
+            proof_url="https://example.invalid/run/1",
+        )
+        body = body_with_contract(
+            [CI_ITEM],
+            [recorded],
+            lines=[f"- [pending-ci] {CI_ITEM} -- waiting for checks"],
+        )
+        self.assertIn('"status": "complete"', body, "the metadata says complete")
+        self.assertIn("- [pending-ci]", body, "the page says pending")
+        self.assertNotIn("- [complete]", body)
+        # And the lane reads the metadata, which is the thing worth knowing:
+        # the clear counts what the block records, not what the page shows.
+        self.assertTrue(
+            verify.should_clear_blocked_label(
+                verify.evidence_entries(body),
+                HEAD,
+                verified={
+                    1: {
+                        "status": "complete",
+                        "verified_head_sha": HEAD,
+                        "check_name": "Web CI",
+                    }
+                },
+            )
+        )
+
+    def test_no_entry_that_renders_no_line_counts_toward_a_clear(self) -> None:
+        """An index nothing can act on is a requirement with nothing on the page.
+
+        The int-only rule went in for the acting path and stopped at the kind
+        check in the clear, which asks for an index only after deciding an
+        entry is `ci`. So a complete `diff` entry at `true`, `1.0`, `"1"`,
+        `0`, `-1` or `null` took `blocked:evidence` off on its own, with no
+        line anywhere for the requirement it claimed to satisfy (#1778,
+        round 10).
+        """
+        for value in (True, 1.0, "1", 0, -1, None, "1\n<!--"):
+            with self.subTest(index=value):
+                entry = {
+                    "index": value,
+                    "item": DIFF_ITEM,
+                    "status": "complete",
+                    "detail": "the diff shows it",
+                    "kind": "diff",
+                }
+                self.assertIsNone(verify.usable_entry_index(entry), "the premise")
+                self.assertFalse(
+                    verify.should_clear_blocked_label([entry], HEAD, verified={}),
+                    f"index {value!r} cleared the label with no line on the page",
+                )
+        # The control: the same entry at an index that renders still clears.
+        self.assertTrue(
+            verify.should_clear_blocked_label(
+                [
+                    {
+                        "index": 1,
+                        "item": DIFF_ITEM,
+                        "status": "complete",
+                        "detail": "the diff shows it",
+                        "kind": "diff",
+                    }
+                ],
+                HEAD,
+                verified={},
+            )
+        )
 
     def test_a_float_and_a_bool_are_not_indexes(self) -> None:
         evidence = sys.modules["evidence"]
