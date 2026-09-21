@@ -2464,6 +2464,10 @@ class TheGateAndTheOwnerAskTheRendererTheSameThingTests(unittest.TestCase):
             made.append(seen[0])
         return made
 
+    # intent: guard
+    # marker: red at `016d94ba`, its own base, by API alone and it cannot be otherwise --
+    # the seam it pins is one this branch ADDS, so there is no property to hold at the base
+    # and no drive that makes it behaviourally red (#1773, round 13).
     def test_both_copies_post_the_same_body_to_the_same_endpoint(self) -> None:
         (gate, gate_timeout), (owner, owner_timeout) = self.requests()
         self.assertEqual(gate.full_url, owner.full_url)
@@ -2476,6 +2480,10 @@ class TheGateAndTheOwnerAskTheRendererTheSameThingTests(unittest.TestCase):
         )
         self.assertEqual(gate_timeout, owner_timeout)
 
+    # intent: guard
+    # marker: red at `016d94ba`, its own base, by API alone and it cannot be otherwise --
+    # the seam it pins is one this branch ADDS, so there is no property to hold at the base
+    # and no drive that makes it behaviourally red (#1773, round 13).
     def test_both_copies_send_the_same_headers_but_their_own_name(self) -> None:
         (gate, _), (owner, _) = self.requests()
         self.assertEqual(sorted(gate.headers), sorted(owner.headers))
@@ -2488,6 +2496,10 @@ class TheGateAndTheOwnerAskTheRendererTheSameThingTests(unittest.TestCase):
             self.assertIn("workspaces", request.headers["User-agent"])
         self.assertNotEqual(gate.headers["User-agent"], owner.headers["User-agent"])
 
+    # intent: guard
+    # marker: red at `016d94ba`, its own base, by API alone and it cannot be otherwise --
+    # the seam it pins is one this branch ADDS, so there is no property to hold at the base
+    # and no drive that makes it behaviourally red (#1773, round 13).
     def test_both_copies_read_the_same_tokens_in_the_same_order(self) -> None:
         for environment, expected in (
             ({"GH_TOKEN": "first", "GITHUB_TOKEN": "second"}, "Bearer first"),
@@ -2497,6 +2509,10 @@ class TheGateAndTheOwnerAskTheRendererTheSameThingTests(unittest.TestCase):
                 for request, _ in self.requests({**environment, "GITHUB_REPOSITORY": "acme/thing"}):
                     self.assertEqual(request.headers["Authorization"], expected)
 
+    # intent: guard
+    # marker: red at `016d94ba`, its own base, by API alone and it cannot be otherwise --
+    # the seam it pins is one this branch ADDS, so there is no property to hold at the base
+    # and no drive that makes it behaviourally red (#1773, round 13).
     def test_both_copies_refuse_rather_than_spend_the_anonymous_allowance(self) -> None:
         # The anonymous allowance is 60 an hour shared across the host, so a
         # tokenless call would refuse one author's body and place the next
@@ -2510,6 +2526,10 @@ class TheGateAndTheOwnerAskTheRendererTheSameThingTests(unittest.TestCase):
                 self.assertEqual(seen, [])
                 self.assertIn("GH_TOKEN", str(raised.exception))
 
+    # intent: guard
+    # marker: red at `016d94ba`, its own base, by API alone and it cannot be otherwise --
+    # the seam it pins is one this branch ADDS, so there is no property to hold at the base
+    # and no drive that makes it behaviourally red (#1773, round 13).
     def test_both_copies_name_a_spent_rate_limit_the_same_way(self) -> None:
         owner = self.owner()
         error = urllib.error.HTTPError(
@@ -2524,6 +2544,10 @@ class TheGateAndTheOwnerAskTheRendererTheSameThingTests(unittest.TestCase):
         )
         self.assertIn("rate limit", owner.http_failure_reason(error))
 
+    # intent: guard
+    # marker: red at `016d94ba`, its own base, by API alone and it cannot be otherwise --
+    # the seam it pins is one this branch ADDS, so there is no property to hold at the base
+    # and no drive that makes it behaviourally red (#1773, round 13).
     def test_the_two_constants_that_decide_the_call_agree(self) -> None:
         owner = self.owner()
         for name in ("MARKDOWN_API_URL", "MARKDOWN_API_VERSION", "RENDER_TIMEOUT_SECONDS", "DEFAULT_REPOSITORY"):
