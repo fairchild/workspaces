@@ -1180,7 +1180,7 @@ def _structured_evidence_entries(
         if not isinstance(raw_entry, dict):
             invalid_lines.append(f"entry {position} is not an object")
             continue
-        index = entry_index(raw_entry)
+        index = usable_entry_index(raw_entry)
         if index is None:
             invalid_lines.append(f"entry {position} is missing a valid integer index")
             continue
@@ -2583,7 +2583,7 @@ def render_execution_summary_body(
     evidence_map = {
         index: entry
         for entry in complete_entries + blocked_entries + pending_ci_entries
-        if (index := entry_index(entry)) is not None
+        if (index := usable_entry_index(entry)) is not None
     }
     evidence_map.update(
         _owner_written_entries(published_body, requested_evidence, mark_carried=True)
@@ -3670,27 +3670,29 @@ def _render_structured_entries(
     return reconciled
 
 
-def entry_index(entry: object) -> int | None:
-    """The index this entry claims, or None if it claims none a reader can take.
+def _claimed_index(entry: object) -> int | None:
+    """The index this entry CLAIMS, whatever anything can do with it.
 
-    ONE definition, in the module where the fan-out below lives, and the
-    verifier imports it. Three readers there had three of these, and the gap
-    between them was not theoretical: one index carrying a `ci` entry and a
-    non-`ci` one passed the duplicate guard, and the write applied the update
-    to EVERY entry at that index (#1778, round 3, filed as #1784). Round 5
-    gave them one definition each side of the module boundary -- which is two
-    definitions agreeing by copy, the shape this family is named for, so
-    round 6 made it one function both modules CALL.
+    Private, and it lives here beside its one caller on purpose. It answers an
+    identity question -- are these two entries at one index? -- and an acting
+    site that asks it instead of `usable_entry_index` acts on an index nothing
+    renders: the apply loop did, and flipped an `{"index": 0}` entry's hidden
+    metadata to complete while the line a reader sees stayed `[pending-ci]`,
+    with nothing announced (#1778, round 8). A name an acting site can reach
+    by habit is a rule waiting to be applied in the wrong place, so reaching
+    it now means reaching past an underscore into this module.
 
-    `OverflowError` too: `1e9999` in the PR-editable metadata parses as
-    infinity, and `int()` of that raises a class the others do not cover.
+    Only an `int`, and `bool` is not one. JSON numbers arrive as `int` or
+    `float`, and a float is not an index -- `1.9` is not entry 1, and `True`
+    is not entry 1 either, though Python will tell you both are if asked with
+    `int()`.
     """
     if not isinstance(entry, dict):
         return None
-    try:
-        return int(entry["index"])
-    except (KeyError, TypeError, ValueError, OverflowError):
+    index = entry.get("index")
+    if isinstance(index, bool) or not isinstance(index, int):
         return None
+    return index
 
 
 def usable_entry_index(entry: object) -> int | None:
@@ -3715,7 +3717,7 @@ def usable_entry_index(entry: object) -> int | None:
     -- it must fall within the requested items -- and it stays where the
     contract is in hand, named separately.
     """
-    index = entry_index(entry)
+    index = _claimed_index(entry)
     return index if index is not None and index >= 1 else None
 
 
@@ -3723,7 +3725,7 @@ def entries_by_index(entries: object) -> dict[int, list[dict[str, object]]]:
     """Every entry a reader can take, grouped by the index it claims -- ALL kinds."""
     grouped: dict[int, list[dict[str, object]]] = {}
     for entry in entries if isinstance(entries, list) else []:
-        index = entry_index(entry)
+        index = _claimed_index(entry)
         if index is not None:
             grouped.setdefault(index, []).append(entry)  # type: ignore[arg-type]
     return grouped
@@ -3804,7 +3806,10 @@ def update_evidence_entries(
             updated_entries.append(raw_entry)
             continue
         entry = dict(raw_entry)
-        index = entry_index(entry)
+        # The USABLE rule, because this acts: an index nothing renders is a
+        # line no reader sees, and flipping its metadata leaves the record
+        # saying one thing and the page another (#1778, round 8).
+        index = usable_entry_index(entry)
         if index is None:
             updated_entries.append(entry)
             continue

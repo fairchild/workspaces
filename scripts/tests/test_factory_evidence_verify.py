@@ -17,6 +17,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -78,6 +79,43 @@ def body_with_entries(entries: list[dict[str, object]]) -> str:
         "*Persona*\n\n## Summary\n- change\n\n"
         f"<!-- evidence-status:v1\n{payload}\n-->\n\n"
         f"## Evidence Status\n{lines}\n\n"
+        "## Validation\n- blocked on evidence: waiting for checks\n\n"
+        "Closes #99\n\n<!-- contributor:issue=99;agent=test -->"
+    )
+
+
+def body_with_contract(
+    contract: list[str],
+    entries: list[dict[str, object]],
+    *,
+    lines: list[str] | None = None,
+) -> str:
+    """A body whose contract, metadata and visible lines are given SEPARATELY.
+
+    `body_with_entries` derives all three from one list, so no fixture built
+    with it can express an entry that disagrees with the contract -- a
+    requirement deleted from the metadata, one added, one retargeted to
+    another check, or a visible line that says something the metadata does
+    not. Every defect of that shape was therefore unreachable by construction,
+    which is why two of them shipped (#1778, round 8).
+
+    Nothing here is derived from anything else: the contract is what the issue
+    asked for, the entries are what the description records, and `lines`
+    defaults to the entries' own rendering only so a caller that does not care
+    can leave it out.
+    """
+    payload = json.dumps({"entries": entries}, indent=2, ensure_ascii=False)
+    visible = "\n".join(
+        lines
+        if lines is not None
+        else [f"- [{entry['status']}] {entry['item']} -- {entry['detail']}" for entry in entries]
+    )
+    requested = "\n".join(f"- {item}" for item in contract)
+    return (
+        "*Persona*\n\n## Summary\n- change\n\n"
+        f"## Requested Evidence\n{requested}\n\n"
+        f"<!-- evidence-status:v1\n{payload}\n-->\n\n"
+        f"## Evidence Status\n{visible}\n\n"
         "## Validation\n- blocked on evidence: waiting for checks\n\n"
         "Closes #99\n\n<!-- contributor:issue=99;agent=test -->"
     )
@@ -1000,8 +1038,8 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
                     label,
                 )
         # And an entry claiming no readable index is invisible to all three.
-        self.assertIsNone(verify.entry_index({"item": CI_ITEM}))
-        self.assertIsNone(verify.entry_index({"index": "1e9999"}))
+        self.assertIsNone(verify.usable_entry_index({"item": CI_ITEM}))
+        self.assertIsNone(verify.usable_entry_index({"index": "1e9999"}))
         self.assertEqual(verify.colliding_indexes([{"item": CI_ITEM}, {"item": CI_ITEM}]), [])
 
     def test_a_verdict_for_another_check_never_counts(self) -> None:
@@ -1558,7 +1596,7 @@ class TheClearRefusesACollidingIndexTooTests(unittest.TestCase):
 class OneRuleForWhichIndexAnythingCanActOnTests(unittest.TestCase):
     """Three validity rules over one field, reduced to two named ones (#1778, round 7).
 
-    `entry_index` answers what an entry CLAIMS -- an identity, any integer, so
+    The identity rule answers what an entry CLAIMS -- any integer, so
     two entries at index 0 are a collision the write must refuse. Whether
     anything can ACT on the claim is a second question with one answer: an
     index numbers a line in a rendered list and the first is 1. This lane
@@ -1566,11 +1604,20 @@ class OneRuleForWhichIndexAnythingCanActOnTests(unittest.TestCase):
     the author about none, which is one contract read two ways.
     """
 
+    def identity(self):
+        """The private identity rule, reached the way an acting site would have to.
+
+        It lives beside its one caller behind an underscore now, so this test
+        names where it is rather than pretending it is part of the surface
+        (#1778, round 8).
+        """
+        return sys.modules["evidence"]._claimed_index
+
     def test_an_index_below_one_is_claimed_but_not_actionable(self) -> None:
         for index in (0, -1):
             with self.subTest(index=index):
                 entry = {"index": index, "item": CI_ITEM, "status": "pending-ci", "detail": "d"}
-                self.assertEqual(verify.entry_index(entry), index)
+                self.assertEqual(self.identity()(entry), index)
                 self.assertIsNone(verify.usable_entry_index(entry))
 
     def test_the_verifier_looks_up_no_check_for_a_line_nothing_renders(self) -> None:
@@ -1596,6 +1643,202 @@ class OneRuleForWhichIndexAnythingCanActOnTests(unittest.TestCase):
             {"index": 0, "item": DIFF_ITEM, "status": "pending-ci", "detail": "d"},
         ]
         self.assertEqual(verify.colliding_indexes(entries), [0])
+
+
+class ADecisionIsTakenOnWhatThePullRequestHoldsNowTests(unittest.TestCase):
+    """Every return in the write loop hands back a body the label is decided on (#1778, round 8).
+
+    Round 7 moved the live body's extraction above two of the returns. The
+    narrowing's own return sat above the READ, so an owner retargeting the one
+    `ci` entry mid-run had `blocked:evidence` cleared after two pull request
+    reads, zero check-run verifications and zero writes -- this lane deciding
+    on a body the pull request no longer has.
+
+    Driven through the builder that can express a contract and an entries list
+    disagreeing, which is the fixture shape every defect of this kind lives in.
+    """
+
+    GREEN = [
+        {
+            "status": "completed",
+            "conclusion": "success",
+            "completed_at": "2026-08-27T00:00:00Z",
+            "html_url": "https://example.invalid/run/1",
+        }
+    ]
+    OTHER_CHECK = "CI: `macOS CI` green on the PR head"
+
+    def run_over(self, first: str, live: str):
+        pr = pr_payload(first, labels=["blocked:evidence"])
+        reads = {"n": 0}
+        gh_calls: list[list[str]] = []
+        written: list[str] = []
+
+        def fake_gh_json(args, env):
+            if not any("pulls/321" in arg for arg in args):
+                return None
+            reads["n"] += 1
+            pr["body"] = first if reads["n"] == 1 else live
+            return pr
+
+        with (
+            mock.patch.object(verify, "_gh_json", side_effect=fake_gh_json),
+            mock.patch.object(verify, "check_runs_for", return_value=self.GREEN),
+            mock.patch.object(
+                verify, "_write_pr_body", side_effect=lambda n, b, e: written.append(b) or True
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+        return reads["n"], written, gh_calls
+
+    def cleared(self, gh_calls) -> bool:
+        return ["pr", "edit", "321", "--remove-label", "blocked:evidence"] in gh_calls
+
+    def settled(self, item: str = CI_ITEM) -> dict[str, object]:
+        """An entry already recording what a green `Web CI` run confirms."""
+        return dict(
+            ci_entry(index=1, status="complete", verified_head_sha=HEAD),
+            item=item,
+            detail=f"`Web CI` green on head {HEAD[:12]} — https://example.invalid/run/1",
+            check_name="Web CI",
+            proof_url="https://example.invalid/run/1",
+        )
+
+    def test_an_entry_retargeted_mid_run_keeps_the_label(self) -> None:
+        # The run verifies `Web CI` green and would clear on the body it read
+        # first. Mid-run the owner retargets that one entry to another check,
+        # which this run has verified nothing about -- so the update is
+        # dropped, nothing is written, and the label must be decided on what
+        # the pull request holds now.
+        contract = [CI_ITEM]
+        first = body_with_contract(contract, [self.settled()])
+        live = body_with_contract(contract, [dict(self.settled(item=self.OTHER_CHECK))])
+        reads, written, gh_calls = self.run_over(first, live)
+        self.assertGreater(reads, 1, "the live body was never read")
+        self.assertEqual(written, [], "an update for a check the entry no longer names was written")
+        self.assertFalse(
+            self.cleared(gh_calls),
+            "the label was cleared on a body whose one requirement this run never verified",
+        )
+
+    def test_the_same_contract_unchanged_still_clears(self) -> None:
+        # The control: reading the live body is not a reason to stop clearing.
+        contract = [CI_ITEM]
+        settled = body_with_contract(
+            contract,
+            [
+                dict(
+                    ci_entry(index=1, status="complete", verified_head_sha=HEAD),
+                    detail=f"`Web CI` green on head {HEAD[:12]} — https://example.invalid/run/1",
+                    check_name="Web CI",
+                    proof_url="https://example.invalid/run/1",
+                )
+            ],
+        )
+        reads, written, gh_calls = self.run_over(settled, settled)
+        self.assertEqual(written, [])
+        self.assertTrue(self.cleared(gh_calls), gh_calls)
+
+    def test_a_requirement_deleted_from_the_metadata_is_not_seen_here(self) -> None:
+        """What the clear quantifies over, asserted rather than assumed.
+
+        The verifier reads the description's metadata and never the contract,
+        so a `pending-ci` entry deleted from the metadata is a requirement
+        this gate cannot see -- the clear reads what survives. That is #1783's
+        family, it is identical on main, and it is named in the docstring and
+        the body rather than fixed here.
+        """
+        contract = [CI_ITEM, DIFF_ITEM]
+        deleted = body_with_contract(
+            contract,
+            [
+                dict(
+                    ci_entry(index=1, status="complete", verified_head_sha=HEAD),
+                    detail=f"`Web CI` green on head {HEAD[:12]} — https://example.invalid/run/1",
+                    check_name="Web CI",
+                    proof_url="https://example.invalid/run/1",
+                )
+            ],
+        )
+        self.assertIn(DIFF_ITEM, deleted, "the contract still asks for it")
+        self.assertNotIn(
+            DIFF_ITEM,
+            json.dumps(verify.evidence_entries(deleted)),
+            "the metadata no longer records it",
+        )
+        _, _, gh_calls = self.run_over(deleted, deleted)
+        self.assertTrue(
+            self.cleared(gh_calls),
+            "documented, not desired: the clear reads the metadata and a deleted entry is "
+            "invisible to it",
+        )
+
+
+class TheIdentityRuleIsNotReachableFromASiteThatActsTests(unittest.TestCase):
+    """The criterion decides in code, and the static test is the second line (#1778, round 8).
+
+    The apply loop asked the IDENTITY rule while acting, so an `{"index": 0}`
+    entry had its hidden metadata flipped to complete while the line a reader
+    sees stayed `[pending-ci]` -- body changed, nothing announced. Two rules
+    over one field is right; applying the wrong one at a site that acts is
+    what a name an acting site can reach by habit invites.
+
+    The rule lives behind an underscore beside its one caller now, so reaching
+    it from an acting site means reaching past a visible boundary into another
+    module. That is the property; the test below names the intent.
+    """
+
+    def test_no_module_that_acts_imports_the_identity_rule(self) -> None:
+        tracked = subprocess.run(
+            ["git", "ls-files", "*.py"],
+            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+        ).stdout.split()
+        self.assertGreater(len(tracked), 50, "the enumeration found almost nothing")
+        reaching = {
+            f"{path}:{number}"
+            for path in tracked
+            if not path.startswith("scripts/tests/")
+            and path != ".agents/skills/cofounder-contributor/scripts/evidence.py"
+            for number, line in enumerate(
+                (REPO_ROOT / path).read_text(encoding="utf-8").splitlines(), 1
+            )
+            if "_claimed_index" in line
+        }
+        self.assertEqual(reaching, set(), "an acting site reached past the boundary")
+
+    def test_the_only_caller_of_the_identity_rule_is_the_collision_grouping(self) -> None:
+        evidence = sys.modules["evidence"]
+        source = Path(evidence.__file__).read_text(encoding="utf-8")
+        callers = [
+            line.strip()
+            for line in source.splitlines()
+            if "_claimed_index(" in line and not line.strip().startswith("def ")
+        ]
+        self.assertEqual(len(callers), 2, callers)
+        self.assertTrue(all("index = _claimed_index(entry)" in line for line in callers), callers)
+
+    def test_an_index_nothing_renders_is_not_acted_on(self) -> None:
+        evidence = sys.modules["evidence"]
+        entry = {"index": 0, "item": "release approval", "status": "pending-ci",
+                 "detail": "waiting", "kind": "manual"}
+        body = body_with_contract(["release approval"], [entry])
+        said: list[str] = []
+        written = evidence.update_evidence_entries(
+            body, {0: {"status": "complete", "detail": "done"}}, announcements=said
+        )
+        self.assertEqual(written, body, "the metadata moved while the visible line did not")
+
+    def test_a_float_and_a_bool_are_not_indexes(self) -> None:
+        evidence = sys.modules["evidence"]
+        for value in (1.9, 1.0, True, False, "1"):
+            with self.subTest(index=value):
+                self.assertIsNone(evidence._claimed_index({"index": value}), value)
+                self.assertIsNone(evidence.usable_entry_index({"index": value}), value)
+        self.assertEqual(evidence._claimed_index({"index": 1}), 1)
 
 
 class VerdictDefinitenessTests(unittest.TestCase):
@@ -2001,13 +2244,25 @@ class BodyChangeRaceGuardTests(unittest.TestCase):
 
         with (
             mock.patch.object(
-                verify, "_gh_json", side_effect=[pr_payload(retargeted_body, head_sha=HEAD)]
+                verify,
+                "_gh_json",
+                # Two reads: one per attempt, and the second is what the label
+                # is decided on. The loop reads the live pull request before
+                # anything in it can return, so the attempt that drops every
+                # update returns what the pull request holds now rather than
+                # the copy this run started from (#1778, round 8) -- one more
+                # read on this path than before, and it is the read that makes
+                # the decision honest.
+                side_effect=[
+                    pr_payload(retargeted_body, head_sha=HEAD),
+                    pr_payload(retargeted_body, head_sha=HEAD),
+                ],
             ) as gh_json,
             mock.patch.object(verify, "_write_pr_body") as write,
         ):
             result = verify._apply_ci_updates(321, HEAD, body, updates, {})
 
-        self.assertEqual(gh_json.call_count, 1)
+        self.assertEqual(gh_json.call_count, 2)
         write.assert_not_called()
         self.assertEqual(result, retargeted_body)
         self.assertNotIn("Web CI", result)

@@ -40,11 +40,7 @@ CONTRIBUTOR_SCRIPTS = (
 if str(CONTRIBUTOR_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(CONTRIBUTOR_SCRIPTS))
 
-from evidence import (  # noqa: E402
-    _evidence_item_kind,
-    _extract_evidence_metadata,
-    usable_entry_index,
-)
+from evidence import _evidence_item_kind, _extract_evidence_metadata  # noqa: E402
 
 
 def _load_sibling(name: str, filename: str):
@@ -486,15 +482,24 @@ def _entry_kind(entry: dict[str, Any]) -> str:
     return _evidence_item_kind(str(entry.get("item") or ""))
 
 
-# The index this entry claims, when it is one anything can act on -- the
-# shared definition, bound here rather than re-implemented. This lane had its
-# own, with its own rule below 1, and it disagreed with the verifier's: an
-# index-0 entry was a check the verifier looked up and a line this lane named
-# to nobody (#1778, round 7). The reason the shared one catches OverflowError
-# holds here too: `1e309` decodes to infinity and `int()` of that raises a
-# class the other two do not cover, which here would abort the lane before it
-# posts anything and turn a bad index into silence instead of a comment.
-_entry_index = usable_entry_index
+def _entry_index(entry: dict[str, Any]) -> int | None:
+    """The entry's index, or None if it is not one.
+
+    `index` comes from the same PR-editable metadata the item text does, and
+    it reaches the comment through two paths that never touched `_quotable`.
+    An index of `"1\n<!--"` opens an HTML comment inside a comment the owner
+    is meant to trust, hiding the instructions under it while the real
+    trailing marker still counts the review as answered.
+    """
+    try:
+        value = int(entry.get("index"))
+    except (TypeError, ValueError, OverflowError):
+        # `1e309` decodes to infinity, and `int()` of that raises
+        # OverflowError rather than ValueError -- which would abort the
+        # response lane before it posts anything, turning a bad index into
+        # silence instead of a comment.
+        return None
+    return value if value > 0 else None
 
 
 def evidence_blockers(entries: list[dict[str, Any]]) -> list[Blocker]:

@@ -39,7 +39,6 @@ from evidence import (  # noqa: E402
     # round 6).
     colliding_indexes,
     entries_by_index,
-    entry_index,
     usable_entry_index,
     update_evidence_entries,
 )
@@ -295,8 +294,18 @@ def should_clear_blocked_label(
     no `verified` in hand no `ci` entry can count, so a caller that forgot to
     pass it keeps the label rather than clearing it.
 
-    What this does NOT close, and it is worth saying where the function is
-    rather than only in a pull request: a non-`ci` completion -- a test, a
+    What it quantifies over is the DESCRIPTION'S metadata, not the issue's
+    contract: `requested_evidence` occurs nowhere in this lane. So "every
+    entry complete" means every entry the pull request body still records, and
+    a requirement deleted from that block is not a requirement this gate can
+    see -- deleting a `pending-ci` entry clears the label, and it does the same
+    on main. Reading the contract here would need the issue the body closes and
+    a rule for a body that records nothing the issue asks for, which is a
+    larger change than re-checking a completion; it is #1783's family and the
+    residual names it.
+
+    What this does NOT close either, and it is worth saying where the function
+    is rather than only in a pull request: a non-`ci` completion -- a test, a
     screenshot, the kinds the macOS lane resolves -- is counted as the entry
     records it, because this lane has no way to verify one. A completion of
     those written by hand still counts toward the clear. That is a provenance
@@ -327,7 +336,7 @@ def should_clear_blocked_label(
         item = str(entry.get("item", "")).strip()
         if _evidence_item_kind(item) != "ci":
             continue
-        index = entry_index(entry)
+        index = usable_entry_index(entry)
         if index is None:
             return False
         update = confirmed.get(index)
@@ -461,6 +470,21 @@ def _apply_ci_updates(
     collisions on the update's own index and nowhere else (#1778, round 5).
     """
     for attempt in range(1, MAX_WRITE_ATTEMPTS + 1):
+        # The live PR first, before anything in this loop can return. Every
+        # return here hands the caller a body it decides `blocked:evidence`
+        # on, so a return that happens before the read decides on the copy
+        # this run started from -- and an owner who retargets the one `ci`
+        # entry mid-run then has the label cleared after two reads, zero
+        # check-run verifications and zero writes. Round 7 moved the
+        # extraction above two of the returns; this is the read itself, above
+        # all of them (#1778, round 8).
+        current = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
+        current_head = current.get("head") if isinstance(current, dict) else None
+        current_sha = str(current_head.get("sha", "")) if isinstance(current_head, dict) else ""
+        # `None` where the read told us nothing, "" where the PR's description
+        # is genuinely empty (#1778, round 7).
+        current_body = str(current.get("body") or "") if isinstance(current, dict) else None
+        live = body if current_body is None else current_body
         # Re-run on every body this loop is about to write, not once before
         # it. The retry re-reads a body an owner may have edited in between,
         # and a collision arriving there at an index this run holds no update
@@ -473,28 +497,16 @@ def _apply_ci_updates(
                 f"PR #{pr_number}: evidence entries share index(es) "
                 f"{', '.join(str(index) for index in shared)}; leaving the contract for the author"
             )
-            return body
+            return live
         safe_updates = _updates_targeting_unchanged_entries(body, updates)
         if not safe_updates:
-            return body
+            # Nothing this run concluded still applies to the body in hand --
+            # an owner retargeted the entry, or removed it. The label is
+            # decided on what the pull request holds NOW, not on the copy this
+            # run read first (#1778, round 8).
+            return live
         uncarried: list[str] = []
         new_body = update_evidence_entries(body, safe_updates, announcements=uncarried)
-        current = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
-        current_head = current.get("head") if isinstance(current, dict) else None
-        current_sha = str(current_head.get("sha", "")) if isinstance(current_head, dict) else ""
-        # Read here, ABOVE both early returns, because both of them return a
-        # body the caller decides the label on. Extracted below them, a
-        # stand-down returned the PRE-EDIT body and the clear was decided on
-        # it: an owner adding a `pending-ci` requirement mid-run had
-        # `blocked:evidence` taken off against a live body recording an unmet
-        # requirement -- this lane having fetched the truth and dropped it
-        # (#1778, round 5, and the stand-down half of #1786).
-        # `None` where the read told us nothing, "" where the PR's description
-        # is genuinely empty: an owner who deletes their description mid-run
-        # has an empty body, and treating that as a failed read decided the
-        # label on the copy this run started from and cleared it (#1778,
-        # round 7).
-        current_body = str(current.get("body") or "") if isinstance(current, dict) else None
         if current_sha != head_sha:
             # Above both returns, because a moved head means this run's
             # conclusions are about a commit the PR has left -- so there is no
@@ -520,7 +532,7 @@ def _apply_ci_updates(
             # rather than on the copy this run started from. A read that told
             # us nothing leaves the body we have, which is the answer we had
             # anyway; an empty one is an answer.
-            return body if current_body is None else current_body
+            return live
         if current_body != body:
             log(
                 f"PR #{pr_number} body changed during verification "
