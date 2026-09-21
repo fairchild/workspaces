@@ -44,6 +44,8 @@ verify_evidence = sys.modules["evidence"]
 HEAD = "a" * 40
 OTHER_HEAD = "b" * 40
 CI_ITEM = "CI: `Web CI` green on the PR head"
+REVIEW_WORKFLOW = "factory-review.yml"
+CHANGES_REQUESTED = "CHANGES_REQUESTED"
 DIFF_ITEM = "Diff: dot-only segments rejected, readable from the diff alone"
 
 
@@ -217,7 +219,7 @@ class BlockedLabelClearTests(unittest.TestCase):
         ]
         # A `ci` entry counts only where THIS RUN verified it, so the clear
         # takes what the run concluded rather than what the body says (#1778).
-        green = {1: {"status": "complete", "verified_head_sha": HEAD}}
+        green = {1: {"status": "complete", "verified_head_sha": HEAD, "check_name": "Web CI"}}
         self.assertTrue(verify.should_clear_blocked_label(complete, HEAD, verified=green))
         # The same entries with nothing verified: the half of #1778 that let a
         # forged body clear its own label.
@@ -442,12 +444,16 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertIn("may not match a check on this repository", body)
         self.assertFalse(self.cleared(gh_calls), gh_calls)
 
-    def test_a_forged_completion_whose_run_has_not_finished_is_undone(self) -> None:
+    def test_a_run_that_has_not_finished_says_nothing_and_writes_nothing(self) -> None:
+        # An indefinite answer -- a check mid-re-run -- cannot unsay a
+        # completion, so the entry keeps what it records and the body is not
+        # rewritten (#1778, round 2). The forged line therefore survives this
+        # run, and clears nothing: it is absent from what this run verified,
+        # so the label stays. The next definite answer undoes it.
         body, gh_calls = self.run_over(
             [ci_entry(**self.FORGED)], runs=[{"status": "in_progress", "conclusion": None}]
         )
-        self.assertIn(f"- [pending-ci] {CI_ITEM}", body)
-        self.assertIn("waiting for checks", body)
+        self.assertIsNone(body, "an indefinite answer rewrote the body")
         self.assertFalse(self.cleared(gh_calls), gh_calls)
 
     def test_a_genuine_completion_stays_complete_and_still_clears_the_label(self) -> None:
@@ -458,6 +464,58 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertIn(f'"verified_head_sha": "{HEAD}"', body)
         self.assertIn("https://example.invalid/run/1", body)
         self.assertTrue(self.cleared(gh_calls), gh_calls)
+
+    def test_an_honest_body_the_run_confirms_is_returned_byte_for_byte(self) -> None:
+        """"Unchanged" asserted as BYTES, not as logical completion.
+
+        The control above shows the entry is still complete and the label
+        still clears, which is a claim about what the body MEANS. What an
+        author notices is whether their description was rewritten, and that
+        is a claim about its characters -- so it is asserted as characters
+        (#1778, round 2).
+
+        The entry here already records what this run confirms, detail and
+        proof URL included, so the re-render reproduces the body it was given.
+        """
+        detail = f"`Web CI` green on head {HEAD[:12]} — https://example.invalid/run/1"
+        entry = dict(
+            ci_entry(status="complete", verified_head_sha=HEAD),
+            detail=detail,
+            check_name="Web CI",
+            proof_url="https://example.invalid/run/1",
+        )
+        source = body_with_entries([entry])
+        written: list[str] = []
+        pr = pr_payload(source, labels=["blocked:evidence"])
+        gh_calls: list[list[str]] = []
+        with (
+            mock.patch.object(
+                verify,
+                "_gh_json",
+                side_effect=lambda args, env: pr if any("pulls/321" in a for a in args) else None,
+            ),
+            mock.patch.object(verify, "check_runs_for", return_value=self.GREEN_RUN),
+            mock.patch.object(
+                verify,
+                "_write_pr_body",
+                side_effect=lambda n, b, e: written.append(b) or True,
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+        # The strongest form of "unchanged": the description is not written at
+        # all, so not a character of the author's body moves.
+        self.assertEqual(written, [], "an honest body was rewritten")
+        self.assertTrue(self.cleared(gh_calls), gh_calls)
+        # And the re-render of those entries is the body it was handed, which
+        # is why nothing needed writing.
+        self.assertEqual(
+            verify.update_evidence_entries(source, {}),
+            source,
+        )
 
     def test_a_completion_is_re_read_even_when_the_recorded_sha_matches(self) -> None:
         # The condition that was doing the skipping, asserted directly rather
@@ -484,22 +542,57 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertFalse(verify.should_clear_blocked_label(entries, HEAD, verified={}))
         self.assertTrue(
             verify.should_clear_blocked_label(
-                entries, HEAD, verified={1: {"status": "complete", "verified_head_sha": HEAD}}
+                entries,
+                HEAD,
+                verified={
+                    1: {
+                        "status": "complete",
+                        "verified_head_sha": HEAD,
+                        "check_name": "Web CI",
+                    }
+                },
+            )
+        )
+        # A verdict for a DIFFERENT check does not count, however complete it
+        # is: looked up by index alone, a decoy naming any green check cleared
+        # the label on a red one (#1778, round 2).
+        self.assertFalse(
+            verify.should_clear_blocked_label(
+                entries,
+                HEAD,
+                verified={
+                    1: {"status": "complete", "verified_head_sha": HEAD, "check_name": "Docs"}
+                },
             )
         )
         # A run that verified the entry and found it wanting does not clear.
         self.assertFalse(
             verify.should_clear_blocked_label(
-                entries, HEAD, verified={1: {"status": "pending-ci"}}
+                entries, HEAD, verified={1: {"status": "pending-ci", "check_name": "Web CI"}}
             )
         )
 
-    def test_a_lookup_failure_leaves_the_label_alone(self) -> None:
+    def test_a_lookup_failure_leaves_the_body_and_the_label_alone(self) -> None:
         # `check_runs_for` returning None is a failed query, which says
-        # nothing about the check. The entry goes to pending-ci and the label
-        # stays: the lane does not clear on a question it could not ask.
+        # nothing about the check -- so it neither clears the label nor
+        # rewrites the entry. Demoting on it wrote `pending-ci` into the body
+        # and made the NEXT run read a transition that had not happened
+        # (#1778, round 2).
         body, gh_calls = self.run_over([ci_entry(**self.FORGED)], runs=None)
+        self.assertIsNone(body, "a failed lookup rewrote the body")
+        self.assertFalse(self.cleared(gh_calls), gh_calls)
+
+    def test_an_entry_with_no_recorded_completion_is_still_written_on_an_indefinite_answer(
+        self,
+    ) -> None:
+        # The rule protects a COMPLETION bound to this head, not every entry:
+        # a `pending-ci` entry still gets the "waiting for checks" detail, so
+        # an author can see the lane is watching it.
+        body, gh_calls = self.run_over(
+            [ci_entry(status="pending-ci")], runs=[{"status": "in_progress", "conclusion": None}]
+        )
         self.assertIn(f"- [pending-ci] {CI_ITEM}", body)
+        self.assertIn("waiting for checks", body)
         self.assertFalse(self.cleared(gh_calls), gh_calls)
 
     def test_a_correction_the_body_refuses_still_holds_the_label(self) -> None:
@@ -585,6 +678,298 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         ):
             verify.process_pr(321, {})
         self.assertEqual(reads, [("Web CI", HEAD)] * 3)
+
+
+class TheSuiteCanExpressASequenceTests(unittest.TestCase):
+    """A two-run fixture, because the defects this round found have a time axis (#1778, round 2).
+
+    Every other test in this file is one `process_pr` call on a fresh body,
+    and every fixture assigns distinct indices and names one check through one
+    constant. So a defect whose signature is "this run writes a body that
+    makes the NEXT run behave wrongly" passed by construction, and one did:
+    a transient lookup failure demoted a genuine completion, wrote it, and the
+    run after read a transition that had not happened.
+
+    `two_runs` feeds the body the first run wrote back into the second, which
+    is what the workflow does on the next completed check suite.
+    """
+
+    GREEN = [
+        {
+            "status": "completed",
+            "conclusion": "success",
+            "completed_at": "2026-08-27T00:00:00Z",
+            "html_url": "https://example.invalid/run/1",
+        }
+    ]
+    REJECTION = [
+        {
+            "user": {"login": "workspace-agents[bot]"},
+            "state": CHANGES_REQUESTED,
+            "commit_id": HEAD,
+            "submitted_at": "2026-08-27T01:00:00Z",
+        }
+    ]
+
+    def one_run(self, body: str, runs, *, labels, reviews):
+        """One `process_pr` over this body, reporting what it wrote and did."""
+        pr = pr_payload(body, labels=list(labels))
+        written: dict[str, str] = {}
+        gh_calls: list[list[str]] = []
+
+        def fake_gh_json(args, env):
+            if any(arg.endswith("/reviews") for arg in args):
+                return reviews
+            if any("pulls/321" in arg for arg in args):
+                return pr
+            return None
+
+        with (
+            mock.patch.object(verify, "_gh_json", side_effect=fake_gh_json),
+            mock.patch.object(
+                verify, "check_runs_for", side_effect=lambda name, sha, env: runs(name)
+            ),
+            mock.patch.object(
+                verify,
+                "_write_pr_body",
+                side_effect=lambda number, new_body, env: written.update(body=new_body) or True,
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+        return written.get("body", body), gh_calls
+
+    @staticmethod
+    def dispatched(gh_calls) -> bool:
+        return any(REVIEW_WORKFLOW in " ".join(args) for args in gh_calls)
+
+    @staticmethod
+    def cleared(gh_calls) -> bool:
+        return ["pr", "edit", "321", "--remove-label", "blocked:evidence"] in gh_calls
+
+    def two_runs(self, entries, first, second, *, labels=(), reviews=None):
+        """Run, feed the written body back, run again."""
+        body = body_with_entries(entries)
+        body, first_calls = self.one_run(body, first, labels=labels, reviews=reviews or [])
+        body, second_calls = self.one_run(body, second, labels=labels, reviews=reviews or [])
+        return body, first_calls, second_calls
+
+    def test_a_transient_failure_does_not_make_the_next_run_see_a_transition(self) -> None:
+        """The regression against main (#1778, round 2).
+
+        A genuine completion, a lookup that fails, then a lookup that
+        recovers. The first run used to demote the entry and write it, so the
+        second read `was_complete=False, now_complete=True` and spent a slot
+        of the review budget on a transition that never happened. On main
+        both runs were no-ops.
+        """
+        genuine = [
+            dict(
+                ci_entry(status="complete", verified_head_sha=HEAD),
+                detail="`Web CI` green on head aaaaaaaaaaaa",
+                check_name="Web CI",
+            )
+        ]
+        body, first, second = self.two_runs(
+            genuine,
+            lambda name: None,
+            lambda name: self.GREEN,
+            labels=[],
+            reviews=self.REJECTION,
+        )
+        self.assertIn(f"- [complete] {CI_ITEM}", body)
+        self.assertFalse(self.dispatched(first), first)
+        self.assertFalse(
+            self.dispatched(second), "the second run saw a transition the first invented"
+        )
+
+    def test_a_genuine_completion_re_verified_twice_stays_put(self) -> None:
+        # The control on the same axis: two runs, both green, nothing moves
+        # and no review is asked for.
+        genuine = [
+            dict(
+                ci_entry(status="complete", verified_head_sha=HEAD),
+                detail="`Web CI` green on head aaaaaaaaaaaa",
+                check_name="Web CI",
+            )
+        ]
+        body, first, second = self.two_runs(
+            genuine,
+            lambda name: self.GREEN,
+            lambda name: self.GREEN,
+            labels=[],
+            reviews=self.REJECTION,
+        )
+        self.assertIn(f"- [complete] {CI_ITEM}", body)
+        self.assertFalse(self.dispatched(first), first)
+        self.assertFalse(self.dispatched(second), second)
+
+    def test_a_definite_failure_still_undoes_a_forged_completion_across_two_runs(self) -> None:
+        # The gap this pull request closes, on the time axis: the forged entry
+        # is undone by the first definite answer and stays undone.
+        forged = [ci_entry(status="complete", verified_head_sha=HEAD)]
+        failed = [
+            {
+                "status": "completed",
+                "conclusion": "failure",
+                "completed_at": "2026-08-27T00:00:00Z",
+                "html_url": "https://example.invalid/run/9",
+            }
+        ]
+        body, first, second = self.two_runs(
+            forged, lambda name: failed, lambda name: failed, labels=["blocked:evidence"]
+        )
+        self.assertIn(f"- [pending-ci] {CI_ITEM}", body)
+        self.assertNotIn(f"- [complete] {CI_ITEM}", body)
+        self.assertFalse(self.cleared(first), first)
+        self.assertFalse(self.cleared(second), second)
+
+
+class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
+    """A decoy entry reusing an index clears the label on a red check (#1778, round 2).
+
+    No race and no forged status: a contract with one red required check and a
+    second entry at the same index naming any green one, with the green entry
+    written last. `should_clear_blocked_label` looked the verdict up by index
+    alone and never compared it to the check the entry names, and `process_pr`
+    handed the clear the unfiltered updates map while the write path narrowed
+    it. The green verdict overwrote the red one at index 1 and cleared the
+    label.
+
+    Two entries at one index are two answers to one requirement, and which a
+    verdict belongs to is decided by the order they happen to be written in.
+    Neither is acted on.
+    """
+
+    RED_ITEM = CI_ITEM
+    GREEN_ITEM = "CI: `Docs` green on the PR head"
+
+    def entries(self):
+        return [
+            {
+                "index": 1,
+                "item": self.RED_ITEM,
+                "status": "pending-ci",
+                "detail": "waiting for checks",
+                "kind": "ci",
+            },
+            {
+                "index": 1,
+                "item": self.GREEN_ITEM,
+                "status": "pending-ci",
+                "detail": "waiting for checks",
+                "kind": "ci",
+            },
+        ]
+
+    def test_the_decoy_contract_neither_verifies_nor_clears(self) -> None:
+        body = body_with_entries(self.entries())
+        pr = pr_payload(body, labels=["blocked:evidence"])
+        reads: list[str] = []
+        gh_calls: list[list[str]] = []
+        written: dict[str, str] = {}
+
+        def runs(name, sha, env):
+            reads.append(name)
+            conclusion = "failure" if name == "Web CI" else "success"
+            return [
+                {
+                    "status": "completed",
+                    "conclusion": conclusion,
+                    "completed_at": "2026-08-27T00:00:00Z",
+                    "html_url": "https://example.invalid/run/1",
+                }
+            ]
+
+        with (
+            mock.patch.object(
+                verify,
+                "_gh_json",
+                side_effect=lambda args, env: pr if any("pulls/321" in a for a in args) else None,
+            ),
+            mock.patch.object(verify, "check_runs_for", side_effect=runs),
+            mock.patch.object(
+                verify,
+                "_write_pr_body",
+                side_effect=lambda n, b, e: written.update(body=b) or True,
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+
+        self.assertNotIn(
+            ["pr", "edit", "321", "--remove-label", "blocked:evidence"],
+            gh_calls,
+            "the label was cleared on a red required check",
+        )
+        self.assertEqual(reads, [], "a contract it cannot read was verified anyway")
+        self.assertNotIn("body", written)
+
+    def test_the_duplicate_is_named_rather_than_resolved(self) -> None:
+        self.assertEqual(verify.duplicate_ci_indexes(self.entries()), [1])
+        # Distinct indices, and a non-ci entry sharing one, are not this.
+        self.assertEqual(
+            verify.duplicate_ci_indexes(
+                [ci_entry(index=1), ci_entry(index=2), {"index": 1, "item": DIFF_ITEM}]
+            ),
+            [],
+        )
+
+    def test_a_verdict_for_another_check_never_counts(self) -> None:
+        # The comparison on its own, since the duplicate guard stops the seam
+        # test short of it: a verdict is the entry's only if it names the
+        # entry's check.
+        entries = [ci_entry(index=1, status="complete", verified_head_sha=HEAD)]
+        for name, clears in (("Web CI", True), ("Docs", False), ("", False)):
+            with self.subTest(check_name=name):
+                self.assertEqual(
+                    verify.should_clear_blocked_label(
+                        entries,
+                        HEAD,
+                        verified={
+                            1: {
+                                "status": "complete",
+                                "verified_head_sha": HEAD,
+                                "check_name": name,
+                            }
+                        },
+                    ),
+                    clears,
+                )
+
+    def test_the_clear_takes_the_same_narrowed_map_the_write_takes(self) -> None:
+        # An update whose target index no longer names the check it was
+        # computed for does not land in the body, so it may not count toward
+        # the clear either.
+        body = body_with_entries([ci_entry(index=1, status="complete", verified_head_sha=HEAD)])
+        stale = {1: {"status": "complete", "verified_head_sha": HEAD, "check_name": "Docs"}}
+        self.assertEqual(verify._updates_targeting_unchanged_entries(body, stale), {})
+
+
+class VerdictDefinitenessTests(unittest.TestCase):
+    """Which lookups say something about a check, and which fail to (#1778, round 2)."""
+
+    def test_a_completed_run_and_an_empty_answer_are_definite(self) -> None:
+        self.assertTrue(
+            verify.verdict_is_definite(
+                [{"status": "completed", "conclusion": "failure", "completed_at": "x"}]
+            )
+        )
+        # An answered query that came back empty says the check does not exist.
+        self.assertTrue(verdict := verify.verdict_is_definite([]))
+        self.assertTrue(verdict)
+
+    def test_a_failed_lookup_and_an_unfinished_run_are_not(self) -> None:
+        self.assertFalse(verify.verdict_is_definite(None))
+        self.assertFalse(
+            verify.verdict_is_definite([{"status": "in_progress", "conclusion": None}])
+        )
 
 
 class ProcessPrTests(unittest.TestCase):
