@@ -94,6 +94,30 @@ def all_of(cases, expected: set[str], label: str):
     return cases
 
 
+def every_claim_says_something(claims, label: str):
+    """Each row's claim asserts SOMETHING, asked before any row is read.
+
+    The other half of the predicate `all_of` states. `all_of` pins WHICH
+    rows a table has; this pins that the claim written for a row is not
+    empty -- `((), (), ())` in place of a row's claim iterates cleanly,
+    asserts nothing, and leaves the row it names unpinned (#1771, round 15).
+
+    One function rather than the same three lines under each claims table:
+    the two copies were a rule with two spellings, and with ONE of them
+    removed the suite stayed green -- so nothing exercised the rule itself,
+    and a seed had nowhere to call it (#1771, round 16). Returns the claims,
+    the way `all_of` returns its table, so a caller binds what it asked
+    about.
+    """
+    empty = sorted(name for name, claim in claims.items() if not any(claim))
+    if empty:
+        raise AssertionError(
+            f"{label}: a row's claim asserts nothing at all: {empty} -- the row is named "
+            "here and pinned by nothing; write the claim or take the row out"
+        )
+    return claims
+
+
 def pending(matched: str) -> str:
     """The pending failure as the rendered view reports it, naming the line it matched.
 
@@ -146,6 +170,95 @@ what the tests below now cover. Two files, +48 -31; no behavior a user sees.
 - [x] None
 - [ ] Blocked on evidence
 """
+
+
+class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
+    """What `every_claim_says_something` is asked for, asked of it.
+
+    The guard that catches an emptied claim was the only thing standing
+    between `((), (), ())` and a row nothing pins -- and nothing exercised
+    the guard. Measured at `bb149390`: with one of its two copies removed
+    the suite is green, and with both removed and a row's claim emptied it
+    is still green. A guard that only ever fires on a defect the tree does
+    not contain is untested until something plants the defect, which is what
+    these seeds are (#1771, round 16).
+
+    The mappings here are DATA -- synthetic claims, not a fixture the tree
+    reads -- so the population this file guards does not grow a member whose
+    only purpose is to be broken.
+    """
+
+    WHOLE = {
+        "contains something": (("[blocked]",), (), ()),
+        "absent something": ((), ("[complete]",), ()),
+        "an order between two things": ((), (), (("first", "second"),)),
+    }
+
+    # intent: guard
+    # marker: red at `bb149390`, its own base, only on the NAME this round adds
+    # (`NameError: every_claim_says_something`). The property it pins holds there --
+    # the two inline copies of the rule enforce it -- so it is a guard, and the two
+    # numbers are counted apart (#1771, round 16).
+    def test_a_claim_with_nothing_in_it_is_named(self) -> None:
+        emptied = dict(self.WHOLE)
+        emptied["a row that pins nothing"] = ((), (), ())
+        with self.assertRaises(AssertionError) as raised:
+            every_claim_says_something(emptied, "seed")
+        message = str(raised.exception)
+        self.assertIn("a row that pins nothing", message)
+        self.assertIn("seed", message)
+        # The rows that DO assert something are not named as offenders: a
+        # guard that reports the whole table says nothing about which row.
+        for name in self.WHOLE:
+            self.assertNotIn(name, message, f"{name}: a row with a claim was named as empty")
+
+    # intent: guard
+    # marker: red at `bb149390`, its own base, only on the NAME this round adds
+    # (`NameError: every_claim_says_something`). The property it pins holds there --
+    # the two inline copies of the rule enforce it -- so it is a guard, and the two
+    # numbers are counted apart (#1771, round 16).
+    def test_a_claim_is_whole_when_any_one_of_its_three_parts_is(self) -> None:
+        # Each of `contains`, `absent` and `order` is enough on its own, and
+        # the guard hands the mapping back the way `all_of` hands back its
+        # table, so a caller iterates what it asked about.
+        self.assertIs(every_claim_says_something(self.WHOLE, "seed"), self.WHOLE)
+        for name, claim in self.WHOLE.items():
+            with self.subTest(row=name):
+                self.assertIs(every_claim_says_something({name: claim}, "seed")[name], claim)
+
+    READERS = (
+        "ThePageReaderTableTests.test_each_row_is_the_shape_its_name_claims",
+        "TheSwallowedHeadingTableTests.test_each_row_is_the_shape_its_name_claims",
+    )
+
+    # intent: guard
+    # marker: red at `bb149390`, its own base, only on the NAME this round adds
+    # (`NameError: every_claim_says_something`). The property it pins holds there --
+    # the two inline copies of the rule enforce it -- so it is a guard, and the two
+    # numbers are counted apart (#1771, round 16).
+    def test_both_claims_tables_are_read_through_it(self) -> None:
+        """The seeds above pin the function; this pins that it is what runs.
+
+        Asked by driving the two tests with the function replaced by a
+        recorder, rather than by counting occurrences in the source: a grep
+        over this file answers a question about text, and what is at stake
+        is whether the claims a test reads went through the guard. A third
+        claims table written with the rule spelled out again beside it is
+        exactly what round 16 removed, and this is what would notice.
+        """
+        module = sys.modules[__name__]
+        original = every_claim_says_something
+        asked: list[str] = []
+
+        def recording(claims, label):
+            asked.append(label)
+            return original(claims, label)
+
+        with mock.patch.object(module, "every_claim_says_something", recording):
+            suite = unittest.TestLoader().loadTestsFromNames(self.READERS, module)
+            outcome = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
+        self.assertTrue(outcome.wasSuccessful(), outcome.failures + outcome.errors)
+        self.assertEqual(len(asked), len(self.READERS), asked)
 
 
 class TheFixtureGuardNamesWhatItExpectsTests(unittest.TestCase):
@@ -2545,11 +2658,10 @@ class ThePageReaderTableTests(unittest.TestCase):
         # The claims table is a fixture this test READS, so it is guarded the
         # same way: its NAMES by the two assertions above, which bind it to a
         # table whose names `all_of` pins, and the NON-VACUITY of each row's
-        # claim here. `((), (), ())` in place of a row's claim asserted
-        # nothing and passed (#1771, round 15).
-        empty = sorted(name for name, claim in claims.items() if not any(claim))
-        self.assertEqual(empty, [], "a row's claim asserts nothing at all")
-        for name, (contains, absent, order) in claims.items():
+        # claim through the one function that asks it (#1771, rounds 15, 16).
+        for name, (contains, absent, order) in every_claim_says_something(
+            claims, self.id().rsplit(".", 1)[-1]
+        ).items():
             with self.subTest(row=name):
                 text = table[name][0]
                 for needle in contains:
@@ -4274,11 +4386,10 @@ class TheSwallowedHeadingTableTests(unittest.TestCase):
         # The claims table is a fixture this test READS, so it is guarded the
         # same way: its NAMES by the two assertions above, which bind it to a
         # table whose names `all_of` pins, and the NON-VACUITY of each row's
-        # claim here. `((), (), ())` in place of a row's claim asserted
-        # nothing and passed (#1771, round 15).
-        empty = sorted(name for name, claim in claims.items() if not any(claim))
-        self.assertEqual(empty, [], "a row's claim asserts nothing at all")
-        for name, (contains, absent, order) in claims.items():
+        # claim through the one function that asks it (#1771, rounds 15, 16).
+        for name, (contains, absent, order) in every_claim_says_something(
+            claims, self.id().rsplit(".", 1)[-1]
+        ).items():
             with self.subTest(row=name):
                 text = table[name][0]
                 for needle in contains:
