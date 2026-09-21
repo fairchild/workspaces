@@ -34,6 +34,42 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "run-contributor.py"
 
 
+def entries_for(lines):
+    """Entries whose rendered lines are exactly these, for a test that holds lines.
+
+    The one helper round 12 keeps, with its reason: these cases are about what
+    the write CARRIES -- a block it moves, a refusal it makes -- and they are
+    written in the lines the case is about rather than in the metadata behind
+    them. Building entries by hand at twenty-one call sites would put the
+    composer's shape in twenty-one places.
+
+    It cannot drift from the composer, because it checks itself against it:
+    the entries it returns render back to the lines it was given, byte for
+    byte, or it raises. A line no entry can produce is passed over rather
+    than invented.
+    """
+    evidence = sys.modules["evidence"]
+    shape = re.compile(r"^- \[(complete|blocked|pending-ci)\] (.+?) -- (.+)$")
+    entries, expected = [], []
+    for line in lines:
+        match = shape.match(line)
+        if not match:
+            continue
+        entries.append(
+            {
+                "index": len(entries) + 1,
+                "item": match[2],
+                "status": match[1],
+                "detail": match[3],
+                "kind": "test",
+            }
+        )
+        expected.append(line)
+    rendered = evidence.rendered_entry_lines(entries)
+    assert rendered == expected, f"the helper and the composer disagree: {rendered} != {expected}"
+    return entries
+
+
 def load_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -6041,7 +6077,7 @@ class ALongSHeadingIsAnotherHeadingTests(unittest.TestCase):
         # The harm as the author sees it: their long-s section survives, and
         # the real one is the one rewritten.
         write = self.evidence().write_evidence_status_section(
-            self.BODY, self.ENTRIES, recorded_items=[self.ITEM]
+            self.BODY, self.ENTRIES, entries=entries_for(self.ENTRIES), recorded_items=[self.ITEM]
         )
         self.assertIn(self.LONG_S, write.body, write.refusal)
         self.assertIn("- [complete] the printer's item -- not this section", write.body)
@@ -6120,7 +6156,7 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
             with self.subTest(shape=name):
                 body = self.body(heading)
                 written, stood_down, _ = self.evidence().write_evidence_status_section(
-                    body, self.ENTRIES, recorded_items=[self.ITEM]
+                    body, self.ENTRIES, entries=entries_for(self.ENTRIES), recorded_items=[self.ITEM]
                 )
                 self.assertIn(self.AUTHORS_LINE, written, stood_down)
 
@@ -6131,7 +6167,7 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         body = self.body("## Evidence Status")
         self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
         written, _, _ = self.evidence().write_evidence_status_section(
-            body, self.ENTRIES, recorded_items=[self.ITEM]
+            body, self.ENTRIES, entries=entries_for(self.ENTRIES), recorded_items=[self.ITEM]
         )
         self.assertNotIn(self.AUTHORS_LINE, written)
 
@@ -6145,7 +6181,7 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         body = self.body("## **Evidence Status**")
         self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
         written, _, _ = self.evidence().write_evidence_status_section(
-            body, self.ENTRIES, recorded_items=[self.ITEM]
+            body, self.ENTRIES, entries=entries_for(self.ENTRIES), recorded_items=[self.ITEM]
         )
         self.assertNotIn(self.AUTHORS_LINE, written)
 
@@ -6239,7 +6275,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
             body, refusal, _ = self.evidence().write_evidence_status_section(
                 self.body(heading),
                 ["- [complete] the UI lane -- swift test passed"],
-                recorded_items=[self.ITEM],
+                entries=entries_for(["- [complete] the UI lane -- swift test passed"]), recorded_items=[self.ITEM],
             )
         self.assertIsNone(refusal)
         return body
@@ -6291,7 +6327,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
             result, refusal, _ = evidence.write_evidence_status_section(
                 refusing,
                 ["- [complete] the UI lane -- swift test passed"],
-                recorded_items=[self.ITEM],
+                entries=entries_for(["- [complete] the UI lane -- swift test passed"]), recorded_items=[self.ITEM],
             )
         self.assertIsNotNone(refusal)
         self.assertEqual(result, refusing)
@@ -6319,7 +6355,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
                         # and says so when it cannot (#1751, round 4). A line
                         # for an item nobody recorded is exactly that shape.
                         [f"- [complete] {self.ITEM} -- swift test passed"],
-                        recorded_items=[self.ITEM],
+                        entries=entries_for([f"- [complete] {self.ITEM} -- swift test passed"]), recorded_items=[self.ITEM],
                     )
                 self.assertIsNone(refusal)
                 self.assertEqual(spoke.getvalue(), "")
@@ -6782,7 +6818,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
             written, refusal, _ = evidence.write_evidence_status_section(
                 two_tagged,
                 ["- [complete] the UI lane -- swift test passed"],
-                recorded_items=["the UI lane"],
+                entries=entries_for(["- [complete] the UI lane -- swift test passed"]), recorded_items=["the UI lane"],
             )
         self.assertIsNone(refusal)
         note = helpers.rejected_heading_note(written, "Evidence Status")
@@ -7298,7 +7334,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
             written, refusal, _ = evidence.write_evidence_status_section(
-                body, [status], recorded_items=[self.ITEM]
+                body, [status], entries=entries_for([status]), recorded_items=[self.ITEM]
             )
         self.assertIsNone(refusal)
         self.assertLessEqual(len(written), evidence.PR_BODY_LIMIT)
@@ -7308,7 +7344,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         # The control: the same body one block shorter does carry it.
         shorter = body.replace(note, note[:-32], 1)
         carried, _, _ = evidence.write_evidence_status_section(
-            shorter, [status], recorded_items=[self.ITEM]
+            shorter, [status], entries=entries_for([status]), recorded_items=[self.ITEM]
         )
         self.assertIn("## Evidence Notes", carried)
         # And where the status alone is already past the limit, dropping the
@@ -7316,7 +7352,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         # rather than traded for a body that still cannot be stored.
         huge = f"- [complete] {self.ITEM} -- " + "x" * evidence.PR_BODY_LIMIT
         kept, _, _ = evidence.write_evidence_status_section(
-            body, [huge], recorded_items=[self.ITEM]
+            body, [huge], entries=entries_for([huge]), recorded_items=[self.ITEM]
         )
         self.assertIn("## Evidence Notes", kept)
 
@@ -7331,7 +7367,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         body = f"## Evidence Status\n\n{status}\n\n{note}\n\n## Validation\n\n- ran it\n"
         with contextlib.redirect_stderr(io.StringIO()):
             written = evidence.write_evidence_status_section(
-                body, [status], recorded_items=[self.ITEM]
+                body, [status], entries=entries_for([status]), recorded_items=[self.ITEM]
             )
         self.assertIsNone(written.refusal)
         self.assertNotIn("Evidence Notes", written.body)
@@ -7344,7 +7380,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         shorter = body.replace(note, note[:-32], 1)
         with contextlib.redirect_stderr(io.StringIO()):
             carried = evidence.write_evidence_status_section(
-                shorter, [status], recorded_items=[self.ITEM]
+                shorter, [status], entries=entries_for([status]), recorded_items=[self.ITEM]
             )
         self.assertIn("## Evidence Notes", carried.body)
         self.assertEqual(carried.announcements, [])
@@ -8132,7 +8168,7 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             result = self.evidence().write_evidence_status_section(
-                self.body(tail), self.ENTRIES, recorded_items=[self.ITEM]
+                self.body(tail), self.ENTRIES, entries=entries_for(self.ENTRIES), recorded_items=[self.ITEM]
             )
         return result, err.getvalue()
 
@@ -8224,7 +8260,7 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
                 self.assertNotEqual(first.announcements, [])
                 with contextlib.redirect_stderr(io.StringIO()):
                     second = self.evidence().write_evidence_status_section(
-                        first.body, self.ENTRIES, recorded_items=[self.ITEM]
+                        first.body, self.ENTRIES, entries=entries_for(self.ENTRIES), recorded_items=[self.ITEM]
                     )
                 self.assertEqual(second.announcements, [])
 
@@ -8727,7 +8763,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             write = evidence.write_evidence_status_section(
                 body,
                 [f"- [complete] {self.ITEM} -- {self.RESOLVED}", f"- [complete] {second} -- ran"],
-                recorded_items=(item for item in (self.ITEM, second)),
+                entries=entries_for([f"- [complete] {self.ITEM} -- {self.RESOLVED}", f"- [complete] {second} -- ran"]), recorded_items=(item for item in (self.ITEM, second)),
             )
         self.assertIsNone(write.refusal)
         self.assertEqual(
@@ -8751,7 +8787,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             write = evidence.write_evidence_status_section(
                 body,
                 ["- [complete] build -- release -- 214 tests passed"],
-                recorded_items=["build -- release"],
+                entries=entries_for(["- [complete] build -- release -- 214 tests passed"]), recorded_items=["build -- release"],
             )
         self.assertIsNone(write.refusal)
         self.assertNotIn("- [pending-ci] build -- release -- waiting", write.body)
@@ -8825,7 +8861,7 @@ class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
         line = f"- [complete] {self.ITEM} -- 214 passed"
         for _ in range(3):
             write = evidence.write_evidence_status_section(
-                body, [line], recorded_items=[self.ITEM]
+                body, [line], entries=entries_for([line]), recorded_items=[self.ITEM]
             )
             self.assertIsNone(write.refusal)
             body = write.body
@@ -8896,7 +8932,7 @@ class ALineTheWriteCannotReadBackIsSaidRatherThanOrphanedTests(unittest.TestCase
             f"- [pending-ci] {item} -- waiting\n\n## Validation\n\n- ran it\n"
         )
         return self.evidence().write_evidence_status_section(
-            body, [f"- [complete] {item} -- {detail}"], recorded_items=[item]
+            body, [f"- [complete] {item} -- {detail}"], entries=entries_for([f"- [complete] {item} -- {detail}"]), recorded_items=[item]
         )
 
     def said(self, write) -> list[str]:
@@ -9141,7 +9177,7 @@ class OneReadingInOneContextForEverythingComparedTests(unittest.TestCase):
             write = evidence.write_evidence_status_section(
                 body,
                 [f"- [complete] {self.INLINE} -- 214 passed"],
-                recorded_items=[self.INLINE, self.REF],
+                entries=entries_for([f"- [complete] {self.INLINE} -- 214 passed"]), recorded_items=[self.INLINE, self.REF],
             )
         self.assertIn(self.OWNER, write.body)
         self.assertEqual(write.body, body)
@@ -9212,7 +9248,7 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
                 line,
                 {self.ITEM},
                 helpers.markdown_section(source, "Evidence Status"),
-                evidence.rendered_entry_lines(evidence.evidence_entries_of(source)),
+                evidence.owned_lines(evidence.evidence_entries_of(source), evidence.evidence_entries_of(source)),
             )
             # The sweep's path: its own scan over the body's physical lines.
             normalized = evidence._strip_evidence_metadata(
@@ -9271,7 +9307,7 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
                 line,
                 {self.ITEM},
                 helpers_section(source),
-                evidence.rendered_entry_lines(evidence.evidence_entries_of(source)),
+                evidence.owned_lines(evidence.evidence_entries_of(source), evidence.evidence_entries_of(source)),
             ):
                 taken.append(label)
         self.assertEqual(taken, [], "an author's edit was taken as the machine's")
@@ -9281,7 +9317,7 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
                 self.rendered,
                 {self.ITEM},
                 helpers_section(source),
-                evidence.rendered_entry_lines(evidence.evidence_entries_of(source)),
+                evidence.owned_lines(evidence.evidence_entries_of(source), evidence.evidence_entries_of(source)),
             )
         )
 
@@ -9294,12 +9330,16 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
             with self.subTest(spelling=label):
                 line = self.rendered.replace(*swap, 1)
                 self.assertFalse(
-                    evidence.is_machine_status_line(line, [self.ITEM], section, [self.rendered]),
+                    evidence.is_machine_status_line(
+                        line, [self.ITEM], section, evidence.owned_lines(entries_for([self.rendered]))
+                    ),
                     f"{label} was taken for the machine's",
                 )
         # The write's own bytes still are.
         self.assertTrue(
-            evidence.is_machine_status_line(self.rendered, [self.ITEM], section, [self.rendered])
+            evidence.is_machine_status_line(
+                self.rendered, [self.ITEM], section, evidence.owned_lines(entries_for([self.rendered]))
+            )
         )
 
     def test_a_star_marker_line_is_carried_rather_than_deleted(self) -> None:
@@ -9312,7 +9352,7 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
         )
         with contextlib.redirect_stderr(io.StringIO()):
             write = evidence.write_evidence_status_section(
-                body, [self.rendered], recorded_items=[self.ITEM]
+                body, [self.rendered], entries=entries_for([self.rendered]), recorded_items=[self.ITEM]
             )
         self.assertIn(star, write.body)
 
@@ -9338,7 +9378,7 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
                     line,
                     {self.ITEM},
                     helpers.markdown_section(source, "Evidence Status"),
-                    evidence.rendered_entry_lines(evidence.evidence_entries_of(source)),
+                    evidence.owned_lines(evidence.evidence_entries_of(source), evidence.evidence_entries_of(source)),
                 )
                 normalized = evidence._strip_evidence_metadata(
                     sweep.MARKDOWN_LINE_ENDING_RE.sub("\n", source)
@@ -9815,6 +9855,51 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         claimed = [index for index, line in enumerate(lines) if owner.claim(line)]
         self.assertEqual(sorted(instrument), claimed)
         self.assertEqual(len(claimed), 1, "one entry, one line")
+
+    def test_the_owner_the_write_builds_holds_the_line_it_is_about_to_render(self) -> None:
+        """The property the instrument's second input exists for (#1751, round 12).
+
+        The write's owner is built from (the entries this run renders, the
+        entries the body records), so an author's line byte-equal to the line
+        the write is ABOUT to render is claimed and replaced. The instrument
+        built its owner from the body's entries twice over, which holds only
+        the line the LAST run rendered — a different first input on every
+        changed verdict.
+
+        What this asserts is the difference itself, at the owner. The
+        end-to-end consequence is not constructible with the instrument's own
+        update map, and the report says what was tried: a line the write is
+        about to render is read back by the RULE unless its item and detail
+        share a construct, and the instrument's update replaces the detail,
+        which closes any construct the item opened. So the cap never decides
+        that line and the two constructions answer the same.
+        """
+        evidence = self.evidence()
+        recorded = evidence.evidence_entries_of(self.body(1))
+        updates = {1: {"status": "complete", "detail": "214 tests passed"}}
+        updated, changed = evidence.entries_with_updates(recorded, updates)
+        self.assertTrue(changed, "the fixture has to change a verdict to say anything")
+        next_line = evidence.rendered_entry_lines(updated)[0]
+        self.assertTrue(evidence.owned_lines(updated, recorded).claim(next_line))
+        self.assertFalse(
+            evidence.owned_lines(recorded, recorded).claim(next_line),
+            "the body's entries twice over cannot hold the line the write will render",
+        )
+
+    def test_the_instrument_applies_the_writes_updates_to_the_bodys_entries(self) -> None:
+        # The structural half: `entries_with_updates` is the one helper both
+        # sides use for "the entries this write renders", and the instrument
+        # names the update map it writes with rather than assuming none.
+        sweep = load_module(
+            "evidence_write_sweep_updates", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        evidence = self.evidence()
+        self.assertEqual(sorted(sweep.UPDATES), [1])
+        updated, changed = evidence.entries_with_updates(
+            evidence.evidence_entries_of(self.body(1)), sweep.UPDATES
+        )
+        self.assertTrue(changed)
+        self.assertEqual([one["status"] for one in updated], ["complete"])
 
     def test_both_readers_agree_on_the_shape_the_two_keys_disagree_about(self) -> None:
         # The mirror pair: two entries, one line, twice in the body. A

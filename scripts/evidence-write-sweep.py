@@ -245,14 +245,17 @@ def _entry_line_numbers(lines: list[str], text: str, source: str) -> set[int]:
     # One owner for this body, the same multiset the write builds: a rendered
     # line owns ONE body line, so two identical copies are one line of the
     # machine's and one of the author's at both readers (#1751, round 9).
-    # The write's own construction, from the same inputs: a body's entries at
-    # both ends of it. This built a second owner from a list of lines, so
-    # "the same owner" was a claim about a class rather than about a value --
-    # and the two would have parted on the first shape where an (entry, line)
-    # pair and a line disagree (#1751, round 11).
-    owned = evidence.owned_lines(
-        evidence.evidence_entries_of(source), evidence.evidence_entries_of(source)
-    )
+    # The write's own construction, from literally the same two inputs: the
+    # entries this write produces and the entries the body records. Built from
+    # (source, source) it differed from the write's first argument on every
+    # changed verdict, so an author's line byte-equal to the line the write
+    # was about to render was the machine's to the write -- replaced -- and
+    # the author's here, reported lost. Loud rather than blind, and a false
+    # positive in the figure this instrument exists to quote (#1751,
+    # round 12).
+    recorded_entries = evidence.evidence_entries_of(source)
+    updated_entries, _ = evidence.entries_with_updates(recorded_entries, UPDATES)
+    owned = evidence.owned_lines(updated_entries, recorded_entries)
     return {
         index
         for index, start in enumerate(starts)
@@ -407,6 +410,13 @@ class Outcome:
         return self.took and not self.announced
 
 
+# The one update every body in this corpus is written with, named so the
+# instrument can apply it to a body's entries the way the write does and
+# build its owner from the SAME two inputs the write builds from -- this run's
+# updated entries and the body's recorded ones (#1751, round 12).
+UPDATES: dict[int, dict[str, object]] = {1: {"status": "complete", "detail": RESOLVED_DETAIL}}
+
+
 def write_once(text: str) -> tuple[str, bool, tuple[str, ...]]:
     """The body after one rewrite, whether the writer declined it, and what it said.
 
@@ -417,7 +427,7 @@ def write_once(text: str) -> tuple[str, bool, tuple[str, ...]]:
     spoke = io.StringIO()
     with contextlib.redirect_stderr(spoke):
         written = evidence.update_evidence_entries(
-            text, {1: {"status": "complete", "detail": RESOLVED_DETAIL}}
+            text, UPDATES
         )
     said = tuple(line for line in spoke.getvalue().splitlines() if line.strip())
     refused = any("refusing to rewrite" in line for line in said)

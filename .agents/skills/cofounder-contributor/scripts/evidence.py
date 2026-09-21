@@ -2607,40 +2607,17 @@ def owned_lines(entries: object, previous_entries: object = ()) -> RenderedLines
     )
 
 
-def lines_and_previous_entries_owned(rendered: Iterable[str], previous_entries: object) -> RenderedLines:
-    """The same rule for a caller holding this run's LINES rather than its entries.
-
-    One claim per line rendered, and a line the last run rendered adds a
-    claim only where this run does not render those bytes -- which is the
-    (entry, line) rule written out over lines: an entry's two sources collapse
-    when they agree, and two entries rendering one line keep two claims
-    because the list holds it twice.
-    """
-    lines = [str(line) for line in rendered]
-    claims: list[tuple[object, str]] = list(enumerate(lines))
-    claims.extend(
-        (("previous", line), line)
-        for _, line in rendered_entry_claims(previous_entries)
-        if line not in lines
-    )
-    return RenderedLines(claims)
-
-
-def lines_owned_one_each(lines: Iterable[str]) -> RenderedLines:
-    """An owner over lines whose entries the caller does not have.
-
-    Each line is its own claim, because a caller handing over a list of lines
-    is saying "these, one apiece" -- there is no entry to collapse two of them
-    onto.
-    """
-    return RenderedLines(list(enumerate(str(line) for line in lines)))
+# An owner with no claims: what a caller that owns no line hands over. A
+# default that is a real owner keeps one rule -- a claim is an (entry, line)
+# pair -- rather than a second one written out over lines beside it.
+NOTHING_OWNED = RenderedLines(())
 
 
 def is_machine_status_line(
     line: str,
     recorded_items: Iterable[str],
     context: str = "",
-    rendered: Iterable[str] = (),
+    rendered: RenderedLines = NOTHING_OWNED,
 ) -> bool:
     """Whether this line under the heading is the machine's. ONE function, both readers.
 
@@ -2671,8 +2648,7 @@ def is_machine_status_line(
     itself and the sweep asked it with no cap at all, so the cap was the
     write's alone and the two answered differently on the first shape tried.
     """
-    owner = rendered if isinstance(rendered, RenderedLines) else lines_owned_one_each(rendered)
-    if owner.claim(line):
+    if rendered.claim(line):
         return True
     return is_recorded_status_line(
         status_line_as_page_reads_it(line, context), recorded_items, context
@@ -2684,7 +2660,7 @@ def _is_status_list_item(
     index: int,
     recorded_items: Iterable[str],
     context: str = "",
-    rendered: Iterable[str] = (),
+    rendered: RenderedLines = NOTHING_OWNED,
     lines: list[str] | None = None,
 ) -> bool:
     """Whether the list item opening at `index` belongs to the machine rather than the author.
@@ -2735,7 +2711,7 @@ def _list_item_spans(
     notes: list[tuple[int, int]],
     recorded_items: Iterable[str],
     context: str = "",
-    rendered: Iterable[str] = (),
+    rendered: RenderedLines = NOTHING_OWNED,
     lines: list[str] | None = None,
 ) -> int:
     """Sort the items of the list opening at `start` into the machine's and the author's; return the index past it.
@@ -2812,7 +2788,7 @@ def _section_notes(
     section: str,
     recorded_items: Iterable[str],
     context: str = "",
-    rendered: Iterable[str] = (),
+    rendered: RenderedLines = NOTHING_OWNED,
 ) -> tuple[list[str], list[str]]:
     """The blocks of one Evidence Status section that are not the machine's status lines, and what went.
 
@@ -3004,7 +2980,7 @@ def write_evidence_status_section(
     status_lines: Iterable[str],
     *,
     recorded_items: Iterable[str],
-    entries: object = (),
+    entries: object,
     previous_entries: object = (),
 ) -> SectionWrite:
     """The one write of `## Evidence Status`, or the body unchanged and why it stands.
@@ -3089,11 +3065,7 @@ def write_evidence_status_section(
     #
     # One function builds this and the instrument's, from the same two
     # inputs, so a body read by both yields the same claims.
-    owned = (
-        owned_lines(entries, previous_entries)
-        if entries
-        else lines_and_previous_entries_owned(rendered, previous_entries)
-    )
+    owned = owned_lines(entries, previous_entries)
     # Every line this write is about to render, asked of its own reader. A
     # line the reader cannot read back is one the next run will take for the
     # author's and carry a copy of, per run -- so it is said here rather than
@@ -4327,6 +4299,55 @@ def _render_structured_entries(
     return reconciled
 
 
+def entries_with_updates(
+    entries: object, updates: dict[int, dict[str, object]]
+) -> tuple[list[object], bool]:
+    """The entries an updates map produces, and whether it changed any of them.
+
+    ONE helper, because the entries a write is about to render are one of the
+    two inputs its owner is built from -- so the instrument that measures the
+    write has to be able to compute the same ones. It built its owner from the
+    source's entries twice over instead, which differs from the write's first
+    input on every changed verdict: an author's line byte-equal to the line
+    the write was about to render was the machine's to the write, which
+    replaced it, and the author's to the instrument, which reported it lost
+    (#1751, round 12). Loud rather than blind, and a false positive in the
+    figure the body quotes.
+
+    An entry no update names comes back as it was; an update naming an index
+    no entry claims changes nothing, which is the fail-closed reading the
+    write has always had.
+    """
+    updated: list[object] = []
+    changed = False
+    for raw_entry in entries if isinstance(entries, list) else []:
+        if not isinstance(raw_entry, dict):
+            updated.append(raw_entry)
+            continue
+        entry = dict(raw_entry)
+        try:
+            # `OverflowError` too: `1e9999` in the PR-editable metadata parses
+            # as infinity, and `int()` of that raises a class the others do
+            # not cover.
+            index = int(entry["index"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            updated.append(entry)
+            continue
+        update = updates.get(index)
+        if update is not None:
+            status = str(update.get("status", entry.get("status", ""))).strip()
+            detail = str(update.get("detail", entry.get("detail", ""))).strip()
+            if status in VALID_EVIDENCE_STATUSES and detail:
+                entry["status"] = status
+                entry["detail"] = detail
+                for key in ("kind", "check_name", "verified_head_sha", "proof_url"):
+                    if key in update:
+                        entry[key] = update[key]
+                changed = True
+        updated.append(entry)
+    return updated, changed
+
+
 def update_evidence_entries(
     body: str,
     updates: dict[int, dict[str, object]],
@@ -4343,30 +4364,7 @@ def update_evidence_entries(
     metadata = _extract_evidence_metadata(body)
     if not isinstance(metadata, dict) or not isinstance(metadata.get("entries"), list):
         return body
-    updated_entries: list[object] = []
-    changed = False
-    for raw_entry in metadata["entries"]:
-        if not isinstance(raw_entry, dict):
-            updated_entries.append(raw_entry)
-            continue
-        entry = dict(raw_entry)
-        try:
-            index = int(entry["index"])
-        except (KeyError, TypeError, ValueError, OverflowError):
-            updated_entries.append(entry)
-            continue
-        update = updates.get(index)
-        if update is not None:
-            status = str(update.get("status", entry.get("status", ""))).strip()
-            detail = str(update.get("detail", entry.get("detail", ""))).strip()
-            if status in {"complete", "blocked", "pending-ci"} and detail:
-                entry["status"] = status
-                entry["detail"] = detail
-                for key in ("kind", "check_name", "verified_head_sha", "proof_url"):
-                    if key in update:
-                        entry[key] = update[key]
-                changed = True
-        updated_entries.append(entry)
+    updated_entries, changed = entries_with_updates(metadata["entries"], updates)
     if not changed:
         return body
     return _render_structured_entries(body, updated_entries, announcements)
