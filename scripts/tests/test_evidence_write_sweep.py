@@ -617,7 +617,11 @@ class TheInstrumentAsksAValueRatherThanAPhraseTests(unittest.TestCase):
             "a blip was counted as a refusal",
         )
 
-    # intent: fix
+    # intent: guard
+    # marker: `fix` until round 15, and its own base says otherwise -- round 13 added it and
+    # round 13 changed only test files, so nothing it asserts can be behaviourally red at
+    # `dca75200`; it is green there, which is a guard by the rule this body states
+    # (#1773, round 15).
     def test_a_renderer_that_answers_on_the_retry_is_not_a_page_that_went_unasked(self) -> None:
         """The two readings, separated through the instrument's public seam.
 

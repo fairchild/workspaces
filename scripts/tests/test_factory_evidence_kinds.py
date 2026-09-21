@@ -10542,16 +10542,43 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
         # from another module, or a dynamic one left it green (#1773, round 13).
         watched = ("_inline_block_bounds", "_code_spans_blanked")
         mentions: dict[str, list[str]] = {name: [] for name in watched}
-        for path in sorted([*scripts.glob("*.py"), *(REPO_ROOT / "scripts").glob("*.py")]):
+        # RECURSIVE: `glob("*.py")` read 55 of the 114 Python files under
+        # `scripts/`, so a caller in a subdirectory left this green -- the
+        # enumerator's reach was the population again (#1773, round 15).
+        walked = sorted({*scripts.rglob("*.py"), *(REPO_ROOT / "scripts").rglob("*.py")})
+        # The suites are excluded from the MENTION check and not from the
+        # walk: a test that asserts this enumeration has to name the symbols
+        # to assert it, so their appearance here says nothing about callers.
+        # Production modules are what the claim is about.
+        production = [p for p in walked if "tests" not in p.parts]
+        for path in production:
             text = path.read_text(encoding="utf-8")
             for name in watched:
                 if name in text and path != scripts / "execution.py":
-                    mentions[name].append(path.name)
+                    mentions[name].append(str(path.relative_to(REPO_ROOT)))
         self.assertEqual(
             mentions,
             {name: [] for name in watched},
             "a module outside `execution.py` names the block map or its only caller",
         )
+        # And the walk's own reach is asserted rather than assumed: every
+        # tracked Python file under those two directories is one it read.
+        tracked = {
+            REPO_ROOT / line
+            for line in subprocess.run(
+                ["git", "ls-files", "scripts", ".agents/skills/cofounder-contributor/scripts"],
+                capture_output=True, text=True, cwd=REPO_ROOT, check=True,
+            ).stdout.split()
+            if line.endswith(".py")
+        }
+        self.assertEqual(
+            sorted(str(p.relative_to(REPO_ROOT)) for p in tracked - set(walked)),
+            [],
+            "a tracked Python file under those directories was not walked",
+        )
+        self.assertGreaterEqual(len(walked), len(tracked), "the walk read fewer files than git tracks")
+        # The reach, stated as a number a reader can check against the tree.
+        self.assertGreaterEqual(len(walked), 100, "the recursive walk collapsed to a flat one")
         callers: dict[str, set[str]] = {}
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -10561,6 +10588,24 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
                     callers.setdefault(inner.func.id, set()).add(node.name)
         self.assertEqual(callers.get("_inline_block_bounds"), {"_code_spans_blanked"})
         self.assertEqual(callers.get("_code_spans_blanked"), {"_without_collapsed_blocks"})
+        # REFERENCES, not only calls: `alias = _inline_block_bounds` followed
+        # by `alias(text)` is a second path into the block map that a walk
+        # over `Call` nodes cannot see. Every mention of either name in this
+        # module, by any spelling, is accounted for -- the definition, the one
+        # call, and the docstrings that name them.
+        referenced: dict[str, set[str]] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for inner in ast.walk(node):
+                    name = None
+                    if isinstance(inner, ast.Name):
+                        name = inner.id
+                    elif isinstance(inner, ast.Attribute):
+                        name = inner.attr
+                    if name in watched:
+                        referenced.setdefault(name, set()).add(node.name)
+        self.assertEqual(referenced.get("_inline_block_bounds"), {"_code_spans_blanked"})
+        self.assertEqual(referenced.get("_code_spans_blanked"), {"_without_collapsed_blocks"})
         # And nothing calls either at module level, where the walk above has
         # no enclosing function to attribute the call to.
         module_level = [
@@ -10985,6 +11030,42 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
         self.assertTrue(helpers.says_secondary_rate_limit(error))
         self.assertTrue(helpers.says_secondary_rate_limit(error))
         self.assertIn("secondary rate limit", error._body_text)
+
+    # intent: fix
+    def test_the_renderer_refusing_the_request_is_not_an_outage(self) -> None:
+        """Permanence is the question, and a 4xx answers it the other way.
+
+        400, 404, 410, 422 and 451 fell through to `server error`, which
+        `RENDERER_CAUSES` marks transient -- so a write proceeded unverified,
+        every run, on a cause waiting will never change, and the author was
+        told nothing they could act on. The family has its own cause and its
+        own repair now (#1773, round 15).
+
+        What stays transient, and why: a 429 is the clock rather than the
+        request even when it carries neither `Retry-After` nor the phrase, and
+        5xx is an outage -- waiting is exactly what fixes both.
+        """
+        for status in (400, 404, 410, 422, 451, 418):
+            with self.subTest(status=status):
+                error = self.http_error(status)
+                cause = helpers.http_failure_cause(error)
+                self.assertEqual(cause, "refused request", f"HTTP {status}")
+                transient, repair = helpers.RENDERER_CAUSES[cause]
+                self.assertFalse(transient, f"HTTP {status} read as a blip")
+                self.assertIsNotNone(repair, f"HTTP {status} refuses with nothing to do about it")
+                self.assertIn(str(status), helpers.http_failure_reason(error))
+        for status in (500, 502, 503):
+            with self.subTest(status=status, family="the outage"):
+                cause = helpers.http_failure_cause(self.http_error(status))
+                self.assertEqual(cause, "server error")
+                self.assertTrue(helpers.RENDERER_CAUSES[cause][0], f"HTTP {status} stopped being a blip")
+        with self.subTest(status=429, family="the clock"):
+            cause = helpers.http_failure_cause(self.http_error(429))
+            self.assertEqual(cause, "secondary rate limit")
+            self.assertTrue(helpers.RENDERER_CAUSES[cause][0], "a bare 429 stopped being the clock")
+        for status, expected in ((401, "rejected token"), (403, "forbidden token")):
+            with self.subTest(status=status, family="the token"):
+                self.assertEqual(helpers.http_failure_cause(self.http_error(status)), expected)
 
     # intent: fix
     def test_each_raise_site_decides_which_family_it_is(self) -> None:
