@@ -1,0 +1,33 @@
+<p dir="auto">The Ghostty callback helpers each reached for userdata their own way, so a nil<br>
+pointer was a crash in one of them and a no-op in the next. This gives them one<br>
+helper with the nil and zero-address cases decided in a single place, which is<br>
+what the tests below now cover. Two files, +48 -31; no behavior a user sees.</p>
+<h2 dir="auto">What</h2>
+<ul dir="auto">
+<li>Improve callback helper maintainability</li>
+</ul>
+<h2 dir="auto">Mergeability</h2>
+<ul dir="auto">
+<li>Surface: desktop</li>
+<li>User-facing behavior changed: none; refactor only</li>
+<li>Non-happy paths considered: nil userdata and zero address behavior covered</li>
+<li>Release/ops preconditions: not applicable</li>
+<li>Residual risk or follow-up: none</li>
+</ul>
+<h2 dir="auto">Validation</h2>
+<ul class="contains-task-list">
+<li class="task-list-item"><input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Completed task" checked=""> Other checks run: swift test --filter GhosttyCallbackUserdata</li>
+</ul>
+<h2 dir="auto">Evidence</h2>
+<ul dir="auto">
+<li><code class="notranslate">swift test --filter GhosttyCallbackUserdata</code> -- Test run with 1992 tests in 214 suites passed</li>
+</ul>
+<h2 dir="auto">Blockers</h2>
+<ul class="contains-task-list">
+<li class="task-list-item"><input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Completed task" checked=""> None</li>
+<li class="task-list-item"><input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task"> Blocked on evidence</li>
+</ul>
+<h2 dir="auto">Evidence Status</h2>
+<ul dir="auto">
+<li>⠀[blocked] waiting</li>
+</ul>
