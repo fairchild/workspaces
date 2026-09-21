@@ -2421,7 +2421,11 @@ def is_recorded_status_line(
 
 
 def _is_status_list_item(
-    tokens: list[Token], index: int, recorded_items: Iterable[str], context: str = ""
+    tokens: list[Token],
+    index: int,
+    recorded_items: Iterable[str],
+    context: str = "",
+    rendered: Iterable[str] = (),
 ) -> bool:
     """Whether the list item opening at `index` belongs to the machine rather than the author.
 
@@ -2438,7 +2442,18 @@ def _is_status_list_item(
     `- [x]` box, a bullet naming no status -- is the author's and moves.
     """
     reading = _status_item_reading(tokens, index)
-    return reading is not None and is_recorded_status_line(reading, recorded_items, context)
+    if reading is None:
+        return False
+    # The write's own bytes, before either reader is asked. A line under the
+    # heading that is byte-identical to a line this write is about to render
+    # is this write's line, whatever a reading makes of it -- which is the
+    # only claim available for a line no reader can parse. Without it a status
+    # line the readers cannot read back was carried to `## Evidence Notes`
+    # once per write, so a long-lived pull request accrued one copy per
+    # completed check suite (#1751, round 5).
+    if reading.strip() in {line.strip() for line in rendered}:
+        return True
+    return is_recorded_status_line(reading, recorded_items, context)
 
 
 def _without_edge_blank_lines(text: str) -> str:
@@ -2464,6 +2479,7 @@ def _list_item_spans(
     notes: list[tuple[int, int]],
     recorded_items: Iterable[str],
     context: str = "",
+    rendered: Iterable[str] = (),
 ) -> int:
     """Sort the items of the list opening at `start` into the machine's and the author's; return the index past it.
 
@@ -2478,7 +2494,7 @@ def _list_item_spans(
             index += 1
             continue
         if token.map is not None:
-            if _is_status_list_item(tokens, index, recorded_items, context):
+            if _is_status_list_item(tokens, index, recorded_items, context, rendered):
                 # The line the status is written on is the machine's; the rest
                 # of the item is one block of the author's, not a run of loose
                 # lines. A pasted log indented under a status bullet belongs to
@@ -2536,7 +2552,10 @@ def _uncarried_note(detail: str, line: int, went: str = "") -> str:
 
 
 def _section_notes(
-    section: str, recorded_items: Iterable[str], context: str = ""
+    section: str,
+    recorded_items: Iterable[str],
+    context: str = "",
+    rendered: Iterable[str] = (),
 ) -> tuple[list[str], list[str]]:
     """The blocks of one Evidence Status section that are not the machine's status lines, and what went.
 
@@ -2590,7 +2609,9 @@ def _section_notes(
             index += 1
             continue
         if token.type in {"bullet_list_open", "ordered_list_open"}:
-            index = _list_item_spans(tokens, index, machine, spans, recorded_items, context)
+            index = _list_item_spans(
+                tokens, index, machine, spans, recorded_items, context, rendered
+            )
             continue
         spans.append((token.map[0], token.map[1]))
         index += 1
@@ -2799,7 +2820,7 @@ def write_evidence_status_section(
     notes: list[str] = []
     announcements: list[str] = list(orphaned)
     for section in sections:
-        carried, said = _section_notes(section, recorded, section)
+        carried, said = _section_notes(section, recorded, section, rendered)
         notes.extend(carried)
         announcements.extend(said)
     # The notes section comes out before the status section goes in, so that

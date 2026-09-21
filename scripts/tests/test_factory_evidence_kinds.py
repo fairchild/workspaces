@@ -8926,6 +8926,52 @@ class ALineTheWriteCannotReadBackIsSaidRatherThanOrphanedTests(unittest.TestCase
                 self.assertIsNone(write.refusal)
                 self.assertIn(f"- [complete] {item} -- {detail}", write.body)
 
+    def counts(self, body: str) -> tuple[int, int]:
+        helpers = sys.modules["_helpers"]
+        status = helpers.markdown_section(body, "Evidence Status")
+        notes = helpers.markdown_section(body, "Evidence Notes")
+        pattern = re.compile(r"\[(complete|blocked|pending-ci)\]")
+        return (
+            len([line for line in status.splitlines() if pattern.search(line)]),
+            len([line for line in notes.splitlines() if pattern.search(line)]),
+        )
+
+    def test_an_unchanged_verdict_does_not_accrue_a_copy_per_write(self) -> None:
+        """The write knows its own bytes, and that is the cap (#1751, round 5).
+
+        A line no reader can read back was carried to `## Evidence Notes` on
+        every write, so a pull request accrued one copy per COMPLETED CHECK
+        SUITE -- the rate matters, because that is how often this writer runs,
+        and a long-lived pull request would walk its body toward the 65,536
+        characters GitHub stores.
+
+        A status line byte-identical to one this write is about to render is
+        this write's line whatever a reading makes of it, which is the only
+        claim available for a line no reader can parse.
+        """
+        evidence = self.evidence()
+        item, detail = self.CROSSING
+        body = (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {item} -- waiting\n\n## Validation\n\n- ran it\n"
+        )
+        seen = []
+        for _ in range(3):
+            body = evidence.write_evidence_status_section(
+                body, [f"- [complete] {item} -- {detail}"], recorded_items=[item]
+            ).body
+            seen.append(self.counts(body))
+        self.assertEqual(seen, [(1, 0), (1, 0), (1, 0)])
+        # A status CHANGE writes a different line, so the old one is carried
+        # once -- and once only, however many runs follow at that verdict.
+        after = []
+        for _ in range(2):
+            body = evidence.write_evidence_status_section(
+                body, [f"- [complete] {item} -- 215 passed"], recorded_items=[item]
+            ).body
+            after.append(self.counts(body))
+        self.assertEqual(after, [(1, 1), (1, 1)])
+
     def test_the_predicate_answers_about_lines_rather_than_items(self) -> None:
         evidence = self.evidence()
         item, detail = self.CROSSING
@@ -9001,6 +9047,56 @@ class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("read as one requirement on the page", errors[0])
         self.assertIn("make each item distinct", errors[0])
+
+    def test_the_update_path_stands_down_and_keeps_the_authors_line(self) -> None:
+        """The same harm on the path a LATER run takes (#1751, round 5).
+
+        The turn's own renderer refuses a colliding contract before it writes,
+        and that guard is tested above. `update_evidence_entries` is the other
+        door: the lane re-renders the section from the entries on every run,
+        and a body whose metadata already records both spellings reaches the
+        write without the turn's check in front of it. Without the stand-down
+        inside `write_evidence_status_section` the owner's line is deleted
+        there instead, with nothing said -- the guard survived a mutant
+        because only the turn's path had a test.
+        """
+        evidence = self.evidence()
+        entries = [
+            {"index": 1, "item": self.BOLD, "status": "pending-ci",
+             "detail": "waiting", "kind": "test"},
+            {"index": 2, "item": self.PLAIN, "status": "pending-ci",
+             "detail": "waiting", "kind": "test"},
+        ]
+        body = (
+            "<!-- evidence-status:v1\n"
+            + json.dumps({"entries": entries})
+            + "\n-->\n\n## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {self.BOLD} -- waiting\n{self.OWNER}\n\n"
+            "## Validation\n\n- ran it\n"
+        )
+        announcements: list[str] = []
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            written = evidence.update_evidence_entries(
+                body,
+                {1: {"status": "complete", "detail": "214 passed"}},
+                announcements=announcements,
+            )
+        # The line the mutant deletes.
+        self.assertIn(self.OWNER, written)
+        self.assertEqual(written, body)
+        stood_down = [
+            note for note in announcements if evidence.is_stood_down_announcement(note)
+        ]
+        self.assertEqual(len(stood_down), 1, announcements)
+        # The sentence names the colliding spelling -- the second occurrence,
+        # which is what `_indistinguishable` reports and the one an author
+        # removes. Naming both would be a change to the message rather than to
+        # the guard, and this round adds no production change.
+        self.assertIn(self.PLAIN, stood_down[0])
+        self.assertIn("read as one requirement on the page", stood_down[0])
+        self.assertIn("cannot be told apart", stood_down[0])
+        self.assertIn("make each requested item distinct", stood_down[0])
 
     def test_the_accounting_names_the_collision_where_the_author_can_fix_it(self) -> None:
         run_contributor = sys.modules["run_contributor_evidence_kinds"]
