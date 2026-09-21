@@ -8912,16 +8912,78 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
         self.assertEqual(evidence.quoted_for_comment("a`b"), "`ab`")
         self.assertEqual(evidence.quoted_for_comment("   "), "")
 
-    # intent: control
-    def test_a_scalar_beside_an_unkeyable_object_still_stands_the_write_down(self) -> None:
-        # The object's refusal wins: it stands for a line the author can see,
-        # and that is what the criterion is about. The scalar beside it is
-        # preserved either way (#1778, round 14).
+    # intent: fix
+    def test_a_scalar_beside_an_unkeyable_object_says_one_thing(self) -> None:
+        """Two sentences that disagreed about whether the write happened.
+
+        The scalar's sentence was composed above the refusal check, so a
+        record holding both told the author "was written with the record's
+        bare value preserved" and then "was left as written" — for a write
+        that did not happen (#1778, round 15). The refusal decides first now,
+        and the scalar sentence belongs to the path that writes. The round-14
+        control asserted only that some note held "position 2", which both
+        orders satisfy.
+        """
         entries = self.entries("2")
         entries.append("legacy")
         source, written, said, _ = self.write(entries)
         self.assertEqual(written, source, "a record with an unkeyable entry was rewritten")
-        self.assertTrue(any("position 2" in note for note in said), said)
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("was left as written", said[0])
+        self.assertNotIn("was written with", said[0])
+        self.assertEqual([note for note in said if "was written with" in note], [])
+
+    # intent: fix
+    def test_the_lines_this_write_replaced_are_named_in_the_sentence(self) -> None:
+        """A line leaving under a sentence that said main does the same (#1778, round 15).
+
+        Round 14 wrote "a status line only the bare value stood for is
+        replaced by this write like any other, which is what it does on main
+        too" — and on the shape this branch's re-verify change reaches, main
+        makes NO write at all, so the clause was false of the body it was
+        said about. What the author gets now is the line itself, verbatim and
+        inert, measured across the write: the section's lines before, minus
+        the section's lines after.
+        """
+        entries = [
+            {"index": 1, "item": self.ITEM, "status": "complete",
+             "detail": "green on head abc", "kind": "ci"},
+            "legacy",
+        ]
+        unowned = "- [pending-ci] the line the scalar stood for -- waiting"
+        source = self.body(entries).replace(
+            "\n\n## Validation", f"\n{unowned}\n\n## Validation", 1
+        )
+        said: list[str] = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            written = self.evidence().update_evidence_entries(
+                source, {1: {"status": "complete", "detail": "green on head abc"}},
+                announcements=said,
+            )
+        self.assertNotEqual(written, source, "the write did not happen")
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("replaced this line with nothing", said[0])
+        self.assertIn("`[pending-ci] the line the scalar stood for -- waiting`", said[0])
+        self.assertNotIn("on main too", said[0])
+        # The author's own text goes into a comment through the RENDER half
+        # of the quoting rule, like every other PR-editable value.
+        self.assertTrue(self.inside_a_code_span(said[0], "the line the scalar stood for"))
+
+    # intent: control
+    def test_a_scalar_with_nothing_replaced_says_nothing_about_replacing(self) -> None:
+        # The control: the same record with no unowned line under the
+        # heading. The write still happens, the bare value is still named,
+        # and there is no "replaced" clause to be wrong about.
+        entries = [
+            {"index": 1, "item": self.ITEM, "status": "complete",
+             "detail": "green on head abc", "kind": "ci"},
+            "legacy",
+        ]
+        source, written, said, _ = self.write(entries)
+        self.assertNotEqual(written, source, "the write did not happen")
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("position 2", said[0])
+        self.assertNotIn("replaced", said[0])
 
     # intent: guard
     def test_a_bare_value_is_named_but_never_refused(self) -> None:
