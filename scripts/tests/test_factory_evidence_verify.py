@@ -1743,6 +1743,76 @@ class ADecisionIsTakenOnWhatThePullRequestHoldsNowTests(unittest.TestCase):
         self.assertEqual(written, [])
         self.assertTrue(self.cleared(gh_calls), gh_calls)
 
+    def test_a_head_that_moves_on_the_retry_path_takes_no_decision(self) -> None:
+        """The ordering that reached the head check below a return (#1778, round 8).
+
+        Read, and the owner retargets the one `ci` entry: the body changed at
+        the same head, so the loop takes the live body and tries again. The
+        owner then pushes. On the second read the head has moved AND the
+        narrowing drops every update — and that return handed the caller a
+        body to decide `blocked:evidence` on, at a head this run verified
+        nothing about, while this function's own rule is that a moved head is
+        no decision at all.
+
+        The head check sits directly after the read now, above every return.
+        """
+        contract = [CI_ITEM]
+        # Unverified to begin with, so the first attempt has a write to make
+        # and the loop can reach a second one.
+        first = body_with_contract(contract, [ci_entry(index=1)])
+        # Retargeted to a kind this lane cannot verify and records as
+        # complete, which is what makes the clear reachable: a `ci` entry
+        # pointed at another check is never counted complete without a
+        # verification, so it could not show the defect.
+        retargeted = body_with_contract(
+            contract,
+            [
+                {
+                    "index": 1,
+                    "item": DIFF_ITEM,
+                    "status": "complete",
+                    "detail": "the diff shows it",
+                    "kind": "diff",
+                }
+            ],
+        )
+        pr = pr_payload(first, labels=["blocked:evidence"])
+        reads = {"n": 0}
+        gh_calls: list[list[str]] = []
+        written: list[str] = []
+
+        def fake_gh_json(args, env):
+            if not any("pulls/321" in arg for arg in args):
+                return None
+            reads["n"] += 1
+            if reads["n"] == 1:
+                pr["body"], pr["head"] = first, {"sha": HEAD}
+            elif reads["n"] == 2:
+                # The retarget, at the head this run is about: the body
+                # changed, so the loop takes it and tries again.
+                pr["body"], pr["head"] = retargeted, {"sha": HEAD}
+            else:
+                # And then the owner pushes. On this attempt the narrowing
+                # has nothing left to apply AND the head has moved.
+                pr["body"], pr["head"] = retargeted, {"sha": "b" * 40}
+            return pr
+
+        with (
+            mock.patch.object(verify, "_gh_json", side_effect=fake_gh_json),
+            mock.patch.object(verify, "check_runs_for", return_value=self.GREEN),
+            mock.patch.object(
+                verify, "_write_pr_body", side_effect=lambda n, b, e: written.append(b) or True
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+
+        self.assertGreaterEqual(reads["n"], 3, "the run never reached the moved head")
+        self.assertEqual(gh_calls, [], "a label was touched at a head this run never verified")
+
     def test_a_requirement_deleted_from_the_metadata_is_not_seen_here(self) -> None:
         """What the clear quantifies over, asserted rather than assumed.
 
