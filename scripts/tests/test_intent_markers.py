@@ -81,7 +81,12 @@ def markers_in(source: str) -> dict[str, list[str]]:
     return found
 
 
-FETCH = "git fetch --no-tags --depth=1 origin main  (or check out with fetch-depth: 0)"
+# The REFSPEC form, because it is the one that works: on a single-branch
+# clone `git fetch origin main` leaves the commit at `FETCH_HEAD` and
+# `origin/main` still does not resolve, so a reader following that
+# instruction meets this failure again. Measured on a single-branch clone
+# (#1773, round 16).
+FETCH = "git fetch --no-tags origin main:refs/remotes/origin/main  (or check out with fetch-depth: 0)"
 
 
 def comparison_base(base: str = "origin/main") -> str | None:
@@ -198,25 +203,39 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
         spelling of a rule is how the rule drifts.
         """
         with tempfile.TemporaryDirectory() as directory:
-            sandbox = Path(directory)
-            tests = sandbox / "scripts" / "tests"
-            tests.mkdir(parents=True)
+            root = Path(directory)
+            upstream = root / "upstream"
+            (upstream / "scripts" / "tests").mkdir(parents=True)
+
+            def git(*args: str, cwd: Path) -> None:
+                subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=True)
+
+            (upstream / "scripts" / "tests" / "test_stub.py").write_text("", encoding="utf-8")
+            git("init", "--initial-branch=main", cwd=upstream)
+            git("config", "user.email", "tests@example.invalid", cwd=upstream)
+            git("config", "user.name", "tests", cwd=upstream)
+            git("add", "-A", cwd=upstream)
+            git("commit", "-m", "main", cwd=upstream)
+            git("checkout", "-b", "work", cwd=upstream)
+            tests = upstream / "scripts" / "tests"
             (tests / "test_intent_markers.py").write_text(
                 Path(__file__).read_text(encoding="utf-8"), encoding="utf-8"
             )
             for name in MARKED_FILES:
                 if name != "test_intent_markers.py":
                     (tests / name).write_text("", encoding="utf-8")
-            for args in (
-                ("init", "--initial-branch=work"),
-                ("config", "user.email", "tests@example.invalid"),
-                ("config", "user.name", "tests"),
-                ("add", "-A"),
-                ("commit", "-m", "a checkout with no origin/main"),
-            ):
-                subprocess.run(["git", *args], cwd=sandbox, capture_output=True, check=True)
+            git("add", "-A", cwd=upstream)
+            git("commit", "-m", "work", cwd=upstream)
+            # The shape the lane had: one branch, no history of `main`.
+            subprocess.run(
+                ["git", "clone", "--quiet", "--single-branch", "--branch", "work",
+                 str(upstream), str(root / "checkout")],
+                capture_output=True, check=True,
+            )
+            sandbox = root / "checkout"
+            tests = sandbox / "scripts" / "tests"
             self.assertIsNone(
-                comparison_base_in(sandbox), "a checkout with no `origin/main` resolved one"
+                comparison_base_in(sandbox), "a single-branch clone resolved `origin/main`"
             )
 
             def run(ci: bool) -> str:
@@ -239,6 +258,20 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
             on_a_laptop = run(ci=False)
             self.assertIn("OK (skipped=1)", on_a_laptop, "a laptop clone did not skip")
             self.assertIn("what is new cannot be measured", on_a_laptop)
+            # And the instruction it prints is RUN here, against that clone:
+            # a reader who follows it has to end up somewhere other than this
+            # failure. `git fetch origin main` alone does not -- it leaves the
+            # commit at `FETCH_HEAD` -- which is why the refspec is in the
+            # sentence (#1773, round 16).
+            instruction = FETCH.split("  (")[0].split()
+            subprocess.run(instruction, cwd=sandbox, capture_output=True, check=True)
+            self.assertIsNotNone(
+                comparison_base_in(sandbox),
+                "the instruction the guard prints does not resolve the base it asks for",
+            )
+            self.assertNotIn(
+                "could not run", run(ci=True), "the base is there and the census still refuses"
+            )
 
     # intent: guard
     def test_the_files_outside_the_guard_are_named_rather_than_implied(self) -> None:
