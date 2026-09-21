@@ -186,7 +186,11 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
             sum(outcome.refused for outcome in self.outcomes),
         )
 
-    # intent: control
+    # intent: fix
+    # marker: `control` until round 13, and the measurement says otherwise -- at
+    # `9a5db027` this method fails `0 != 24`, because its own assertion moved from
+    # `== 0` to `== 24` when this round's production changed what the field reads
+    # (#1773, round 13).
     def test_a_cause_the_write_proceeds_past_leaves_nothing_unmeasured(self) -> None:
         """The sibling: the count tracks the CAUSE, not the corpus (#1773, round 7).
 
@@ -613,28 +617,74 @@ class TheInstrumentAsksAValueRatherThanAPhraseTests(unittest.TestCase):
             "a blip was counted as a refusal",
         )
 
+    # intent: fix
+    def test_a_renderer_that_answers_on_the_retry_is_not_a_page_that_went_unasked(self) -> None:
+        """The two readings, separated through the instrument's public seam.
+
+        Round 12 said the by-value reading's advantage was not observable
+        through `write_once`, `sweep()` or `report()`, because the seam that
+        announces also prints. That had it backwards, and the case that shows
+        it is a renderer that FAILS ONCE and answers on the retry: the write
+        asks again, the page answers, the announcement is RETRACTED -- and
+        the step log still carries the first failure's sentence. Measured
+        over the whole generated corpus, one `write_once` per body with a
+        stub that raises on its first call and answers after: the predicate
+        says 0 bodies went unasked and the old grep says 24. The grep is the
+        one that is wrong, and the public path is where you can see it
+        (#1773, round 13).
+        """
+        def flaky():
+            state = {"calls": 0}
+
+            def render(text: str) -> str:
+                state["calls"] += 1
+                if state["calls"] == 1:
+                    raise helpers.RendererUnavailable(
+                        "the renderer answered HTTP 503", cause="server error"
+                    )
+                return "<p>ok</p>"
+
+            return render
+
+        by_value = by_grep = bodies = 0
+        for tail in sweep_script.SECTION_TAILS.values():
+            for successor in sweep_script.SUCCESSORS.values():
+                for ending in sweep_script.LINE_ENDINGS.values():
+                    source = sweep_script.body(tail, successor, ending)
+                    with (
+                        mock.patch.object(helpers, "render_markdown", side_effect=flaky()),
+                        mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
+                    ):
+                        _, _, unasked, said = sweep_script.write_once(source)
+                    bodies += 1
+                    by_value += bool(unasked)
+                    by_grep += any("the page could not be asked" in line for line in said)
+        self.assertEqual(bodies, 168)
+        self.assertEqual(by_value, 0, "a page that answered on the retry was counted as unasked")
+        self.assertEqual(
+            by_grep, 24, "the step log no longer carries the first failure; the case is not built"
+        )
+
     # intent: guard
     # marker: red at `016d94ba`, its round's base, by API alone and it cannot be otherwise --
     # the seam it pins is one that round ADDS, so there is no property to hold there and no
     # drive that makes it behaviourally red (#1773, round 12).
     def test_only_a_write_that_announces_without_logging_tells_the_two_apart(self) -> None:
-        """The case the instrument's public entry points cannot express.
+        """The complementary direction: a write that announces and does not print.
 
-        Both readings agree on every body the real seam produces at this
-        head: round 11 gave the note's constructor the prefix the old grep
-        searched the step log for, so under a blip the log carries those
-        words too and `sweep()` counts the same 24 either way -- measured, as
-        the mutant that puts the grep back and leaves the suite green.
+        Under a blip that never lifts, both readings agree -- round 11 gave
+        the note's constructor the prefix the old grep searched the step log
+        for, so the log carries those words too and `sweep()` counts the same
+        24 either way. Round 12 concluded from that that the by-value
+        reading's advantage was not observable publicly, which was wrong: the
+        sibling above separates them through `write_once`, where a renderer
+        that answers on the retry leaves the grep over-counting 24 bodies the
+        page was reached about.
 
-        What separates them is a writer that ANNOUNCES WITHOUT LOGGING, and
-        no public path does that: the seam that announces also prints. So
-        this drives `write_once` with the announcement made and the log
-        silent, which is a reach into the module rather than a use of it, and
-        it is declared as the guard it is. The finding, said rather than
-        relabelled quietly: the by-value reading's advantage over the grep is
-        not observable through `sweep()` or `report()` today, and it would
-        become observable the moment any seam announces without printing --
-        which is the change this reading exists to survive (#1773, round 12).
+        What no seam produces today is the other direction, a writer that
+        ANNOUNCES WITHOUT LOGGING, so this one reaches into the module rather
+        than using it and is declared as the guard it is. It is the shape the
+        by-value reading exists to survive (#1773, rounds 12 and 13).
         """
         evidence = sys.modules["evidence"]
         note = sys.modules["_helpers"].unverified_announcement(

@@ -10504,7 +10504,9 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
 
     # intent: guard
     # marker: green at `87df0a5f`, this round's base, which is what a guard over round 11's
-    # intent: fix
+    # boundary looks like; red at `9a5db027`, before the normalisation existed. Round 12's
+    # relabelling left a stray `# intent: fix` under this note, which is the whole of the gap
+    # between the tree's markers and the body's counts (#1773, round 13).
     def test_every_path_into_the_block_map_crosses_the_normalisation(self) -> None:
         """"Normalise once at the boundary" has a precondition, asserted here.
 
@@ -10518,11 +10520,38 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
         that makes every ending an LF. A second caller of either makes this
         red, and that is the day the normalisation belongs lower down
         (#1773, round 12).
+
+        What this enumeration covers, since a guard that does not say so is
+        the count-only guard again: every bare-name call inside a function of
+        `execution.py`, every module-level call in that file, and any mention
+        of either name -- call, attribute, reference or string -- in any
+        other module of the skill's scripts or this repo's `scripts/`. What
+        it does not cover: a call assembled at runtime from characters this
+        walk never sees as one name, and any caller outside those two
+        directories (#1773, round 13).
         """
-        source = (
-            REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "execution.py"
-        ).read_text(encoding="utf-8")
+        scripts = REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts"
+        source = (scripts / "execution.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
+        # Every mention of either name, anywhere in the skill's scripts and in
+        # this repo's own `scripts/`, by any spelling a reader can see: a bare
+        # call, an attribute call on the module, a reference passed around, or
+        # a name inside a string (which is how a `globals()[...]` call would
+        # read). Round 12's version walked one file for bare-name calls inside
+        # a function, so a second caller at module level, an attribute call
+        # from another module, or a dynamic one left it green (#1773, round 13).
+        watched = ("_inline_block_bounds", "_code_spans_blanked")
+        mentions: dict[str, list[str]] = {name: [] for name in watched}
+        for path in sorted([*scripts.glob("*.py"), *(REPO_ROOT / "scripts").glob("*.py")]):
+            text = path.read_text(encoding="utf-8")
+            for name in watched:
+                if name in text and path != scripts / "execution.py":
+                    mentions[name].append(path.name)
+        self.assertEqual(
+            mentions,
+            {name: [] for name in watched},
+            "a module outside `execution.py` names the block map or its only caller",
+        )
         callers: dict[str, set[str]] = {}
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -10532,6 +10561,16 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
                     callers.setdefault(inner.func.id, set()).add(node.name)
         self.assertEqual(callers.get("_inline_block_bounds"), {"_code_spans_blanked"})
         self.assertEqual(callers.get("_code_spans_blanked"), {"_without_collapsed_blocks"})
+        # And nothing calls either at module level, where the walk above has
+        # no enclosing function to attribute the call to.
+        module_level = [
+            node
+            for node in tree.body
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            for inner in ast.walk(node)
+            if isinstance(inner, ast.Call) and getattr(inner.func, "id", "") in watched
+        ]
+        self.assertEqual(module_level, [], "a module-level call reaches the block map")
         # And the boundary itself is the first thing that function does.
         boundary = next(
             node
