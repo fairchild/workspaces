@@ -317,6 +317,7 @@ def lines_lost(before: str, after: str) -> list[str]:
 class Outcome:
     label: str
     refused: bool
+    unasked: bool
     lost: tuple[str, ...]
     closed: tuple[tuple[str, str], ...]
     announced: tuple[str, ...]
@@ -353,12 +354,24 @@ class Outcome:
         return self.took and not self.announced
 
 
-def write_once(text: str) -> tuple[str, bool, tuple[str, ...]]:
-    """The body after one rewrite, whether the writer declined it, and what it said.
+def write_once(text: str) -> tuple[str, bool, bool, tuple[str, ...]]:
+    """The body after one rewrite, whether the writer declined it, why, and what it said.
 
     Both are read from what the runtime prints rather than inferred from the
     body: stderr is where the person reading a workflow log meets them, so a
     change that stops announcing something shows up here as silence.
+
+    A refusal has two quite different meanings and this instrument keeps them
+    apart. One is a HAZARD in the body -- a block whose closer never came --
+    and that is a cost worth counting, because the write declined a body a
+    person wrote. The other is that the page could not be asked at all, which
+    says nothing about the body: this runs with no token, and a placement that
+    cannot see the page now refuses rather than proceeding on a weaker check
+    (#1773, round 6). Counting the second as a refusal would inflate the
+    headline and, worse, quietly shrink what this instrument can see -- every
+    body carrying a `<details>` would leave the measurement without saying so.
+    So it is counted on its own line and named as what it is: bodies this run
+    could not measure.
     """
     spoke = io.StringIO()
     with contextlib.redirect_stderr(spoke):
@@ -367,7 +380,8 @@ def write_once(text: str) -> tuple[str, bool, tuple[str, ...]]:
         )
     said = tuple(line for line in spoke.getvalue().splitlines() if line.strip())
     refused = any("refusing to rewrite" in line for line in said)
-    return written, refused, said
+    unasked = any("the page could not be asked" in line for line in said)
+    return written, refused, unasked, said
 
 
 def sweep() -> list[Outcome]:
@@ -377,12 +391,13 @@ def sweep() -> list[Outcome]:
         for successor_name, successor in SUCCESSORS.items():
             for ending_name, ending in LINE_ENDINGS.items():
                 source = body(tail, successor, ending)
-                written, refused, said = write_once(source)
-                again, _, _ = write_once(written)
+                written, refused, unasked, said = write_once(source)
+                again, _, _, _ = write_once(written)
                 outcomes.append(
                     Outcome(
                         label=f"{tail_name} / {successor_name} / {ending_name}",
                         refused=refused,
+                        unasked=unasked,
                         lost=tuple(lines_lost(source, written)),
                         closed=tuple(seams_closed(source, written)),
                         announced=tuple(line for line in said if "not carried" in line),
@@ -396,7 +411,9 @@ def report(outcomes: list[Outcome]) -> dict[str, object]:
     return {
         "instrument": INSTRUMENT,
         "bodies": len(outcomes),
-        "refusals": sum(outcome.refused for outcome in outcomes),
+        # Hazard refusals only: see `write_once`.
+        "refusals": sum(outcome.refused and not outcome.unasked for outcome in outcomes),
+        "bodies_the_page_could_not_be_asked_about": sum(outcome.unasked for outcome in outcomes),
         "bodies_losing_a_line_silently": sum(outcome.silent for outcome in outcomes),
         "bodies_losing_a_line_with_a_reason_given": sum(
             outcome.took and bool(outcome.announced) for outcome in outcomes
@@ -426,6 +443,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     print(f"{summary['instrument']}: {summary['bodies']} bodies, written twice")
     print(f"  refusals: {summary['refusals']}")
+    print(
+        "  bodies the page could not be asked about: "
+        f"{summary['bodies_the_page_could_not_be_asked_about']}"
+    )
     print(f"  bodies losing a line silently: {summary['bodies_losing_a_line_silently']}")
     print(
         "  bodies losing a line with a reason given: "
