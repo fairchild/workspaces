@@ -2553,6 +2553,26 @@ def render_execution_summary_body(
     if not _explicit_evidence_contract(requested_evidence):
         return summary_body, []
 
+    # The published record, held to the same rule the lane's write is held to:
+    # nothing the author wrote leaves the body without a line saying it left.
+    # This path rebuilds the record from the turn's own inputs, so an entry it
+    # cannot render was simply not carried forward -- the record came back
+    # clean, the author's status line for that entry was gone from the page,
+    # and `errors`, `announcements` and stderr were all empty. The recovery
+    # from a stand-down was itself an instance of the loss the stand-down
+    # exists to prevent (#1778, round 12). The turn stops instead, the way it
+    # stops on a contract whose items it cannot tell apart, and the body
+    # stands whole.
+    published_record = _extract_evidence_metadata(published_body)
+    published_entries = (
+        published_record.get("entries") if isinstance(published_record, dict) else None
+    )
+    if (refusal := unrenderable_record_refusal(published_entries)) is not None:
+        log(refusal)
+        if announcements is not None:
+            announcements.append(refusal)
+        return summary_body, [refusal]
+
     used_indexes: set[int] = set()
     complete_entries, errors = parse_structured_evidence_updates(
         evidence_complete,
@@ -3630,18 +3650,82 @@ def entry_as_rendered(entry: object) -> tuple[dict[str, object] | None, str | No
     index = usable_entry_index(entry)
     if index is None:
         if _claimed_index(entry) is None:
-            return None, f"index {json.dumps(claimed)}, which is not an integer"
-        return None, f"index {claimed}, which numbers no line"
+            return None, f"index {comment_safe(json.dumps(claimed), 80)}, which is not an integer"
+        return None, f"index {comment_safe(str(claimed), 80)}, which numbers no line"
     item = _encodable(str(entry.get("item", "")).strip())
     status = str(entry.get("status", "")).strip()
     detail = _encodable(str(entry.get("detail", "")).strip())
     if not item:
         return None, "no item text"
     if status not in RENDERABLE_STATUSES:
-        return None, f"status {json.dumps(status)}, which is not {', '.join(RENDERABLE_STATUSES)}"
+        return None, (
+            f"status {comment_safe(json.dumps(status), 80)}, "
+            f"which is not {', '.join(RENDERABLE_STATUSES)}"
+        )
     if not detail:
         return None, "no detail"
     return {"index": index, "item": item, "status": status, "detail": detail}, None
+
+
+COMMENT_QUOTE_LIMIT = 160
+
+
+def comment_safe(text: str, limit: int = COMMENT_QUOTE_LIMIT) -> str:
+    """PR-editable text, flattened and bounded, for use inside a code span.
+
+    Backticks and newlines come out, so a quoted string cannot break out of
+    the span or the line it sits on, and HTML comment delimiters come out to a
+    fixed point -- one pass left `<<!--!--` behind as `<!--`.
+
+    Why any of it: `item`, `index`, `detail` and the rest come from the
+    metadata block, which is as editable as the pull request description. An
+    item of `a\n\n<!-- @name` opens an HTML comment on a line of its own
+    inside a comment the OWNER is meant to trust, hiding the recovery
+    instruction under it and the line the dedup guard keys on -- measured
+    against GitHub's renderer, which shows neither (#1778, round 12). An index
+    of `1\n<!--` did the same through two paths in the review-response lane
+    that never touched its quoting (#1778, round 6); that hazard's account was
+    deleted with the function it sat on and is restored here, where both
+    lanes read it.
+
+    Rendering is `quoted_for_comment`'s job; this is about what the string may
+    contain at all.
+    """
+    flattened = " ".join(text.replace("`", "").split())
+    while "<!--" in flattened or "-->" in flattened:
+        flattened = flattened.replace("<!--", "").replace("-->", "")
+    if len(flattened) <= limit:
+        return flattened
+    return flattened[: limit - 1].rstrip() + "\u2026"
+
+
+def as_code_span(text: str) -> str:
+    """Text already flattened by `comment_safe`, wrapped so none of it can act.
+
+    Separate from the flattening because a caller that trims the text first --
+    the review-response lane cuts an item at a clause boundary so a reader can
+    recognise the line -- wraps what it trimmed rather than re-flattening it.
+    Flattening twice eats the space `comment_safe` leaves where it removed an
+    HTML comment marker, which is a visible difference in a posted comment.
+    """
+    return f"`{text}`" if text else ""
+
+
+def quoted_for_comment(text: str, limit: int = COMMENT_QUOTE_LIMIT) -> str:
+    """PR-editable text, rendered so none of it can act.
+
+    A code span, not an escape list. Escaping `<` stopped the HTML-comment
+    class and left every markdown construct alive: a link, an image, an
+    autolink, a nested list marker, a mention. Inside a span all of them are
+    characters, and `comment_safe` has already taken the backticks out, so
+    nothing in the text can close the span it sits in.
+
+    ONE function for every PR-editable field that reaches a comment. The
+    review-response lane had this rule and the writer's announcements did not,
+    so the same hazard was live one field over from a lane that had closed it
+    (#1778, round 12).
+    """
+    return as_code_span(comment_safe(text, limit))
 
 
 def unrenderable_entries(entries: object) -> list[str]:
@@ -3650,9 +3734,15 @@ def unrenderable_entries(entries: object) -> list[str]:
     By POSITION in the record rather than by index, because the index is the
     thing that may be unreadable.
 
-    A record entry that is not an object at all is not named here: nothing
-    ever rendered a line for it, so there is no line of the author's standing
-    for it to lose. Everything with an item is named.
+    A record entry that is not an object at all -- a bare string or number in
+    the entries list -- is NOT named here, and the honest way to put it is as
+    a loss rather than as a safe exemption. Such an entry renders no line, so
+    a status line the author wrote for it is dropped on the next rewrite with
+    nothing said, exactly as it is on main. It is tolerated for one reason: a
+    scalar carries no item, so this code cannot say which line on the page
+    stood for it, and a sentence naming "the entry at position 3" with nothing
+    to recognise it by is not a sentence an author can act on. Filed rather
+    than fixed here; every entry that IS an object is named (#1778, round 12).
     """
     named: list[str] = []
     for position, entry in enumerate(entries if isinstance(entries, list) else [], start=1):
@@ -3660,8 +3750,32 @@ def unrenderable_entries(entries: object) -> list[str]:
         if rendered is not None or reason is None:
             continue
         item = str(entry.get("item", "")).strip() if isinstance(entry, dict) else ""
-        named.append(f"the entry at position {position}" + (f" (`{item}`)" if item else "") + f" has {reason}")
+        quoted = quoted_for_comment(item)
+        named.append(
+            f"the entry at position {position}" + (f" ({quoted})" if quoted else "") + f" has {reason}"
+        )
     return named
+
+
+def unrenderable_record_refusal(entries: object) -> str | None:
+    """The sentence a record this code cannot render earns, or None.
+
+    Composed here rather than at the writer, because two readers need it and
+    the second had no way to reach it: the verifier lane takes this path only
+    when the run has something else to write, so a body whose ONLY `ci` entry
+    is malformed produced no updates, no comment and a silently kept label --
+    which is the most likely shape of a malformed record (#1778, round 12).
+    One composition, so the sentence the lane posts and the sentence the write
+    logs cannot drift apart.
+    """
+    named = unrenderable_entries(entries)
+    if not named:
+        return None
+    return STOOD_DOWN_ANNOUNCEMENT_PREFIX + (
+        "; ".join(named)
+        + ", so this write cannot render it and will not delete the line it stands for; "
+        "fix the metadata"
+    )
 
 
 def _render_structured_entries(
@@ -3686,12 +3800,7 @@ def _render_structured_entries(
     stands down, the way a colliding index does, so record and page stay as
     the author left them and the sentence names the entry.
     """
-    if (unrenderable := unrenderable_entries(updated_entries)):
-        refusal = STOOD_DOWN_ANNOUNCEMENT_PREFIX + (
-            "; ".join(unrenderable)
-            + ", so this write cannot render it and will not delete the line it stands for; "
-            "fix the metadata"
-        )
+    if (refusal := unrenderable_record_refusal(updated_entries)) is not None:
         log(refusal)
         if announcements is not None:
             announcements.append(refusal)
@@ -3736,7 +3845,9 @@ def _render_structured_entries(
 def _claimed_index(entry: object) -> int | None:
     """The index this entry CLAIMS, whatever anything can do with it.
 
-    Private, and it lives here beside its one caller on purpose. It answers an
+    Private, and it lives beside the readers that may ask it -- three of them,
+    named in `test_every_function_that_can_reach_the_identity_rule_is_named_here`,
+    none of which acts on the answer. It answers an
     identity question -- are these two entries at one index? -- and an acting
     site that asks it instead of `usable_entry_index` acts on an index nothing
     renders: the apply loop did, and flipped an `{"index": 0}` entry's hidden
@@ -3785,7 +3896,15 @@ def usable_entry_index(entry: object) -> int | None:
 
 
 def entries_by_index(entries: object) -> dict[int, list[dict[str, object]]]:
-    """Every entry a reader can take, grouped by the index it claims -- ALL kinds."""
+    """Every entry whose index is an INTEGER, grouped by the index it claims.
+
+    "Every entry a reader can take" was too wide by exactly the rule this
+    function applies: an entry at `"1"`, `true` or `1.0` is dropped here,
+    because the identity rule answers None for it (#1778, round 12). All
+    KINDS, which is the part that matters for a collision -- what is ambiguous
+    is which entry a verdict belongs to, and the kinds change nothing about
+    that.
+    """
     grouped: dict[int, list[dict[str, object]]] = {}
     for entry in entries if isinstance(entries, list) else []:
         index = _claimed_index(entry)

@@ -597,7 +597,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
             [],
         )
 
-    # intent: fix
+    # intent: guard
     def test_the_clear_counts_what_this_run_verified_and_not_what_the_body_says(self) -> None:
         # The second half of the hole. Even with the entries re-verified, a
         # clear computed from the recorded entries would pass a body whose
@@ -1010,7 +1010,7 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
         self.assertEqual(reads, [], "a contract it cannot read was verified anyway")
         self.assertNotIn("body", written)
 
-    # intent: fix
+    # intent: guard
     def test_a_collision_of_any_kinds_is_named_rather_than_resolved(self) -> None:
         """Inverted from round 2, where this test asserted the defect (#1778, round 3).
 
@@ -1044,7 +1044,7 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
             [],
         )
 
-    # intent: fix
+    # intent: guard
     def test_all_three_readers_take_one_definition_of_an_index(self) -> None:
         # The mechanism, asserted directly: the guard, the write's narrowing
         # and the clear read the same grouping, so none of them can be right
@@ -1078,7 +1078,7 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
         self.assertIsNone(verify.usable_entry_index({"index": "1e9999"}))
         self.assertEqual(verify.colliding_indexes([{"item": CI_ITEM}, {"item": CI_ITEM}]), [])
 
-    # intent: fix
+    # intent: guard
     def test_a_verdict_for_another_check_never_counts(self) -> None:
         # The comparison on its own, since the duplicate guard stops the seam
         # test short of it: a verdict is the entry's only if it names the
@@ -1203,7 +1203,7 @@ class AMixedKindIndexManufacturesACompletionTests(unittest.TestCase):
                     f"{label}: the label was cleared",
                 )
 
-    # intent: fix
+    # intent: guard
     def test_the_order_that_used_to_manufacture_one_is_the_ci_last_order(self) -> None:
         # Named so the record says which half was live: with the `ci` entry
         # last the narrowing kept the update and the write landed it on both
@@ -1633,13 +1633,13 @@ class TheClearRefusesACollidingIndexTooTests(unittest.TestCase):
         "kind": "diff",
     }
 
-    # intent: fix
+    # intent: guard
     def test_two_complete_non_ci_entries_at_one_index_keep_the_label(self) -> None:
         entries = [dict(self.TWIN), dict(self.TWIN, detail="and the owner said so again")]
         self.assertEqual(verify.colliding_indexes(entries), [1])
         self.assertFalse(verify.should_clear_blocked_label(entries, HEAD, verified={}))
 
-    # intent: fix
+    # intent: guard
     def test_the_same_two_entries_at_distinct_indexes_still_clear(self) -> None:
         entries = [dict(self.TWIN), dict(self.TWIN, index=2)]
         self.assertEqual(verify.colliding_indexes(entries), [])
@@ -1666,7 +1666,7 @@ class OneRuleForWhichIndexAnythingCanActOnTests(unittest.TestCase):
         """
         return sys.modules["evidence"]._claimed_index
 
-    # intent: fix
+    # intent: guard
     def test_an_index_below_one_is_claimed_but_not_actionable(self) -> None:
         for index in (0, -1):
             with self.subTest(index=index):
@@ -1681,7 +1681,7 @@ class OneRuleForWhichIndexAnythingCanActOnTests(unittest.TestCase):
                 entries = [{"index": index, "item": CI_ITEM, "status": "pending-ci", "detail": "d"}]
                 self.assertEqual(verify.ci_entries_needing_verification(entries, HEAD), [])
 
-    # intent: fix
+    # intent: guard
     def test_the_response_lane_takes_the_same_definition(self) -> None:
         response = load_module(
             "factory_review_response_indexes", REPO_ROOT / "scripts" / "factory-review-response.py"
@@ -1691,7 +1691,7 @@ class OneRuleForWhichIndexAnythingCanActOnTests(unittest.TestCase):
             self.assertIsNone(response.usable_entry_index({"index": index}))
         self.assertEqual(response.usable_entry_index({"index": 2}), 2)
 
-    # intent: fix
+    # intent: guard
     def test_a_collision_below_one_is_still_a_collision(self) -> None:
         # The identity rule stays wide: the write fans `updates[0]` across
         # every entry claiming 0, so the guard has to see two of them.
@@ -2068,7 +2068,7 @@ class TheIdentityRuleIsNotReachableFromASiteThatActsTests(unittest.TestCase):
     module. That is the property; the test below names the intent.
     """
 
-    # intent: fix
+    # intent: guard
     def test_an_acting_site_reads_no_key_it_has_not_checked(self) -> None:
         """The property, not the private name (#1778, round 10).
 
@@ -2183,7 +2183,7 @@ class TheIdentityRuleIsNotReachableFromASiteThatActsTests(unittest.TestCase):
         # section, which is the case the kinds suite drives (#1778, round 11).
         self.assertEqual(said, [])
 
-    # intent: fix
+    # intent: guard
     def test_a_visible_line_disagreeing_with_its_metadata_is_expressible(self) -> None:
         """What `lines=` is for, demonstrated rather than claimed (#1778, round 10).
 
@@ -2224,7 +2224,7 @@ class TheIdentityRuleIsNotReachableFromASiteThatActsTests(unittest.TestCase):
             )
         )
 
-    # intent: fix
+    # intent: guard
     def test_no_entry_that_renders_no_line_counts_toward_a_clear(self) -> None:
         """An index nothing can act on is a requirement with nothing on the page.
 
@@ -2266,7 +2266,7 @@ class TheIdentityRuleIsNotReachableFromASiteThatActsTests(unittest.TestCase):
             )
         )
 
-    # intent: fix
+    # intent: guard
     def test_a_float_and_a_bool_are_not_indexes(self) -> None:
         evidence = sys.modules["evidence"]
         for value in (1.9, 1.0, True, False, "1"):
@@ -2279,7 +2279,7 @@ class TheIdentityRuleIsNotReachableFromASiteThatActsTests(unittest.TestCase):
 class VerdictDefinitenessTests(unittest.TestCase):
     """Which lookups say something about a check, and which fail to (#1778, round 2)."""
 
-    # intent: fix
+    # intent: guard
     def test_a_completed_run_and_an_empty_answer_are_definite(self) -> None:
         self.assertTrue(
             verify.verdict_is_definite(
@@ -2290,14 +2290,14 @@ class VerdictDefinitenessTests(unittest.TestCase):
         self.assertTrue(verdict := verify.verdict_is_definite([]))
         self.assertTrue(verdict)
 
-    # intent: fix
+    # intent: guard
     def test_a_failed_lookup_and_an_unfinished_run_are_not(self) -> None:
         self.assertFalse(verify.verdict_is_definite(None))
         self.assertFalse(
             verify.verdict_is_definite([{"status": "in_progress", "conclusion": None}])
         )
 
-    # intent: fix
+    # intent: guard
     def test_a_completed_run_beside_an_unfinished_one_is_not_definite(self) -> None:
         """No precondition on the caller's query, and no ordering rule (#1778, round 11).
 
@@ -2870,6 +2870,83 @@ class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
         # A note about text missing from a body nobody wrote names a loss that
         # did not happen: the section is still whole on the pull request.
         self.assertEqual(self.carried_note(write_succeeds=False), [])
+
+    # intent: fix
+    def test_a_record_whose_only_entry_is_malformed_is_still_said(self) -> None:
+        """The stand-down had one path to the author, and it ran only when the
+        run had something ELSE to write (#1778, round 12).
+
+        A body whose only `ci` entry carries an index this code cannot key
+        produces no updates at all, so the write is never called, the
+        announcement is never made, and the label stays with nothing said --
+        on the most likely shape of a malformed record. Measured at
+        `2428d188`: no comment.
+        """
+        entry = dict(ci_entry(), index="1")
+        body = body_with_contract([CI_ITEM], [entry])
+        pr = pr_payload(body, labels=["blocked:evidence"])
+        posted: list[list[str]] = []
+        gh_calls: list[list[str]] = []
+        with (
+            mock.patch.object(
+                verify,
+                "_gh_json",
+                side_effect=lambda args, env: pr if any("pulls/321" in a for a in args) else None,
+            ),
+            mock.patch.object(verify, "check_runs_for", return_value=[]),
+            mock.patch.object(verify, "_write_pr_body", return_value=True),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+            mock.patch.object(
+                verify,
+                "post_uncarried_notes",
+                side_effect=lambda pr_number, persona, notes, head, env: posted.append(list(notes))
+                or True,
+            ),
+        ):
+            verify.process_pr(321, {})
+        self.assertEqual(len(posted), 1, f"the author was told nothing: {posted}")
+        self.assertEqual(len(posted[0]), 1, posted[0])
+        self.assertIn("position 1", posted[0][0])
+        self.assertIn('index "1"', posted[0][0])
+        self.assertTrue(
+            sys.modules["evidence"].is_stood_down_announcement(posted[0][0]), posted[0][0]
+        )
+        # And the label stays, because nothing was verified.
+        self.assertNotIn(
+            ["pr", "edit", "321", "--remove-label", "blocked:evidence"], gh_calls, gh_calls
+        )
+
+    # intent: control
+    def test_a_record_this_code_can_render_says_nothing_extra(self) -> None:
+        # The control: the same shape with a usable index and no work to do
+        # (an empty check-run answer) posts no stand-down.
+        body = body_with_contract([CI_ITEM], [ci_entry(status="complete", verified_head_sha=HEAD)])
+        pr = pr_payload(body, labels=[])
+        posted: list[list[str]] = []
+        with (
+            mock.patch.object(
+                verify,
+                "_gh_json",
+                side_effect=lambda args, env: pr if any("pulls/321" in a for a in args) else None,
+            ),
+            mock.patch.object(verify, "check_runs_for", return_value=[]),
+            mock.patch.object(verify, "_write_pr_body", return_value=True),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(verify, "_gh", return_value=True),
+            mock.patch.object(
+                verify,
+                "post_uncarried_notes",
+                side_effect=lambda pr_number, persona, notes, head, env: posted.append(list(notes))
+                or True,
+            ),
+        ):
+            verify.process_pr(321, {})
+        self.assertEqual(
+            [note for notes in posted for note in notes if "position" in note], []
+        )
 
     def stood_down_note(self, *, head_moves: bool = False) -> list[list[str]]:
         """The notes the verifier posted on a body whose write stands down.
