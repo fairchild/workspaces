@@ -509,12 +509,42 @@ def evidence_blockers(entries: list[dict[str, Any]]) -> list[Blocker]:
     # A lane needs an index to write back through. An entry whose index is
     # not a positive integer is skipped by the completers, so calling it
     # self-clearing promises a write that never happens.
+    # And a lane needs a record the writer will ACT on. `update_evidence_entries`
+    # refuses a record with two entries at one index whatever their statuses
+    # are, so a pending entry sharing an index with a complete or blocked one
+    # is not self-clearing either -- it waits on the author, like the two
+    # pending entries round 12 covered. The collision is asked of the whole
+    # record rather than of the pending slice, which is where round 12's
+    # version could not see it (#1778, round 13).
+    shared = set(colliding_indexes(entries))
     self_clearing = [
         entry
         for entry in pending
-        if _entry_kind(entry) in PENDING_COMPLETERS and usable_entry_index(entry) is not None
+        if _entry_kind(entry) in PENDING_COMPLETERS
+        and usable_entry_index(entry) is not None
+        and usable_entry_index(entry) not in shared
     ]
     waiting_on_author = [entry for entry in pending if entry not in self_clearing]
+    if shared:
+        # Named where the author reads it, and named ONCE: the entries that
+        # collide are in the author group above, and what they need is not
+        # "say what would prove it" but "give each item its own index". The
+        # sentence used to live in the self-clearing block, which is exactly
+        # the group a colliding entry no longer lands in (#1778, round 13).
+        blockers.append(
+            Blocker(
+                key="evidence-colliding-index",
+                owner_required=True,
+                detail=(
+                    ("Index " if len(shared) == 1 else "Indexes ")
+                    + ", ".join(str(index) for index in sorted(shared))
+                    + (" carries" if len(shared) == 1 else " carry")
+                    + " more than one evidence entry, so an update aimed at one would land on "
+                    "every entry sharing it and the writer refuses the record whole. Give each "
+                    "item its own index in the evidence block to let the lanes run."
+                ),
+            )
+        )
     if waiting_on_author:
         blockers.append(
             Blocker(
@@ -580,10 +610,14 @@ def _attestation_block(blocked: list[dict[str, Any]]) -> str:
 
 
 def _colliding(entries: list[dict[str, Any]]) -> bool:
-    """Whether this record holds two entries at one index -- the writer's own rule.
+    """Whether these entries hold two at one index -- the writer's own rule.
 
     Asked through the shared `colliding_indexes` rather than re-derived, so
-    what this lane TELLS an author and what the writer DOES cannot drift.
+    what this lane TELLS an author and what the writer DOES cannot drift. The
+    CALLER decides what to hand it: `evidence_blockers` asks over the whole
+    record, because a pending entry colliding with a complete one is just as
+    unwritable as two pending ones and the pending slice alone cannot see it
+    (#1778, round 13).
     """
     return bool(colliding_indexes(entries))
 

@@ -40,6 +40,7 @@ from evidence import (  # noqa: E402
     colliding_indexes,
     entries_by_index,
     usable_entry_index,
+    colliding_record_refusal,
     unrenderable_record_refusal,
     update_evidence_entries,
 )
@@ -545,7 +546,19 @@ def _apply_ci_updates(
             # (#1740, round 3). Read the live PR before saying so, the way the
             # writing path below does: a push in between would file the note
             # under a head the author has already left (#1740, round 4).
-            post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
+            #
+            # And composed from THAT read rather than from the copy this
+            # attempt started with. `uncarried` was built over `body`, so an
+            # author who repaired the record between the two reads was told
+            # to fix what they had just fixed -- the round-9 rule (every
+            # return hands back what the pull request holds now) one step
+            # further: what is SAID is about the same body (#1778, round 13).
+            said = uncarried
+            if live != body:
+                fresh: list[str] = []
+                update_evidence_entries(live, safe_updates, announcements=fresh)
+                said = fresh
+            post_uncarried_notes(pr_number, None, said, head_sha, env)
             # The live body, so the label is decided on what the PR holds now
             # rather than on the copy this run started from. A read that told
             # us nothing leaves the body we have, which is the answer we had
@@ -646,15 +659,17 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
 
     updates: dict[int, dict[str, object]] = {}
     verified: dict[int, dict[str, object]] = {}
-    if (shared := colliding_indexes(entries)):
+    # ONE path for every refusal this lane makes over the record it read, so a
+    # refusal added later cannot arrive with no way to say itself. Round 12
+    # gave the malformed record a comment and left the colliding one logging
+    # into a step log nobody reads (#1778, round 13).
+    record_refusal = colliding_record_refusal(entries) or unrenderable_record_refusal(entries)
+    if colliding_indexes(entries):
         # Two entries at one index are two answers to one requirement, and
         # which of them a verdict belongs to is decided by the order they
         # happen to be written in. Neither is acted on: nothing is verified,
         # nothing is written, and the label stays (#1778, round 2).
-        log(
-            f"PR #{pr_number}: evidence entries share index(es) "
-            f"{', '.join(str(index) for index in shared)}; leaving the contract for the author"
-        )
+        log(f"PR #{pr_number}: {record_refusal}")
     else:
         recorded_status = {
             index: (
@@ -685,16 +700,6 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
             status, recorded_sha = recorded_status.get(index, ("", ""))
             if not (status == "complete" and recorded_sha == head_sha):
                 updates[index] = update
-        if not updates and (refusal := unrenderable_record_refusal(entries)) is not None:
-            # The stand-down the write would have made, said even though this
-            # run has nothing else to write. It reaches the author only
-            # through the write's announcements, and a record whose only `ci`
-            # entry is malformed produces no updates -- so the most likely
-            # shape of a malformed record was the one shape nobody was told
-            # about, with the label kept and nothing said (#1778, round 12).
-            # `post_uncarried_notes` keeps it to one comment per head.
-            log(refusal)
-            post_uncarried_notes(pr_number, None, [refusal], head_sha, env)
         if updates:
             updated_body = _apply_ci_updates(pr_number, head_sha, body, updates, env)
             if updated_body is None:
@@ -707,6 +712,14 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
                 index: update
                 for index, update in _updates_targeting_unchanged_entries(body, verified).items()
             }
+
+    if not updates and record_refusal is not None:
+        # Said whether or not the run had other work, for either refusal: the
+        # write is the only thing that announces one, and a record this lane
+        # refuses produces no write at all. `post_uncarried_notes` keeps it to
+        # one comment per head (#1778, rounds 12 and 13).
+        log(record_refusal)
+        post_uncarried_notes(pr_number, None, [record_refusal], head_sha, env)
 
     # The transition question, and it takes the RECORDED reading on purpose.
     # It asks whether the body already looked complete before this run, and
