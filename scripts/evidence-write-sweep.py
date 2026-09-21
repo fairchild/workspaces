@@ -62,6 +62,16 @@ SECTION_TAILS = {
     # (codex, gpt-5.6-sol, xhigh). `author_lines` matches the entry SHAPE now,
     # and this body is what says so.
     "a note naming the item in prose": f"\nReviewer note: {ITEM} only on this head.\n",
+    # The author's OWN status bullet, naming an item the body records nowhere.
+    # The writer took it as its own and replaced it while this instrument read
+    # it as the author's, which is two answers about one line -- and on this
+    # body the answer that won deleted it and said nothing (#1751). It is the
+    # author's now at both readers, and this body is what says so on a real
+    # write rather than in a docstring.
+    "an unrecorded status bullet of the author's": (
+        "\nA note for the reviewer.\n"
+        "- [blocked] release approval -- the signing profile is missing\n"
+    ),
 }
 
 # What the author wrote after the section. The successor decides where the
@@ -122,21 +132,11 @@ def body(tail: str, successor: str, ending: str) -> str:
     return text.replace("\n", ending)
 
 
+# The shape a reader reads as an entry, which is the shape #1734 lost. The
+# filter below does not match on it -- whose line this is, shape included, is
+# `evidence.is_recorded_status_line` and nowhere else (#1751) -- and the
+# fixtures name it to say which shape they are built out of.
 ENTRY_LINE_RE = re.compile(r"^\s*- \[(?:complete|blocked|pending-ci)\] .+ -- .+$")
-
-
-def _entry_line_for(item: str) -> re.Pattern[str]:
-    """The line the write renders for one recorded item, as a pattern.
-
-    Built from the item rather than read out of the line. Reading it out took
-    the text up to the FIRST ` -- `, so a recorded item that itself holds one
-    -- `build -- release` -- was cut to `build`, which no metadata records; the
-    write's own entry then read as the author's, and an ordinary write reported
-    the entry it had just rewritten as a silent loss (#1738, round 3).
-    """
-    return re.compile(
-        rf"^\s*- \[(?:complete|blocked|pending-ci)\] {re.escape(item)} -- .+$"
-    )
 
 
 def _recorded_items(text: str) -> set[str]:
@@ -170,12 +170,15 @@ def _entry_line_numbers(lines: list[str], text: str, recorded: set[str]) -> set[
     It is entry-SHAPED, rather than carrying the item's text anywhere: a line
     naming the item in prose is the author's sentence about it.
 
-    It names an item the metadata RECORDS -- matched whole, escaped, rather
-    than read out of the line up to the first ` -- `, which cut a recorded
-    `build -- release` down to `build` and handed the write's own entry back as
-    the author's (#1738, round 3). So the author's own `- [blocked] release
-    approval -- the signing profile is missing` is never the machine's,
-    wherever it sits and however the section is read.
+    It names an item the metadata RECORDS -- asked of `evidence`, which is the
+    same function the write asks (`is_recorded_status_line`). A status-shaped
+    line inside the section that names no recorded item is the author's,
+    wherever it sits, and the write moves it to `## Evidence Notes` like any
+    other block. Answering it here in a pattern of this file's own was two
+    definitions of one rule, and on the author's own `- [blocked] release
+    approval -- the signing profile is missing` written under the heading they
+    disagreed: the write replaced it and this instrument called the
+    replacement a silent loss (#1751).
 
     And it sits INSIDE the section, so an author's copy of a recorded item
     under their own `## Validation` stays theirs.
@@ -198,12 +201,11 @@ def _entry_line_numbers(lines: list[str], text: str, recorded: set[str]) -> set[
     for line in lines:
         starts.append(offset)
         offset += len(line) + 1
-    patterns = [_entry_line_for(item) for item in recorded]
     return {
         index
         for index, start in enumerate(starts)
         if bounds[1] <= start < bounds[2]
-        and any(pattern.match(lines[index]) for pattern in patterns)
+        and evidence.is_recorded_status_line(lines[index], recorded)
     }
 
 

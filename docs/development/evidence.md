@@ -430,13 +430,17 @@ measurements you already wrote. A status line is a list
 item under the one
 `## Evidence Status` heading a reader sees, on a single line, whose text reads
 `[status] item -- proof`, one per requested item. That is the whole of what
-the heading holds: under it a bullet opening with a status token is the
-machine's, well-formed or not, and every other block -- a note to a reviewer,
-a link to a run, a pasted log excerpt, a `- [x]` box, a bullet naming no
-status -- is a note, which a rewrite moves, in the order written, to a
-top-level `## Evidence Notes` section directly below. Write your note there
+the heading holds: under it a bullet opening with a status token AND naming an
+item the body records is the machine's, and every other block -- a note to a
+reviewer, a link to a run, a pasted log excerpt, a `- [x]` box, a bullet naming
+no status, a status bullet of your own for something the contract does not ask
+for -- is a note, which a rewrite moves, in the order written, to a top-level
+`## Evidence Notes` section directly below. Write your note there
 and it stays put; write it under the heading and the next lane run or factory
-turn relocates it. A body carrying no such block has no such section. A block
+turn relocates it -- relocates, not deletes: your own
+`- [blocked] release approval -- the signing profile is missing` under that
+heading comes back in the notes rather than going without a word (#1751).
+A body carrying no such block has no such section. A block
 indented under a status bullet is the author's too and moves whole, since it
 belongs to the bullet only because the parser folds it there; a status line
 soft-wrapped over several source lines is one line on the page and goes with

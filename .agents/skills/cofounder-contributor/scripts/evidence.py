@@ -2151,15 +2151,52 @@ EVIDENCE_STATUS_HEADING = "Evidence Status"
 EVIDENCE_NOTES_HEADING = "Evidence Notes"
 
 
-def _is_status_list_item(tokens: list[Token], index: int) -> bool:
+def is_recorded_status_line(line: str, recorded_items: Iterable[str]) -> bool:
+    """Whether a line under `## Evidence Status` is the machine's rather than the author's.
+
+    THE RULE, and the one function that answers it, because the two readers of
+    this section used to answer it apart: a status-shaped line inside the
+    section that names no recorded item is the author's, wherever it sits, and
+    it moves to `## Evidence Notes` like any other block. A line naming an item
+    the write records is the machine's and is replaced from the entries in
+    hand.
+
+    The writer read every status-shaped line under the heading as its own and
+    the sweep that measures the writer read only the recorded ones as its own,
+    so an author's `- [blocked] release approval -- the signing profile is
+    missing` written under the heading was both, and the answer that won
+    deleted it without a word (#1751). Deciding it here rather than in two
+    docstrings is what makes the pair unable to diverge again.
+
+    The item is matched against the items in hand rather than read out of the
+    line up to its first ` -- `: that reading cut a recorded `build -- release`
+    down to `build`, which no metadata records, and handed a write its own
+    entry back as somebody else's line (#1738, round 3).
+
+    A write that records nothing owns no line here. That is the conservative
+    answer -- every line is the author's -- and it is the answer the sweep
+    gives a body whose metadata records no entries.
+    """
+    items = [str(item) for item in recorded_items if str(item).strip()]
+    if not items:
+        return False
+    reading = split_evidence_status_line(line.strip(), items)
+    if reading is None:
+        return False
+    key = _normalize_evidence_key(reading[1])
+    return any(_normalize_evidence_key(item) == key for item in items)
+
+
+def _is_status_list_item(tokens: list[Token], index: int, recorded_items: Iterable[str]) -> bool:
     """Whether the list item opening at `index` belongs to the machine rather than the author.
 
     A bullet whose text opens with a status token -- `[complete]`, `[blocked]`
-    or `[pending-ci]` -- is the machine's vocabulary, and the rewrite replaces
-    it from the entries in hand. Well-formed or not: an item missing its
-    `--` boundary, or wrapping a nested block, is a malformed status line
-    rather than a note, and carrying it would put a status a reader can see
-    outside the one section every reader of a status reads.
+    or `[pending-ci]` -- is the machine's vocabulary AND names an item this
+    write records, and the rewrite replaces it from the entries in hand. A
+    status-shaped line inside the section that names no recorded item is the
+    author's, wherever it sits, and it moves to `## Evidence Notes` like any
+    other block (`is_recorded_status_line`, #1751) -- an item missing its `--`
+    boundary among them, since a line that names no item names no recorded one.
 
     Read as the page reads it, so a numbered item, a bulleted one and a
     `**[complete]**` are one shape. Everything else under the heading -- a
@@ -2173,7 +2210,7 @@ def _is_status_list_item(tokens: list[Token], index: int) -> bool:
         # table with it.
         return False
     text = inline_text(tokens[index + 2].children).strip()
-    return EVIDENCE_STATUS_PREFIX_RE.match(f"- {text}") is not None
+    return is_recorded_status_line(f"- {text}", recorded_items)
 
 
 def _without_edge_blank_lines(text: str) -> str:
@@ -2193,7 +2230,11 @@ def _without_edge_blank_lines(text: str) -> str:
 
 
 def _list_item_spans(
-    tokens: list[Token], start: int, machine: list[tuple[int, int]], notes: list[tuple[int, int]]
+    tokens: list[Token],
+    start: int,
+    machine: list[tuple[int, int]],
+    notes: list[tuple[int, int]],
+    recorded_items: Iterable[str],
 ) -> int:
     """Sort the items of the list opening at `start` into the machine's and the author's; return the index past it.
 
@@ -2208,7 +2249,7 @@ def _list_item_spans(
             index += 1
             continue
         if token.map is not None:
-            if _is_status_list_item(tokens, index):
+            if _is_status_list_item(tokens, index, recorded_items):
                 # The line the status is written on is the machine's; the rest
                 # of the item is one block of the author's, not a run of loose
                 # lines. A pasted log indented under a status bullet belongs to
@@ -2265,8 +2306,13 @@ def _uncarried_note(detail: str, line: int, went: str = "") -> str:
     )
 
 
-def _section_notes(section: str) -> tuple[list[str], list[str]]:
-    """The blocks of one Evidence Status section that are not status lines, and what went.
+def _section_notes(section: str, recorded_items: Iterable[str]) -> tuple[list[str], list[str]]:
+    """The blocks of one Evidence Status section that are not the machine's status lines, and what went.
+
+    A status-shaped line inside the section that names no recorded item is the
+    author's, wherever it sits, and it moves to `## Evidence Notes` like any
+    other block (`is_recorded_status_line`, #1751). So what the write is about
+    to put back is decided by the items it holds, not by the shape of a line.
 
     Parsed as CommonMark rather than matched line by line, for the reason
     every read of this section is: a line matched by pattern is not always a
@@ -2313,7 +2359,7 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
             index += 1
             continue
         if token.type in {"bullet_list_open", "ordered_list_open"}:
-            index = _list_item_spans(tokens, index, machine, spans)
+            index = _list_item_spans(tokens, index, machine, spans, recorded_items)
             continue
         spans.append((token.map[0], token.map[1]))
         index += 1
@@ -2445,7 +2491,7 @@ def _stood_down(source: str, refusal: str) -> SectionWrite:
 
 
 def write_evidence_status_section(
-    body: str, status_lines: Iterable[str]
+    body: str, status_lines: Iterable[str], *, recorded_items: Iterable[str]
 ) -> SectionWrite:
     """The one write of `## Evidence Status`, or the body unchanged and why it stands.
 
@@ -2460,6 +2506,14 @@ def write_evidence_status_section(
     body that carried no such block has no such section, a body that has one
     keeps it directly below the status, and a second write over the first
     moves nothing, since by then the notes are no longer under the heading.
+
+    `recorded_items` is what the status lines are rendered from, and it is
+    passed rather than read back out of them: an item carrying its own ` -- `
+    cannot be recovered from the line it was rendered into (#1738, round 3). A
+    status-shaped line inside the section that names no recorded item is the
+    author's, wherever it sits, and it moves to `## Evidence Notes` like any
+    other block (`is_recorded_status_line`, #1751). A caller with no items
+    records nothing and owns no line in the section.
 
     A section the body already has is rewritten where its author put it, so a
     write moves the status list's contents and nothing else.
@@ -2478,13 +2532,18 @@ def write_evidence_status_section(
     that heading, so the terminator is no longer part of the question.
     """
     source = body
+    # Read once: the items are walked for every line of every section, and a
+    # generator handed in would be spent on the first of them -- after which
+    # every status line in the body reads as the author's and the section
+    # fills with the entries it was about to replace.
+    recorded = list(recorded_items)
     sections, refusal = removed_section_texts(body, EVIDENCE_STATUS_HEADING)
     if refusal is not None:
         return _stood_down(source, refusal)
     notes: list[str] = []
     announcements: list[str] = []
     for section in sections:
-        carried, said = _section_notes(section)
+        carried, said = _section_notes(section, recorded)
         notes.extend(carried)
         announcements.extend(said)
     # The notes section comes out before the status section goes in, so that
@@ -2610,7 +2669,11 @@ def render_execution_summary_body(
     # Untrimmed, because that is the text the writer cuts and the text the
     # reason answers about; trimming here and not there is what once let the
     # guard name a refusal while the write went ahead.
-    write = write_evidence_status_section(stripped_body, evidence_lines)
+    write = write_evidence_status_section(
+        stripped_body,
+        evidence_lines,
+        recorded_items=[str(entry["item"]) for _, entry in sorted(evidence_map.items())],
+    )
     rendered, write_refusal = write.body, write.refusal
     if announcements is not None:
         announcements.extend(write.announcements)
@@ -3650,6 +3713,7 @@ def _render_structured_entries(
                 f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
                 for entry in sorted(rendered_entries, key=lambda entry: int(entry["index"]))
             ],
+            recorded_items=[str(entry["item"]) for entry in rendered_entries],
         )
         reconciled, refusal = write.body, write.refusal
         if announcements is not None:

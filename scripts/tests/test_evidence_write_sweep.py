@@ -43,7 +43,7 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
     is the property that was missing.
     """
 
-    BODIES = 168
+    BODIES = 180
     REFUSALS = 22
     ANNOUNCED_LOSSES = 2
 
@@ -446,6 +446,64 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         self.assertNotEqual(written, prose)
         self.assertEqual(sweep_script.lines_lost(prose, written), [])
 
+    def test_an_unrecorded_status_bullet_under_the_heading_survives_the_write(self) -> None:
+        """The body the two readings disagreed about, written for real (#1751).
+
+        The writer took every status-shaped line under the heading as its own;
+        this instrument called a line the machine's only when it names a
+        recorded item. So the author's own
+        `- [blocked] release approval -- the signing profile is missing`
+        inside the section was replaced by one and counted a silent loss by
+        the other -- twelve bodies of this corpus, each losing that line with
+        nothing printed.
+
+        One rule at both readers now: a status-shaped line inside the section
+        that names no recorded item is the author's, wherever it sits, and it
+        moves to `## Evidence Notes` like any other block.
+        """
+        tail = sweep_script.SECTION_TAILS["an unrecorded status bullet of the author's"]
+        self.assertIn(self.BLOCKED_UNDER_AN_H1, tail)
+        for successor in sweep_script.SUCCESSORS:
+            for ending_name, ending in sweep_script.LINE_ENDINGS.items():
+                with self.subTest(successor=successor, ending=ending_name):
+                    source = sweep_script.body(tail, sweep_script.SUCCESSORS[successor], ending)
+                    written, refused, said = sweep_script.write_once(source)
+                    self.assertFalse(refused)
+                    self.assertEqual(sweep_script.lines_lost(source, written), [])
+                    self.assertEqual(sweep_script.seams_closed(source, written), [])
+                    # Carried rather than kept quiet about: nothing is taken,
+                    # so there is nothing for the runtime to say.
+                    self.assertEqual([line for line in said if "not carried" in line], [])
+                    self.assertIn(
+                        self.BLOCKED_UNDER_AN_H1,
+                        sweep_script.MARKDOWN_LINE_ENDING_RE.sub("\n", written),
+                    )
+
+    def test_the_instrument_and_the_writer_ask_one_function_whose_line_it_is(self) -> None:
+        # Identical by construction rather than by two docstrings agreeing:
+        # `_entry_line_numbers` and the writer's `_is_status_list_item` both
+        # call `evidence.is_recorded_status_line`, so a line cannot be the
+        # machine's to one and the author's to the other (#1751).
+        evidence = sys.modules["evidence"]
+        source = sweep_script.body(
+            sweep_script.SECTION_TAILS["an unrecorded status bullet of the author's"],
+            sweep_script.SUCCESSORS["one h2 below"],
+            "\n",
+        )
+        recorded = sweep_script._recorded_items(source)
+        self.assertEqual(recorded, {sweep_script.ITEM})
+        self.assertTrue(
+            evidence.is_recorded_status_line(
+                f"- [pending-ci] {sweep_script.ITEM} -- {sweep_script.DETAIL}", recorded
+            )
+        )
+        self.assertFalse(evidence.is_recorded_status_line(self.BLOCKED_UNDER_AN_H1, recorded))
+        # Which is what the instrument's own reading of that body says.
+        self.assertIn(self.BLOCKED_UNDER_AN_H1, sweep_script.author_lines(source))
+        self.assertNotIn(
+            f"- [pending-ci] {sweep_script.ITEM} -- {sweep_script.DETAIL}",
+            sweep_script.author_lines(source),
+        )
 
 if __name__ == "__main__":
     unittest.main()
