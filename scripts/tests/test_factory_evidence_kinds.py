@@ -8482,6 +8482,7 @@ class TheWriterRefusesACollidingIndexItself(unittest.TestCase):
             )
         return source, written, said, stderr.getvalue()
 
+    # intent: fix
     def test_a_colliding_index_leaves_the_body_byte_identical(self) -> None:
         source, written, said, stderr = self.write(
             [self.entry(1), self.entry(1, item="a second requirement at the same index")]
@@ -8491,6 +8492,7 @@ class TheWriterRefusesACollidingIndexItself(unittest.TestCase):
         self.assertIn("share index(es) 1", said[0])
         self.assertIn("share index(es) 1", stderr)
 
+    # intent: fix
     def test_the_collision_need_not_be_at_the_updated_index(self) -> None:
         # What the verifier's narrowing structurally cannot see: it drops
         # updates it HOLDS, and it holds none for index 2.
@@ -8500,12 +8502,14 @@ class TheWriterRefusesACollidingIndexItself(unittest.TestCase):
         self.assertEqual(written, source)
         self.assertIn("share index(es) 2", said[0])
 
+    # intent: guard
     def test_entries_at_distinct_indexes_are_written_as_before(self) -> None:
         source, written, said, _ = self.write([self.entry(1), self.entry(2, kind="diff")])
         self.assertNotEqual(written, source)
         self.assertIn("- [complete] ", written)
         self.assertEqual(said, [])
 
+    # intent: fix
     def test_an_index_no_reader_can_take_is_not_a_collision(self) -> None:
         evidence = self.evidence()
         self.assertEqual(
@@ -8516,6 +8520,146 @@ class TheWriterRefusesACollidingIndexItself(unittest.TestCase):
             [],
         )
         self.assertIsNone(evidence._claimed_index({"index": float("inf")}))
+
+
+class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
+    """The rule the round-8 fix broke while closing the shape it names (#1778, round 11).
+
+    Round 8 moved `_render_structured_entries` from `int(entry["index"])` to
+    `usable_entry_index`, so that an entry nothing can act on is not acted on.
+    It is also not RENDERED: a body recording a usable entry beside one whose
+    index is `"2"` came back with the second entry's status line deleted, its
+    metadata intact, nothing in `## Evidence Notes` and `announcements` empty.
+    Record and page disagreeing, reintroduced by the fix for record and page
+    disagreeing.
+
+    The criterion, which covers more than the two alternatives it was chosen
+    between: nothing the author wrote leaves the body without a line saying it
+    left. A rewrite this code cannot account for every line of stands down
+    whole and names the entry, the way a colliding index already does.
+    """
+
+    ITEM = "run `swift test`"
+    OTHER = "manual QA on device"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def entries(self, odd: object) -> list[dict[str, object]]:
+        return [
+            {"index": 1, "item": self.ITEM, "status": "pending-ci",
+             "detail": "queued on head abc", "kind": "ci", "check_name": "test"},
+            {"index": odd, "item": self.OTHER, "status": "pending-ci",
+             "detail": "device booked", "kind": "other"},
+        ]
+
+    def body(self, entries: list[dict[str, object]]) -> str:
+        lines = "\n".join(
+            f"- [{entry['status']}] {entry['item']} -- {entry['detail']}" for entry in entries
+        )
+        return (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": entries}) + "\n-->\n\n"
+            "## Summary\n\n- one change\n\n"
+            f"## Evidence Status\n\n{lines}\n\n## Validation\n\n- ran it\n"
+        )
+
+    def write(self, entries: list[dict[str, object]]):
+        evidence = self.evidence()
+        said: list[str] = []
+        source = self.body(entries)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            written = evidence.update_evidence_entries(
+                source, {1: {"status": "complete", "detail": "green on head abc"}},
+                announcements=said,
+            )
+        return source, written, said, stderr.getvalue()
+
+    def section_of(self, body: str) -> str:
+        return sys.modules["_helpers"].markdown_section(body, "Evidence Status") or ""
+
+    # intent: fix
+    def test_an_entry_the_renderer_cannot_key_keeps_its_line(self) -> None:
+        """The line the author can see is still there, and something said why.
+
+        Asserted about the PAGE, not about a type error on the way in: a test
+        that dies in `int()` proves the parser and not the rewrite.
+        """
+        for odd in ("2", True, 2.0, None, 0, -1):
+            with self.subTest(index=repr(odd)):
+                entries = self.entries(odd)
+                line = f"- [pending-ci] {self.OTHER} -- device booked"
+                source, written, said, stderr = self.write(entries)
+                self.assertIn(line, self.section_of(written), "the author's line was deleted")
+                self.assertEqual(written, source, "the body was rewritten anyway")
+                self.assertEqual(len(said), 1, said)
+                self.assertIn(self.OTHER, said[0], "the announcement does not name the entry")
+                self.assertIn("position 2", said[0])
+                self.assertIn(said[0].split(": ", 1)[1][:30], stderr)
+
+    # intent: fix
+    def test_the_lane_that_resolves_pending_ci_stands_down_too(self) -> None:
+        # The other production caller of the renderer. Same body, same rule:
+        # it resolves nothing rather than resolving entry 1 and deleting the
+        # line of an entry it cannot key.
+        evidence = self.evidence()
+        said: list[str] = []
+        source = self.body(self.entries("2"))
+        with contextlib.redirect_stderr(io.StringIO()):
+            written = evidence.reconcile_pending_ci_evidence(
+                source,
+                build_succeeded=True,
+                tests_succeeded=True,
+                smoke_succeeded=True,
+                test_output="214 tests passed",
+                announcements=said,
+            )
+        self.assertEqual(written, source)
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("position 2", said[0])
+
+    # intent: guard
+    def test_an_entry_the_renderer_drops_for_any_other_reason_stands_down_too(self) -> None:
+        # One rule, not one per field: the renderer refuses a status outside
+        # the vocabulary, an empty item and an empty detail the same way it
+        # refuses an index, and each is a line on the page nothing would
+        # account for. Main deletes these lines too -- this half is not a
+        # regression, it is the rest of the same rule.
+        for over, named in (
+            ({"status": "done"}, "status"),
+            ({"item": "  "}, "item"),
+            ({"detail": ""}, "detail"),
+        ):
+            with self.subTest(**over):
+                entries = self.entries(2)
+                entries[1].update(over)
+                source, written, said, _ = self.write(entries)
+                self.assertEqual(written, source)
+                self.assertEqual(len(said), 1, said)
+                self.assertIn("position 2", said[0])
+                self.assertIn(named, said[0])
+
+    # intent: control
+    def test_entries_this_code_can_account_for_are_written_as_before(self) -> None:
+        source, written, said, _ = self.write(self.entries(2))
+        self.assertNotEqual(written, source)
+        self.assertIn(f"- [complete] {self.ITEM} -- green on head abc", written)
+        self.assertIn(f"- [pending-ci] {self.OTHER} -- device booked", written)
+        self.assertEqual(said, [])
+
+    # intent: guard
+    def test_the_reason_the_author_reads_names_the_index_it_found(self) -> None:
+        evidence = self.evidence()
+        said: list[str] = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            evidence.update_evidence_entries(
+                self.body(self.entries("2")), {1: {"status": "complete", "detail": "green"}},
+                announcements=said,
+            )
+        self.assertIn('"2"', said[0], said)
+        self.assertTrue(
+            said[0].startswith(evidence.STOOD_DOWN_ANNOUNCEMENT_PREFIX), said[0]
+        )
 
 
 if __name__ == "__main__":

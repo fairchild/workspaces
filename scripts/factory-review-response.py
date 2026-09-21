@@ -444,7 +444,7 @@ def _recognition_label(entry: dict[str, Any]) -> str:
     """
     text = _quotable(str(entry.get("item") or ""))
     if not text:
-        index = _entry_index(entry)
+        index = usable_entry_index(entry)
         return f"item {index}" if index is not None else "an unnamed item"
     clause = text.find(",")
     if ITEM_RECOGNITION_FLOOR <= clause <= ITEM_RECOGNITION_LIMIT:
@@ -462,7 +462,7 @@ def _count_word(count: int) -> str:
 
 def _index_phrase(entries: list[dict[str, Any]]) -> str:
     """`Item 3` / `Items 3 and 4` / `Items 3, 4 and 7`."""
-    indexes = [str(index) for entry in entries if (index := _entry_index(entry)) is not None]
+    indexes = [str(index) for entry in entries if (index := usable_entry_index(entry)) is not None]
     if not indexes:
         return "Those items" if len(entries) != 1 else "That item"
     noun = "Item" if len(indexes) == 1 else "Items"
@@ -487,14 +487,17 @@ def _entry_kind(entry: dict[str, Any]) -> str:
 
 
 # The index this entry claims, when it is one anything can act on -- the
-# shared definition, bound here rather than re-implemented. This lane had its
-# own, with its own rule below 1, and it disagreed with the verifier's: an
-# index-0 entry was a check the verifier looked up and a line this lane named
-# to nobody (#1778, round 7). The reason the shared one catches OverflowError
-# holds here too: `1e309` decodes to infinity and `int()` of that raises a
-# class the other two do not cover, which here would abort the lane before it
-# posts anything and turn a bad index into silence instead of a comment.
-_entry_index = usable_entry_index
+# The shared definition is imported above and called by its own name. This
+# lane had a local one, with its own rule below 1, and it disagreed with the
+# verifier's: an index-0 entry was a check the verifier looked up and a line
+# this lane named to nobody (#1778, round 7). It was then kept as the alias
+# `_entry_index`, which reads like the identity rule and is bound to the
+# usable one -- a near-name for a rule that has a real name, in a module where
+# the two rules are the distinction everything turns on (#1778, round 11). The
+# reason the shared one catches OverflowError holds here too: `1e309` decodes
+# to infinity and `int()` of that raises a class the other two do not cover,
+# which here would abort the lane before it posts anything and turn a bad
+# index into silence instead of a comment.
 
 
 def evidence_blockers(entries: list[dict[str, Any]]) -> list[Blocker]:
@@ -524,7 +527,7 @@ def evidence_blockers(entries: list[dict[str, Any]]) -> list[Blocker]:
     self_clearing = [
         entry
         for entry in pending
-        if _entry_kind(entry) in PENDING_COMPLETERS and _entry_index(entry) is not None
+        if _entry_kind(entry) in PENDING_COMPLETERS and usable_entry_index(entry) is not None
     ]
     waiting_on_author = [entry for entry in pending if entry not in self_clearing]
     if waiting_on_author:

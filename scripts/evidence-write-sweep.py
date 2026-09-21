@@ -83,6 +83,24 @@ SUCCESSORS = {
 
 LINE_ENDINGS = {"lf": "\n", "crlf": "\r\n"}
 
+# A SECOND recorded entry, and the index the record gives it. Every body the
+# corpus measured before this axis had exactly one entry at index 1, so no
+# generated body could carry an index the write cannot key -- and the number
+# this instrument exists to quote read 0 for a shape it could not produce
+# (#1778, round 11). The first value is no second entry at all, which is the
+# body this corpus has always built, so the figures stay comparable.
+NO_SECOND_ENTRY = object()
+SECOND_ITEM = "manual QA on device"
+SECOND_DETAIL = "the device is booked"
+SECOND_ENTRY_INDEXES = {
+    "one entry": NO_SECOND_ENTRY,
+    "a second entry at 2": 2,
+    'a second entry at "2"': "2",
+    "a second entry at true": True,
+    "a second entry at 2.0": 2.0,
+    "a second entry at null": None,
+}
+
 
 def load(name: str, path: Path):
     """The skill's own modules, by path, with their directory on the path only while they load."""
@@ -103,14 +121,26 @@ evidence = load("evidence", SKILL_SCRIPTS / "evidence.py")
 MARKDOWN_LINE_ENDING_RE = helpers.MARKDOWN_LINE_ENDING_RE
 
 
-def body(tail: str, successor: str, ending: str) -> str:
-    """One PR body: the metadata the writer reads, the section, the tail under it, and the author's next block."""
-    meta = {
-        "entries": [
-            {"index": 1, "item": ITEM, "status": "pending-ci", "detail": DETAIL, "kind": "test"}
-        ]
-    }
-    section = f"- [pending-ci] {ITEM} -- {DETAIL}\n" + tail
+def body(tail: str, successor: str, ending: str, second_index: object = NO_SECOND_ENTRY) -> str:
+    """One PR body: the metadata the writer reads, the section, the tail under it, and the author's next block.
+
+    `second_index` is the index the record gives a SECOND entry, whose status
+    line sits under the first. The author wrote that line and can see it, so
+    what the write does with it is this instrument's business whatever the
+    record says about its index.
+    """
+    entries: list[dict[str, object]] = [
+        {"index": 1, "item": ITEM, "status": "pending-ci", "detail": DETAIL, "kind": "test"}
+    ]
+    lines = [f"- [pending-ci] {ITEM} -- {DETAIL}"]
+    if second_index is not NO_SECOND_ENTRY:
+        entries.append(
+            {"index": second_index, "item": SECOND_ITEM, "status": "pending-ci",
+             "detail": SECOND_DETAIL, "kind": "other"}
+        )
+        lines.append(f"- [pending-ci] {SECOND_ITEM} -- {SECOND_DETAIL}")
+    meta = {"entries": entries}
+    section = "\n".join(lines) + "\n" + tail
     text = (
         "<!-- evidence-status:v1\n"
         + json.dumps(meta)
@@ -155,10 +185,18 @@ def _recorded_items(text: str) -> set[str]:
     entries = metadata.get("entries") if isinstance(metadata, dict) else None
     if not isinstance(entries, list):
         return set()
+    # Only the entries the write can RENDER. An entry the renderer will not
+    # render owns no line, so a status line on the page for it is the
+    # author's -- and a write that deletes it has taken a line a reader had.
+    # Claiming it for the write made that deletion invisible here, which is
+    # how the renderer came to drop an entry recorded at index `"2"` with this
+    # instrument reading 0 (#1778, round 11).
     return {
         str(entry["item"]).strip()
         for entry in entries
-        if isinstance(entry, dict) and entry.get("item")
+        if isinstance(entry, dict)
+        and entry.get("item")
+        and evidence.entry_as_rendered(entry)[0] is not None
     }
 
 
@@ -317,6 +355,13 @@ def lines_lost(before: str, after: str) -> list[str]:
 class Outcome:
     label: str
     refused: bool
+    # Whether this body's RECORD holds an entry the write cannot render --
+    # known from the axis that generated it rather than read back out of what
+    # the runtime said, because both refusals announce through one prefix and
+    # a split keyed on the sentence is a split that rewording moves. Counting
+    # the two together would let 672 malformed records hide the 44 declined
+    # hazards this corpus was built to count.
+    record_is_malformed: bool
     lost: tuple[str, ...]
     closed: tuple[tuple[str, str], ...]
     announced: tuple[str, ...]
@@ -386,19 +431,27 @@ def sweep() -> list[Outcome]:
     for tail_name, tail in SECTION_TAILS.items():
         for successor_name, successor in SUCCESSORS.items():
             for ending_name, ending in LINE_ENDINGS.items():
-                source = body(tail, successor, ending)
-                written, refused, said = write_once(source)
-                again, _, _ = write_once(written)
-                outcomes.append(
-                    Outcome(
-                        label=f"{tail_name} / {successor_name} / {ending_name}",
-                        refused=refused,
-                        lost=tuple(lines_lost(source, written)),
-                        closed=tuple(seams_closed(source, written)),
-                        announced=tuple(line for line in said if "not carried" in line),
-                        fixed_point=again == written,
+                for index_name, second_index in SECOND_ENTRY_INDEXES.items():
+                    source = body(tail, successor, ending, second_index)
+                    written, refused, said = write_once(source)
+                    again, _, _ = write_once(written)
+                    outcomes.append(
+                        Outcome(
+                            label=f"{tail_name} / {successor_name} / {ending_name} / {index_name}",
+                            refused=refused,
+                            record_is_malformed=(
+                                second_index is not NO_SECOND_ENTRY
+                                and evidence.entry_as_rendered(
+                                    {"index": second_index, "item": SECOND_ITEM,
+                                     "status": "pending-ci", "detail": SECOND_DETAIL}
+                                )[0] is None
+                            ),
+                            lost=tuple(lines_lost(source, written)),
+                            closed=tuple(seams_closed(source, written)),
+                            announced=tuple(line for line in said if "not carried" in line),
+                            fixed_point=again == written,
+                        )
                     )
-                )
     return outcomes
 
 
@@ -407,6 +460,15 @@ def report(outcomes: list[Outcome]) -> dict[str, object]:
         "instrument": INSTRUMENT,
         "bodies": len(outcomes),
         "refusals": sum(outcome.refused for outcome in outcomes),
+        "refusals_of_a_malformed_record": sum(
+            outcome.refused and outcome.record_is_malformed for outcome in outcomes
+        ),
+        "refusals_of_a_hazard_in_the_page": sum(
+            outcome.refused and not outcome.record_is_malformed for outcome in outcomes
+        ),
+        "malformed_records_written_anyway": sum(
+            outcome.record_is_malformed and not outcome.refused for outcome in outcomes
+        ),
         "bodies_losing_a_line_silently": sum(outcome.silent for outcome in outcomes),
         "bodies_losing_a_line_with_a_reason_given": sum(
             outcome.took and bool(outcome.announced) for outcome in outcomes
@@ -436,6 +498,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     print(f"{summary['instrument']}: {summary['bodies']} bodies, written twice")
     print(f"  refusals: {summary['refusals']}")
+    print(f"    of a malformed record: {summary['refusals_of_a_malformed_record']}")
+    print(f"    of a hazard in the page: {summary['refusals_of_a_hazard_in_the_page']}")
+    print(
+        "  malformed records written anyway: "
+        f"{summary['malformed_records_written_anyway']}"
+    )
     print(f"  bodies losing a line silently: {summary['bodies_losing_a_line_silently']}")
     print(
         "  bodies losing a line with a reason given: "
