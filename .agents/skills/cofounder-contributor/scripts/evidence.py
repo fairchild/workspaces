@@ -1469,7 +1469,14 @@ def _indistinguishable(texts: list[str], context: str = "") -> list[str]:
     duplicates: list[str] = []
     for text in texts:
         key = _normalize_evidence_key(item_as_page_reads_it(str(text), context))
-        if key and key in seen and text not in duplicates:
+        # An EMPTY key is a key like any other here. `**.**` and `.` both read
+        # as nothing on the page, so they are one requirement to everything
+        # downstream and a line naming either cannot be told from a line
+        # naming the other -- which is the whole of what this refuses. The
+        # `if key and ...` that skipped them predates the page reading and
+        # answered `[]` for exactly the pair the ownership rule calls one
+        # (#1751, round 14).
+        if key in seen and text not in duplicates:
             duplicates.append(text)
         seen.add(key)
     return duplicates
@@ -2519,7 +2526,7 @@ def entries_keyed_for(entries: object, requested_evidence: list[str]) -> list[di
     return keyed
 
 
-def rendered_entry_claims(entries: object) -> list[tuple[int, str]]:
+def rendered_entry_claims(entries: object) -> list[tuple[tuple[int, int], str]]:
     """Each renderable entry's index and the line the write renders for it.
 
     The key is the entry's `index`, and what that key has to do is name the
@@ -2531,17 +2538,42 @@ def rendered_entry_claims(entries: object) -> list[tuple[int, str]]:
 
     Within one body, two entries at one index is a shape this code does not
     refuse: `_indistinguishable` compares the items and answers nothing when
-    they genuinely differ. Measured over three writes on this head, that shape
-    is a fixed point rather than an accrual: two lines and nothing carried,
-    and with a spare copy of one line in the body, two lines and that copy in
-    `## Evidence Notes` once and not again. The refusal of a colliding index
-    is #1782's change, not this one's, and this docstring does not lean on it
-    (#1751, round 13).
+    they genuinely differ. Round 13 measured that shape over three writes and
+    called it a fixed point, which was true of the axis it varied and false of
+    the conjunction: the index alone is a fixed point, and two entries at one
+    index THAT ALSO RENDER THE SAME LINE are not. `- [pending-ci] run `a -- b
+    -- c` ok` is what both `{item: "run `a", detail: "b -- c` ok"}` and
+    `{item: "run `a -- b", detail: "c` ok"}` render, because the ` -- `
+    boundary falls in two places in one text; held at one index their claims
+    collapsed to one, so the write owned one of the two lines it had just
+    rendered and carried the other to `## Evidence Notes` every run -- 2 lines
+    and 1 carried on this head, 2 and 0 with the two entries at two indexes
+    (#1751, round 14).
+
+    So the key is the index AND the occurrence of that index in its own list,
+    which no two entries of one list can share. The criterion the key is built
+    to: no two claims may share an owner, whichever half of the pair they
+    collide on. A test that varies one half with the other fixed passes on the
+    broken code either way, which is why the pin is one test holding both
+    equal at once.
     """
-    return [
-        (int(entry["index"]), f"- [{entry['status']}] {entry['item']} -- {entry['detail']}")
-        for entry in renderable_entries(entries)
-    ]
+    claims: list[tuple[tuple[int, int], str]] = []
+    seen: dict[int, int] = {}
+    for entry in renderable_entries(entries):
+        index = int(entry["index"])
+        # The OCCURRENCE beside the index, so no two entries of one list share
+        # a key: two entries at one index rendering one line collapsed to a
+        # single claim, and the write then owned one of the two lines it had
+        # just rendered and carried the other, every run (#1751, round 14).
+        # Counted per list and in order, so the same pair in this run's
+        # entries and in the body's recorded ones still lines up -- which is
+        # what lets an unchanged verdict stay ONE claim across two sources.
+        occurrence = seen.get(index, 0)
+        seen[index] = occurrence + 1
+        claims.append(
+            ((index, occurrence), f"- [{entry['status']}] {entry['item']} -- {entry['detail']}")
+        )
+    return claims
 
 
 def rendered_entry_lines(entries: object) -> list[str]:
@@ -3030,7 +3062,7 @@ def write_evidence_status_section(
     *,
     recorded_items: Iterable[str],
     entries: object,
-    previous_entries: object = (),
+    previous_entries: object,
 ) -> SectionWrite:
     """The one write of `## Evidence Status`, or the body unchanged and why it stands.
 
