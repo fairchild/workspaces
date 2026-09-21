@@ -19,6 +19,7 @@
     "body": "## Summary\n\n<details>\n<summary>notes</summary>\n\n- one change\n\n</details>\n\n## Evidence Notes wsx7placementprob&#101;\n\n## Evidence Notes wsx7placementp<!---->robe1\n\n## Evidence Notes WSX7PLACEMENTPROBE2\n\n## Evidence Status\n- [complete] run `swift test` -- passed\n\n## Evidence Notes wsx7placementprobe1\nA note the author wrote under the heading.\n\n## Validation\n\n- ran it",
     "recorded_at": "2026-09-21T13:00:24Z"
   },
+  "08a4faaac3cfa16fabbe45b0df9b165401f652c86e664cd50d0bedf3594cc48e": "The release lane lost its provisioning step, so a signed build never reached the appcast and the update check stalled. This restores it, with the lane's own log as the proof. One file, +12 -3; no behavior a user sees.\n\n## Mergeability\n\n- Surface: desktop\n- User-facing behavior changed: none; refactor only\n- Non-happy paths considered: nil userdata and zero address behavior covered\n- Residual risk or follow-up: none\n\n<pre>\n## Evidence Status\n- ` [blocked] ` waiting\n</pre>\n\n## Evidence\n\n- [x] Not a testable change\n",
   "0b00f3a72024d439f560cadae892c4900ca1fe8aef7b6d40f1566199559f30d1": {
     "body": "## Summary\n\n- one change\n\n<details data-note=\"a `tick` and @nobody\">\n<summary>notes</summary>\n\nfolded\n\n## Evidence Status\n\n- [complete] `swift test` -- 1992 tests passed\n",
     "recorded_at": "2026-09-21T12:58:32Z"
@@ -107,6 +108,7 @@
     "body": "## Summary\n\n- one change\n\n<details>\n<summary>notes</summary>\n\nfolded prose\n\n## Evidence Status\n\n- [complete] `swift test` -- 1992 tests passed\n",
     "recorded_at": "2026-09-21T12:58:38Z"
   },
+  "3fff7f9a2fc0518930ba1aeb052a065996f259b5fc30e1e4ded2b258306f61c4": "The release lane lost its provisioning step, so a signed build never reached the appcast and the update check stalled. This restores it, with the lane's own log as the proof. One file, +12 -3; no behavior a user sees.\n\n## Mergeability\n\n- Surface: desktop\n- User-facing behavior changed: none; refactor only\n- Non-happy paths considered: nil userdata and zero address behavior covered\n- Residual risk or follow-up: none\n\n<pre>\n## Evidence Status\n- `` [blocked] `` waiting\n</pre>\n\n## Evidence\n\n- [x] Not a testable change\n",
   "42a4b0047067fba3bf1c616b9b333bc5d14860fdb8cd857774370f74e070feb1": {
     "body": "## Summary\n\n- one change\n\n<details>\n<summary>notes</summary>\n\nfolded prose\n\n</details>\n\n## Evidence Status wsx7placementprob<em>e</em>\n\nsomeone wrote this\n\n## Evidence Status wsx7placementprobe1\n\n- [complete] `swift test` -- 1992 tests passed\n",
     "recorded_at": "2026-09-21T13:00:36Z"
@@ -143,6 +145,7 @@
     "body": "## Summary\n\n- one change\n\n```html\n<details>\n<summary>notes</summary>\n```\n\n## Evidence Status\n\n- [complete] `swift test` -- 1992 tests passed\n",
     "recorded_at": "2026-09-21T12:58:41Z"
   },
+  "591155d5f4e44390efb823286f41251dc80a27eb9f2e2d08b0b1f91586f72750": "The release lane lost its provisioning step, so a signed build never reached the appcast and the update check stalled. This restores it, with the lane's own log as the proof. One file, +12 -3; no behavior a user sees.\n\n## Mergeability\n\n- Surface: desktop\n- User-facing behavior changed: none; refactor only\n- Non-happy paths considered: nil userdata and zero address behavior covered\n- Residual risk or follow-up: none\n\n<pre>\n## Evidence Status\n- **[blocked]:** waiting\n</pre>\n\n## Evidence\n\n- [x] Not a testable change\n",
   "5d5da07ff434c70091811a19f789b20ce1f8178e4a79044a4ca2ec8b3fa27a4a": {
     "body": "Not carried from this PR's body at commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.\n\nstart `open\n- an item\n<details>more` end\n\n- a heading a reader cannot see\n",
     "recorded_at": "2026-09-21T13:00:13Z"

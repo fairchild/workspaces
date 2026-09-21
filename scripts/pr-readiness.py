@@ -161,9 +161,23 @@ HEADING_INDENT = r" {0,3}"
 LIST_MARKER = r"(?:[-*+]|[0-9]{1,9}[.)])"
 LINE_ENDING_RE = re.compile(r"\r\n?")
 # A status token is read however a reader sees it written: in code, bold or
-# italics, or behind a task box (`- [ ] [pending-ci]`).
+# italics, or behind a task box (`- [ ] [pending-ci]`). One spelling of the
+# wrapper for every reader below, because three copies of it drifted apart
+# once already and the gap was the same in all three (#1771).
+#
+# `OPENING_WRAPPER` and `CLOSING_WRAPPER` are the marks a reader sees around
+# the token, and the padding inside them is part of the wrapper rather than
+# part of the token: a code span written `` ` [blocked] ` `` shows its spaces
+# to a reader wherever the span is printed as characters. `CLOSING_WRAPPER`
+# also allows a run of punctuation before the marks close, because
+# `**[blocked]:**` is a status with a colon after it and nothing about the
+# colon makes the line say less (#1771).
+OPENING_WRAPPER = r"[`*_]*[ \t]*"
+CLOSING_WRAPPER = r"(?:[^\w\s]|[_ \t])*"
+STATUS_TOKEN = r"\[(?:blocked|pending-ci)\]"
 PENDING_STATUS_RE = re.compile(
-    rf"(?im)^\s*{LIST_MARKER}\s*(?:\[[ x]\]\s*)?[`*_]*\[(?:blocked|pending-ci)\][`*_]*(?:\s|$)"
+    rf"(?im)^\s*{LIST_MARKER}\s*(?:\[[ x]\]\s*)?"
+    rf"{OPENING_WRAPPER}{STATUS_TOKEN}{CLOSING_WRAPPER}(?:\s|$)"
 )
 FENCE_OPENER_RE = re.compile(r" {0,3}(?P<run>`{3,}|~{3,})(?P<info>.*)")
 
@@ -408,7 +422,7 @@ MARKDOWN = MarkdownIt("commonmark").enable(["table", "strikethrough"])
 # whose first cell reads `- [blocked]`. Marking it optional here keeps a
 # reader's view of that cell and the gate's the same (#1727).
 RENDERED_PENDING_RE = re.compile(
-    rf"(?i)^(?:{LIST_MARKER}\s*)?(?:\[[ x]\]\s*)?\[(?:blocked|pending-ci)\](?:\s|$)"
+    rf"(?i)^(?:{LIST_MARKER}\s*)?(?:\[[ x]\]\s*)?{STATUS_TOKEN}{CLOSING_WRAPPER}(?:\s|$)"
 )
 
 # The same line, in text no markdown parser ever touched. A raw HTML block
@@ -423,8 +437,16 @@ RENDERED_PENDING_RE = re.compile(
 # wrappers and REQUIRES a marker -- so `` `[blocked]` waiting `` on a line of
 # its own inside a `<pre>` matched neither, and the page prints it (#1742,
 # round 5).
+#
+# The wrapper this shares with the written view is the padded one. A span the
+# page prints as characters shows its padding too, so `` ` [blocked] ` `` and
+# the double-backtick form are statuses a reader sees here where in ordinary
+# markdown the code span strips the padding and the rendered view catches
+# them; this pattern caught neither, and the gate passed a body showing a
+# blocked status inside a raw block (#1771).
 RAW_HTML_PENDING_RE = re.compile(
-    rf"(?i)^(?:{LIST_MARKER}\s*)?(?:\[[ x]\]\s*)?[`*_]*\[(?:blocked|pending-ci)\][`*_]*(?:\s|$)"
+    rf"(?i)^(?:{LIST_MARKER}\s*)?(?:\[[ x]\]\s*)?"
+    rf"{OPENING_WRAPPER}{STATUS_TOKEN}{CLOSING_WRAPPER}(?:\s|$)"
 )
 
 
