@@ -3069,6 +3069,100 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
                 html = pr_readiness.render_markdown(self.unswallowed_body(line))
             self.assertIn(line, re.sub(r"<[^>]+>", "", html), name)
 
+    def test_a_line_the_parser_left_as_text_takes_the_raw_reader(self) -> None:
+        """The kind assigned on the unparsed-tag path (#1771, round 3).
+
+        `<x:y>…</x:y>` is one run of prose to this parser, so the line reaches
+        the page with whatever markup it carries. Those characters are
+        pre-parse and take the raw-block reader; flagging them parsed left the
+        wrapper axis untested and the gate accepted
+        `<x:y>**[blocked] …</x:y>` under a real heading.
+
+        Worth two sentences for whoever tries this next. A LONE `*` is not a
+        counterexample: the post-parse reader reads a single `*` as a list
+        marker, so both readers answer the same on it and the mutant looks
+        dead. Neither is a backtick span — an unparsed TAG does not stop the
+        parser resolving inline markup around it, so `` `[blocked]` `` is
+        already `[blocked]` by the time the line is stripped out. What
+        survives is markup the parser could not PAIR, which is why `**` is
+        where the two readers part. The axis to vary is the wrapper, not the
+        effort.
+        """
+        for name, line, parts in (
+            ("a double asterisk", "<x:y>**[blocked] the signing profile is missing</x:y>", True),
+            ("a backtick span (resolved, so both agree)", "<x:y>`[blocked]` waiting</x:y>", False),
+            ("a lone asterisk (a marker, so both agree)", "<x:y>*[blocked] waiting</x:y>", False),
+        ):
+            with self.subTest(spelling=name):
+                body = self.body(f"## Evidence Status\n\n{line}\n\n")
+                section = pr_readiness.status_lines_by_view(body)
+                self.assertTrue(
+                    any(pr_readiness.RAW_HTML_PENDING_RE.match(one) for one in section.printed),
+                    f"{name}: the raw reader did not see it",
+                )
+                self.assertEqual(
+                    any(pr_readiness.RENDERED_PENDING_RE.match(one) for one in section.printed),
+                    not parts,
+                    f"{name}: the two readers parting is the whole point of the kind",
+                )
+                self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok, name)
+
+    def test_the_probes_printed_branch_reaches_what_nothing_else_does(self) -> None:
+        """Survivor 2, resolved by construction rather than by deletion (#1771, round 3).
+
+        The pass could not separate this branch from the two readers above it
+        in three attempts, and the reason is that every body it tried was
+        caught earlier — by the swallowing block's own lines, or by the
+        written view, which takes both wrappers and needs a list marker.
+
+        The input that separates them is a SECOND raw block below the
+        swallowing one, holding an UNMARKED status: the first check finds
+        nothing in the swallowing block, the written view needs a marker the
+        line does not have, a raw block contributes no parsed lines at all,
+        and only the raw reader over the printed lines sees it. Measured at
+        each step below, so the branch is pinned by the case that needs it
+        rather than justified by a property somewhere else.
+        """
+        middle = (
+            "<pre>\n## Evidence Status\nnothing pending in here\n</pre>\n\n"
+            "<pre>\n` [blocked] ` waiting\n</pre>\n\n"
+        )
+        body = self.body(middle)
+        normalized = pr_readiness.LINE_ENDING_RE.sub("\n", body)
+        line = normalized[: normalized.index("## Evidence Status")].count("\n")
+        block = next(
+            token
+            for token in pr_readiness.MARKDOWN.parse(normalized)
+            if token.type == "html_block" and token.map and token.map[0] <= line < token.map[1]
+        )
+        # 1. the swallowing block holds no status of its own
+        self.assertFalse(
+            any(
+                pr_readiness.RAW_HTML_PENDING_RE.match(one)
+                for one in pr_readiness.html_block_text_lines(block.content)
+            )
+        )
+        below = "\n".join(normalized.split("\n")[(block.map or [0, 0])[1] :])
+        probe = f"## Evidence Status\n{below}"
+        written, _ = pr_readiness.split_fenced_blocks(
+            pr_readiness.extract_section(probe, "Evidence Status", strip=False)
+        )
+        # 2. the written view needs a marker this line does not have
+        self.assertIsNone(pr_readiness.PENDING_STATUS_RE.search(written))
+        section = pr_readiness.status_lines_by_view(probe)
+        # 3. a raw block has no parsed lines
+        self.assertEqual(section.parsed, [])
+        self.assertIn("` [blocked] ` waiting", section.printed)
+        # 4. only this reader sees it, and the gate refuses because it does
+        self.assertFalse(
+            any(pr_readiness.RENDERED_PENDING_RE.match(one) for one in section.printed)
+        )
+        self.assertTrue(
+            any(pr_readiness.RAW_HTML_PENDING_RE.match(one) for one in section.printed)
+        )
+        self.assertTrue(pr_readiness._a_status_is_kept_out(normalized, block))
+        self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok)
+
     def test_each_reader_takes_the_wrappers_its_input_can_carry(self) -> None:
         """The criterion, pinned BOTH ways (#1771, round 2).
 

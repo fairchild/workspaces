@@ -177,6 +177,13 @@ LINE_ENDING_RE = re.compile(r"\r\n?")
 #   where a line that opens a list item is what a status bullet is, while a
 #   raw block prints whatever sits on the line, marker or no marker.
 #
+#   A line the parser left as TEXT because it modelled no tag is pre-parse
+#   too, and it is the case that looks post-parse and is not:
+#   `<x:y>**[blocked] x</x:y>` is one run of prose to this parser, so the
+#   `**` is still there when the page prints it. Those lines take the
+#   raw-block reader for the same reason a raw block's do -- the characters
+#   reach the page as written (#1771, round 3).
+#
 #   A POST-PARSE view reads text a parser has already resolved, so it takes
 #   NEITHER wrapper: by the time it sees the line, a code span has lost its
 #   backticks and emphasis its asterisks, and a pattern allowing them there
@@ -1425,6 +1432,11 @@ def _a_status_is_kept_out(normalized: str, block: Token) -> bool:
     return bool(PENDING_STATUS_RE.search(written)) or any(
         RENDERED_PENDING_RE.match(text) for text in status_lines_by_view(probe).parsed
     ) or any(
+        # Not redundant with either reader above, and the case that shows it
+        # is a SECOND raw block below the swallowing one holding an unmarked
+        # status: the written view needs a list marker, the parsed lines of a
+        # raw block are empty, and only this reader sees the characters the
+        # page prints (#1771, round 3).
         RAW_HTML_PENDING_RE.match(text) for text in status_lines_by_view(probe).printed
     )
 
