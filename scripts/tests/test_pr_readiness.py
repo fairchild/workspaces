@@ -141,9 +141,18 @@ what the tests below now cover. Two files, +48 -31; no behavior a user sees.
 class TheFixtureGuardNamesWhatItExpectsTests(unittest.TestCase):
     """What `all_of` is asked for, asked of `all_of` itself.
 
-    Round 6 gave every table-driven test a guard because emptying a table
-    left five principal tests reporting OK in 0.000s. The guard read the
-    SIZE, which is an answer to "how many" where the claim is about WHICH.
+    Round 6 gave SEVEN of this file's fixture tables a guard, because
+    emptying a table left five principal tests reporting OK in 0.000s. It
+    was written here as "every table-driven test", which was false at the
+    head that wrote it -- sixteen more class-level tables and two
+    module-level ones were iterated with nothing checking them until rounds
+    11 and 12 (#1771, round 12). What that guard read was the SIZE, which is
+    an answer to "how many" where the claim is about WHICH.
+
+    What it checks now is the set of NAMES, and what it does not check is
+    the shape a name labels: a row's VALUE replaced by another row's, its
+    key untouched, is invisible here. Where the name is itself a claim about
+    the shape, the shape is pinned in that table's own suite.
     """
 
     NAMES = {
@@ -2363,36 +2372,36 @@ class ThePageReaderMayOnlyAddRefusalsTests(unittest.TestCase):
 # A row is (name, middle, lines, ok): the text placed after a passing body's
 # opening, every line the page shows under the heading, and the gate's
 # verdict. Adding a shape here is adding a test.
-PAGE_READER_TABLE = (
-    ("a block tag after prose", '## Evidence Status\n\nContext <div>[blocked] x</div>\n', ('Context', '[blocked] x'), False),
-    ("a pre after prose", '## Evidence Status\n\nContext <pre>[blocked] x</pre>\n', ('Context', '[blocked] x'), False),
-    ("a break after prose", '## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
-    ("a break inside a list item", '## Evidence Status\n\n- complete <br>[blocked] x\n', ('complete', '[blocked] x'), False),
-    ("an unparsed tag the page prints", '## Evidence Status\n\n<x:y>[blocked] x</x:y>\n', ('<x:y>[blocked] x</x:y>',), False),
-    ("a type parameter mid-line", '## Evidence Status\n\n<div>API note: Vec<T> [blocked] names an enum case</div>\n', ('API note: Vec [blocked] names an enum case',), True),
-    ("a fenced example", '## Evidence Status\n\n```\n- [blocked] x\n```\n', (), True),
-    ("an indented example", '## Evidence Status\n\n    - [blocked] x\n', (), False),
-    ("a code span", '## Evidence Status\n\n- `[blocked]` x\n', ('[blocked] x',), False),
-    ("a code span after a break", '## Evidence Status\n\nContext <br>`[blocked]` x\n', ('Context', '[blocked] x'), False),
-    ("a rule of asterisks", '## Evidence Status\n\n***\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
-    ("a dash rule", '## Evidence Status\n\n---\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
-    ("a quoted heading inside", '## Evidence Status\n\n> ## Note\n\nContext <br>[blocked] x\n', ('Note', 'Context', '[blocked] x'), False),
-    ("a heading inside a list item", '## Evidence Status\n\n- outer\n  - ## Note\n\nContext <br>[blocked] x\n', ('outer', 'Note', 'Context', '[blocked] x'), False),
-    ("a quoted example elsewhere", '## Notes\n\n> ## Evidence Status\n> - [blocked] an example\n\n## Evidence Status\n\n- [complete] ran it -- 1992 tests passed\n', ('[complete] ran it -- 1992 tests passed',), True),
-    ("a long-s heading", '## Evidence Statuſ\n\n- [blocked] x\n', (), False),
-    ("a fold holding the section", '<details>\n<summary>notes</summary>\n\n## Evidence Status\n\n- [blocked] x\n', ('[blocked] x',), False),
-    ("a fold holding a quoted heading", '## Evidence Status\n\n<details>\n<summary>s</summary>\n\n> ## Note\n\nContext <br>[blocked] x\n', ('s', 'Note', 'Context', '[blocked] x'), False),
-    ("an unclosed blockquote before", '<blockquote>\n\n## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
-    ("an unclosed list item before", '<ul><li>\n\n## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
-    ("an unclosed blockquote inside", '## Evidence Status\n\n<blockquote>\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
-    ("a break inside a quoted heading", '## Evidence Status\n\n> ## Context<br>[blocked] x\n', ('Context', '[blocked] x'), False),
-    ("a sibling heading after a top-level section", '## Evidence Status\n\n## Notes\n\nContext <br>[blocked] x\n', (), True),
-    ("a sibling heading after a nested section", '<blockquote>\n\n## Evidence Status\n\n## Notes\n\nContext <br>[blocked] x\n', (), True),
-    ("a shallower heading after a quoted section", '> ## Evidence Status\n> - [complete] ran it\n\n## Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
-    ("a shallower heading after a blockquote section", '<blockquote>\n\n## Evidence Status\n\n- [complete] ran it\n\n</blockquote>\n\n## Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
-    ("a shallower h1 after a quoted section", '> ## Evidence Status\n> - [complete] ran it\n\n# Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
-    ("a raw pre holding the status", '## Evidence Status\n\n<pre>\nnote\n[blocked] x\n</pre>\n', ('note', '[blocked] x'), False),
-)
+PAGE_READER_TABLE = {
+    "a block tag after prose": ('## Evidence Status\n\nContext <div>[blocked] x</div>\n', ('Context', '[blocked] x'), False),
+    "a pre after prose": ('## Evidence Status\n\nContext <pre>[blocked] x</pre>\n', ('Context', '[blocked] x'), False),
+    "a break after prose": ('## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    "a break inside a list item": ('## Evidence Status\n\n- complete <br>[blocked] x\n', ('complete', '[blocked] x'), False),
+    "an unparsed tag the page prints": ('## Evidence Status\n\n<x:y>[blocked] x</x:y>\n', ('<x:y>[blocked] x</x:y>',), False),
+    "a type parameter mid-line": ('## Evidence Status\n\n<div>API note: Vec<T> [blocked] names an enum case</div>\n', ('API note: Vec [blocked] names an enum case',), True),
+    "a fenced example": ('## Evidence Status\n\n```\n- [blocked] x\n```\n', (), True),
+    "an indented example": ('## Evidence Status\n\n    - [blocked] x\n', (), False),
+    "a code span": ('## Evidence Status\n\n- `[blocked]` x\n', ('[blocked] x',), False),
+    "a code span after a break": ('## Evidence Status\n\nContext <br>`[blocked]` x\n', ('Context', '[blocked] x'), False),
+    "a rule of asterisks": ('## Evidence Status\n\n***\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    "a dash rule": ('## Evidence Status\n\n---\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    "a quoted heading inside": ('## Evidence Status\n\n> ## Note\n\nContext <br>[blocked] x\n', ('Note', 'Context', '[blocked] x'), False),
+    "a heading inside a list item": ('## Evidence Status\n\n- outer\n  - ## Note\n\nContext <br>[blocked] x\n', ('outer', 'Note', 'Context', '[blocked] x'), False),
+    "a quoted example elsewhere": ('## Notes\n\n> ## Evidence Status\n> - [blocked] an example\n\n## Evidence Status\n\n- [complete] ran it -- 1992 tests passed\n', ('[complete] ran it -- 1992 tests passed',), True),
+    "a long-s heading": ('## Evidence Statuſ\n\n- [blocked] x\n', (), False),
+    "a fold holding the section": ('<details>\n<summary>notes</summary>\n\n## Evidence Status\n\n- [blocked] x\n', ('[blocked] x',), False),
+    "a fold holding a quoted heading": ('## Evidence Status\n\n<details>\n<summary>s</summary>\n\n> ## Note\n\nContext <br>[blocked] x\n', ('s', 'Note', 'Context', '[blocked] x'), False),
+    "an unclosed blockquote before": ('<blockquote>\n\n## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    "an unclosed list item before": ('<ul><li>\n\n## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    "an unclosed blockquote inside": ('## Evidence Status\n\n<blockquote>\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    "a break inside a quoted heading": ('## Evidence Status\n\n> ## Context<br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    "a sibling heading after a top-level section": ('## Evidence Status\n\n## Notes\n\nContext <br>[blocked] x\n', (), True),
+    "a sibling heading after a nested section": ('<blockquote>\n\n## Evidence Status\n\n## Notes\n\nContext <br>[blocked] x\n', (), True),
+    "a shallower heading after a quoted section": ('> ## Evidence Status\n> - [complete] ran it\n\n## Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
+    "a shallower heading after a blockquote section": ('<blockquote>\n\n## Evidence Status\n\n- [complete] ran it\n\n</blockquote>\n\n## Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
+    "a shallower h1 after a quoted section": ('> ## Evidence Status\n> - [complete] ran it\n\n# Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
+    "a raw pre holding the status": ('## Evidence Status\n\n<pre>\nnote\n[blocked] x\n</pre>\n', ('note', '[blocked] x'), False),
+}
 
 
 class ThePageReaderTableTests(unittest.TestCase):
@@ -2410,14 +2419,80 @@ class ThePageReaderTableTests(unittest.TestCase):
         return GOOD_BODY + f"\n{middle}"
 
     def test_every_probed_shape_shows_the_lines_the_table_says(self) -> None:
-        for name, middle, lines, _ in PAGE_READER_TABLE:
+        for name, (middle, lines, _) in all_of(
+            PAGE_READER_TABLE,
+            {
+                "a block tag after prose",
+                "a pre after prose",
+                "a break after prose",
+                "a break inside a list item",
+                "an unparsed tag the page prints",
+                "a type parameter mid-line",
+                "a fenced example",
+                "an indented example",
+                "a code span",
+                "a code span after a break",
+                "a rule of asterisks",
+                "a dash rule",
+                "a quoted heading inside",
+                "a heading inside a list item",
+                "a quoted example elsewhere",
+                "a long-s heading",
+                "a fold holding the section",
+                "a fold holding a quoted heading",
+                "an unclosed blockquote before",
+                "an unclosed list item before",
+                "an unclosed blockquote inside",
+                "a break inside a quoted heading",
+                "a sibling heading after a top-level section",
+                "a sibling heading after a nested section",
+                "a shallower heading after a quoted section",
+                "a shallower heading after a blockquote section",
+                "a shallower h1 after a quoted section",
+                "a raw pre holding the status",
+            },
+            "PAGE_READER_TABLE",
+        ).items():
             with self.subTest(shape=name), recorded_page():
                 page = pr_readiness.page_view(self.body(middle))
                 self.assertIsNone(page.unverified, name)
                 self.assertEqual(page.lines, lines, name)
 
     def test_every_probed_shape_gets_the_verdict_the_table_says(self) -> None:
-        for name, middle, _, ok in PAGE_READER_TABLE:
+        for name, (middle, _, ok) in all_of(
+            PAGE_READER_TABLE,
+            {
+                "a block tag after prose",
+                "a pre after prose",
+                "a break after prose",
+                "a break inside a list item",
+                "an unparsed tag the page prints",
+                "a type parameter mid-line",
+                "a fenced example",
+                "an indented example",
+                "a code span",
+                "a code span after a break",
+                "a rule of asterisks",
+                "a dash rule",
+                "a quoted heading inside",
+                "a heading inside a list item",
+                "a quoted example elsewhere",
+                "a long-s heading",
+                "a fold holding the section",
+                "a fold holding a quoted heading",
+                "an unclosed blockquote before",
+                "an unclosed list item before",
+                "an unclosed blockquote inside",
+                "a break inside a quoted heading",
+                "a sibling heading after a top-level section",
+                "a sibling heading after a nested section",
+                "a shallower heading after a quoted section",
+                "a shallower heading after a blockquote section",
+                "a shallower h1 after a quoted section",
+                "a raw pre holding the status",
+            },
+            "PAGE_READER_TABLE",
+        ).items():
             with self.subTest(shape=name), recorded_page():
                 result = pr_readiness.evaluate(pr(self.body(middle)), self.FILES)
                 self.assertEqual(result.ok, ok, (name, result.failures))
@@ -2425,7 +2500,43 @@ class ThePageReaderTableTests(unittest.TestCase):
     def test_the_table_exercises_both_rules(self) -> None:
         # A table nobody checks the shape of grows lopsided. These are the
         # axes the four rounds actually moved along.
-        shapes = "\n".join(middle for _, middle, _, _ in PAGE_READER_TABLE)
+        shapes = "\n".join(
+            middle
+            for middle, _, _ in all_of(
+                PAGE_READER_TABLE,
+                {
+                    "a block tag after prose",
+                    "a pre after prose",
+                    "a break after prose",
+                    "a break inside a list item",
+                    "an unparsed tag the page prints",
+                    "a type parameter mid-line",
+                    "a fenced example",
+                    "an indented example",
+                    "a code span",
+                    "a code span after a break",
+                    "a rule of asterisks",
+                    "a dash rule",
+                    "a quoted heading inside",
+                    "a heading inside a list item",
+                    "a quoted example elsewhere",
+                    "a long-s heading",
+                    "a fold holding the section",
+                    "a fold holding a quoted heading",
+                    "an unclosed blockquote before",
+                    "an unclosed list item before",
+                    "an unclosed blockquote inside",
+                    "a break inside a quoted heading",
+                    "a sibling heading after a top-level section",
+                    "a sibling heading after a nested section",
+                    "a shallower heading after a quoted section",
+                    "a shallower heading after a blockquote section",
+                    "a shallower h1 after a quoted section",
+                    "a raw pre holding the status",
+                },
+                "PAGE_READER_TABLE",
+            ).values()
+        )
         for splitter in ("<br>", "<div>", "<pre>", "```", "`[blocked]`", "    - [blocked]"):
             self.assertIn(splitter, shapes)
         for bound in ("***", "---", "> ##", "<details>", "<blockquote>", "<ul><li>", "## Notes"):
@@ -3286,6 +3397,31 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
         "a punctuation gap after the token": "- **[blocked]:** waiting",
     }
 
+    # intent: guard
+    def test_each_padded_row_is_the_spelling_its_name_says(self) -> None:
+        """What the name-set guard cannot see, pinned where the name is the claim.
+
+        `all_of` asserts the NAMES a table carries, so a row's value replaced
+        by another row's -- the double-backtick spelling swapped for the
+        single-backtick one, key untouched -- passes it, and the claim these
+        three names make is precisely about their spellings (#1771, round
+        12). Each name is checked against the shape it labels here; the
+        general hole stays open by decision, because a table whose names are
+        labels rather than claims has nothing for a guard to check them
+        against.
+        """
+        spellings = {
+            "a space inside the backticks": ("` [blocked] `", "`` "),
+            "double-backtick padding": ("`` [blocked] ``", None),
+            "a punctuation gap after the token": ("**[blocked]:**", None),
+        }
+        for name, (must_hold, must_not) in spellings.items():
+            with self.subTest(spelling=name):
+                line = self.PADDED_STATUSES[name]
+                self.assertIn(must_hold, line, f"{name}: not the shape its name says")
+                if must_not is not None:
+                    self.assertNotIn(must_not, line, f"{name}: another row's spelling")
+
     def padded_body(self, line: str) -> str:
         return self.body(f"<pre>\n## Evidence Status\n{line}\n</pre>\n\n")
 
@@ -3736,58 +3872,53 @@ REAL_EMPHASISED = "## **Evidence Status**\n\n- [complete] swift test -- ok\n\n"
 REAL_SETEXT = "Evidence Status\n---------------\n\n- [complete] swift test -- ok\n\n"
 REAL_PLAIN = "## Evidence Status\n\n- [complete] swift test -- ok\n\n"
 
-SWALLOWED_HEADING_TABLE = (
+SWALLOWED_HEADING_TABLE = {
     # Round 2: the heading is swallowed by an opener a line above it and the
     # status sits below the block in ordinary markdown.
-    ("a details closer, status below", f"</details>\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
-    ("an img tag, status below", f'<img src="https://example.invalid/a.png">\n## Evidence Status\n\n{BLOCKED_LINE}\n\n', True, INSIDE_A_BLOCK),
-    ("a div around heading and status", f"<div>\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
-    ("a comment a browser ends at --!>", f"<!-- note --!>\n\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
+    "a details closer, status below": (f"</details>\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
+    "an img tag, status below": (f'<img src="https://example.invalid/a.png">\n## Evidence Status\n\n{BLOCKED_LINE}\n\n', True, INSIDE_A_BLOCK),
+    "a div around heading and status": (f"<div>\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
+    "a comment a browser ends at --!>": (f"<!-- note --!>\n\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
     # Round 3: the block covers the heading and hides nothing. The section is
     # optional, so its absence is not a body to refuse.
-    ("a closed comment, heading alone", "<!--\n## Evidence Status\n-->\n\n", False, None),
-    ("a closed comment, a complete item", "<!--\n## Evidence Status\n- [complete] ran it -- 1992 tests passed\n-->\n\n", False, None),
-    ("a pre block, a complete item", "<pre>\n## Evidence Status\n- [complete] ran it -- 1992 tests passed\n</pre>\n\n", False, None),
-    ("a pre block, a wrapped complete item", "<pre>\n## Evidence Status\n- **[complete]** ran it\n</pre>\n\n", False, None),
+    "a closed comment, heading alone": ("<!--\n## Evidence Status\n-->\n\n", False, None),
+    "a closed comment, a complete item": ("<!--\n## Evidence Status\n- [complete] ran it -- 1992 tests passed\n-->\n\n", False, None),
+    "a pre block, a complete item": ("<pre>\n## Evidence Status\n- [complete] ran it -- 1992 tests passed\n</pre>\n\n", False, None),
+    "a pre block, a wrapped complete item": ("<pre>\n## Evidence Status\n- **[complete]** ran it\n</pre>\n\n", False, None),
     # Round 4: a heading-shaped line INSIDE the block, status below the block.
     # The block prints it as characters; a markdown parser reads it as a
     # heading and ended the synthetic section before the status.
-    ("a pre block holding a second heading", f"<pre>\n## Evidence Status\n## Notes\n</pre>\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
-    ("a comment holding a second heading", f"<!--\n## Evidence Status\n## Notes\n-->\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
+    "a pre block holding a second heading": (f"<pre>\n## Evidence Status\n## Notes\n</pre>\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
+    "a comment holding a second heading": (f"<!--\n## Evidence Status\n## Notes\n-->\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
     # Round 5: the status inside the block wrapped in markup the block prints
     # as characters. The list marker is optional here, which is why neither
     # existing pattern covered the pair.
-    ("a comment, a bold status", "<!--\n## Evidence Status\n- **[blocked]** waiting\n-->\n\n", True, INSIDE_A_BLOCK),
-    ("a comment, a backticked status", "<!--\n## Evidence Status\n- `[blocked]` waiting\n-->\n\n", True, INSIDE_A_BLOCK),
-    ("a pre block, a bold status", "<pre>\n## Evidence Status\n- **[blocked]** waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
-    ("a pre block, a bold status with no marker", "<pre>\n## Evidence Status\n**[blocked]** waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
-    ("a pre block, a backticked status with no marker", "<pre>\n## Evidence Status\n`[blocked]` waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
-    ("a pre block, an underscored status", "<pre>\n## Evidence Status\n- _[blocked]_ waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
-    ("a comment, a wrapped pending-ci", "<!--\n## Evidence Status\n- **[pending-ci]** waiting\n-->\n\n", True, INSIDE_A_BLOCK),
-    ("a pre block, a backticked pending-ci with no marker", "<pre>\n## Evidence Status\n`[pending-ci]` waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
+    "a comment, a bold status": ("<!--\n## Evidence Status\n- **[blocked]** waiting\n-->\n\n", True, INSIDE_A_BLOCK),
+    "a comment, a backticked status": ("<!--\n## Evidence Status\n- `[blocked]` waiting\n-->\n\n", True, INSIDE_A_BLOCK),
+    "a pre block, a bold status": ("<pre>\n## Evidence Status\n- **[blocked]** waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
+    "a pre block, a bold status with no marker": ("<pre>\n## Evidence Status\n**[blocked]** waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
+    "a pre block, a backticked status with no marker": ("<pre>\n## Evidence Status\n`[blocked]` waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
+    "a pre block, an underscored status": ("<pre>\n## Evidence Status\n- _[blocked]_ waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
+    "a comment, a wrapped pending-ci": ("<!--\n## Evidence Status\n- **[pending-ci]** waiting\n-->\n\n", True, INSIDE_A_BLOCK),
+    "a pre block, a backticked pending-ci with no marker": ("<pre>\n## Evidence Status\n`[pending-ci]` waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
     # Controls the refusal must not cost.
-    ("a comment, a plain status", "<!--\n## Evidence Status\n- [blocked] waiting\n-->\n\n", True, INSIDE_A_BLOCK),
-    ("the blank line the message asks for", f"</details>\n\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, PENDING_TEXT),
-    ("a fenced example of the heading", "```markdown\n## Evidence Status\n\n- [blocked] an example\n```\n\n", False, None),
-    ("an indented example of the heading", "    ## Evidence Status\n\n    - [blocked] an example\n\n", False, None),
+    "a comment, a plain status": ("<!--\n## Evidence Status\n- [blocked] waiting\n-->\n\n", True, INSIDE_A_BLOCK),
+    "the blank line the message asks for": (f"</details>\n\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, PENDING_TEXT),
+    "a fenced example of the heading": ("```markdown\n## Evidence Status\n\n- [blocked] an example\n```\n\n", False, None),
+    "an indented example of the heading": ("    ## Evidence Status\n\n    - [blocked] an example\n\n", False, None),
     # Round 6: a real section below the swallowed heading. The check was asked
     # only where the parse found NO candidate, so a real section written with
     # emphasis or over a setext underline left one candidate and the question
     # went unasked -- the whole class passed while the shape above it, alone
     # in the body, refused (#1767).
-    ("swallowed blocked above an emphasised section", SWALLOWED_BLOCKED + REAL_EMPHASISED, True, INSIDE_A_BLOCK),
-    ("swallowed blocked above a setext section", SWALLOWED_BLOCKED + REAL_SETEXT, True, INSIDE_A_BLOCK),
-    ("swallowed blocked above a plain section", SWALLOWED_BLOCKED + REAL_PLAIN, True, INSIDE_A_BLOCK),
-    (
-        "swallowed blocked above an emphasised section, CRLF",
-        (SWALLOWED_BLOCKED + REAL_EMPHASISED).replace("\n", "\r\n"),
-        True,
-        INSIDE_A_BLOCK,
-    ),
+    "swallowed blocked above an emphasised section": (SWALLOWED_BLOCKED + REAL_EMPHASISED, True, INSIDE_A_BLOCK),
+    "swallowed blocked above a setext section": (SWALLOWED_BLOCKED + REAL_SETEXT, True, INSIDE_A_BLOCK),
+    "swallowed blocked above a plain section": (SWALLOWED_BLOCKED + REAL_PLAIN, True, INSIDE_A_BLOCK),
+    "swallowed blocked above an emphasised section, CRLF": ((SWALLOWED_BLOCKED + REAL_EMPHASISED).replace("\n", "\r\n"), True, INSIDE_A_BLOCK),
     # The control the widening must not cost: nothing is being kept out, so
     # the block is an author's own markup and the body passes as it did.
-    ("swallowed complete above an emphasised section", SWALLOWED_COMPLETE + REAL_EMPHASISED, False, None),
-)
+    "swallowed complete above an emphasised section": (SWALLOWED_COMPLETE + REAL_EMPHASISED, False, None),
+}
 
 
 class TheSwallowedHeadingTableTests(unittest.TestCase):
@@ -3808,7 +3939,39 @@ class TheSwallowedHeadingTableTests(unittest.TestCase):
         return f"{self.OPENING}{self.MERGEABILITY}{middle}{self.EVIDENCE}"
 
     def test_every_probed_shape_gets_the_verdict_it_owes(self) -> None:
-        for name, block, refused, fragment in SWALLOWED_HEADING_TABLE:
+        for name, (block, refused, fragment) in all_of(
+            SWALLOWED_HEADING_TABLE,
+            {
+                "a details closer, status below",
+                "an img tag, status below",
+                "a div around heading and status",
+                "a comment a browser ends at --!>",
+                "a closed comment, heading alone",
+                "a closed comment, a complete item",
+                "a pre block, a complete item",
+                "a pre block, a wrapped complete item",
+                "a pre block holding a second heading",
+                "a comment holding a second heading",
+                "a comment, a bold status",
+                "a comment, a backticked status",
+                "a pre block, a bold status",
+                "a pre block, a bold status with no marker",
+                "a pre block, a backticked status with no marker",
+                "a pre block, an underscored status",
+                "a comment, a wrapped pending-ci",
+                "a pre block, a backticked pending-ci with no marker",
+                "a comment, a plain status",
+                "the blank line the message asks for",
+                "a fenced example of the heading",
+                "an indented example of the heading",
+                "swallowed blocked above an emphasised section",
+                "swallowed blocked above a setext section",
+                "swallowed blocked above a plain section",
+                "swallowed blocked above an emphasised section, CRLF",
+                "swallowed complete above an emphasised section",
+            },
+            "SWALLOWED_HEADING_TABLE",
+        ).items():
             with self.subTest(shape=name):
                 result = pr_readiness.evaluate(pr(self.body(block)), self.FILES)
                 self.assertEqual(result.ok, not refused, (name, result.failures))
@@ -3822,7 +3985,39 @@ class TheSwallowedHeadingTableTests(unittest.TestCase):
         # The message is the whole value of refusing rather than going quiet,
         # so the table checks that every swallowed-heading refusal still
         # carries both line numbers and the repair.
-        for name, block, refused, fragment in SWALLOWED_HEADING_TABLE:
+        for name, (block, refused, fragment) in all_of(
+            SWALLOWED_HEADING_TABLE,
+            {
+                "a details closer, status below",
+                "an img tag, status below",
+                "a div around heading and status",
+                "a comment a browser ends at --!>",
+                "a closed comment, heading alone",
+                "a closed comment, a complete item",
+                "a pre block, a complete item",
+                "a pre block, a wrapped complete item",
+                "a pre block holding a second heading",
+                "a comment holding a second heading",
+                "a comment, a bold status",
+                "a comment, a backticked status",
+                "a pre block, a bold status",
+                "a pre block, a bold status with no marker",
+                "a pre block, a backticked status with no marker",
+                "a pre block, an underscored status",
+                "a comment, a wrapped pending-ci",
+                "a pre block, a backticked pending-ci with no marker",
+                "a comment, a plain status",
+                "the blank line the message asks for",
+                "a fenced example of the heading",
+                "an indented example of the heading",
+                "swallowed blocked above an emphasised section",
+                "swallowed blocked above a setext section",
+                "swallowed blocked above a plain section",
+                "swallowed blocked above an emphasised section, CRLF",
+                "swallowed complete above an emphasised section",
+            },
+            "SWALLOWED_HEADING_TABLE",
+        ).items():
             if not refused or fragment != INSIDE_A_BLOCK:
                 continue
             with self.subTest(shape=name):
@@ -3877,7 +4072,42 @@ class TheSwallowedHeadingTableTests(unittest.TestCase):
     def test_the_table_covers_both_status_tokens_and_every_wrapper(self) -> None:
         # A table nobody checks the shape of grows lopsided. These are the
         # axes the four passes actually moved along.
-        rows = "\n".join(block for _, block, _, _ in SWALLOWED_HEADING_TABLE)
+        rows = "\n".join(
+            block
+            for block, _, _ in all_of(
+                SWALLOWED_HEADING_TABLE,
+                {
+                    "a details closer, status below",
+                    "an img tag, status below",
+                    "a div around heading and status",
+                    "a comment a browser ends at --!>",
+                    "a closed comment, heading alone",
+                    "a closed comment, a complete item",
+                    "a pre block, a complete item",
+                    "a pre block, a wrapped complete item",
+                    "a pre block holding a second heading",
+                    "a comment holding a second heading",
+                    "a comment, a bold status",
+                    "a comment, a backticked status",
+                    "a pre block, a bold status",
+                    "a pre block, a bold status with no marker",
+                    "a pre block, a backticked status with no marker",
+                    "a pre block, an underscored status",
+                    "a comment, a wrapped pending-ci",
+                    "a pre block, a backticked pending-ci with no marker",
+                    "a comment, a plain status",
+                    "the blank line the message asks for",
+                    "a fenced example of the heading",
+                    "an indented example of the heading",
+                    "swallowed blocked above an emphasised section",
+                    "swallowed blocked above a setext section",
+                    "swallowed blocked above a plain section",
+                    "swallowed blocked above an emphasised section, CRLF",
+                    "swallowed complete above an emphasised section",
+                },
+                "SWALLOWED_HEADING_TABLE",
+            ).values()
+        )
         for token in ("[blocked]", "[pending-ci]", "[complete]"):
             self.assertIn(token, rows)
         for wrapper in ("**[", "`[", "_["):
