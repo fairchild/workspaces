@@ -4041,12 +4041,17 @@ def _render_structured_entries(
         took `unreadable_after` out of the condition to avoid.
 
         Subsumed today, and kept for the reason the BEFORE half below is
-        kept: every line this write renders has the shape `[status] item --
-        detail`, which the prefix reader takes and whose item is in `items`,
-        so the rewritten-ness question already answers yes to all of them --
-        the mutant dropping this term is EQUIVALENT by that containment. It
-        states the requirement that question is one route to: a line that is
-        there was not replaced with nothing.
+        kept. The containment, at the grain the `.strip()` argument above is
+        made at: `rendered_text` (:4028) is built from `rendered_lines`
+        (:3944), whose every member is `f"- [{status}] {item} -- {detail}"`
+        for an entry of `rendered_entries`; stripped of its marker each is
+        `[status] item -- detail`, which `EVIDENCE_STATUS_PREFIX_RE` (:50)
+        matches, whose item is in `items` (:4013) -- the same
+        `rendered_entries` -- and whose tail begins ` -- `. So every member
+        of `rendered_text` is a line `_rewritten` (:4015) answers True for,
+        and the mutant dropping this term is EQUIVALENT by that containment
+        rather than by a sample. It states the requirement that question is
+        one route to: a line that is there was not replaced with nothing.
         """
         return line.strip() in rendered_text
 
