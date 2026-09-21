@@ -3943,7 +3943,7 @@ def _render_structured_entries(
 
     rendered_lines = [
         f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
-        for entry in sorted(rendered_entries, key=lambda entry: entry["index"])
+        for entry in sorted(rendered_entries, key=lambda entry: int(entry["index"]))
     ]
     if rendered_entries:
         write = write_evidence_status_section(
@@ -3993,12 +3993,62 @@ def _render_structured_entries(
     # measured, not reasoned -- so it is out, and
     # `test_a_write_whose_own_detail_hides_the_section_still_names_what_left`
     # holds it out.
-    rendered_items = sorted({str(entry["item"]).strip() for entry in rendered_entries})
-    items = set(rendered_items)
+    # Decided from what this write KNOWS it rendered, not by reading the line
+    # back. `split_evidence_status_line` refuses any line past
+    # `EVIDENCE_STATUS_LINE_LIMIT`, so a rendered-back line longer than that
+    # answered "not rewritten" and was named "replaced with nothing" while it
+    # sat in the written body -- telling the author to write back a line they
+    # already have, which duplicates it on the next run (#1778, round 18).
+    # The status token still comes from this module's own prefix reader,
+    # which has no length limit; the ITEM is matched against the items the
+    # write rendered rather than found by splitting on the first ` -- `, so
+    # an item that CONTAINS the separator matches its own line instead of
+    # splitting at the wrong boundary -- round 16's defect in another shape.
+    # `.strip()` here is redundant and stays as the reader's contract rather
+    # than as a step: the only producer of `rendered_entries` is
+    # `entry_as_rendered` a few lines above, which strips the item as it
+    # builds the line the write emits, so this set is already stripped. Its
+    # mutant is EQUIVALENT by that construction rather than by a sample
+    # (#1778, round 18).
+    items = {str(entry["item"]).strip() for entry in rendered_entries}
 
     def _rewritten(line: str) -> bool:
-        split = split_evidence_status_line(f"- {line}", rendered_items)
-        return split is not None and split[1].strip() in items
+        prefix = EVIDENCE_STATUS_PREFIX_RE.match(f"- {line}")
+        if not prefix:
+            return False
+        rest = prefix.group("rest").strip()
+        for item in items:
+            if not rest.startswith(item):
+                continue
+            tail = rest[len(item) :].lstrip()
+            if tail == "" or tail[0] in "-\u2013\u2014":
+                return True
+        return False
+
+    rendered_text = {line.strip().lstrip("-").strip() for line in rendered_lines}
+
+    def _still_written(line: str) -> bool:
+        """A line this write itself put back is not a line that left the body.
+
+        The backstop under the rewritten-ness question, and it is about the
+        write's OWN output rather than about the body's text: a line that is
+        THERE was not replaced with nothing, and the sentence saying it was
+        is a false accusation the author acts on by writing a duplicate
+        (#1778, round 18). Bound to what the write rendered rather than to a
+        substring of the body, because a copy of a line somewhere else in the
+        body -- inside a fenced example, say -- is not the line that left the
+        section, and suppressing that naming would be the silence round 17
+        took `unreadable_after` out of the condition to avoid.
+
+        Subsumed today, and kept for the reason the BEFORE half below is
+        kept: every line this write renders has the shape `[status] item --
+        detail`, which the prefix reader takes and whose item is in `items`,
+        so the rewritten-ness question already answers yes to all of them --
+        the mutant dropping this term is EQUIVALENT by that containment. It
+        states the requirement that question is one route to: a line that is
+        there was not replaced with nothing.
+        """
+        return line.strip() in rendered_text
 
     # The BEFORE half is redundant TODAY and kept deliberately: this reader
     # answers an unreadable section with no lines at all, so the list would
@@ -4012,7 +4062,11 @@ def _render_structured_entries(
     replaced = (
         []
         if unreadable_before is not None
-        else [line for line in before if line not in after and not _rewritten(line)]
+        else [
+            line
+            for line in before
+            if line not in after and not _rewritten(line) and not _still_written(line)
+        ]
     )
     if (scalars := scalar_record_announcement(updated_entries, replaced)) is not None:
         log(scalars)

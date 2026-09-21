@@ -9091,12 +9091,224 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
                 # says so, with the line itself inert inside a code span.
                 self.assertNotIn(unowned.lstrip("- "), written)
                 self.assertEqual(len(said), 1, said)
-                self.assertIn("replaced this line with nothing", said[0])
-                self.assertIn("the line no entry owns", said[0])
+                # The WHOLE quoted span, exactly: a count and three substrings
+                # pass when the wrong line is named -- swapping this line's
+                # status for the entry's left this guard green while the
+                # sentence accused a line that was still there
+                # (#1778, round 18, finding 2).
+                self.assertIn(
+                    "This write replaced this line with nothing: "
+                    "`[pending-ci] the line no entry owns -- waiting`.",
+                    said[0],
+                )
                 self.assertTrue(self.inside_a_code_span(said[0], "the line no entry owns"))
-                # And the entry's own line, which the write rendered back, is
-                # not named as replaced even with the page refusing to read it.
+                # Exactly one line is named, and it is not the entry's own.
+                quoted = re.findall(r"replaced this line with nothing: (.+?)\. Rewriting", said[0])
+                self.assertEqual(quoted, ["`[pending-ci] the line no entry owns -- waiting`"])
                 self.assertNotIn(self.ITEM, said[0].split("replaced this line")[1])
+
+    LONG_ITEM = "verify " + "x" * 4100
+
+    def pass_record(self, *, item: str | None = None):
+        """The confirmation pass's own record: an entry the write updates, a
+        second whose rendered line is past the parser's limit, and the scalar
+        that carries `replaced` to the author."""
+        return [
+            {"index": 1, "item": self.ITEM, "status": "complete",
+             "detail": "green on head aaaa", "kind": "ci"},
+            {"index": 2, "item": item or self.LONG_ITEM, "status": "pending-ci",
+             "detail": "waiting", "kind": "ci"},
+            "legacy",
+        ]
+
+    def updated_record(self, item: str):
+        """The same shape with the item under test at the index the write
+        updates, so its rendered line CHANGES across the write.
+
+        That is what separates the two halves of the answer: a line rendered
+        back byte-identical is caught by "this write rendered it", and only a
+        line whose text moved has to be recognised by its item.
+        """
+        return [
+            {"index": 1, "item": item, "status": "pending-ci", "detail": "waiting", "kind": "ci"},
+            "legacy",
+        ]
+
+    def written_under(self, entries, detail: str):
+        said: list[str] = []
+        source = self.body(entries)
+        with contextlib.redirect_stderr(io.StringIO()):
+            written = self.evidence().update_evidence_entries(
+                source, {1: {"status": "complete", "detail": detail}}, announcements=said
+            )
+        return source, written, said
+
+    # intent: fix
+    def test_a_line_the_parser_is_too_long_to_read_is_still_not_replaced(self) -> None:
+        """A line that is THERE is never named as replaced with nothing.
+
+        `split_evidence_status_line` refuses a line past
+        `EVIDENCE_STATUS_LINE_LIMIT`, so the rewritten-ness question answered
+        "no" for a rendered-back line of 4,107 characters; with the after
+        page unreadable -- the detail carries inline HTML -- `after` is empty
+        and the line was named "replaced this line with nothing" while it sat
+        in the written body. The author's repair for that sentence is to
+        write the line again, which duplicates it (#1778, round 18).
+
+        Rewritten-ness comes from the write's own knowledge now: the items it
+        rendered, matched against the line's text after this module's own
+        status-prefix reader, which has no length limit.
+        """
+        # The pass's own record: the long line is rendered back unchanged.
+        with self.subTest(shape="the long line rendered back unchanged"):
+            entries = self.pass_record()
+            source, written, said = self.written_under(entries, "green <b>now</b>")
+            _, unreadable_after = self.evidence()._rendered_status_lines(written)
+            self.assertIsNotNone(unreadable_after, "the after page was readable; case not built")
+            self.assertIn(f"- [pending-ci] {self.LONG_ITEM} -- waiting", written)
+            self.assertNotEqual(written, source, "the write did not happen")
+            named = [note for note in said if "replaced this line" in note]
+            self.assertEqual(named, [], f"a line still in the body was named: {named}")
+        # And the half only the ITEM can answer: the long entry is the one
+        # the write updates, so its line's TEXT moves and "this write
+        # rendered that line" cannot recognise it. The parser refuses the
+        # line for its length, so without a rewritten-ness question of the
+        # write's own the author is told a line they still have was replaced.
+        with self.subTest(shape="the long line's own detail updated"):
+            entries = self.updated_record(self.LONG_ITEM)
+            _, written, said = self.written_under(entries, "green <b>now</b>")
+            _, unreadable_after = self.evidence()._rendered_status_lines(written)
+            self.assertIsNotNone(unreadable_after, "the after page was readable; case not built")
+            self.assertIn(f"- [complete] {self.LONG_ITEM} -- green <b>now</b>", written)
+            named = [note for note in said if "replaced this line" in note]
+            self.assertEqual(named, [], f"a line still in the body was named: {named}")
+
+    # intent: control
+    def test_the_same_record_under_a_plain_detail_names_nothing_either(self) -> None:
+        # The control: the page can read the after section, `after` holds the
+        # long line, and nothing is named -- which is why the fix above is
+        # about the rewritten-ness question rather than about the reader.
+        entries = self.pass_record()
+        _, written, said = self.written_under(entries, "green on head bbbb")
+        _, unreadable_after = self.evidence()._rendered_status_lines(written)
+        self.assertIsNone(unreadable_after)
+        self.assertIn(f"- [pending-ci] {self.LONG_ITEM} -- waiting", written)
+        self.assertEqual([note for note in said if "replaced this line" in note], [])
+
+    # intent: guard
+    def test_an_item_carrying_the_separator_matches_its_own_line(self) -> None:
+        """Round 16's defect in the shape a contract-less split brings back.
+
+        An item holding ` -- ` splits at the wrong boundary, so the line the
+        write rendered back for it stops matching its own entry and is named
+        "replaced with nothing". The match is bound to the items the write
+        rendered rather than to the first separator in the line, so the item
+        matches itself whatever it contains (#1778, round 18).
+        """
+        item = "run `swift test` -- the device lane"
+        entries = self.updated_record(item)
+        _, written, said = self.written_under(entries, "green <b>now</b>")
+        self.assertIn(f"- [complete] {item} -- green <b>now</b>", written)
+        self.assertEqual([note for note in said if "replaced this line" in note], [])
+
+    # intent: guard
+    def test_an_item_recorded_with_spare_whitespace_matches_its_line(self) -> None:
+        # What this pins is `entry_as_rendered`'s normalisation: it strips
+        # the item as it builds the line, so a record carrying spare
+        # whitespace renders a line without it and the rewritten-ness
+        # question still matches that line. The `.strip()` beside the items
+        # set is redundant because of this, which is why its mutant is
+        # equivalent rather than red (#1778, round 18).
+        entries = self.updated_record(f"  {self.ITEM}  ")
+        _, written, said = self.written_under(entries, "green <b>now</b>")
+        self.assertEqual([note for note in said if "replaced this line" in note], [])
+
+    # intent: guard
+    def test_the_written_order_is_numeric_past_index_nine(self) -> None:
+        """Index 10 is where a string key and an int key part.
+
+        `main` sorted the rendered entries by `int(entry["index"])` and this
+        branch dropped the `int()`; the live behaviour was right because
+        `usable_entry_index` hands back an int, so nothing in any suite
+        noticed -- a record at indexes 1, 2 and 10 was never written. Sorting
+        by `str(entry["index"])` instead leaves every suite green, which is
+        what makes this coverage rather than a defect (#1778, round 18).
+        """
+        entries = [
+            {"index": index, "item": f"item {index}", "status": "pending-ci",
+             "detail": "waiting", "kind": "ci"}
+            for index in (1, 2, 10)
+        ]
+        _, written, _ = self.written_under(entries, "green on head bbbb")
+        order = [
+            line.split("] ", 1)[1].split(" --", 1)[0]
+            for line in written.splitlines()
+            if line.startswith("- [")
+        ]
+        self.assertEqual(order, ["item 1", "item 2", "item 10"], written)
+
+    # intent: guard
+    def test_every_refusal_this_reader_makes_answers_with_no_lines(self) -> None:
+        """The contract, over every site rather than over a sample.
+
+        Two places in `_render_structured_entries` lean on it: the BEFORE
+        half of the fail-closed condition is kept because of it, and the
+        AFTER half is absent because of it. The round-16 guard drove three
+        shapes and all three returned from ONE of the reader's eight refusal
+        sites, so a later reader that returned partial lines from any of the
+        other seven would have left it green (#1778, round 18, finding 3).
+
+        Neither of the two dependents owns the contract -- they are a
+        condition and the absence of one, not callers -- so it is pinned
+        here instead: eight bodies, one per site, and a read of the
+        function's own returns so a ninth site cannot be added without this
+        test seeing it.
+        """
+        evidence = self.evidence()
+        head = "Why this exists, plainly, in a paragraph long enough to read as one.\n\n"
+        sites = {
+            "two headings": "## Evidence Status\n\n- [complete] a -- b\n\n"
+                            "## Evidence Status\n\n- [complete] c -- d\n",
+            "the heading is an h3": "### Evidence Status\n\n- [complete] a -- b\n",
+            "inline HTML in the heading": "## Evidence Status<!-- c -->\n\n- [complete] a -- b\n",
+            "HTML before the heading": "<div>a fold</div>\n\n## Evidence Status\n\n- [complete] a -- b\n",
+            "a paragraph under the heading": "## Evidence Status\n\nprose\n\n- [complete] a -- b\n",
+            "an item holding an HTML block": "## Evidence Status\n\n- <div>x</div>\n",
+            "an item holding more than a line": "## Evidence Status\n\n- a line\n\n  - nested\n",
+            "inline HTML in an item": "## Evidence Status\n\n- [complete] a <b>x</b> -- b\n",
+        }
+        reasons = {}
+        for name, tail in sites.items():
+            with self.subTest(site=name):
+                lines, reason = evidence._rendered_status_lines(head + tail)
+                self.assertEqual(lines, [], f"{name}: a refusal came back with lines")
+                self.assertIsNotNone(reason, f"{name}: no reason given")
+                reasons[name] = reason
+        # Eight bodies, eight different refusals: three shapes that all land
+        # on one site prove one site.
+        self.assertEqual(len(set(reasons.values())), len(sites), reasons)
+        # And every return in the function itself, so the day a ninth site is
+        # added this test is where it shows up.
+        source = (
+            REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "evidence.py"
+        ).read_text(encoding="utf-8")
+        reader = next(
+            node
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.FunctionDef) and node.name == "_rendered_status_lines"
+        )
+        returns = [
+            ast.unparse(node.value.elts[0])
+            for node in ast.walk(reader)
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple)
+        ]
+        self.assertEqual(
+            sorted(set(returns)),
+            ["[]", "lines"],
+            "a return of this reader hands back something other than no lines or the lines",
+        )
+        self.assertEqual(returns.count("lines"), 1, "more than one non-empty return")
+        self.assertEqual(len(returns) - 1, len(sites), "the sites and the bodies have parted")
 
     # intent: guard
     def test_an_unreadable_section_answers_with_no_lines(self) -> None:
