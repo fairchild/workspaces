@@ -122,7 +122,32 @@ def ci_entries_needing_verification(
     entries: list[object],
     head_sha: str,
 ) -> list[tuple[int, str]]:
-    """(index, check name) for `ci` entries pending or stale against head."""
+    """(index, check name) for every `ci` entry this lane can look up.
+
+    Every one of them, whatever status it records and whatever head it claims
+    to be bound to. It used to skip an entry already `complete` and bound to
+    the current head, on the reading that such an entry had been verified
+    already -- but what had been verified was whatever wrote it, and the
+    thing that writes a pull request description is anyone with write access.
+    A `{"status": "complete", "verified_head_sha": "<head>"}` typed into the
+    block was never looked at again, and with `should_clear_blocked_label`
+    reading the entries as recorded, the next run of this lane cleared the
+    label it had applied itself without reading a single check run (#1778).
+
+    So a completion is a claim this lane re-checks, on every run, against the
+    live check runs on the head. The decision on the issue was re-verify
+    rather than sign: one login covers many actors here, so a signature would
+    prove what the block's existence already proves.
+
+    `head_sha` is no longer read here and stays in the signature: it is what
+    the entries are verified AGAINST, the caller passes it to
+    `entry_update_for_check_run`, and a function that takes the head is the
+    one a reader expects to be answering a question about the head.
+
+    An entry with no extractable check name is still not this lane's business,
+    which is the fail-closed rule #1120 set: a guessed check name verifies
+    nothing and a wrong one fails an honest body.
+    """
     needed: list[tuple[int, str]] = []
     for entry in entries:
         if not isinstance(entry, dict):
@@ -139,10 +164,7 @@ def ci_entries_needing_verification(
         # infinity, and `int()` of that raises a class the others do not cover.
         except (KeyError, TypeError, ValueError, OverflowError):
             continue
-        status = str(entry.get("status", "")).strip()
-        recorded_sha = str(entry.get("verified_head_sha", "")).strip()
-        if status == "pending-ci" or (status == "complete" and recorded_sha != head_sha):
-            needed.append((index, check_name))
+        needed.append((index, check_name))
     return needed
 
 
@@ -201,9 +223,16 @@ def entry_update_for_check_run(
     }
 
 
-def should_clear_blocked_label(entries: list[object] | None, head_sha: str) -> bool:
-    """Provably-safe auto-clear: every entry complete, every ci entry bound
-    to the current head. Anything unexpected keeps the label."""
+def _recorded_contract_is_complete(entries: list[object] | None, head_sha: str) -> bool:
+    """Whether the body ALREADY read as complete, taking the entries at their word.
+
+    The reading `should_clear_blocked_label` used to have, kept for the one
+    question where taking the record at its word is safe: whether this run
+    changed anything. A forged body reads as complete here and the only thing
+    that follows is that no review is requested, which costs a forger nothing
+    and an honest author nothing either. Clearing a label is the question
+    where it is not safe, and that one asks what this run verified (#1778).
+    """
     if not entries:
         return False
     for entry in entries:
@@ -216,6 +245,56 @@ def should_clear_blocked_label(entries: list[object] | None, head_sha: str) -> b
             _evidence_item_kind(item) == "ci"
             and str(entry.get("verified_head_sha", "")).strip() != head_sha
         ):
+            return False
+    return True
+
+
+def should_clear_blocked_label(
+    entries: list[object] | None,
+    head_sha: str,
+    *,
+    verified: dict[int, dict[str, object]] | None = None,
+) -> bool:
+    """Provably-safe auto-clear: every entry complete, every ci entry verified BY THIS RUN.
+
+    `verified` is what this run's own check-run reads concluded, keyed by
+    entry index. A `ci` entry counts as complete only when it is in there
+    complete and bound to this head -- not because the recorded entry says
+    so, which is the half of #1778 that let a body clear its own label. With
+    no `verified` in hand no `ci` entry can count, so a caller that forgot to
+    pass it keeps the label rather than clearing it.
+
+    What this does NOT close, and it is worth saying where the function is
+    rather than only in a pull request: a non-`ci` completion -- a test, a
+    screenshot, the kinds the macOS lane resolves -- is counted as the entry
+    records it, because this lane has no way to verify one. A completion of
+    those written by hand still counts toward the clear. That is a provenance
+    question about the lane that writes them, and the guide's section on what
+    the metadata comment guarantees names it (#1712).
+
+    Anything unexpected keeps the label.
+    """
+    if not entries:
+        return False
+    confirmed = verified or {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return False
+        if str(entry.get("status", "")).strip() != "complete":
+            return False
+        item = str(entry.get("item", "")).strip()
+        if _evidence_item_kind(item) != "ci":
+            continue
+        try:
+            index = int(entry["index"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return False
+        update = confirmed.get(index)
+        if not isinstance(update, dict):
+            return False
+        if str(update.get("status", "")).strip() != "complete":
+            return False
+        if str(update.get("verified_head_sha", "")).strip() != head_sha:
             return False
     return True
 
@@ -438,10 +517,9 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
     if entries is None:
         return
 
-    was_complete = should_clear_blocked_label(entries, head_sha)
+    updates: dict[int, dict[str, object]] = {}
     needed = ci_entries_needing_verification(entries, head_sha)
     if needed:
-        updates: dict[int, dict[str, object]] = {}
         for index, check_name in needed:
             runs = check_runs_for(check_name, head_sha, env)
             updates[index] = entry_update_for_check_run(
@@ -458,7 +536,17 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
             return
         body = updated_body
 
-    now_complete = should_clear_blocked_label(evidence_entries(body), head_sha)
+    # The transition question, and it takes the RECORDED reading on purpose.
+    # It asks whether the body already looked complete before this run, and
+    # its only consequence is whether a review is requested -- so reading the
+    # entries as recorded can suppress a request and can never clear a label.
+    # Reading it the verified way instead would make every check suite on a
+    # finished pull request a fresh transition and spend a slot of the review
+    # budget on each (#1778).
+    was_complete = _recorded_contract_is_complete(entries, head_sha)
+    now_complete = should_clear_blocked_label(
+        evidence_entries(body), head_sha, verified=updates
+    )
     label_names = {
         str(label.get("name", ""))
         for label in pr.get("labels", [])
