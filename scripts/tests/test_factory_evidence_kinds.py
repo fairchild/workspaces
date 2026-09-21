@@ -9069,6 +9069,28 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
                 self.assertIsNotNone(unreadable_before, f"{name}: the before body was readable")
                 self.assertIsNone(unreadable_after, f"{name}: the write left an unreadable section")
 
+    # intent: guard
+    def test_an_unreadable_section_answers_with_no_lines(self) -> None:
+        # Why the fail-closed condition beside it is redundant today, and why
+        # it stays: this reader answers an unreadable section with NO lines,
+        # so the replaced list is empty either way — the guard's mutant is
+        # equivalent, measured. If a later reader returns partial lines with
+        # a reason, this test goes red and the guard starts earning its keep
+        # (#1778, round 16).
+        evidence = self.evidence()
+        entries = [{"index": 1, "item": self.ITEM, "status": "pending-ci",
+                    "detail": "queued", "kind": "ci"}]
+        for name, tail in (
+            ("a table", "\n| a | b |\n| --- | --- |\n| 1 | 2 |\n"),
+            ("a quote", "\n> quoted\n"),
+            ("a bare paragraph", "\nprose under the heading\n"),
+        ):
+            with self.subTest(shape=name):
+                source = self.body(entries).replace("\n\n## Validation", f"\n{tail}\n## Validation", 1)
+                lines, unreadable = evidence._rendered_status_lines(source)
+                self.assertIsNotNone(unreadable, f"{name}: the reader took it")
+                self.assertEqual(lines, [], f"{name}: it answered with lines as well as a reason")
+
     # intent: control
     def test_a_scalar_with_nothing_replaced_says_nothing_about_replacing(self) -> None:
         # The control: the same record with no unowned line under the

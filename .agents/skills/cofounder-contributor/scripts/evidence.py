@@ -3991,6 +3991,13 @@ def _render_structured_entries(
         split = split_evidence_status_line(f"- {line}", rendered_items)
         return split is not None and split[1].strip() in items
 
+    # The fail-closed condition is redundant TODAY and kept deliberately:
+    # this reader answers an unreadable section with no lines at all, so the
+    # list would be empty anyway (its mutant is equivalent, measured). It
+    # stays because the redundancy is the reader's contract rather than this
+    # function's, and a reader that later returns partial lines with a reason
+    # would otherwise start naming them. The contract is pinned by
+    # `test_an_unreadable_section_answers_with_no_lines`.
     replaced = (
         []
         if unreadable_before is not None
