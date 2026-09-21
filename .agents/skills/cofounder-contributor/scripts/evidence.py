@@ -2145,6 +2145,9 @@ def _owner_written_entries(
 # for the same reason: what is carried is what the body states the end of.
 EVIDENCE_STATUS_HEADING = "Evidence Status"
 EVIDENCE_NOTES_HEADING = "Evidence Notes"
+# The one spelling of "this text left the section", so a reader and a second
+# sentence about the same loss ask the same question (#1778, round 21).
+UNCARRIED_ANNOUNCEMENT_PREFIX = "not carried to "
 
 
 def _is_status_list_item(tokens: list[Token], index: int) -> bool:
@@ -2256,9 +2259,19 @@ def _uncarried_note(detail: str, line: int, went: str = "") -> str:
     """
     quoted = f", starting {code_span(went)}" if went.strip() else ""
     return (
-        f"not carried to `## {EVIDENCE_NOTES_HEADING}`: {detail} at line {line} "
+        f"{UNCARRIED_ANNOUNCEMENT_PREFIX}`## {EVIDENCE_NOTES_HEADING}`: {detail} at line {line} "
         f"of the `{EVIDENCE_STATUS_HEADING}` section{quoted}"
     )
+
+
+def says_text_was_not_carried(note: str) -> bool:
+    """Whether this announcement already tells the author text left the section.
+
+    One predicate beside the one composer, so a second sentence about the
+    same loss can ask rather than grep -- the shape that put two spellings of
+    one rule in this module three times over (#1778, round 21).
+    """
+    return note.startswith(UNCARRIED_ANNOUNCEMENT_PREFIX)
 
 
 def _section_notes(section: str) -> tuple[list[str], list[str]]:
@@ -3945,11 +3958,16 @@ def _render_structured_entries(
         f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
         for entry in sorted(rendered_entries, key=lambda entry: int(entry["index"]))
     ]
+    carried_notes: list[str] = []
     if rendered_entries:
         write = write_evidence_status_section(
             _strip_evidence_metadata(body), rendered_lines
         )
         reconciled, refusal = write.body, write.refusal
+        # Held here as well as handed on, so the second sentence about a loss
+        # can ask whether the first was already said even when the caller
+        # keeps no list (#1778, round 21).
+        carried_notes = list(write.announcements)
         if announcements is not None:
             announcements.extend(write.announcements)
         if refusal is not None:
@@ -4048,12 +4066,13 @@ def _render_structured_entries(
 
     items = {_as_the_page_reads(str(entry["item"]).strip()) for entry in rendered_entries}
 
-    def _rewritten(line: str) -> bool:
-        prefix = EVIDENCE_STATUS_PREFIX_RE.match(f"- {line}")
+    def _names_one_of(line: str, known: set[str]) -> bool:
+        """Whether this line is a status line for one of `known`."""
+        prefix = EVIDENCE_STATUS_PREFIX_RE.match(f"- {line.strip().lstrip('-*+').strip()}")
         if not prefix:
             return False
         rest = prefix.group("rest").strip()
-        for item in items:
+        for item in known:
             if not item or not rest.startswith(item):
                 continue
             tail = rest[len(item) :]
@@ -4069,6 +4088,15 @@ def _render_structured_entries(
             if separator is not None and not tail[: separator.start()].strip():
                 return True
         return False
+
+    def _rewritten(line: str) -> bool:
+        return _names_one_of(line, items)
+
+    # The same question asked of the author's RAW bytes, for the one path
+    # where the page's reading does not exist: the reader refused the
+    # section, so both sides of that comparison are the body as written
+    # (#1778, round 21).
+    raw_items = {str(entry["item"]).strip() for entry in rendered_entries}
 
     rendered_as_read, _ = _rendered_status_lines(
         f"## {EVIDENCE_STATUS_HEADING}\n\n" + "\n".join(rendered_lines) + "\n"
@@ -4133,6 +4161,51 @@ def _render_structured_entries(
             if line not in after and not _rewritten(line) and not _still_written(line)
         ]
     )
+    # An empty `replaced` because nothing was replaced and an empty one
+    # because the page could not be READ are not the same result, and until
+    # round 21 they were the same object. This is the one shape where the
+    # BEFORE half of the fail-closed condition decides anything: the reader
+    # refuses the section (an item carrying inline HTML, say), so `before` is
+    # empty and nothing is named -- while the write goes ahead and rewrites
+    # the section, so any line it held that this write did not render back
+    # has left. The loss is main's too; the SILENCE was this branch's, and
+    # the criterion is that nothing leaves without a line saying it left. The
+    # page is not read around the refusal -- that is the second renderer
+    # round 17 closed -- the refusal itself is what the sentence carries
+    # (#1778, round 21).
+    already_said = any(says_text_was_not_carried(note) for note in carried_notes)
+    # What LEFT, measured on the author's own bytes rather than on a reading
+    # of the page: the page reader has refused, and reconstructing its view
+    # around the refusal is the second renderer round 17 closed. The section's
+    # source lines before the write, minus the ones still there after it,
+    # minus the lines this write rendered, is what the author no longer has --
+    # and it is the form they need to put a line back.
+    taken = []
+    if unreadable_before is not None and not already_said:
+        rendered_now = {line.strip() for line in rendered_lines}
+        # Anywhere in the written body, not only under the status heading: a
+        # line the write CARRIED (to the notes section) has not left.
+        after_source = {line.strip() for line in reconciled.splitlines()}
+        taken = [
+            line.strip()
+            for line in markdown_section(body, EVIDENCE_STATUS_HEADING).splitlines()
+            if line.strip()
+            and line.strip() not in after_source
+            and line.strip() not in rendered_now
+            and not _names_one_of(line, raw_items)
+        ]
+    if taken:
+        unread = quoted_sentence(
+            "The `## Evidence Status` section could not be read before this write "
+            "({reason}), so what it took is named from the body's own text rather than "
+            "from the page: {taken}. Rewriting those below the status section keeps them "
+            "in the body the next run writes.",
+            reason=quoted_for_comment(unreadable_before),
+            taken=quoted_for_comment(", ".join(taken)),
+        )
+        log(unread)
+        if announcements is not None:
+            announcements.append(unread)
     if (scalars := scalar_record_announcement(updated_entries, replaced)) is not None:
         log(scalars)
         if announcements is not None:
