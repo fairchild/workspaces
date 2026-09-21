@@ -10635,6 +10635,54 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                 owner = evidence.owned_lines(entries, [])
                 self.assertEqual([owner.claim(line) for _ in range(3)], expected)
 
+    # intent: fix
+    # marker: red at `35a13793`, its own base, behaviourally --
+    # `AssertionError: unexpectedly None`, the write going ahead on a record
+    # naming one requirement in two spellings. Red on `016d94ba` on a name
+    # this branch adds (#1751, round 16).
+    def test_two_spellings_of_one_requirement_in_the_record_are_refused(self) -> None:
+        """The key is the page's reading, and this is the shape that says so.
+
+        `Manual QA on device` and `**Manual QA** on device` are two strings
+        and one requirement: the page reads them the same, so every status
+        line naming either is the entry's under the ownership rule, and two
+        entries recording them are two claims on one line's bytes. Keying
+        this check on the raw item text instead leaves the suite green --
+        measured, a surviving mutant of this round -- because no fixture in
+        it records one requirement under two spellings.
+
+        Asked at the WRITER rather than through the turn, which is where the
+        check lives and the only seam where both spellings survive: the
+        turn's re-keying drops an entry whose item is not the requested
+        string, so the pair cannot reach the write through it.
+
+        `recorded_items` holds the requirement ONCE here, which is what the
+        writer is handed in the shape this is about -- the turn builds it
+        from a map keyed by index, so two entries at one index collapse to
+        one recorded item while the entries themselves keep both. Handing
+        both spellings as recorded items instead makes the CONTRACT's own
+        guard fire first, and then this test would be about that guard.
+        """
+        evidence = self.evidence()
+        entries = [
+            {"index": 1, "item": "Manual QA on device", "status": "complete",
+             "detail": "done on the test device"},
+            {"index": 2, "item": "**Manual QA** on device", "status": "complete",
+             "detail": "done on the test device"},
+        ]
+        lines = evidence.rendered_entry_lines(entries)
+        write = evidence.write_evidence_status_section(
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            + "\n".join(lines) + "\n\n## Validation\n\n- ok\n",
+            lines,
+            recorded_items=["Manual QA on device"],
+            entries=entries,
+            previous_entries=[],
+        )
+        self.assertIsNotNone(write.refusal, "the write went ahead on two spellings of one item")
+        self.assertIn("record one requirement more than once", write.refusal)
+        self.assertIn("at position 1, 2", write.refusal)
+
     # intent: control
     # marker: green at `35a13793`, its own base -- `Ran 1 test ... OK` -- which
     # is what makes it a control; red on `016d94ba` on a NAME this branch adds,
