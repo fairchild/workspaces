@@ -50,20 +50,29 @@ PENDING_TEXT = getattr(
 )
 
 
-def all_of(cases, expected: int, label: str):
-    """A fixture table, with its size asserted before anything iterates it.
+def all_of(cases, expected: set[str], label: str):
+    """A fixture table, with its exact contents asserted before anything iterates it.
 
     A table-driven test iterates a dict nothing requires to be non-empty, so
     emptying the table leaves five principal tests reporting OK in 0.000s --
     and round 4's "accepted at base, refused at head" rested on those tables
-    happening to be populated (#1771, round 6). The COUNT rather than
-    non-emptiness, because a table trimmed to one shape is the same hole with
-    a smaller mouth.
+    happening to be populated (#1771, round 6).
+
+    The NAMES rather than the count, because a count answers "how many" and
+    the claim is about WHICH: a shape swapped for another of the same size --
+    a weaker spelling in place of the one a claim rests on -- passed this
+    guard silently and took the coverage with it (#1771, round 10). The
+    caller names the keys it expects, so a swap is as loud as a deletion and
+    the count is implied. Duplicates are a difference too: a table naming one
+    shape twice is a shape short.
     """
-    if len(cases) != expected:
+    names = set(cases)
+    missing, unexpected = sorted(expected - names), sorted(names - expected)
+    if missing or unexpected or len(cases) != len(expected):
         raise AssertionError(
-            f"{label}: {len(cases)} shapes, expected {expected} -- the table this test's "
-            "claim rests on was changed; re-measure the claim or update the count"
+            f"{label}: missing {missing}, unexpected {unexpected}, {len(cases)} rows for "
+            f"{len(expected)} names -- the table this test's claim rests on was changed; "
+            "re-measure the claim or update the set"
         )
     return cases
 
@@ -120,6 +129,68 @@ what the tests below now cover. Two files, +48 -31; no behavior a user sees.
 - [x] None
 - [ ] Blocked on evidence
 """
+
+
+class TheFixtureGuardNamesWhatItExpectsTests(unittest.TestCase):
+    """What `all_of` is asked for, asked of `all_of` itself.
+
+    Round 6 gave every table-driven test a guard because emptying a table
+    left five principal tests reporting OK in 0.000s. The guard read the
+    SIZE, which is an answer to "how many" where the claim is about WHICH.
+    """
+
+    NAMES = {
+        "a space inside the backticks",
+        "double-backtick padding",
+        "a punctuation gap after the token",
+    }
+    TABLE = {
+        "a space inside the backticks": "- ` [blocked] ` waiting",
+        "double-backtick padding": "- `` [blocked] `` waiting",
+        "a punctuation gap after the token": "- **[blocked]:** waiting",
+    }
+
+    def raised_by(self, cases, names=None) -> str:
+        with self.assertRaises(AssertionError) as raised:
+            all_of(cases, self.NAMES if names is None else names, "T")
+        return str(raised.exception)
+
+    # intent: fix
+    def test_a_row_swapped_for_another_of_the_same_size_is_loud(self) -> None:
+        # The hole a count leaves: three shapes in, three shapes out, and the
+        # one the claim rests on replaced by a weaker spelling. The guard
+        # says which name went and which arrived (#1771, round 10).
+        swapped = dict(self.TABLE)
+        del swapped["a punctuation gap after the token"]
+        swapped["a plain backticked token"] = "- `[blocked]` waiting"
+        self.assertEqual(len(swapped), len(self.TABLE))
+        message = self.raised_by(swapped)
+        self.assertIn("missing ['a punctuation gap after the token']", message)
+        self.assertIn("unexpected ['a plain backticked token']", message)
+        self.assertIn("re-measure the claim or update the set", message)
+
+    # intent: control
+    def test_the_table_as_it_stands_passes_through(self) -> None:
+        # The guard returns the table itself, so a call site iterates what it
+        # asked about rather than a copy.
+        self.assertIs(all_of(self.TABLE, self.NAMES, "T"), self.TABLE)
+
+    # intent: guard
+    def test_emptying_and_trimming_are_still_loud(self) -> None:
+        # Round 6's two shapes, which the set catches for the same reason it
+        # catches a swap: they are differences in the names.
+        self.assertIn("missing [", self.raised_by({}))
+        trimmed = dict(list(self.TABLE.items())[:2])
+        self.assertIn("missing ['a punctuation gap after the token']", self.raised_by(trimmed))
+
+    # intent: guard
+    def test_a_sequence_naming_one_shape_twice_is_a_shape_short(self) -> None:
+        # A set alone would call this table complete: three rows, two shapes.
+        message = self.raised_by(
+            ("a space inside the backticks", "double-backtick padding", "double-backtick padding"),
+        )
+        self.assertIn("missing ['a punctuation gap after the token']", message)
+        self.assertIn("3 rows for 3 names", message)
 
 
 class PRReadinessTests(unittest.TestCase):
@@ -905,13 +976,13 @@ class RenderedStatusLineTests(unittest.TestCase):
     FILES = ["Sources/WorkspaceManager/Foo.swift"]
     PENDING = PendingLineShapeTests.PENDING
     # The three writings of `- [pending-ci] item -- waiting` the written view
-    # misses: an escaped bracket, bracket character references, and a tag pair
-    # around the token.
-    SHAPES = (
-        "- \\[pending-ci] item -- waiting",
-        "- &#91;pending-ci&#93; item -- waiting",
-        "- <span>[pending-ci]</span> item -- waiting",
-    )
+    # misses. Named rather than positional so the guard below can say WHICH
+    # of them a table is missing (#1771, round 10).
+    SHAPES = {
+        "an escaped bracket": "- \\[pending-ci] item -- waiting",
+        "bracket character references": "- &#91;pending-ci&#93; item -- waiting",
+        "a tag pair around the token": "- <span>[pending-ci]</span> item -- waiting",
+    }
 
     # #1727. The issue's own reproduction: a section whose list item is
     # complete and whose table cell is not.
@@ -929,15 +1000,31 @@ class RenderedStatusLineTests(unittest.TestCase):
         return GOOD_BODY + f"\n## Evidence Status\n{section}"
 
     def test_each_written_shape_of_a_pending_line_fails(self) -> None:
-        for shape in all_of(self.SHAPES, 3, "RenderedStatusLineTests.SHAPES"):
-            with self.subTest(shape=shape):
+        for name, shape in all_of(
+            self.SHAPES,
+            {
+                "an escaped bracket",
+                "bracket character references",
+                "a tag pair around the token",
+            },
+            "RenderedStatusLineTests.SHAPES",
+        ).items():
+            with self.subTest(shape=name):
                 self.assertEqual(
                     self.failures(self.body(f"{shape}\n")), [pending("[pending-ci] item -- waiting")]
                 )
 
     def test_a_blocked_token_fails_in_the_same_three_shapes(self) -> None:
-        for shape in all_of(self.SHAPES, 3, "RenderedStatusLineTests.SHAPES"):
-            with self.subTest(shape=shape):
+        for name, shape in all_of(
+            self.SHAPES,
+            {
+                "an escaped bracket",
+                "bracket character references",
+                "a tag pair around the token",
+            },
+            "RenderedStatusLineTests.SHAPES",
+        ).items():
+            with self.subTest(shape=name):
                 self.assertEqual(
                     self.failures(self.body(f"{shape.replace('pending-ci', 'blocked')}\n")),
                     [pending("[blocked] item -- waiting")],
@@ -947,8 +1034,16 @@ class RenderedStatusLineTests(unittest.TestCase):
         # `evaluate` rewrites CR and CRLF to LF before anything reads the body,
         # and reads the section from that same normalized text, so the rendered
         # view sees the shape the author wrote.
-        for shape in all_of(self.SHAPES, 3, "RenderedStatusLineTests.SHAPES"):
-            with self.subTest(shape=shape):
+        for name, shape in all_of(
+            self.SHAPES,
+            {
+                "an escaped bracket",
+                "bracket character references",
+                "a tag pair around the token",
+            },
+            "RenderedStatusLineTests.SHAPES",
+        ).items():
+            with self.subTest(shape=name):
                 body = self.body(f"{shape}\n").replace("\n", "\r\n")
                 self.assertEqual(self.failures(body), [pending("[pending-ci] item -- waiting")])
 
@@ -958,7 +1053,15 @@ class RenderedStatusLineTests(unittest.TestCase):
     def test_a_complete_line_still_passes_in_every_shape(self) -> None:
         complete = [
             one.replace("pending-ci", "complete")
-            for one in all_of(self.SHAPES, 3, "RenderedStatusLineTests.SHAPES")
+            for _, one in all_of(
+                self.SHAPES,
+                {
+                    "an escaped bracket",
+                    "bracket character references",
+                    "a tag pair around the token",
+                },
+                "RenderedStatusLineTests.SHAPES",
+            ).items()
         ]
         for shape in ("- [complete] item -- proof", *complete):
             with self.subTest(shape=shape):
@@ -966,14 +1069,30 @@ class RenderedStatusLineTests(unittest.TestCase):
 
     def test_a_rendered_only_shape_inside_a_fence_is_still_an_example(self) -> None:
         complete = "- [complete] swift test -- 1992 tests passed\n"
-        for shape in all_of(self.SHAPES, 3, "RenderedStatusLineTests.SHAPES"):
-            with self.subTest(shape=shape):
+        for name, shape in all_of(
+            self.SHAPES,
+            {
+                "an escaped bracket",
+                "bracket character references",
+                "a tag pair around the token",
+            },
+            "RenderedStatusLineTests.SHAPES",
+        ).items():
+            with self.subTest(shape=name):
                 self.assertEqual(self.failures(self.body(f"{complete}\n```markdown\n{shape}\n```\n")), [])
 
     def test_a_task_box_in_front_of_a_rendered_only_shape_still_fails(self) -> None:
         for box in ("- [ ] ", "- [x] ", "1. [X] "):
-            for shape in all_of(self.SHAPES, 3, "RenderedStatusLineTests.SHAPES"):
-                with self.subTest(box=box, shape=shape):
+            for name, shape in all_of(
+                self.SHAPES,
+                {
+                    "an escaped bracket",
+                    "bracket character references",
+                    "a tag pair around the token",
+                },
+                "RenderedStatusLineTests.SHAPES",
+            ).items():
+                with self.subTest(box=box, shape=name):
                     line = box + shape.split(" ", 1)[1]
                     self.assertEqual(
                         self.failures(self.body(f"{line}\n")),
@@ -984,7 +1103,15 @@ class RenderedStatusLineTests(unittest.TestCase):
         # The check reached directly, on the body as written: each shape
         # flattens to the text a reader sees.
         section = "".join(
-            f"{shape}\n" for shape in all_of(self.SHAPES, 3, "RenderedStatusLineTests.SHAPES")
+            f"{shape}\n" for _, shape in all_of(
+                self.SHAPES,
+                {
+                    "an escaped bracket",
+                    "bracket character references",
+                    "a tag pair around the token",
+                },
+                "RenderedStatusLineTests.SHAPES",
+            ).items()
         )
         self.assertEqual(
             pr_readiness.rendered_status_lines(self.body(section)),
@@ -1907,7 +2034,16 @@ class ThePageSaysWhereALineStartsTests(unittest.TestCase):
         return pr_readiness.evaluate(pr(body), self.FILES)
 
     def test_a_block_tag_after_prose_starts_a_line_the_page_shows(self) -> None:
-        for shape, section in all_of(self.SHAPES, 4, "ThePageSaysWhereALineStartsTests.SHAPES").items():
+        for shape, section in all_of(
+            self.SHAPES,
+            {
+                "a div after prose",
+                "a pre after prose",
+                "a break after prose",
+                "a break inside a list item",
+            },
+            "ThePageSaysWhereALineStartsTests.SHAPES",
+        ).items():
             with self.subTest(shape=shape), recorded_page():
                 failures = self.failures(self.body(section))
                 self.assertTrue(
@@ -1924,7 +2060,16 @@ class ThePageSaysWhereALineStartsTests(unittest.TestCase):
         # The fallback, stated as the cost it is: with no renderer the gate
         # stands on the source model, which does not see these, and it says so
         # rather than passing quietly.
-        for shape, section in all_of(self.SHAPES, 4, "ThePageSaysWhereALineStartsTests.SHAPES").items():
+        for shape, section in all_of(
+            self.SHAPES,
+            {
+                "a div after prose",
+                "a pre after prose",
+                "a break after prose",
+                "a break inside a list item",
+            },
+            "ThePageSaysWhereALineStartsTests.SHAPES",
+        ).items():
             with self.subTest(shape=shape):
                 result = self.result(self.body(section))
                 self.assertEqual(result.failures, [])
@@ -3028,7 +3173,15 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
         The half that asks reality is the sibling below, which reads the
         recorded page for the same three bodies.
         """
-        for name, line in all_of(self.PADDED_STATUSES, 3, "PADDED_STATUSES").items():
+        for name, line in all_of(
+            self.PADDED_STATUSES,
+            {
+                "a space inside the backticks",
+                "double-backtick padding",
+                "a punctuation gap after the token",
+            },
+            "PADDED_STATUSES",
+        ).items():
             with self.subTest(spelling=name):
                 body = self.padded_body(line)
                 self.assertEqual(pr_readiness.status_heading_candidates(body), [])
@@ -3045,7 +3198,15 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
         padding reach the page -- which is why they are statuses here and not
         in ordinary markdown.
         """
-        for name, line in all_of(self.PADDED_STATUSES, 3, "PADDED_STATUSES").items():
+        for name, line in all_of(
+            self.PADDED_STATUSES,
+            {
+                "a space inside the backticks",
+                "double-backtick padding",
+                "a punctuation gap after the token",
+            },
+            "PADDED_STATUSES",
+        ).items():
             with self.subTest(spelling=name), recorded_page():
                 html = pr_readiness.render_markdown(self.padded_body(line))
             text = re.sub(r"<[^>]+>", "", html)
@@ -3078,7 +3239,15 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
 
         The sibling below asks the page whether it prints these characters.
         """
-        for name, line in all_of(self.UNSWALLOWED, 3, "UNSWALLOWED").items():
+        for name, line in all_of(
+            self.UNSWALLOWED,
+            {
+                "a padded span with no marker",
+                "double-backtick padding with no marker",
+                "a punctuation gap with no marker",
+            },
+            "UNSWALLOWED",
+        ).items():
             with self.subTest(spelling=name):
                 body = self.unswallowed_body(line)
                 lines = pr_readiness.rendered_status_lines(body)
@@ -3102,7 +3271,15 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
     # intent: guard
     def test_the_page_prints_those_unmarked_lines_too(self) -> None:
         # Asks reality, from recordings taken with the token.
-        for name, line in all_of(self.UNSWALLOWED, 3, "UNSWALLOWED").items():
+        for name, line in all_of(
+            self.UNSWALLOWED,
+            {
+                "a padded span with no marker",
+                "double-backtick padding with no marker",
+                "a punctuation gap with no marker",
+            },
+            "UNSWALLOWED",
+        ).items():
             with self.subTest(spelling=name), recorded_page():
                 html = pr_readiness.render_markdown(self.unswallowed_body(line))
             self.assertIn(line, re.sub(r"<[^>]+>", "", html), name)
@@ -3251,7 +3428,15 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
         # The rule this reader is written to, asserted rather than described:
         # one spelling of the wrapper for all three readers, so a shape the
         # written view takes cannot be one this reader misses.
-        table = {**all_of(self.PADDED_STATUSES, 3, "PADDED_STATUSES"), "plain backticks": "- `[blocked]` waiting"}
+        table = {**all_of(
+            self.PADDED_STATUSES,
+            {
+                "a space inside the backticks",
+                "double-backtick padding",
+                "a punctuation gap after the token",
+            },
+            "PADDED_STATUSES",
+        ), "plain backticks": "- `[blocked]` waiting"}
         for name, line in table.items():
             with self.subTest(spelling=name):
                 self.assertTrue(pr_readiness.PRINTED_PENDING_RE.match(line), name)
@@ -4523,7 +4708,11 @@ class TheSeederAndThisGateAskOneQuestionTests(unittest.TestCase):
         # What the two questions were for, now answered by one: the body is
         # returned unwritten because the section is there, and the gate reads
         # the author's own section rather than reporting it missing.
-        for name, heading in all_of(self.SHAPES, 4, "TheSeederAndThisGateAskOneQuestionTests.SHAPES").items():
+        for name, heading in all_of(
+            self.SHAPES,
+            {"emphasis", "indented three spaces", "setext", "trailing spaces"},
+            "TheSeederAndThisGateAskOneQuestionTests.SHAPES",
+        ).items():
             with self.subTest(shape=name):
                 body = self.BODY.format(heading=heading)
                 seeded = self.seeder().seed_mergeability_section(body, changed_files=self.FILES)
@@ -4546,7 +4735,11 @@ class TheSeederAndThisGateAskOneQuestionTests(unittest.TestCase):
         )
         # And the shapes the page shows: both readers find them, so neither
         # half of the old conjunction is left to be load-bearing.
-        for name, heading in all_of(self.SHAPES, 4, "TheSeederAndThisGateAskOneQuestionTests.SHAPES").items():
+        for name, heading in all_of(
+            self.SHAPES,
+            {"emphasis", "indented three spaces", "setext", "trailing spaces"},
+            "TheSeederAndThisGateAskOneQuestionTests.SHAPES",
+        ).items():
             with self.subTest(shape=name):
                 body = self.BODY.format(heading=heading)
                 self.assertTrue(reader.has_markdown_section(body, "Mergeability"))
@@ -5005,7 +5198,19 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
     def test_the_gate_refuses_every_shape_the_page_prints_a_status_on(self) -> None:
         # The ACCEPTANCE, not a property of a regex: at `56ba54d6` each of
         # these returns ok.
-        for name, (written, printed, seen) in all_of(self.SHAPES, 7, "SHAPES").items():
+        for name, (written, printed, seen) in all_of(
+            self.SHAPES,
+            {
+                "escaped asterisks",
+                "asterisk references",
+                "escaped backticks",
+                "backtick references",
+                "underscore references",
+                "an intraword underscore",
+                "a second link label",
+            },
+            "SHAPES",
+        ).items():
             with self.subTest(shape=name):
                 result = pr_readiness.evaluate(pr(self.body(written)), self.FILES)
                 self.assertFalse(result.ok, f"{name}: the gate accepted a body showing a status")
@@ -5031,7 +5236,19 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
         # Tokenless, which is how the gate runs on a laptop: the parser
         # resolves the escape and the reference, so the line the model holds
         # is the line the page prints, delimiters and all.
-        for name, (written, printed, _) in all_of(self.SHAPES, 7, "SHAPES").items():
+        for name, (written, printed, _) in all_of(
+            self.SHAPES,
+            {
+                "escaped asterisks",
+                "asterisk references",
+                "escaped backticks",
+                "backtick references",
+                "underscore references",
+                "an intraword underscore",
+                "a second link label",
+            },
+            "SHAPES",
+        ).items():
             with self.subTest(shape=name):
                 lines = pr_readiness.rendered_status_lines(self.body(written))
                 self.assertIn(printed, lines, name)
@@ -5482,7 +5699,15 @@ class ThePagePlaneIsAskedAboutTheInvisibleClassTests(unittest.TestCase):
         # #1794's three, recorded so the page-plane claim about them is a
         # recording rather than a sentence: the page shows the token in each,
         # and the gate accepts each — which is the frontier, stated.
-        for name, (line, refused) in all_of(self.FRONTIER, 3, "FRONTIER").items():
+        for name, (line, refused) in all_of(
+            self.FRONTIER,
+            {
+                "a Hangul filler (closed this round)",
+                "a Braille blank (So, not default-ignorable)",
+                "a combining mark inside the token",
+            },
+            "FRONTIER",
+        ).items():
             with self.subTest(shape=name):
                 body = self.body(line)
                 with recorded_page():
@@ -5513,7 +5738,19 @@ class ThePageShowsThoseDelimitersTooTests(unittest.TestCase):
     # intent: fix
     def test_the_page_prints_the_delimiters_and_the_gate_reads_them(self) -> None:
         shapes = APrintedLineCanCarryADelimiterCharacterTests.SHAPES
-        for name, (written, printed, _) in all_of(shapes, 7, "SHAPES").items():
+        for name, (written, printed, _) in all_of(
+            shapes,
+            {
+                "escaped asterisks",
+                "asterisk references",
+                "escaped backticks",
+                "backtick references",
+                "underscore references",
+                "an intraword underscore",
+                "a second link label",
+            },
+            "SHAPES",
+        ).items():
             with self.subTest(shape=name), recorded_page():
                 body = self.body(written)
                 page = pr_readiness.page_view(body)
