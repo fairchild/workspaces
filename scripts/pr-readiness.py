@@ -1872,6 +1872,9 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
     # The page first, then the source model. Both are refusers and either one
     # is enough, so the order decides only which line the failure names -- and
     # the page's line is the one an author can go and look at.
+    if (drift := unicode_data_notice()) is not None:
+        # Loud where a human reads it, rather than in a comment nobody runs.
+        notices.append(drift)
     page = page_view(body)
     if page.unverified:
         notices.append(
