@@ -516,12 +516,16 @@ and `evaluate_evidence_accounting` and `_live_ci_evidence_gate_error` in the
 contributor skill's scripts. A sentence here describing one of them is a copy
 of it that goes stale on its own.
 
-The `blocked:evidence` clear reads the recorded entries
-(`should_clear_blocked_label`, `process_pr`). That is the gap
-[#1778](https://github.com/fairchild/workspaces/issues/1778) tracks.
+A completion already recorded complete and bound to the current head is
+re-checked by neither the CI verifier nor the macOS evidence lane
+(`ci_entries_needing_verification`, `reconcile_pending_ci_evidence`), and it
+counts toward clearing `blocked:evidence` (`should_clear_blocked_label`); that
+is the gap [#1778](https://github.com/fairchild/workspaces/issues/1778) tracks.
 
-For a reviewer: a completion in the comment is a claim, not a proof. Open the
-run the entry names.
+For a reviewer: a completion in the comment is a claim, not a proof. The run
+link an entry carries (`proof_url`) is recorded, not verified, so it takes you
+to a run page to read as evidence rather than as proof that the entry is
+genuine.
 
 ## How it's enforced
 
