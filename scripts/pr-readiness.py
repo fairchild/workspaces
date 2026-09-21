@@ -39,6 +39,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -200,15 +201,39 @@ LINE_ENDING_RE = re.compile(r"\r\n?")
 # The padding inside a wrapper is part of the wrapper rather than part of the
 # token: a code span written `` ` [blocked] ` `` shows its spaces to a reader
 # wherever the span is printed as characters (#1771).
-# The leading run: the inline delimiter characters a wrapper is made of,
-# and the characters that take space on the line without showing anything.
-# The invisible ones are here because the eighth-shape attempt found them
-# (#1771, round 4): `&#8203;[blocked]` prints a zero-width space and then
-# the token, so the page shows `[blocked] waiting` and a reader sees a
-# status where the gate saw a line starting with something else. A tilde
-# is deliberately NOT here: a struck-through status is withdrawn rather
-# than pending, which is #1727's decision and `test_a_struck_status_is_not_the_status_wherever_it_sits` holds it.
-OPENING_WRAPPER = "[`*_\u200b\u00ad\ufeff]*[ \t\u00a0]*"
+# The leading run, as a CATEGORY rather than as a list of characters: the
+# inline delimiter characters a wrapper is made of, and every character that
+# occupies the line without showing anything.
+#
+# Round 4 enumerated three of the second kind and was told what that is worth:
+# a list of three invisible characters is a list wearing a criterion's
+# clothes, and four more went straight through it -- a word joiner (U+2060), a
+# zero-width non-joiner (U+200C), a zero-width joiner (U+200D) and a
+# left-to-right mark (U+200E) each print nothing and put `[blocked] waiting`
+# in front of a reader, on the page and in this model both (#1771, round 5).
+#
+# So the second set is derived from Unicode: the FORMAT characters (`Cf` --
+# the zero-width family, the bidi controls and isolates, the soft hyphen, the
+# byte-order mark, the tag characters above the BMP) and the SPACE separators
+# (`Zs` -- U+00A0 and every other width of space). A code point Unicode adds
+# to either is covered here the day this gate's Python knows about it, which
+# is what makes this a rule rather than a list. The walk costs about a tenth
+# of a second at import, against a gate that makes a network call.
+#
+# Two neighbours are deliberately out. COMBINING MARKS (`Mn`) show something:
+# a mark before the token renders as a diacritic on a dotted circle, and one
+# attached to `[` still shows the bracket, so a mark is content rather than
+# nothing. A TILDE is out for the reason it was out before: a struck-through
+# status is withdrawn rather than pending (#1727), and
+# `test_a_struck_status_is_not_the_status_wherever_it_sits` holds that.
+INVISIBLE_CATEGORIES = ("Cf", "Zs")
+INVISIBLE_LEADING = "".join(
+    chr(code)
+    for code in range(0x110000)
+    if unicodedata.category(chr(code)) in INVISIBLE_CATEGORIES
+)
+WRAPPER_DELIMITERS = "`*_"
+OPENING_WRAPPER = "[" + re.escape(WRAPPER_DELIMITERS + "\t" + INVISIBLE_LEADING) + "]*"
 STATUS_TOKEN = r"\[(?:blocked|pending-ci)\]"
 PENDING_STATUS_RE = re.compile(
     rf"(?im)^\s*{LIST_MARKER}\s*(?:\[[ x]\]\s*)?{OPENING_WRAPPER}{STATUS_TOKEN}"

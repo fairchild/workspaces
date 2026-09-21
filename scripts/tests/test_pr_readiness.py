@@ -22,6 +22,7 @@ import re
 import sys
 import tempfile
 import time
+import unicodedata
 import unittest
 import urllib.error
 from pathlib import Path
@@ -5026,6 +5027,71 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
                 self.assertFalse(
                     pr_readiness.evaluate(pr(self.body(written)), self.FILES).ok, name
                 )
+
+    # intent: fix
+    def test_every_invisible_character_in_front_of_the_token_is_a_status(self) -> None:
+        """The ninth shape: what the zero-width space is an INSTANCE of (#1771, round 5).
+
+        Round 4 enumerated three invisible characters and called the criterion
+        settled. Four more went straight through the list — a word joiner, a
+        zero-width non-joiner, a zero-width joiner and a left-to-right mark —
+        each printing nothing in front of `[blocked] waiting`, on the page and
+        in this model both. A list of three is a list wearing a criterion's
+        clothes; the run is the CATEGORY now.
+        """
+        for name, written in (
+            ("a word joiner", "- &#8288;[blocked] waiting"),
+            ("a zero-width non-joiner", "- &zwnj;[blocked] waiting"),
+            ("a zero-width joiner", "- &#8205;[blocked] waiting"),
+            ("a left-to-right mark", "- &#8206;[blocked] waiting"),
+        ):
+            with self.subTest(shape=name):
+                self.assertFalse(
+                    pr_readiness.evaluate(pr(self.body(written)), self.FILES).ok, name
+                )
+
+    # intent: guard
+    def test_the_run_is_the_category_and_not_the_characters_someone_thought_of(self) -> None:
+        """Every code point Unicode calls a format character or a space separator.
+
+        The claim this round makes is about `Cf` and `Zs`, so it is asked of
+        all of them rather than of four more names: each one in front of the
+        token, through the gate, refused. A code point Unicode adds to either
+        category is covered by the same walk.
+        """
+        # The categories are named HERE rather than read off the gate, so this
+        # walk is a claim about Unicode that the gate has to meet — at
+        # `b76017a6` it fails on the characters the enumeration missed rather
+        # than erroring on a name that branch does not have.
+        invisible = [
+            chr(code)
+            for code in range(0x110000)
+            if unicodedata.category(chr(code)) in ("Cf", "Zs")
+        ]
+        self.assertGreater(len(invisible), 100, "the walk found almost nothing")
+        unrefused = [
+            f"U+{ord(one):04X}"
+            for one in invisible
+            if pr_readiness.evaluate(pr(self.body(f"- {one}[blocked] waiting")), self.FILES).ok
+        ]
+        self.assertEqual(unrefused, [], "a character that shows nothing hid a status")
+        # And the gate builds the same set from the same two categories, so
+        # the run is that rule rather than a copy of it kept in step by hand.
+        self.assertEqual(
+            sorted(invisible), sorted(pr_readiness.INVISIBLE_LEADING), "the gate's own set"
+        )
+
+    # intent: guard
+    def test_a_combining_mark_is_content_rather_than_nothing(self) -> None:
+        # The neighbour the criterion excludes, and why: a mark renders as a
+        # diacritic rather than as nothing, so it is not part of the leading
+        # run. Stated as a test so the exclusion is a decision rather than an
+        # omission — and the cost is named in the body.
+        self.assertNotIn("\u0308", pr_readiness.INVISIBLE_LEADING)
+        self.assertEqual(unicodedata.category("\u0308"), "Mn")
+        self.assertTrue(
+            pr_readiness.evaluate(pr(self.body("- &#776;[blocked] waiting")), self.FILES).ok
+        )
 
     # intent: control
     def test_a_tilde_stays_outside_the_run_because_a_struck_status_is_withdrawn(self) -> None:
