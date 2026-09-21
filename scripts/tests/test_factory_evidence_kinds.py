@@ -18,6 +18,7 @@ import bisect
 import contextlib
 import importlib.util
 import io
+import inspect
 import itertools
 import os
 import json
@@ -8607,6 +8608,9 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 self.assertIn(self.THEIRS, self.flat(twice))
                 self.assertEqual(said, [])
 
+    # intent: guard
+    # Guards: a stale reading of a recorded item stays the machine's -- green on main,
+    # and the half of the rule this round's readers must not break.
     def test_a_status_line_naming_a_recorded_item_is_still_the_machines(self) -> None:
         # The other direction of the same rule, and the half that keeps the
         # section readable: a stale reading of an item the write records is
@@ -8723,6 +8727,9 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             )
         )
 
+    # intent: guard
+    # Guards: the writer reads the wrapped spellings as the page does -- true on main,
+    # said out loud here so the reader this arc unified cannot quietly narrow.
     def test_a_wrapped_line_naming_a_recorded_item_is_the_machines(self) -> None:
         # The writer's half of the pair, pinned: it read the page all along,
         # and this says so rather than leaving it to the docstring.
@@ -9331,14 +9338,14 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
                 line = self.rendered.replace(*swap, 1)
                 self.assertFalse(
                     evidence.is_machine_status_line(
-                        line, [self.ITEM], section, evidence.owned_lines(entries_for([self.rendered]))
+                        line, [self.ITEM], section, evidence.owned_lines(entries_for([self.rendered]), ())
                     ),
                     f"{label} was taken for the machine's",
                 )
         # The write's own bytes still are.
         self.assertTrue(
             evidence.is_machine_status_line(
-                self.rendered, [self.ITEM], section, evidence.owned_lines(entries_for([self.rendered]))
+                self.rendered, [self.ITEM], section, evidence.owned_lines(entries_for([self.rendered]), ())
             )
         )
 
@@ -9428,6 +9435,8 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             f"- [pending-ci] {self.ITEM} -- {detail}\n\n## Validation\n\n- ran it\n"
         )
 
+    # intent: guard
+    # Guards: seven pushes with a changing detail accrue nothing.
     def test_seven_pushes_with_a_changing_detail_and_no_status_change(self) -> None:
         evidence = self.evidence()
         body = self.body_with(f"{self.DETAIL} on head aaaaaaaaaaaX")
@@ -9442,6 +9451,9 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             seen.append(self.counts(body))
         self.assertEqual(seen, [(1, 0)] * 7)
 
+    # intent: guard
+    # Guards: a status change costs no copy. Main passes it under a different key;
+    # it pins the property the entry key has to keep.
     def test_a_status_change_carries_nothing_either(self) -> None:
         """Keyed on the ENTRY, a status change costs no copy at all.
 
@@ -9465,6 +9477,8 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             self.assertEqual(self.counts(body), (1, 0))
         self.assertIn("- [complete] ", body)
 
+    # intent: guard
+    # Guards: the cap runs on the path production takes, not only on a hand-made body.
     def test_the_turn_caps_it_too_through_the_entry_point_production_uses(self) -> None:
         """The turn path, driven where production drives it (#1751, round 8).
 
@@ -9746,6 +9760,8 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         written, _ = self.written(3, recorded="complete")
         self.assertEqual(self.counts(written), (1, 2))
 
+    # intent: guard
+    # Guards: the ordinary one-copy body -- the case the cap must leave alone.
     def test_one_copy_is_still_the_machines_and_is_replaced(self) -> None:
         written, _ = self.written(1)
         self.assertEqual(self.counts(written), (1, 0))
@@ -9806,6 +9822,9 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertTrue(owner.claim(line), "the second entry's claim was collapsed away")
         self.assertFalse(owner.claim(line))
 
+    # intent: guard
+    # Guards: no accrual for the mirror pair. Green on main, red at `15e80e9e`: it
+    # guards a regression this PR introduced and then fixed.
     def test_the_mirror_pair_is_a_fixed_point_rather_than_an_accrual(self) -> None:
         # Driven through the write, three times: (2,0) each time. At
         # `15e80e9e` this read (2,1), (2,2), (2,3) -- one machine copy into
@@ -9856,6 +9875,64 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertEqual(sorted(instrument), claimed)
         self.assertEqual(len(claimed), 1, "one entry, one line")
 
+    # intent: guard
+    # Guards: the instrument's owner holds the line the write is about to
+    # render, over an update detail carrying a construct and one past the
+    # length limit. Green at `76c65118`; it is the test that kills the
+    # `(source, source)` mutant, which is a guard's job rather than a fix's.
+    def test_the_instrument_owns_the_line_the_write_is_about_to_render(self) -> None:
+        """The axis round 12's attempt held fixed (#1751, round 13).
+
+        Round 12 reported the "(source, source)" mutant as unkillable, on the
+        reasoning that the update replaces the detail and so closes any
+        construct the item opened. That reasoning is wrong -- replacing a
+        detail closes nothing. What made the mutant survive is that the
+        instrument's own update carries the detail `214 tests passed`, which
+        holds no construct and is well inside the line limit, so the line it
+        renders is one the RULE can read back and the cap never decides it.
+
+        Vary the update's detail and the two constructions part. The detail is
+        rebound on the sweep module (`mock.patch.object(sweep, "UPDATES", …)`)
+        rather than parametrised into `_entry_line_numbers`, because the
+        instrument's update is a property of the corpus it writes, not an
+        argument its readers take.
+        """
+        evidence = self.evidence()
+        sweep = load_module(
+            "evidence_write_sweep_detail", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        item, waiting = "run `a", "waiting"
+        for label, detail in (
+            ("a detail that closes a construct the item opened", "b` ok"),
+            ("a detail past the status-line limit", "x" * 4100),
+        ):
+            with self.subTest(detail=label):
+                next_line = f"- [complete] {item} -- {detail}"
+                entry = {
+                    "index": 1, "item": item, "status": "pending-ci",
+                    "detail": waiting, "kind": "test",
+                }
+                source = (
+                    "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
+                    "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+                    f"- [pending-ci] {item} -- {waiting}\n{next_line}\n\n"
+                    "## Validation\n\n- ran it\n"
+                )
+                normalized = evidence._strip_evidence_metadata(
+                    sweep.MARKDOWN_LINE_ENDING_RE.sub("\n", source)
+                )
+                lines = normalized.split("\n")
+                with mock.patch.object(
+                    sweep, "UPDATES", {1: {"status": "complete", "detail": detail}}
+                ):
+                    owned = sweep._entry_line_numbers(lines, normalized, source)
+                self.assertIn(
+                    lines.index(next_line),
+                    owned,
+                    f"{label}: the line the write is about to render is not the machine's here",
+                )
+
+    # intent: guard
     def test_the_owner_the_write_builds_holds_the_line_it_is_about_to_render(self) -> None:
         """The property the instrument's second input exists for (#1751, round 12).
 
@@ -9901,6 +9978,162 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual([one["status"] for one in updated], ["complete"])
 
+    MOVED_ITEM = "run `a"
+    MOVED_DETAIL = "b` ok"
+    OTHER_ITEM = "manual QA"
+
+    def moved(self, requested: list[str], index: int) -> tuple[int, int]:
+        """The turn, over a body the author wrote a second copy of the line into.
+
+        The published body records the item at index 1 -- where the last turn
+        wrote it. `requested` is the contract as it stands NOW, and `index` is
+        this run's position for the same item.
+        """
+        line = f"- [complete] {self.MOVED_ITEM} -- {self.MOVED_DETAIL}"
+        recorded = {"index": 1, "item": self.MOVED_ITEM, "status": "complete",
+                    "detail": self.MOVED_DETAIL, "kind": "test"}
+        visible = (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"{line}\n{line}\n\n## Validation\n\n- ran it\n"
+        )
+        published = (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": [recorded]}) + "\n-->\n\n" + visible
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            rendered, errors = run_contributor.render_execution_summary_body(
+                visible,
+                requested_evidence=requested,
+                evidence_complete=[f"{index} -- {self.MOVED_DETAIL}"],
+                evidence_blocked=None,
+                evidence_pending_ci=None,
+                published_body=published,
+            )
+        self.assertEqual(errors, [])
+        return self.counts(rendered)
+
+    # intent: fix
+    def test_an_item_that_keeps_its_text_and_moves_position_owns_one_line(self) -> None:
+        """A claim's key has to name the same entry in BOTH bodies (#1751, round 13).
+
+        Through the turn, which is where the two index spaces met: this run's
+        entries are built from positions in the CURRENT `requested_evidence`
+        and the published body's entries were read at the positions the LAST
+        turn wrote them at. So an issue owner reordering the requested list
+        gave one line two claims, and the write owned both of the author's
+        copies: one rewritten, the other deleted -- nothing in
+        `## Evidence Notes`, nothing on stderr about it, no refusal.
+
+        Both sides are indexed against one list now. At `76c65118` this read
+        (1, 0) while the controls below read (1, 1) -- the position is the
+        only thing that differs between them, which is why nothing caught it.
+        """
+        self.assertEqual(
+            self.moved([self.OTHER_ITEM, self.MOVED_ITEM], 2),
+            (1, 1),
+            "the author's second copy was deleted",
+        )
+
+    # intent: control
+    def test_the_same_item_at_one_position_is_unchanged(self) -> None:
+        # The same turn with the item where the published body left it: one
+        # contract item, and two, so the second control differs from the fix
+        # case in the position alone.
+        self.assertEqual(self.moved([self.MOVED_ITEM], 1), (1, 1))
+        self.assertEqual(self.moved([self.MOVED_ITEM, self.OTHER_ITEM], 1), (1, 1))
+
+    # intent: guard
+    def test_an_entry_this_contract_no_longer_asks_for_is_dropped(self) -> None:
+        # Not guessed at: an item the issue no longer requests is not a
+        # requirement of this contract, so it owns no line in it.
+        evidence = self.evidence()
+        recorded = {"index": 1, "item": "a requirement since removed", "status": "complete",
+                    "detail": "d", "kind": "test"}
+        self.assertEqual(evidence.entries_keyed_for([recorded], ["something else"]), [])
+
+    # intent: guard
+    def test_two_entries_at_one_index_are_a_fixed_point_on_this_head(self) -> None:
+        """What `rendered_entry_claims` claims about a colliding index, run.
+
+        The docstring used to justify the index key by saying a second entry
+        at one index is refused as a collision. It is not -- that refusal is
+        #1782's -- so the justification was false for the head it sat on. What
+        IS true here is measured: three writes, no accrual either way.
+        """
+        evidence = self.evidence()
+        entries = [
+            self.entry(index=1),
+            self.entry(index=1, item="manual QA on device", detail="queued"),
+        ]
+        self.assertEqual(
+            evidence._indistinguishable([str(one["item"]) for one in entries], ""),
+            [],
+            "the items genuinely differ, so nothing here refuses the shape",
+        )
+        lines = evidence.rendered_entry_lines(entries)
+        update = {1: {"status": "complete", "detail": str(entries[0]["detail"])}}
+        for label, extra, expected in (
+            ("no spare copy", [], (2, 0)),
+            ("a spare copy of the first line", [lines[0]], (2, 1)),
+        ):
+            with self.subTest(body=label):
+                body = (
+                    "<!-- evidence-status:v1\n" + json.dumps({"entries": entries}) + "\n-->\n\n"
+                    "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+                    + "\n".join(lines + extra)
+                    + "\n\n## Validation\n\n- ran it\n"
+                )
+                seen = []
+                for _ in range(3):
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        body = evidence.update_evidence_entries(body, update)
+                    seen.append(self.counts(body))
+                self.assertEqual(seen, [expected] * 3)
+
+    # intent: guard
+    def test_the_owner_takes_both_ends_of_the_body_with_no_default(self) -> None:
+        # A default for `previous_entries` is a caller dropping the last run's
+        # claims without saying so: a changed verdict's old line is then
+        # carried to `## Evidence Notes` rather than replaced. Required, so
+        # omitting it is a TypeError at the call rather than a quiet carry at
+        # the write -- and both production call sites pass it.
+        evidence = self.evidence()
+        parameters = inspect.signature(evidence.owned_lines).parameters
+        self.assertEqual(
+            [one.default for one in parameters.values()], [inspect.Parameter.empty] * 2
+        )
+        with self.assertRaises(TypeError):
+            evidence.owned_lines([self.entry()])
+
+    # intent: guard
+    def test_two_entries_with_one_item_text_stay_two_claims(self) -> None:
+        """What the index buys, in the shape that would cost the item text.
+
+        Two entries in ONE body can carry the same item text at two indexes.
+        The index tells them apart, so they own their two lines; keyed on the
+        item text alone they would be one key and one of the two lines would
+        go unowned -- which is the alternative this round rejected.
+
+        Re-keyed into a contract that names the item once they share an index,
+        and they still own two lines: a claim is an (entry, line) pair, so two
+        entries rendering two different lines are two claims either way.
+        """
+        evidence = self.evidence()
+        item = "run `a"
+        entries = [
+            {"index": 1, "item": item, "status": "complete", "detail": "first` ok", "kind": "test"},
+            {"index": 2, "item": item, "status": "complete", "detail": "second` ok", "kind": "test"},
+        ]
+        lines = evidence.rendered_entry_lines(entries)
+        self.assertEqual(
+            evidence.rendered_entry_claims(entries), [(1, lines[0]), (2, lines[1])]
+        )
+        keyed = evidence.entries_keyed_for(entries, [item])
+        self.assertEqual([one["index"] for one in keyed], [1, 1], "one requirement, one position")
+        owner = evidence.owned_lines(entries, keyed)
+        self.assertTrue(owner.claim(lines[0]))
+        self.assertTrue(owner.claim(lines[1]), "the second entry's line went unowned")
+
+    # intent: guard
     def test_both_readers_agree_on_the_shape_the_two_keys_disagree_about(self) -> None:
         # The mirror pair: two entries, one line, twice in the body. A
         # line-keyed owner and a pair-keyed one answer the same here only

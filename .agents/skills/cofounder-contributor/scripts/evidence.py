@@ -2489,13 +2489,54 @@ def renderable_entries(entries: object) -> list[dict[str, object]]:
     return renderable
 
 
+def entries_keyed_for(entries: object, requested_evidence: list[str]) -> list[dict[str, object]]:
+    """The published body's entries, re-keyed into THIS turn's index space.
+
+    A claim's key has to name the same entry in both bodies, and an index does
+    not: it is a position in a list the issue owner can reorder. The turn
+    builds this run's entries from positions in the CURRENT
+    `requested_evidence` and read the published body's entries at the
+    positions the last turn wrote them at, so an item that kept its text and
+    moved position produced two claims on one line -- and the write then owned
+    both of an author's copies and deleted one with nothing said (#1751,
+    round 13).
+
+    So both sides are indexed against one list: an entry is matched to this
+    turn's contract by the item it names, and takes that item's position.
+    An entry whose item this turn no longer asks for is dropped rather than
+    guessed at -- it is not a requirement of this contract, so it owns no line
+    in it.
+    """
+    position = {item: index for index, item in enumerate(requested_evidence, start=1)}
+    keyed: list[dict[str, object]] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        index = position.get(str(entry.get("item", "")))
+        if index is None:
+            continue
+        keyed.append({**entry, "index": index})
+    return keyed
+
+
 def rendered_entry_claims(entries: object) -> list[tuple[int, str]]:
     """Each renderable entry's index and the line the write renders for it.
 
-    The key is the entry's `index`, which is what the write itself treats as
-    an entry's identity: the updates map is keyed by it and a second entry at
-    one index is refused as a collision, so within one body an index names at
-    most one entry that reaches a write.
+    The key is the entry's `index`, and what that key has to do is name the
+    same entry in BOTH bodies: the one this run renders and the one it is
+    rewriting. An index is a position in a list the issue owner can reorder,
+    so it is that name only while both sides are indexed against the SAME
+    list -- which is why the turn re-keys the published body's entries into
+    this turn's contract before handing them over (`entries_keyed_for`).
+
+    Within one body, two entries at one index is a shape this code does not
+    refuse: `_indistinguishable` compares the items and answers nothing when
+    they genuinely differ. Measured over three writes on this head, that shape
+    is a fixed point rather than an accrual: two lines and nothing carried,
+    and with a spare copy of one line in the body, two lines and that copy in
+    `## Evidence Notes` once and not again. The refusal of a colliding index
+    is #1782's change, not this one's, and this docstring does not lean on it
+    (#1751, round 13).
     """
     return [
         (int(entry["index"]), f"- [{entry['status']}] {entry['item']} -- {entry['detail']}")
@@ -2553,8 +2594,8 @@ class RenderedLines:
       their items genuinely differ, and no guard sees a collision. Collapsing
       their two claims to one left the write owning one of the two lines it
       had rendered, so it carried its own second line to `## Evidence Notes`
-      on every write -- (2,1), (2,2), (2,3), unbounded, with nothing said
-      (#1751, round 11).
+      -- (2,1), (2,2), (2,3) over three writes, with nothing said (#1751,
+      round 11).
 
     A dedupe can only remove claims and a claim authorises a deletion, so the
     failure direction of the coarse key was a carry rather than a loss. That
@@ -2585,7 +2626,7 @@ class RenderedLines:
         return bool(self._remaining)
 
 
-def owned_lines(entries: object, previous_entries: object = ()) -> RenderedLines:
+def owned_lines(entries: object, previous_entries: object) -> RenderedLines:
     """The lines a write owns for one body, from the entries at both ends of it.
 
     ONE construction for both readers, from the same two inputs: the entries
@@ -2596,9 +2637,17 @@ def owned_lines(entries: object, previous_entries: object = ()) -> RenderedLines
     (#1751, round 11). A body read by both now yields the same claims in the
     same order.
 
-    An `RenderedLines` passed straight through is one already built; a plain
-    iterable of lines is read as one claim each, which is what a caller
-    holding lines and no entries means by handing them over.
+    A `RenderedLines` passed straight through is one already built. There is
+    no path for a caller holding LINES: the sentence that said a plain
+    iterable is read as one claim each was false -- `renderable_entries` keeps
+    dicts, so such a call produced nought claims and an owner that owned
+    nothing. A docstring is a claim, and that one is deleted rather than
+    implemented, because a caller with lines and no entries cannot say which
+    entry a line belongs to, which is the whole of the key (#1751, round 13).
+
+    `previous_entries` is required for the same reason `entries` is: omitting
+    it drops the last run's claims, so a changed verdict's old line is carried
+    instead of replaced, and no production caller ever omitted it.
     """
     if isinstance(entries, RenderedLines):
         return entries
@@ -3245,7 +3294,11 @@ def render_execution_summary_body(
         # it produced an empty list on every push and the turn's cap never ran
         # at all (#1751, round 8).
         entries=structured_entries,
-        previous_entries=evidence_entries_of(published_body),
+        # Re-keyed into THIS turn's index space, so a claim's key names the
+        # same entry in both bodies (#1751, round 13).
+        previous_entries=entries_keyed_for(
+            evidence_entries_of(published_body), requested_evidence
+        ),
     )
     rendered, write_refusal = write.body, write.refusal
     if announcements is not None:

@@ -748,6 +748,9 @@ class TheTwoProducersOfOneReadingAgreeAcrossTheGrammarTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.forms = list(generated_status_forms())
 
+    # intent: guard
+    # Guards: the generated grammar covers every axis the suite claims -- a property
+    # of the fixture generator, which main's generator also had.
     def test_the_product_covers_every_axis_it_claims_to(self) -> None:
         # The size is quoted in the pull request body, so it is pinned here
         # rather than left to be recounted, and every value of every axis is
