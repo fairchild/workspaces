@@ -2497,6 +2497,44 @@ class ThePageReaderTableTests(unittest.TestCase):
                 result = pr_readiness.evaluate(pr(self.body(middle)), self.FILES)
                 self.assertEqual(result.ok, ok, (name, result.failures))
 
+    # intent: fix
+    def test_each_row_is_the_shape_its_name_claims(self) -> None:
+        """The pin the name guard cannot be: the SHAPE a row's name claims.
+
+        `all_of` asserts which names a table carries. A row given its
+        neighbour's value with its key untouched keeps the count and the
+        name, so the guard passes and the coverage leaves -- measured on this
+        table for `a break inside a list item`, round 4's `<br>` inside a
+        list item, which went silently because the sibling shape test pins
+        tokens over the JOINED corpus and another row still carries `<br>`
+        (#1771, round 13).
+
+        Every row of this table states a property, so every row has a claim
+        here; a row whose name is a bare label would be listed in
+        PAGE_READER_LABELS instead, and a name that claims something with no
+        claim written for it fails the completeness check below.
+        """
+        table = PAGE_READER_TABLE
+        claims = PAGE_READER_CLAIMS
+        labels = PAGE_READER_LABELS
+        self.assertEqual(
+            sorted(set(table) - set(claims) - labels),
+            [],
+            "a row's name claims a shape with nothing pinning it",
+        )
+        self.assertEqual(sorted(set(claims) - set(table)), [], "a claim for a row that is gone")
+        for name, (contains, absent, order) in claims.items():
+            with self.subTest(row=name):
+                text = table[name][0]
+                for needle in contains:
+                    self.assertIn(needle, text, f"{name}: the shape its name claims is gone")
+                for needle in absent:
+                    self.assertNotIn(needle, text, f"{name}: another row's shape is here")
+                for first, second in order:
+                    self.assertLess(
+                        text.index(first), text.index(second), f"{name}: the order its name claims"
+                    )
+
     def test_the_table_exercises_both_rules(self) -> None:
         # A table nobody checks the shape of grows lopsided. These are the
         # axes the four rounds actually moved along.
@@ -3415,7 +3453,15 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
             "double-backtick padding": ("`` [blocked] ``", None),
             "a punctuation gap after the token": ("**[blocked]:**", None),
         }
-        for name, (must_hold, must_not) in spellings.items():
+        for name, (must_hold, must_not) in all_of(
+            spellings,
+            {
+                "a space inside the backticks",
+                "double-backtick padding",
+                "a punctuation gap after the token",
+            },
+            "ThePaddedStatusSpellings.spellings",
+        ).items():
             with self.subTest(spelling=name):
                 line = self.PADDED_STATUSES[name]
                 self.assertIn(must_hold, line, f"{name}: not the shape its name says")
@@ -3872,6 +3918,85 @@ REAL_EMPHASISED = "## **Evidence Status**\n\n- [complete] swift test -- ok\n\n"
 REAL_SETEXT = "Evidence Status\n---------------\n\n- [complete] swift test -- ok\n\n"
 REAL_PLAIN = "## Evidence Status\n\n- [complete] swift test -- ok\n\n"
 
+# What each row of `PAGE_READER_TABLE` CLAIMS, read off its own name, as
+# (must contain, must not contain, must appear in this order). A name that
+# states a property is a claim about the shape, and a guard over the names
+# alone cannot see that shape leave: a row given its neighbour's value with
+# its key untouched keeps the count, keeps the name, and drops the coverage
+# -- round 4's `<br>` inside a list item went that way silently, because the
+# table's other shape test pins tokens over the JOINED corpus and a token
+# another row still carries stays present (#1771, round 13).
+PAGE_READER_CLAIMS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[tuple[str, str], ...]]] = {
+    "a block tag after prose": (("Context <div>",), (), ()),
+    "a pre after prose": (("Context <pre>",), (), ()),
+    "a break after prose": (("Context <br>",), ("- ",), ()),
+    "a break inside a list item": (("- complete <br>",), (), ()),
+    "an unparsed tag the page prints": (("<x:y>",), (), ()),
+    "a type parameter mid-line": (("Vec<T>",), (), ()),
+    "a fenced example": (("```",), (), ()),
+    "an indented example": (("\n    - [blocked]",), ("```",), ()),
+    "a code span": (("`[blocked]`",), ("<br>",), ()),
+    "a code span after a break": (("<br>`[blocked]`",), (), ()),
+    "a rule of asterisks": (("***",), (), (("***", "[blocked]"),)),
+    "a dash rule": (("\n---\n",), (), (("---", "[blocked]"),)),
+    "a quoted heading inside": (("> ## ",), (), (("## Evidence Status", "> ## "),)),
+    "a heading inside a list item": (("- outer", "  - ## "), (), ()),
+    "a quoted example elsewhere": (("> ## Evidence Status",), (), (("> ## Evidence Status", "\n## Evidence Status"),)),
+    "a long-s heading": (("Statu\u017f",), (), ()),
+    "a fold holding the section": (("<details>",), (), (("<details>", "## Evidence Status"),)),
+    "a fold holding a quoted heading": (("<details>", "> ## "), (), (("## Evidence Status", "<details>"),)),
+    "an unclosed blockquote before": (("<blockquote>",), ("</blockquote>",), (("<blockquote>", "## Evidence Status"),)),
+    "an unclosed list item before": (("<ul><li>",), ("</li>",), (("<ul><li>", "## Evidence Status"),)),
+    "an unclosed blockquote inside": (("<blockquote>",), ("</blockquote>",), (("## Evidence Status", "<blockquote>"),)),
+    "a break inside a quoted heading": (("> ## Context<br>",), (), ()),
+    "a sibling heading after a top-level section": (("## Notes",), ("<blockquote>", "> ## "), (("## Evidence Status", "## Notes"),)),
+    "a sibling heading after a nested section": (("<blockquote>", "## Notes"), (), (("<blockquote>", "## Notes"),)),
+    "a shallower heading after a quoted section": (("> ## Evidence Status", "\n## Notes"), ("<blockquote>",), (("> ## Evidence Status", "## Notes"),)),
+    "a shallower heading after a blockquote section": (("<blockquote>", "</blockquote>", "## Notes"), (), (("</blockquote>", "## Notes"),)),
+    "a shallower h1 after a quoted section": (("> ## Evidence Status", "\n# Notes"), ("\n## Notes",), ()),
+    "a raw pre holding the status": (("<pre>",), (), (("## Evidence Status", "<pre>"),)),
+}
+# Every row of that table states a property, so none of them is a bare label.
+PAGE_READER_LABELS: frozenset[str] = frozenset()
+
+
+# The same per-row pins for the swallowed-heading table. Round 5's absent
+# list marker left this table the same way: the row named "...with no marker"
+# given its marker-bearing neighbour's value keeps the name and loses the
+# shape (#1771, round 13).
+SWALLOWED_CLAIMS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[tuple[str, str], ...]]] = {
+    "a details closer, status below": (("</details>\n## Evidence Status",), (), ()),
+    "an img tag, status below": (("<img ",), (), (("<img ", "## Evidence Status"),)),
+    "a div around heading and status": (("<div>\n## Evidence Status",), ("</div>",), ()),
+    "a comment a browser ends at --!>": (("--!>",), (), (("--!>", "## Evidence Status"),)),
+    "a closed comment, heading alone": (("<!--", "-->"), ("[blocked]", "[complete]", "[pending-ci]"), ()),
+    "a closed comment, a complete item": (("<!--", "-->", "- [complete]"), ("[blocked]",), ()),
+    "a pre block, a complete item": (("<pre>", "</pre>", "- [complete]"), ("**",), ()),
+    "a pre block, a wrapped complete item": (("<pre>", "- **[complete]**"), (), ()),
+    "a pre block holding a second heading": (("<pre>", "## Notes"), (), (("## Evidence Status", "## Notes"),)),
+    "a comment holding a second heading": (("<!--", "## Notes"), ("<pre>",), (("## Evidence Status", "## Notes"),)),
+    "a comment, a bold status": (("<!--", "- **[blocked]**"), ("<pre>",), ()),
+    "a comment, a backticked status": (("<!--", "- `[blocked]`"), ("<pre>",), ()),
+    "a pre block, a bold status": (("<pre>", "- **[blocked]**"), ("<!--",), ()),
+    "a pre block, a bold status with no marker": (("<pre>", "\n**[blocked]**"), ("- **[blocked]**",), ()),
+    "a pre block, a backticked status with no marker": (("<pre>", "\n`[blocked]`"), ("- `[blocked]`",), ()),
+    "a pre block, an underscored status": (("<pre>", "- _[blocked]_"), (), ()),
+    "a comment, a wrapped pending-ci": (("<!--", "**[pending-ci]**"), ("<pre>",), ()),
+    "a pre block, a backticked pending-ci with no marker": (("<pre>", "\n`[pending-ci]`"), ("- `[pending-ci]`",), ()),
+    "a comment, a plain status": (("<!--", "- [blocked] waiting"), ("**", "`"), ()),
+    "the blank line the message asks for": (("</details>\n\n## Evidence Status",), (), ()),
+    "a fenced example of the heading": (("```",), (), (("```", "## Evidence Status"),)),
+    "an indented example of the heading": (("    ## Evidence Status",), ("```",), ()),
+    "swallowed blocked above an emphasised section": (("[blocked]", "## **Evidence Status**"), (), (("[blocked]", "## **Evidence Status**"),)),
+    "swallowed blocked above a setext section": (("[blocked]", "Evidence Status\n------"), (), ()),
+    "swallowed blocked above a plain section": (("[blocked]", "<div>", "\n## Evidence Status\n\n- [complete]"), ("**Evidence Status**",), ()),
+    "swallowed blocked above an emphasised section, CRLF": (("\r\n", "[blocked]", "## **Evidence Status**"), (), ()),
+    "swallowed complete above an emphasised section": (("- [complete] the UI lane", "## **Evidence Status**"), ("[blocked]",), ()),
+}
+# Every row of this table states a property too.
+SWALLOWED_LABELS: frozenset[str] = frozenset()
+
+
 SWALLOWED_HEADING_TABLE = {
     # Round 2: the heading is swallowed by an opener a line above it and the
     # status sits below the block in ordinary markdown.
@@ -4068,6 +4193,44 @@ class TheSwallowedHeadingTableTests(unittest.TestCase):
         self.assertEqual(len(pr_readiness.status_heading_candidates(body)), 1)
         self.assertIsNone(pr_readiness.evidence_status_heading_failure(body))
         self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok)
+
+    # intent: fix
+    def test_each_row_is_the_shape_its_name_claims(self) -> None:
+        """The pin the name guard cannot be: the SHAPE a row's name claims.
+
+        `all_of` asserts which names a table carries. A row given its
+        neighbour's value with its key untouched keeps the count and the
+        name, so the guard passes and the coverage leaves -- measured on this
+        table for `a break inside a list item`, round 4's `<br>` inside a
+        list item, which went silently because the sibling shape test pins
+        tokens over the JOINED corpus and another row still carries `<br>`
+        (#1771, round 13).
+
+        Every row of this table states a property, so every row has a claim
+        here; a row whose name is a bare label would be listed in
+        SWALLOWED_LABELS instead, and a name that claims something with no
+        claim written for it fails the completeness check below.
+        """
+        table = SWALLOWED_HEADING_TABLE
+        claims = SWALLOWED_CLAIMS
+        labels = SWALLOWED_LABELS
+        self.assertEqual(
+            sorted(set(table) - set(claims) - labels),
+            [],
+            "a row's name claims a shape with nothing pinning it",
+        )
+        self.assertEqual(sorted(set(claims) - set(table)), [], "a claim for a row that is gone")
+        for name, (contains, absent, order) in claims.items():
+            with self.subTest(row=name):
+                text = table[name][0]
+                for needle in contains:
+                    self.assertIn(needle, text, f"{name}: the shape its name claims is gone")
+                for needle in absent:
+                    self.assertNotIn(needle, text, f"{name}: another row's shape is here")
+                for first, second in order:
+                    self.assertLess(
+                        text.index(first), text.index(second), f"{name}: the order its name claims"
+                    )
 
     def test_the_table_covers_both_status_tokens_and_every_wrapper(self) -> None:
         # A table nobody checks the shape of grows lopsided. These are the
