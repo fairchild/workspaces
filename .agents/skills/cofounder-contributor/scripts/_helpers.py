@@ -1114,6 +1114,17 @@ RENDERER_CAUSES: dict[str, tuple[bool, str | None]] = {
         "the renderer refused the token for this repository; export one with access to it "
         "and run again",
     ),
+    # The renderer refusing the REQUEST rather than the caller: a 400, 404,
+    # 410, 422 or 451 is an answer about what was sent, and every one of them
+    # says the same thing about waiting -- it changes nothing. These fell
+    # through to `server error` and were marked transient, so a write that
+    # could never be verified proceeded unverified on every run (#1773,
+    # round 15).
+    "refused request": (
+        False,
+        "the renderer refused the request itself, which waiting does not change; check the "
+        "body it was given and re-run once it is something the renderer will take",
+    ),
     # A secondary rate limit is the renderer asking for a pause, not refusing
     # the token: `Retry-After` is time fixing it, so waiting is exactly what
     # changes the answer.
@@ -1220,6 +1231,8 @@ def http_failure_reason(error: urllib.error.HTTPError) -> str:
         return f"the renderer asked for a pause (HTTP {error.code}, retry after {retry})"
     if error.code in {403, 429} and says_secondary_rate_limit(error):
         return f"the renderer applied a secondary rate limit (HTTP {error.code})"
+    if 400 <= error.code < 500 and error.code not in {401, 403, 429}:
+        return f"the renderer refused the request (HTTP {error.code})"
     return f"the renderer answered HTTP {error.code}"
 
 
@@ -1254,6 +1267,19 @@ def http_failure_cause(error: urllib.error.HTTPError) -> str:
         return "rejected token"
     if error.code == 403:
         return "forbidden token"
+    # A 429 is Too Many Requests whatever else it carries: with no
+    # `Retry-After` and no phrase in the body it still reaches here, and it
+    # is the clock rather than the request, so it stays transient.
+    if error.code == 429:
+        return "secondary rate limit"
+    # Everything else in the 4xx family is the renderer refusing what it was
+    # SENT. 401 and 403 are about the token; what is left -- 400, 404, 410, 422, 451 and their
+    # siblings -- is an answer waiting cannot change, so it refuses rather
+    # than proceeding unverified. 5xx and anything else stay transient,
+    # because a server error and an unreachable renderer are outages and
+    # waiting is exactly what fixes them.
+    if 400 <= error.code < 500:
+        return "refused request"
     return "server error"
 
 

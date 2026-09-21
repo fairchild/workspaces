@@ -13,9 +13,15 @@ rather than stored, so regenerating the figure needs this file and the skill
 modules it writes through, and no stored corpus to go stale beside them.
 
 Run it with `uv run --script scripts/evidence-write-sweep.py`; add `--json` for
-the machine-readable form. It touches no network, no repository state and no
-GitHub. `scripts/tests/test_evidence_write_sweep.py` pins its numbers at the
-current tree, so a change to the writer that moves them fails there.
+the machine-readable form. It touches no repository state, and what it does
+with the network is worth stating exactly: the write it drives CALLS the
+renderer -- 48 calls over 12 distinct texts in one tokenless run of 168
+bodies, measured by wrapping `render_markdown` -- and tokenless every one of
+them is refused locally, before any request, because there is no token to
+make. "No renderer calls" was the earlier claim and it was false; what is
+true is that a tokenless run reaches no network (#1773, round 15).
+
+`scripts/tests/test_evidence_write_sweep.py` pins its numbers at the current tree, so a change to the writer that moves them fails there.
 """
 
 from __future__ import annotations
