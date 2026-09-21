@@ -295,7 +295,8 @@ def should_clear_blocked_label(
     pass it keeps the label rather than clearing it.
 
     What it quantifies over is the DESCRIPTION'S metadata, not the issue's
-    contract: `requested_evidence` occurs nowhere in this lane. So "every
+    contract: the contract's own name appears in this lane only in this
+    sentence, and no code here reads it. So "every
     entry complete" means every entry the pull request body still records, and
     a requirement deleted from that block is not a requirement this gate can
     see -- deleting a `pending-ci` entry clears the label, and it does the same
@@ -333,12 +334,18 @@ def should_clear_blocked_label(
             return False
         if str(entry.get("status", "")).strip() != "complete":
             return False
-        item = str(entry.get("item", "")).strip()
-        if _evidence_item_kind(item) != "ci":
-            continue
+        # EVERY entry the clear counts, not only the `ci` ones. An entry whose
+        # index nothing can act on renders no line, so counting it toward a
+        # clear counts a requirement with nothing on the page for it: a
+        # complete `diff` entry at `true`, `1.0`, `"1"`, `0`, `-1` or `null`
+        # took the label off on its own. The int-only rule went in for the
+        # acting path and stopped at the kind check here (#1778, round 10).
         index = usable_entry_index(entry)
         if index is None:
             return False
+        item = str(entry.get("item", "")).strip()
+        if _evidence_item_kind(item) != "ci":
+            continue
         update = confirmed.get(index)
         if not isinstance(update, dict):
             return False
