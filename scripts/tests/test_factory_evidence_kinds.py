@@ -5852,8 +5852,8 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
             result = execution.seed_mergeability_section(
-                self.FENCED_EXAMPLE_BODY, announcements=[], changed_files=["docs/x.md"]
-            )
+                self.FENCED_EXAMPLE_BODY, changed_files=["docs/x.md"]
+            ).body
         self.assertNotEqual(result, self.FENCED_EXAMPLE_BODY)
         self.assertEqual(spoke.getvalue(), "")
         self.assertTrue(helpers.has_markdown_section(result, "Mergeability"))
@@ -6101,7 +6101,7 @@ class ASectionStartsAtAHeadingThePageShowsTests(unittest.TestCase):
         body = self.FENCED_ONLY.replace("Evidence Status", "Mergeability").replace(
             self.EXAMPLE, "- Surface: docs"
         )
-        seeded = execution.seed_mergeability_section(body, announcements=[], changed_files=["docs/x.md"])
+        seeded = execution.seed_mergeability_section(body, changed_files=["docs/x.md"]).body
         self.assertNotEqual(seeded, body)
         self.assertTrue(helpers.has_markdown_section(seeded, "Mergeability"))
         section = helpers.markdown_section(seeded, "Mergeability")
@@ -6118,13 +6118,13 @@ class ASectionStartsAtAHeadingThePageShowsTests(unittest.TestCase):
         body = "## Summary\n\nwhat.\n\n<pre>\nthe log I never closed\n"
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
-            seeded = execution.seed_mergeability_section(body, announcements=[], changed_files=["docs/x.md"])
+            seeded = execution.seed_mergeability_section(body, changed_files=["docs/x.md"]).body
         self.assertEqual(seeded, body)
         self.assertIn("is not a heading on the page", spoke.getvalue())
         self.assertIn("</pre>", spoke.getvalue())
         # And the control: close the block and the same write goes ahead.
         closed = body + "</pre>\n"
-        written = execution.seed_mergeability_section(closed, announcements=[], changed_files=["docs/x.md"])
+        written = execution.seed_mergeability_section(closed, changed_files=["docs/x.md"]).body
         self.assertTrue(helpers.has_markdown_section(written, "Mergeability"))
 
     def test_a_heading_the_page_shows_as_code_anywhere_else_is_left_alone(self) -> None:
@@ -10016,25 +10016,37 @@ class TheNotesPathTakesTheSameAnswerAsTheStatusPathTests(unittest.TestCase):
                 "the renderer answered HTTP 503", cause="server error"
             )
 
-        seams = {
-            "the Mergeability seed": lambda said: execution.seed_mergeability_section(
-                folded, changed_files=["docs/x.md"], announcements=said
-            ),
-            "the status section write": lambda said: evidence.write_evidence_status_section(
-                folded, ["- [complete] the item -- proof"]
-            ).announcements.extend(said) or said.extend(
+        def seed(said: list[str]) -> None:
+            said.extend(
+                execution.seed_mergeability_section(
+                    folded, changed_files=["docs/x.md"]
+                ).announcements
+            )
+
+        def status_write(said: list[str]) -> None:
+            said.extend(
                 evidence.write_evidence_status_section(
                     folded, ["- [complete] the item -- proof"]
                 ).announcements
-            ),
-            "the turn's own render": lambda said: evidence.render_execution_summary_body(
+            )
+
+        def turn_render(said: list[str]) -> None:
+            evidence.render_execution_summary_body(
                 folded,
                 requested_evidence=["the item"],
                 evidence_complete=["1 -- proof"],
                 evidence_blocked=[],
                 evidence_pending_ci=[],
                 announcements=said,
-            ),
+            )
+
+        # Each seam reports the way it reports -- the seed RETURNS what it
+        # said, the other two take the list their caller owns -- and what is
+        # asserted is the same for all three: the author is told.
+        seams = {
+            "the Mergeability seed": seed,
+            "the status section write": status_write,
+            "the turn's own render": turn_render,
         }
         for name, drive in seams.items():
             with self.subTest(seam=name):
@@ -10050,22 +10062,26 @@ class TheNotesPathTakesTheSameAnswerAsTheStatusPathTests(unittest.TestCase):
                     f"{name}: the page went unread and the author was told nothing: {said}",
                 )
 
-    def test_no_production_seam_takes_its_announcements_by_default(self) -> None:
-        """The shape the defect took, asserted where it can be seen.
+    def test_the_seed_has_no_announcement_channel_to_hand_it(self) -> None:
+        """The shape the defect took, twice, and what removed the choice.
 
-        A note that depends on a caller remembering to pass a list is a note
-        the one caller nobody updated does not send. Every production seam
-        that places a section REQUIRES the list its caller owns.
+        Round 8 left the note to a caller remembering to pass a list; round 9
+        made the list required, and a required parameter can still be handed
+        one that goes nowhere -- real, non-default, posted by nobody. There is
+        no parameter now: the seed returns what it said, so the only caller
+        that decides anything is the one with a comment to post.
         """
         import inspect
 
         execution = sys.modules["execution"]
         signature = inspect.signature(execution.seed_mergeability_section)
-        parameter = signature.parameters["announcements"]
-        self.assertIs(
-            parameter.default,
-            inspect.Parameter.empty,
-            "a seam that announces took its channel by default again",
+        self.assertNotIn(
+            "announcements",
+            signature.parameters,
+            "a channel a caller can hand over is a channel a caller can drop",
+        )
+        self.assertEqual(
+            sorted(execution.SeededSection._fields), ["announcements", "body"]
         )
 
 
@@ -10211,6 +10227,52 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
             self.execution()._notes_a_reader_has_been_shown(quoted, self.checked()),
         )
 
+    def test_two_cells_holding_one_text_keep_their_order(self) -> None:
+        """The cursor's claim, pinned (#1773, round 10).
+
+        The comment said two cells with the same text keep their order and
+        nothing asserted it. Without the cursor, `find` returns the FIRST
+        occurrence both times, so the third cell is given the first cell's
+        span and the text between them -- including a `<details` -- is never
+        looked at as its own block.
+        """
+        text = (
+            "a line\n\n| a | b | c |\n| --- | --- | --- |\n"
+            "| x `open | <details>more | x `open |\n\nafter\n"
+        )
+        bounds = self.execution()._inline_block_bounds(text)
+        spans = [text[start:stop] for start, stop in bounds]
+        self.assertEqual(spans.count("x `open"), 2, "both cells are their own span")
+        first, second = [index for index, one in enumerate(spans) if one == "x `open"]
+        self.assertLess(bounds[first][0], bounds[second][0], "in the order they appear")
+        self.assertEqual(spans[first + 1], "<details>more", "and the cell between them is its own")
+
+    def test_a_cell_whose_text_is_not_in_its_row_takes_its_row_rather_than_another_block(
+        self,
+    ) -> None:
+        """The row's end, pinned (#1773, round 10).
+
+        A cell's content is not always a substring of its row: markdown-it
+        unescapes it, so `a \\| b` arrives as `a | b`, which the row does not
+        contain. The search then finds nothing inside the row and the cell
+        falls back to the whole row -- the safe answer. Without the bound it
+        would keep looking and find those characters in a LATER block,
+        handing one cell a span in someone else's paragraph.
+        """
+        body = (
+            "| h1 | h2 |\n| --- | --- |\n| a \\| b | y |\n\n"
+            "and later: a | b appears again here\n"
+        )
+        execution = self.execution()
+        bounds = execution._inline_block_bounds(body)
+        spans = [body[start:stop] for start, stop in bounds]
+        # The cell falls back to its row, and no span reaches into the
+        # paragraph below it.
+        paragraph_at = body.index("and later")
+        for start, stop in bounds[:-1]:
+            self.assertLessEqual(stop, paragraph_at, f"a span reached past its block: {body[start:stop]!r}")
+        self.assertIn("and later: a | b appears again here", spans)
+
     def test_the_page_folds_the_note_below_that_table(self) -> None:
         # Asks reality, from a recording taken with the token.
         comment = (
@@ -10265,7 +10327,6 @@ class EveryInsertTakesTheWritesAnswerTests(unittest.TestCase):
 
     def seeded(self, *, transient: bool):
         execution = sys.modules["execution"]
-        said: list[str] = []
 
         def refuse(text: str) -> str:
             raise helpers.RendererUnavailable(
@@ -10278,10 +10339,10 @@ class EveryInsertTakesTheWritesAnswerTests(unittest.TestCase):
             mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
             contextlib.redirect_stderr(io.StringIO()),
         ):
-            body = execution.seed_mergeability_section(
-                self.FOLDED, changed_files=["docs/x.md"], announcements=said
+            seeded = execution.seed_mergeability_section(
+                self.FOLDED, changed_files=["docs/x.md"]
             )
-        return body, said
+        return seeded.body, list(seeded.announcements)
 
     def test_a_permanent_cause_leaves_the_body_alone_and_says_why(self) -> None:
         body, said = self.seeded(transient=False)
@@ -10315,11 +10376,11 @@ class EveryInsertTakesTheWritesAnswerTests(unittest.TestCase):
                     mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
                     contextlib.redirect_stderr(io.StringIO()),
                 ):
-                    body = execution.seed_mergeability_section(
-                        self.FOLDED, changed_files=["docs/x.md"], announcements=said
+                    seeded = execution.seed_mergeability_section(
+                        self.FOLDED, changed_files=["docs/x.md"]
                     )
-                self.assertEqual("## Mergeability" in body, places, cause)
-                self.assertTrue(said, f"{cause}: nothing reached the caller")
+                self.assertEqual("## Mergeability" in seeded.body, places, cause)
+                self.assertTrue(seeded.announcements, f"{cause}: nothing came back")
 
 
 class AMissingTokenIsNotABlipTests(unittest.TestCase):

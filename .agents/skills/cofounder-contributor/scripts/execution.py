@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
 from _helpers import (
     MARKDOWN,
@@ -1062,9 +1063,23 @@ def _changed_surface_files(env: dict[str, str]) -> list[str]:
     return files
 
 
-def seed_mergeability_section(
-    summary_body: str, *, changed_files: list[str], announcements: list[str]
-) -> str:
+class SeededSection(NamedTuple):
+    """A seeded body and what the seeding had to say about it.
+
+    The same shape `SectionWrite` has, for the same reason. Round 9 made the
+    announcement channel a required parameter so no caller could forget it,
+    and a required parameter can still be handed a list that goes nowhere:
+    the note then reaches a real, non-default list that nobody posts, and
+    every seam test passes because each hands the seam a list of its own.
+    Carrying the note back is what removes the choice -- there is no list to
+    pass, so there is none to drop (#1773, round 10).
+    """
+
+    body: str
+    announcements: tuple[str, ...] = ()
+
+
+def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) -> SeededSection:
     """Seed the `## Mergeability` block scripts/pr-readiness.py requires when
     the agent omitted it.
 
@@ -1094,7 +1109,7 @@ def seed_mergeability_section(
     # readers find and an empty section, so seeding is skipped and the gate
     # reports the section missing -- main's behaviour, unchanged here.
     if has_markdown_section(summary_body, "Mergeability"):
-        return summary_body
+        return SeededSection(summary_body)
 
     what_line = _mergeability_clip(_first_content_line(what_section(summary_body)))
     validation_line = _mergeability_clip(_first_content_line(markdown_section(summary_body, "Validation")))
@@ -1135,21 +1150,21 @@ def seed_mergeability_section(
     # gate fails the body loudly for it -- so the body stands and the reason
     # is said.
     placed = inserted_markdown_section(summary_body, "Mergeability", content)
-    # Required, not defaulted. Round 8 made every insert take the write's
-    # answer and left the note's delivery to a caller remembering to pass a
-    # list -- and the production caller passed none, so at a 503 under an
-    # unclosed `<details>` the section went into the fold with the notice on
-    # stderr alone. A default that preserves the old behaviour at the one call
-    # site nobody updated is the fix holding everywhere except where it
-    # matters (#1773, round 9).
+    # Carried, not handed over. Round 8 left the note's delivery to a caller
+    # remembering to pass a list and the production caller passed none; round
+    # 9 made the list required and a required parameter can still be given one
+    # that goes nowhere. What the seeding said comes back with the body it
+    # seeded, so the caller that has a comment to post is the only one that
+    # decides anything (#1773, round 10).
+    said: list[str] = []
     if placed.unverified is not None:
-        announcements.append(placed.unverified)
+        said.append(placed.unverified)
     if placed.refusal is not None:
         note = f"`## Mergeability` not seeded: {placed.refusal}"
         log(note)
-        announcements.append(note)
-        return summary_body
-    return placed.body
+        said.append(note)
+        return SeededSection(summary_body, tuple(said))
+    return SeededSection(placed.body, tuple(said))
 
 
 def build_body(data: dict[str, object]) -> str:
@@ -1891,12 +1906,14 @@ def route_execution_action(
         )
         log(json.dumps({"error_class": "evidence_validation", "detail": "; ".join(evidence_errors), "issue": issue_number}))
         return 1
-    summary_body = seed_mergeability_section(
-        summary_body,
-        changed_files=_changed_surface_files(env),
-        # The list this turn already owns and posts on the pull request.
-        announcements=uncarried,
+    seeded = seed_mergeability_section(
+        summary_body, changed_files=_changed_surface_files(env)
     )
+    summary_body = seeded.body
+    # Into the list this turn posts on the pull request. Extending from the
+    # return is what makes the note's delivery unforgettable rather than
+    # remembered (#1773, round 10).
+    uncarried.extend(seeded.announcements)
     pr_body = compose_pr_body(issue_number, persona, summary_body)
     author_label = author_label_for_persona(persona)
     ensure_label_exists(
