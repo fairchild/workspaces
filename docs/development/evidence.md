@@ -496,6 +496,33 @@ The classifier lives in `_evidence_item_kind` (`.agents/skills/cofounder-contrib
 `scripts/tests/test_factory_evidence_kinds.py` is the readable corpus of what
 does and does not classify.
 
+### What the metadata comment guarantees
+
+The metadata comment is the hidden `<!-- evidence-status:v1 ... -->` block that
+a factory turn or an evidence lane writes at the top of a pull request body,
+recording for each requested item the kind it was classified as and the status
+that run gathered. The reader recognises the block by its shape rather than by
+parsing HTML, and trusts what it finds: a well-formed entry recording
+`complete` counts as complete. The block carries no signature, no hash and no
+author, and nothing checks which run wrote it.
+
+Anyone who can edit the pull request description can therefore write or change
+the comment, a recorded completion included. There is no provenance check and
+no signing. The factory's evidence accounting, and the reviewer gate that reads
+that accounting, take the entry at its word.
+
+What the comment guarantees is that the last automated run agreed. The CI
+verifier (`factory-evidence-verify.yml`) re-reads recorded `ci` completions
+against the pull request head, and the macOS evidence lane (`_evidence.yml`)
+rewrites the section from what its run gathered, so a hand-written completion
+does not survive the next run of the lane that owns the item. Between a hand
+edit and that run the accounting reads the entry as complete, and a body
+approved in that window is approved.
+
+For a reviewer, a completion in the comment is a claim the last run made rather
+than a proof that the work happened. Where it matters, open the run the entry
+names and read it.
+
 ## How it's enforced
 
 Three layers, from gentlest to strongest:
