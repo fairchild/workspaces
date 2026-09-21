@@ -381,7 +381,8 @@ the PR opens completes the entry on the next turn. A status line you edit by
 hand is carried forward by that same turn, marked `(carried forward from an
 earlier revision)` so a reader can tell it was written before the code under
 it. The CI verifier and the macOS lane write only through the hidden metadata,
-so a hand edit does not survive those two; edit the body again after them.
+so a hand edit does not survive a run of those two that rewrites the section;
+edit the body again after them.
 Until the entry completes both sit `pending-ci`, which is visible and fails the
 readiness gate, rather than `blocked`, which puts the PR in front of the owner.
 
@@ -469,7 +470,7 @@ review reads it. And only an `other` line is read at once. A
 `[complete]` written over any other kind reads as the metadata says until a
 factory turn or the lane that owns the item writes it, because nothing but a
 lane or the factory's own reading of the body completes those. Like any hand
-edit, the line does not survive the CI verifier or the macOS lane rewriting
+edit, the line is replaced whenever the CI verifier or the macOS lane rewrites
 the section.
 
 A body with no evidence metadata -- a PR written by hand, or one whose metadata
@@ -495,6 +496,36 @@ the reader cannot place included.
 The classifier lives in `_evidence_item_kind` (`.agents/skills/cofounder-contributor/scripts/evidence.py`);
 `scripts/tests/test_factory_evidence_kinds.py` is the readable corpus of what
 does and does not classify.
+
+### What the metadata comment guarantees
+
+The metadata comment is the hidden `<!-- evidence-status:v1 ... -->` block
+beside the `## Evidence Status` section, recording a status for evidence items.
+Anyone who can edit the pull request description can write or change it, a
+recorded completion included.
+
+What it records is not independently authenticated: no signing, no provenance
+check. The `verified_head_sha` field binds an entry to a commit, and it is as
+editable as the rest of the block.
+
+A recorded completion may be re-checked by a later run — for some kinds, in
+some conditions. Which, and when, is the code's to answer rather than this
+page's: `ci_entries_needing_verification` in
+[`scripts/factory-evidence-verify.py`](../../scripts/factory-evidence-verify.py),
+and `evaluate_evidence_accounting` and `_live_ci_evidence_gate_error` in the
+contributor skill's scripts. A sentence here describing one of them is a copy
+of it that goes stale on its own.
+
+A completion already recorded complete and bound to the current head is
+re-checked by neither the CI verifier nor the macOS evidence lane
+(`ci_entries_needing_verification`, `reconcile_pending_ci_evidence`), and it
+counts toward clearing `blocked:evidence` (`should_clear_blocked_label`); that
+is the gap [#1778](https://github.com/fairchild/workspaces/issues/1778) tracks.
+
+For a reviewer: a completion in the comment is a claim, not a proof. The run
+link an entry carries is recorded, not verified, so it takes you
+to a run page to read as evidence rather than as proof that the entry is
+genuine.
 
 ## How it's enforced
 

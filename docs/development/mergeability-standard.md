@@ -54,6 +54,11 @@ which refuses on the page's behalf and never accepts for it — so a preflight
 that passed unverified can still fail in CI. Export `GH_TOKEN=$(gh auth
 token)` to get CI's answer locally.
 
+The hidden metadata comment beside that section is not independently
+authenticated, and anyone who can edit the description can write a recorded
+completion — see
+[what the metadata comment guarantees](evidence.md#what-the-metadata-comment-guarantees).
+
 PR summary style: prefer concise Markdown links for completed checks and
 artifacts — link the check name, e.g. `Web CI passed`, to the run URL.
 Readability preference, not a merge gate.
