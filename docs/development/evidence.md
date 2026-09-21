@@ -499,29 +499,56 @@ does and does not classify.
 ### What the metadata comment guarantees
 
 The metadata comment is the hidden `<!-- evidence-status:v1 ... -->` block that
-a factory turn or an evidence lane writes at the top of a pull request body,
-recording for each requested item the kind it was classified as and the status
-that run gathered. The reader recognises the block by its shape rather than by
-parsing HTML, and trusts what it finds: a well-formed entry recording
-`complete` counts as complete. The block carries no signature, no hash and no
-author, and nothing checks which run wrote it.
+a factory turn or an evidence lane writes beside the `## Evidence Status`
+section — directly above that heading, or at the end of the body where there is
+no such heading — recording for each requested item the kind it was classified
+as and the status that run gathered. The reader recognises the block by its
+shape rather than by parsing HTML, takes the last one in the body, and trusts
+what it finds: a well-formed entry recording `complete` counts as complete. The
+block carries no signature, no hash and no author, and nothing checks which run
+wrote it.
 
 Anyone who can edit the pull request description can therefore write or change
 the comment, a recorded completion included. There is no provenance check and
-no signing. The factory's evidence accounting, and the reviewer gate that reads
-that accounting, take the entry at its word.
+no signing.
 
-What the comment guarantees is that the last automated run agreed. The CI
-verifier (`factory-evidence-verify.yml`) re-reads recorded `ci` completions
-against the pull request head, and the macOS evidence lane (`_evidence.yml`)
-rewrites the section from what its run gathered, so a hand-written completion
-does not survive the next run of the lane that owns the item. Between a hand
-edit and that run the accounting reads the entry as complete, and a body
-approved in that window is approved.
+The one binding an entry carries is `verified_head_sha`, written by the CI
+verifier when it saw a named check green. It records which commit the entry
+claims to be about, and it is as hand-writable as everything around it, so it
+says nothing about who wrote the entry; what it decides is whether the verifier
+looks again. A `ci` entry recorded `complete` whose `verified_head_sha` is not
+the current head is re-verified against live check-run state on the next run,
+and one bound to the current head is skipped.
 
-For a reviewer, a completion in the comment is a claim the last run made rather
-than a proof that the work happened. Where it matters, open the run the entry
-names and read it.
+That is close to the whole of what a later run re-checks. Both writers rewrite
+the visible status list from the metadata, so a `- [complete] ...` line edited
+by hand is overwritten at the next run — but the entry behind it is not
+re-read. The macOS evidence lane (`_evidence.yml`) re-resolves only entries
+recorded `pending-ci`; one already recorded `complete` passes through and is
+re-rendered as it stands. The CI verifier (`factory-evidence-verify.yml`) looks
+only at `ci` items, and only at those pending or stale against the head.
+
+So a completion forged into the metadata and bound to the current head survives
+every later run, and `should_clear_blocked_label` then takes `blocked:evidence`
+off once every entry reads complete. A forged completion of any other kind — a
+statement, an attested test command, a diff — is never re-checked at all.
+[#1778](https://github.com/fairchild/workspaces/issues/1778) tracks that gap.
+
+Nor does editing a body start a run that would close the window: the verifier
+fires on a completed check suite or a manual dispatch, and the evidence lane is
+`workflow_call` only. On a pull request nobody pushes to again, no run follows
+the edit.
+
+One class of entry is re-read rather than trusted, and it is read at review
+time: before an approve counts, `_live_ci_evidence_gate_error` re-verifies
+every named-check item against live check-run state on the current head, so a
+forged `ci` completion does not carry a review. Every other kind the accounting
+and that gate take at their word.
+
+For a reviewer, a completion in the comment is a claim rather than a proof —
+for a `ci` item, a claim the reviewer gate re-checks, and for the rest, one
+nothing downstream checks again. Where it matters, open the run the entry names
+and read it.
 
 ## How it's enforced
 

@@ -55,8 +55,8 @@ that passed unverified can still fail in CI. Export `GH_TOKEN=$(gh auth
 token)` to get CI's answer locally.
 
 The hidden metadata comment beside that section is trusted by shape and
-carries no signature or author, so a recorded completion says only that the
-last automated run agreed — see
+carries no signature or author, and a recorded completion is re-checked later
+only for a named-check item — see
 [what the metadata comment guarantees](evidence.md#what-the-metadata-comment-guarantees).
 
 PR summary style: prefer concise Markdown links for completed checks and
