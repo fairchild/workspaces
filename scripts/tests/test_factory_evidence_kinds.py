@@ -8577,6 +8577,8 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         return after.split("\n## ", 1)[0].strip()
 
     # intent: fix
+    # marker: behaviourally red at `016d94ba`, its own base
+    # (`AssertionError`).
     def test_the_authors_own_blocked_bullet_lands_in_the_notes(self) -> None:
         for name, ending in self.ENDINGS.items():
             with self.subTest(ending=name):
@@ -8599,6 +8601,8 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 self.assertEqual(said, [])
 
     # intent: fix
+    # marker: behaviourally red at `016d94ba`, its own base
+    # (`AssertionError`).
     def test_a_second_write_leaves_the_bullet_where_the_first_put_it(self) -> None:
         # A fixed point, or the line travels one write at a time and an author
         # reading the body between two lane runs sees a different page each.
@@ -8613,6 +8617,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
     # Guards: a stale reading of a recorded item stays the machine's -- green on main,
     # and the half of the rule this round's readers must not break.
     # intent: control
+    # marker: green at `016d94ba`, its own base.
     def test_a_status_line_naming_a_recorded_item_is_still_the_machines(self) -> None:
         # The other direction of the same rule, and the half that keeps the
         # section readable: a stale reading of an item the write records is
@@ -8628,6 +8633,8 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         self.assertEqual(said, [])
 
     # intent: fix
+    # marker: behaviourally red at `016d94ba`, its own base
+    # (`AssertionError`).
     def test_both_writers_carry_it(self) -> None:
         # The pair that has to agree about what a body carries (#1729): the
         # lane's re-render and the factory turn's own render, on one body.
@@ -8741,6 +8748,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
     # Guards: the writer reads the wrapped spellings as the page does -- true on main,
     # said out loud here so the reader this arc unified cannot quietly narrow.
     # intent: control
+    # marker: green at `e6934e95`, its own base.
     def test_a_wrapped_line_naming_a_recorded_item_is_the_machines(self) -> None:
         # The writer's half of the pair, pinned: it read the page all along,
         # and this says so rather than leaving it to the docstring.
@@ -8756,6 +8764,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 self.assertEqual(said, [])
 
     # intent: guard
+    # marker: green at `e6934e95`, its own base.
     def test_a_wrapped_line_naming_no_recorded_item_is_the_authors(self) -> None:
         # The other half on the same shapes: wrapping a status token does not
         # hand the write a line it does not record.
@@ -8908,6 +8917,7 @@ class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
         self.assertNotIn("[pending-ci]", notes)
 
     # intent: guard
+    # marker: green at `3ac9675e`, its own base.
     def test_an_item_carrying_its_own_separator_is_still_read_whole(self) -> None:
         # The probe reads the item back by REMOVING what it added, not by
         # searching for a boundary: a search with no contract takes the first
@@ -8922,6 +8932,7 @@ class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
         )
 
     # intent: guard
+    # marker: green at `3ac9675e`, its own base.
     def test_the_reading_is_the_same_one_the_line_goes_through(self) -> None:
         # Round 3's cases, unchanged by round 4: the mechanism got deeper, not
         # different.
@@ -9083,6 +9094,8 @@ class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
         return sys.modules["evidence"]
 
     # intent: fix
+    # marker: behaviourally red at `3ac9675e`, its own base
+    # (`AssertionError`).
     def test_the_collision_check_uses_the_ownership_rules_key(self) -> None:
         evidence = self.evidence()
         self.assertEqual(evidence._indistinguishable([self.BOLD, self.PLAIN]), [self.PLAIN])
@@ -9090,6 +9103,8 @@ class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
         self.assertEqual(evidence._indistinguishable([self.BOLD, "the smoke lane"]), [])
 
     # intent: fix
+    # marker: behaviourally red at `3ac9675e`, its own base
+    # (`AssertionError`).
     def test_the_turn_refuses_the_contract_and_keeps_the_authors_line(self) -> None:
         run_contributor = sys.modules["run_contributor_evidence_kinds"]
         with contextlib.redirect_stderr(io.StringIO()):
@@ -9108,6 +9123,7 @@ class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
         self.assertIn("make each item distinct", errors[0])
 
     # intent: guard
+    # marker: green at `690713b0`, its own base.
     def test_the_update_path_stands_down_and_keeps_the_authors_line(self) -> None:
         """The same harm on the path a LATER run takes (#1751, round 5).
 
@@ -9159,6 +9175,8 @@ class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
         self.assertIn("make each requested item distinct", stood_down[0])
 
     # intent: fix
+    # marker: behaviourally red at `3ac9675e`, its own base
+    # (`AssertionError`).
     def test_the_accounting_names_the_collision_where_the_author_can_fix_it(self) -> None:
         run_contributor = sys.modules["run_contributor_evidence_kinds"]
         accounting, errors = run_contributor.validate_evidence_accounting(
@@ -9170,6 +9188,7 @@ class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
         )
 
     # intent: guard
+    # marker: green at `3ac9675e`, its own base.
     def test_a_distinguishable_contract_is_written_as_before(self) -> None:
         # The control: the guard costs an ordinary contract nothing, and an
         # author's status bullet for something the contract does not ask for
@@ -9520,6 +9539,8 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
 
     # Guards: seven pushes with a changing detail accrue nothing.
     # intent: fix
+    # marker: behaviourally red at `1955ed15`, its own base
+    # (`AssertionError`).
     def test_seven_pushes_with_a_changing_detail_and_no_status_change(self) -> None:
         evidence = self.evidence()
         body = self.body_with(f"{self.DETAIL} on head aaaaaaaaaaaX")
@@ -9537,6 +9558,8 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
     # Guards: a status change costs no copy. Main passes it under a different key;
     # it pins the property the entry key has to keep.
     # intent: fix
+    # marker: behaviourally red at `1955ed15`, its own base
+    # (`AssertionError`).
     def test_a_status_change_carries_nothing_either(self) -> None:
         """Keyed on the ENTRY, a status change costs no copy at all.
 
@@ -9562,6 +9585,8 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
 
     # Guards: the cap runs on the path production takes, not only on a hand-made body.
     # intent: fix
+    # marker: behaviourally red at `d02bb8cc`, its own base
+    # (`AssertionError`).
     def test_the_turn_caps_it_too_through_the_entry_point_production_uses(self) -> None:
         """The turn path, driven where production drives it (#1751, round 8).
 
@@ -9600,6 +9625,7 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
         self.assertEqual(seen, [(1, 0)] * 3)
 
     # intent: guard
+    # marker: green at `d02bb8cc`, its own base.
     def test_the_turn_reconstructs_from_the_published_body_and_not_the_model_s(self) -> None:
         # The mechanism directly: the same expression over the two bodies
         # gives different answers, and only one of them is the last run's.
@@ -9672,16 +9698,21 @@ class OneDefinitionOfWhichEntriesTheWriteRendersTests(unittest.TestCase):
         return written, stderr.getvalue()
 
     # intent: fix
+    # marker: behaviourally red at `d02bb8cc`, its own base
+    # (`AssertionError`).
     def test_an_entry_the_write_would_not_render_does_not_take_the_owners_line(self) -> None:
         written, stderr = self.written(self.body(with_the_unrenderable_entry=True))
         self.assertIn(self.OWNERS, written, f"the owner's line went; stderr said {stderr!r}")
 
     # intent: guard
+    # marker: green at `d02bb8cc`, its own base.
     def test_the_control_without_it_keeps_the_line_too(self) -> None:
         written, _ = self.written(self.body(with_the_unrenderable_entry=False))
         self.assertIn(self.OWNERS, written)
 
     # intent: fix
+    # marker: behaviourally red at `d02bb8cc`, its own base
+    # (`AssertionError`).
     def test_the_reconstruction_names_exactly_the_lines_the_write_renders(self) -> None:
         evidence = self.evidence()
         helpers = sys.modules["_helpers"]
@@ -9708,6 +9739,8 @@ class OneDefinitionOfWhichEntriesTheWriteRendersTests(unittest.TestCase):
         )
 
     # intent: fix
+    # marker: behaviourally red at `f28b61f0`, its own base
+    # (`AssertionError`).
     def test_the_turn_renderer_renders_what_the_reconstruction_rebuilds(self) -> None:
         """The same equality on the OTHER renderer (#1751, round 9).
 
@@ -9746,6 +9779,7 @@ class OneDefinitionOfWhichEntriesTheWriteRendersTests(unittest.TestCase):
         self.assertEqual(rendered, [f"- [complete] {item.strip()} -- --filter QA` passed"])
 
     # intent: guard
+    # marker: green at `d02bb8cc`, its own base.
     def test_the_turn_path_carries_the_same_two_bodies_and_the_same_metadata(self) -> None:
         """The axis neither the product nor the corpus can produce (#1751, round 8).
 
@@ -9830,12 +9864,16 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         return body, stderr.getvalue()
 
     # intent: fix
+    # marker: behaviourally red at `f28b61f0`, its own base
+    # (`AssertionError`).
     def test_the_second_identical_line_is_the_authors_and_is_carried(self) -> None:
         written, said = self.written(2)
         self.assertEqual(self.counts(written), (1, 1), f"stderr said {said!r}")
         self.assertIn("not readable back", said)
 
     # intent: fix
+    # marker: behaviourally red at `95f74424`, its own base
+    # (`AssertionError`).
     def test_the_same_holds_when_the_verdict_has_not_changed(self) -> None:
         """The shape round 9's fixture could not reach (#1751, round 10).
 
@@ -9852,12 +9890,15 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertEqual(self.counts(written), (1, 1), f"stderr said {said!r}")
 
     # intent: fix
+    # marker: behaviourally red at `95f74424`, its own base
+    # (`AssertionError`).
     def test_a_third_copy_is_the_authors_too(self) -> None:
         written, _ = self.written(3, recorded="complete")
         self.assertEqual(self.counts(written), (1, 2))
 
     # Guards: the ordinary one-copy body -- the case the cap must leave alone.
     # intent: control
+    # marker: green at `f28b61f0`, its own base.
     def test_one_copy_is_still_the_machines_and_is_replaced(self) -> None:
         written, _ = self.written(1)
         self.assertEqual(self.counts(written), (1, 0))
@@ -9933,6 +9974,8 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
     # Guards: no accrual for the mirror pair. Green on main, red at `15e80e9e`: it
     # guards a regression this PR introduced and then fixed.
     # intent: fix
+    # marker: behaviourally red at `15e80e9e`, its own base
+    # (`AssertionError`).
     def test_the_mirror_pair_is_a_fixed_point_rather_than_an_accrual(self) -> None:
         # Driven through the write, three times: (2,0) each time. At
         # `15e80e9e` this read (2,1), (2,2), (2,3) -- one machine copy into
@@ -9992,6 +10035,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
     # length limit. Green at `76c65118`; it is the test that kills the
     # `(source, source)` mutant, which is a guard's job rather than a fix's.
     # intent: guard
+    # marker: green at `76c65118`, its own base.
     def test_the_instrument_owns_the_line_the_write_is_about_to_render(self) -> None:
         """The axis round 12's attempt held fixed (#1751, round 13).
 
@@ -10131,6 +10175,8 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         return self.counts(rendered)
 
     # intent: fix
+    # marker: behaviourally red at `76c65118`, its own base
+    # (`AssertionError`).
     def test_an_item_that_keeps_its_text_and_moves_position_owns_one_line(self) -> None:
         """A claim's key has to name the same entry in BOTH bodies (#1751, round 13).
 
@@ -10153,6 +10199,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         )
 
     # intent: guard
+    # marker: green at `76c65118`, its own base.
     def test_the_same_item_at_one_position_is_unchanged(self) -> None:
         # The same turn with the item where the published body left it: one
         # contract item, and two, so the second control differs from the fix
@@ -10173,6 +10220,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertEqual(evidence.entries_keyed_for([recorded], ["something else"]), [])
 
     # intent: guard
+    # marker: green at `7808a051`, its own base.
     def test_two_entries_at_one_index_with_two_lines_are_a_fixed_point(self) -> None:
         """What `rendered_entry_claims` claims about a colliding index, run.
 
@@ -10252,6 +10300,8 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
             )
 
     # intent: fix
+    # marker: behaviourally red at `7808a051`, its own base
+    # (`AssertionError`).
     def test_two_entries_at_one_index_rendering_one_line_own_both(self) -> None:
         """The conjunction, held at once, through the lane every run calls.
 
@@ -10307,6 +10357,8 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                     )
 
     # intent: fix
+    # marker: behaviourally red at `7808a051`, its own base
+    # (`AssertionError`).
     def test_two_items_that_both_read_as_nothing_are_one_requirement(self) -> None:
         # The page reads `**.**` and `.` as the same nothing, so a line naming
         # either cannot be told from a line naming the other -- which is what
@@ -10318,6 +10370,8 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertEqual(evidence._indistinguishable(["a", "b"]), [], "a control")
 
     # intent: fix
+    # marker: behaviourally red at `76c65118`, its own base
+    # (`AssertionError`).
     def test_two_entries_with_one_item_text_stay_two_claims(self) -> None:
         """What the index buys, in the shape that would cost the item text.
 
@@ -10652,6 +10706,8 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertEqual(len(claimed), 2, "two entries, two lines")
 
     # intent: fix
+    # marker: behaviourally red at `f28b61f0`, its own base
+    # (`AssertionError`).
     def test_the_instrument_calls_the_second_copy_the_authors_too(self) -> None:
         # The sweep's sight, restored by construction: it builds the same
         # owner, so exactly one of the two identical lines is the machine's to
@@ -10668,6 +10724,8 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertEqual(len(owned), 1, "the instrument gave one entry both copies")
 
     # intent: fix
+    # marker: behaviourally red at `f28b61f0`, its own base
+    # (`AssertionError`).
     def test_the_instrument_reports_the_loss_when_the_write_takes_both(self) -> None:
         # What `lines_lost` says about a write that deleted the second copy:
         # the line, rather than nothing. Asked of the instrument directly with

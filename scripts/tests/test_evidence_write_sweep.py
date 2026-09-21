@@ -563,6 +563,8 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         )
 
     # intent: fix
+    # marker: behaviourally red at `e6934e95`, its own base
+    # (`AssertionError`).
     def test_the_two_readers_agree_on_a_status_line_however_it_is_written(self) -> None:
         """The rule is one function, and it is asked of the page's reading at both readers.
 
@@ -764,6 +766,7 @@ class TheTwoProducersOfOneReadingAgreeAcrossTheGrammarTests(unittest.TestCase):
     # Guards: the generated grammar covers every axis the suite claims -- a property
     # of the fixture generator, which main's generator also had.
     # intent: control
+    # marker: green at `d037e850`, its own base.
     def test_the_product_covers_every_axis_it_claims_to(self) -> None:
         # The size is quoted in the pull request body, so it is pinned here
         # rather than left to be recounted, and every value of every axis is
@@ -789,6 +792,7 @@ class TheTwoProducersOfOneReadingAgreeAcrossTheGrammarTests(unittest.TestCase):
         )
 
     # intent: guard
+    # marker: green at `d037e850`, its own base.
     def test_the_two_producers_read_every_form_the_same_way(self) -> None:
         evidence = sys.modules["evidence"]
         disagreements = [
@@ -800,6 +804,8 @@ class TheTwoProducersOfOneReadingAgreeAcrossTheGrammarTests(unittest.TestCase):
         self.assertEqual(len(disagreements), 0, disagreements[:5])
 
     # intent: fix
+    # marker: behaviourally red at `d037e850`, its own base
+    # (`AssertionError`).
     def test_the_rule_classifies_every_form_the_way_its_axis_says(self) -> None:
         # The half that catches #1751 round 3: a line naming a recorded item
         # is the machine's whatever markup the ITEM carries, and a status
@@ -814,6 +820,7 @@ class TheTwoProducersOfOneReadingAgreeAcrossTheGrammarTests(unittest.TestCase):
         self.assertEqual(len(wrong), 0, wrong[:5])
 
     # intent: guard
+    # marker: green at `d037e850`, its own base.
     def test_a_crlf_line_reads_the_same_as_its_lf_form(self) -> None:
         evidence = sys.modules["evidence"]
         form = next(f for f in self.forms if f.axes["item markup"] == "bold")
