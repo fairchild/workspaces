@@ -30,6 +30,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TESTS = REPO_ROOT / "scripts" / "tests"
@@ -47,37 +48,66 @@ MARKED_FILES = (
     "test_intent_markers.py",
 )
 KINDS = ("fix", "guard", "control")
+# The split the body publishes, measured at this head by the walk below and
+# by a second reader. A snapshot rather than a bound: the number in the body
+# is the claim, and this is what makes a change to it loud.
+PUBLISHED_SPLIT = {"fix": 41, "guard": 75, "control": 11}
 # Anchored at the start of the comment: a line that MENTIONS a marker in
 # prose -- "the `# intent: fix` above" -- is a comment about a marker and not
 # one, and a reader that took either would count the prose.
 MARKER_RE = re.compile(r"^\s*#\s*intent:\s*(\S+)\s*$")
 
 
+def _marks_above(node: ast.AST, lines: list[str]) -> list[str]:
+    """The markers belonging to this definition, in source order.
+
+    The CONTIGUOUS run of comment lines immediately above the first
+    decorator (or the `def` when there is none), so a marker separated by a
+    blank line is not this test's and a marker inside a docstring is not a
+    comment at all -- and then the decorator span itself, because a second
+    marker sitting BETWEEN two decorators is a marker this test carries and
+    a reader that only looked upwards never saw it (#1773, round 17).
+    """
+    first = node.decorator_list[0].lineno if node.decorator_list else node.lineno
+    index = first - 2
+    marks: list[str] = []
+    while index >= 0 and lines[index].strip().startswith("#"):
+        match = MARKER_RE.match(lines[index])
+        if match:
+            marks.append(match.group(1).lower())
+        index -= 1
+    marks.reverse()
+    for line in lines[first - 1 : node.lineno - 1]:
+        match = MARKER_RE.match(line)
+        if match:
+            marks.append(match.group(1).lower())
+    return marks
+
+
 def markers_in(source: str) -> dict[str, list[str]]:
-    """Every `def test_*` in this source, with the markers directly above it.
+    """Every `def test_*` in this source, keyed by its QUALIFIED name, with its markers.
 
     Any nesting: a test inside a class inside a `try` is still a test. The
-    block read is the CONTIGUOUS run of comment lines immediately above the
-    `def`, so a marker separated from it by a blank line is not this test's,
-    and a marker inside a docstring is not a comment at all.
+    key is the dotted path to the definition rather than the bare name,
+    because a key coarser than the thing it identifies loses members --
+    two classes each holding a `test_writes_the_body`, or both branches of
+    a conditionally defined class, collapsed to one entry, and an unmarked
+    test could hide behind a marked one of the same name (#1773, round 17).
     """
-    tree = ast.parse(source)
     lines = source.split("\n")
     found: dict[str, list[str]] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        if not node.name.startswith("test_"):
-            continue
-        first = node.decorator_list[0].lineno if node.decorator_list else node.lineno
-        index = first - 2
-        marks: list[str] = []
-        while index >= 0 and lines[index].strip().startswith("#"):
-            match = MARKER_RE.match(lines[index])
-            if match:
-                marks.append(match.group(1).lower())
-            index -= 1
-        found[node.name] = marks[::-1]
+
+    def walk(node: ast.AST, prefix: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            name = getattr(child, "name", None)
+            if (
+                isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and child.name.startswith("test_")
+            ):
+                found[f"{prefix}{child.name}"] = _marks_above(child, lines)
+            walk(child, f"{prefix}{name}." if name else prefix)
+
+    walk(ast.parse(source), "")
     return found
 
 
@@ -89,23 +119,85 @@ def markers_in(source: str) -> dict[str, list[str]]:
 FETCH = "git fetch --no-tags origin main:refs/remotes/origin/main  (or check out with fetch-depth: 0)"
 
 
-def comparison_base(base: str = "origin/main") -> str | None:
-    """What "new" is measured against, or None if this checkout cannot say.
+# The refspec form resolves the ref; `--unshallow` gives the history a merge
+# base needs. Two instructions because there are two ways to be unable to
+# answer, and an instruction that does not fix the shape it is printed for is
+# a false claim -- both are RUN by the seeds below (#1773, rounds 16 and 17).
+DEEPEN = (
+    "git fetch --no-tags --unshallow origin main:refs/remotes/origin/main"
+    "  (or check out with fetch-depth: 0)"
+)
+
+
+class Base(NamedTuple):
+    """The commit "new" is measured against, or what this checkout needs first."""
+
+    sha: str | None
+    missing: str | None
+
+
+def comparison_base(root: Path = REPO_ROOT, base: str = "origin/main") -> Base:
+    """What "new" is measured against here, or None and the reason it cannot be.
 
     The MERGE BASE of `HEAD` and `origin/main` rather than `origin/main`
     itself: a pull request checkout is the head or a merge commit, and "new"
     has to mean new to this pull request rather than new since whatever main
     has moved to since it branched.
+
+    Never a string that looks like an answer. Returning `base` when
+    `git merge-base` fails swapped merge-base semantics for origin/main-tip
+    semantics without saying so -- on a shallow checkout, where the ref
+    resolves and no history is shared -- and a caller asking "did I get a
+    base?" was told yes (#1773, round 17).
     """
     if subprocess.run(
         ["git", "rev-parse", "--verify", "--quiet", base],
-        capture_output=True, text=True, cwd=REPO_ROOT,
+        capture_output=True, text=True, cwd=root,
     ).returncode != 0:
-        return None
-    merge_base = subprocess.run(
-        ["git", "merge-base", "HEAD", base], capture_output=True, text=True, cwd=REPO_ROOT
+        return Base(None, f"`{base}` is not in this checkout: {FETCH}")
+    found = subprocess.run(
+        ["git", "merge-base", "HEAD", base], capture_output=True, text=True, cwd=root
     )
-    return merge_base.stdout.strip() if merge_base.returncode == 0 else base
+    if found.returncode != 0:
+        return Base(
+            None,
+            f"`{base}` resolves but this checkout shares no history with it, so the "
+            f"merge base cannot be computed: {DEEPEN}",
+        )
+    return Base(found.stdout.strip(), None)
+
+
+def head_of(root: Path = REPO_ROOT) -> str:
+    """This checkout's HEAD, for the one question the base cannot answer alone."""
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=root
+    ).stdout.strip()
+
+
+def added_test_files(base: str, root: Path = REPO_ROOT) -> tuple[str, ...]:
+    """Test files this branch ADDS under `scripts/tests/`, named rather than assumed.
+
+    Not `test_files_added_since`: the walk below reads every `def test_*` in
+    this file as a test, so a helper named that way is an unmarked test to
+    its own census. Caught by this guard on the commit that added it.
+
+    The guard's population was the five files somebody listed, so a new
+    suite added with no markers at all was invisible to it AND to the
+    check for files outside it, which only notices an outside file once it
+    carries a marker. A file this branch adds is this branch's to mark
+    (#1773, round 17).
+    """
+    shown = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=A", base, "HEAD", "--", "scripts/tests"],
+        capture_output=True, text=True, cwd=root,
+    )
+    if shown.returncode != 0:
+        return ()
+    return tuple(sorted(
+        Path(line).name
+        for line in shown.stdout.split("\n")
+        if line.endswith(".py") and Path(line).name.startswith("test_")
+    ))
 
 
 def new_tests(path: Path, base: str | None) -> set[str] | None:
@@ -126,17 +218,6 @@ def new_tests(path: Path, base: str | None) -> set[str] | None:
     return set(markers_in(path.read_text(encoding="utf-8"))) - at_base
 
 
-def comparison_base_in(root: Path, base: str = "origin/main") -> str | None:
-    """`comparison_base` asked about another checkout, for the seed below."""
-    if subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", base],
-        capture_output=True, text=True, cwd=root,
-    ).returncode != 0:
-        return None
-    found = subprocess.run(["git", "merge-base", "HEAD", base], capture_output=True, text=True, cwd=root)
-    return found.stdout.strip() if found.returncode == 0 else base
-
-
 class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
     """The census over the real tree, which is the part a hand-run script was doing."""
 
@@ -148,8 +229,9 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
     def test_every_test_this_branch_adds_declares_exactly_one_intent(self) -> None:
         offenders: dict[str, list[str]] = {"unmarked": [], "multi-marked": [], "unknown kind": []}
         counted = 0
+        split = {kind: 0 for kind in KINDS}
         base = comparison_base()
-        if base is None:
+        if base.sha is None:
             # The two cases are different and the difference is the whole
             # point of this branch. A LOCAL checkout with no remote cannot
             # say what is new, and refusing there would fail on a clone
@@ -159,17 +241,17 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
             # which is the silence this test was committed to end, so it
             # fails and says what to fetch (#1773, round 16).
             if os.environ.get("GITHUB_ACTIONS"):
-                self.fail(
-                    "the comparison base is missing from this checkout, so the marker census "
-                    f"could not run: {FETCH}"
-                )
+                self.fail(f"the marker census could not run: {base.missing}")
             self.skipTest(
-                "no `origin/main` in this checkout, so what is new cannot be measured; "
-                f"this fails rather than skips under GITHUB_ACTIONS ({FETCH})"
+                f"what is new cannot be measured here; this fails rather than skips "
+                f"under GITHUB_ACTIONS ({base.missing})"
             )
-        for name in MARKED_FILES:
+        population = MARKED_FILES + tuple(
+            name for name in added_test_files(base.sha) if name not in MARKED_FILES
+        )
+        for name in population:
             path = TESTS / name
-            added = new_tests(path, base)
+            added = new_tests(path, base.sha)
             found = markers_in(path.read_text(encoding="utf-8"))
             for test in sorted(added):
                 marks = found[test]
@@ -180,8 +262,99 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
                     offenders["multi-marked"].append(f"{name}::{test} {marks}")
                 elif marks[0] not in KINDS:
                     offenders["unknown kind"].append(f"{name}::{test} {marks[0]}")
+                else:
+                    split[marks[0]] += 1
         self.assertEqual({k: v for k, v in offenders.items() if v}, {}, "markers to fix")
+        if base.sha == head_of():
+            # The population of "what this branch adds" is EMPTY on the branch
+            # this guard protects, the moment it merges: on a main checkout
+            # the merge base is HEAD, nothing is new, and a lower bound over
+            # nothing fails. Measured at `22e2bd46` in a clone where
+            # `origin/main == HEAD`: `0 not greater than 100`, which would
+            # have redded the agent lane on main and kept it red. A guard
+            # whose subject is a diff says what it does when the diff is
+            # empty, and passing silently is not that: the reason is printed
+            # (#1773, round 17).
+            self.assertEqual(counted, 0, "the base is HEAD and the walk still found new tests")
+            print(
+                "marker census: nothing added relative to the base; the guard has no "
+                "population here",
+                file=sys.stderr,
+            )
+            return
         self.assertGreater(counted, 100, "the population collapsed; the walk read too few tests")
+        # The split the pull request body publishes, pinned as a snapshot the
+        # way a fixture's names are pinned. Without it the guard holds the
+        # kinds are known and holds nothing about how many of each, so a
+        # marker flipped `guard` -> `control` left the suite green while the
+        # body's red-first line went false (#1773, round 17). A change here
+        # is meant to be loud: re-measure, and update this in the same commit
+        # as the tests that moved it.
+        self.assertEqual(
+            split, PUBLISHED_SPLIT,
+            "the marker split moved; re-measure and update PUBLISHED_SPLIT and the body's "
+            "red-first line in the same commit",
+        )
+
+    def upstream_with_a_branch(self, root: Path, extra: dict[str, str] | None = None) -> Path:
+        """A repository with `main` and a `work` branch carrying this file.
+
+        One builder for every seed below, because three temporary
+        repositories built three ways would be three shapes nobody compares.
+        """
+        upstream = root / "upstream"
+        tests = upstream / "scripts" / "tests"
+        tests.mkdir(parents=True)
+
+        def git(*args: str) -> None:
+            subprocess.run(["git", *args], cwd=upstream, capture_output=True, check=True)
+
+        (tests / "test_stub.py").write_text("", encoding="utf-8")
+        git("init", "--initial-branch=main")
+        git("config", "user.email", "tests@example.invalid")
+        git("config", "user.name", "tests")
+        git("add", "-A")
+        git("commit", "-m", "main")
+        git("checkout", "-b", "work")
+        (tests / "test_intent_markers.py").write_text(
+            Path(__file__).read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        for name in MARKED_FILES:
+            if name != "test_intent_markers.py":
+                (tests / name).write_text("", encoding="utf-8")
+        for name, source in (extra or {}).items():
+            (tests / name).write_text(source, encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-m", "work")
+        return upstream
+
+    def census_in(self, sandbox: Path, ci: bool) -> str:
+        """This file, run inside another checkout, the way the lane runs it."""
+        environment = {**os.environ, "PYTHONPYCACHEPREFIX": str(sandbox / ".pyc")}
+        environment.pop("GITHUB_ACTIONS", None)
+        if ci:
+            environment["GITHUB_ACTIONS"] = "true"
+        finished = subprocess.run(
+            [sys.executable, str(sandbox / "scripts" / "tests" / "test_intent_markers.py"), "-v",
+             "TheMarkersThisBranchWritesAreCheckedByCITests"
+             ".test_every_test_this_branch_adds_declares_exactly_one_intent"],
+            cwd=sandbox, capture_output=True, text=True, env=environment,
+        )
+        return finished.stdout + finished.stderr
+
+    def instruction_printed_in(self, output: str) -> list[str]:
+        """The command the failure PRINTED, taken from the output rather than rebuilt.
+
+        Re-deriving it from the constant is what let the printed form and
+        the tested form drift: the false `--depth 1` instruction round 16
+        exists to eliminate could be put back and the seed stayed green,
+        because it ran `FETCH` and asserted only the substring `git fetch`
+        (#1773, round 17).
+        """
+        printed = [line for line in output.splitlines() if "git fetch" in line]
+        self.assertTrue(printed, f"nothing in the output says what to fetch: {output}")
+        said = printed[0]
+        return said[said.index("git fetch"):].split("  (")[0].strip().split()
 
     # intent: fix
     def test_a_checkout_without_the_base_fails_in_ci_and_skips_on_a_laptop(self) -> None:
@@ -200,32 +373,13 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
         reason; a run under `GITHUB_ACTIONS` fails and says what to fetch.
         This drives THIS FILE inside a temporary repository that has no
         `origin/main`, rather than restating either sentence here -- a second
-        spelling of a rule is how the rule drifts.
+        spelling of a rule is how the rule drifts. And the instruction it
+        runs is the one the failure PRINTED, read back out of the captured
+        output, so the sentence and the command cannot drift apart either.
         """
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            upstream = root / "upstream"
-            (upstream / "scripts" / "tests").mkdir(parents=True)
-
-            def git(*args: str, cwd: Path) -> None:
-                subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=True)
-
-            (upstream / "scripts" / "tests" / "test_stub.py").write_text("", encoding="utf-8")
-            git("init", "--initial-branch=main", cwd=upstream)
-            git("config", "user.email", "tests@example.invalid", cwd=upstream)
-            git("config", "user.name", "tests", cwd=upstream)
-            git("add", "-A", cwd=upstream)
-            git("commit", "-m", "main", cwd=upstream)
-            git("checkout", "-b", "work", cwd=upstream)
-            tests = upstream / "scripts" / "tests"
-            (tests / "test_intent_markers.py").write_text(
-                Path(__file__).read_text(encoding="utf-8"), encoding="utf-8"
-            )
-            for name in MARKED_FILES:
-                if name != "test_intent_markers.py":
-                    (tests / name).write_text("", encoding="utf-8")
-            git("add", "-A", cwd=upstream)
-            git("commit", "-m", "work", cwd=upstream)
+            upstream = self.upstream_with_a_branch(root)
             # The shape the lane had: one branch, no history of `main`.
             subprocess.run(
                 ["git", "clone", "--quiet", "--single-branch", "--branch", "work",
@@ -233,45 +387,149 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
                 capture_output=True, check=True,
             )
             sandbox = root / "checkout"
-            tests = sandbox / "scripts" / "tests"
             self.assertIsNone(
-                comparison_base_in(sandbox), "a single-branch clone resolved `origin/main`"
+                comparison_base(sandbox).sha, "a single-branch clone resolved `origin/main`"
             )
-
-            def run(ci: bool) -> str:
-                environment = {**os.environ, "PYTHONPYCACHEPREFIX": str(sandbox / ".pyc")}
-                environment.pop("GITHUB_ACTIONS", None)
-                if ci:
-                    environment["GITHUB_ACTIONS"] = "true"
-                finished = subprocess.run(
-                    [sys.executable, str(tests / "test_intent_markers.py"), "-v",
-                     "TheMarkersThisBranchWritesAreCheckedByCITests"
-                     ".test_every_test_this_branch_adds_declares_exactly_one_intent"],
-                    cwd=sandbox, capture_output=True, text=True, env=environment,
-                )
-                return finished.stdout + finished.stderr
-
-            in_ci = run(ci=True)
+            in_ci = self.census_in(sandbox, ci=True)
             self.assertIn("FAILED", in_ci, "CI did not fail on a missing base")
             self.assertIn("could not run", in_ci)
-            self.assertIn("git fetch", in_ci, "the failure does not say what to fetch")
-            on_a_laptop = run(ci=False)
+            self.assertIn(FETCH, in_ci, "the failure does not print the instruction that works")
+            on_a_laptop = self.census_in(sandbox, ci=False)
             self.assertIn("OK (skipped=1)", on_a_laptop, "a laptop clone did not skip")
             self.assertIn("what is new cannot be measured", on_a_laptop)
-            # And the instruction it prints is RUN here, against that clone:
-            # a reader who follows it has to end up somewhere other than this
+            # And the printed instruction is RUN here, against that clone: a
+            # reader who follows it has to end up somewhere other than this
             # failure. `git fetch origin main` alone does not -- it leaves the
             # commit at `FETCH_HEAD` -- which is why the refspec is in the
             # sentence (#1773, round 16).
-            instruction = FETCH.split("  (")[0].split()
-            subprocess.run(instruction, cwd=sandbox, capture_output=True, check=True)
+            subprocess.run(
+                self.instruction_printed_in(in_ci), cwd=sandbox, capture_output=True, check=True
+            )
             self.assertIsNotNone(
-                comparison_base_in(sandbox),
+                comparison_base(sandbox).sha,
                 "the instruction the guard prints does not resolve the base it asks for",
             )
             self.assertNotIn(
-                "could not run", run(ci=True), "the base is there and the census still refuses"
+                "could not run", self.census_in(sandbox, ci=True),
+                "the base is there and the census still refuses",
             )
+
+    # intent: fix
+    def test_a_shallow_checkout_is_told_so_rather_than_given_the_tip(self) -> None:
+        """A ref that resolves is not a base, and saying it is hides the swap.
+
+        On a `--depth 1` checkout the printed fetch resolves `origin/main`
+        and `git merge-base HEAD origin/main` still fails -- no shared
+        history -- and the helper returned the literal string `origin/main`.
+        The walk then measured "new" against main's TIP instead of the merge
+        base, which is the substitution its own docstring exists to prevent,
+        and a caller asking whether it got a base was told yes. Measured on a
+        genuine shallow clone at `22e2bd46`: `comparison_base()` returned
+        `'origin/main'` and the census ran green on it.
+
+        It answers None with the deeper instruction now, and the seed runs
+        THAT instruction and asserts the census can then measure (#1773,
+        round 17).
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            upstream = self.upstream_with_a_branch(root)
+            # `file://` because a local-path clone ignores `--depth`.
+            subprocess.run(
+                ["git", "clone", "--quiet", "--depth", "1", "--single-branch",
+                 "--branch", "work", f"file://{upstream}", str(root / "checkout")],
+                capture_output=True, check=True,
+            )
+            sandbox = root / "checkout"
+            subprocess.run(self.instruction_printed_in(self.census_in(sandbox, ci=True)),
+                           cwd=sandbox, capture_output=True, check=True)
+            resolved = subprocess.run(
+                ["git", "rev-parse", "--verify", "--quiet", "origin/main"],
+                cwd=sandbox, capture_output=True, text=True,
+            )
+            self.assertEqual(resolved.returncode, 0, "the first instruction did not resolve the ref")
+            base = comparison_base(sandbox)
+            self.assertIsNone(base.sha, "a shallow checkout was handed a base it cannot have")
+            self.assertIn("shares no history", base.missing or "")
+            shallow = self.census_in(sandbox, ci=True)
+            self.assertIn("FAILED", shallow, "CI did not fail on a checkout with no merge base")
+            self.assertIn("shares no history", shallow)
+            # The deeper instruction, taken from what it printed and run.
+            subprocess.run(
+                self.instruction_printed_in(shallow), cwd=sandbox, capture_output=True, check=True
+            )
+            self.assertIsNotNone(
+                comparison_base(sandbox).sha,
+                "the deeper instruction the guard prints does not give it a merge base",
+            )
+
+    # intent: fix
+    def test_a_new_test_file_this_branch_adds_is_in_the_population(self) -> None:
+        """The guard's population was a list somebody wrote, not what the branch adds.
+
+        A new suite added with no markers at all was invisible twice over:
+        the census walks `MARKED_FILES`, and the check for files outside it
+        only notices an outside file once it CARRIES a marker. So the one
+        shape the file's docstring promises to catch -- a test added without
+        declaring what it is for -- passed when it arrived in a new file.
+        The population is the listed files plus the test files this branch
+        adds (#1773, round 17).
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            upstream = self.upstream_with_a_branch(
+                root,
+                extra={"test_zz_added_suite.py": "class T:\n    def test_undeclared(self):\n        pass\n"},
+            )
+            subprocess.run(
+                ["git", "clone", "--quiet", "--branch", "work", str(upstream),
+                 str(root / "checkout")],
+                capture_output=True, check=True,
+            )
+            sandbox = root / "checkout"
+            subprocess.run(["git", "fetch", "--no-tags", "origin", "main:refs/remotes/origin/main"],
+                           cwd=sandbox, capture_output=True, check=True)
+            reported = self.census_in(sandbox, ci=True)
+            self.assertIn("FAILED", reported, "a new file's unmarked test was invisible")
+            self.assertIn("test_zz_added_suite.py::T.test_undeclared", reported)
+
+    # intent: fix
+    def test_a_checkout_whose_base_is_head_passes_and_says_why(self) -> None:
+        """The population is empty on the branch this guard protects, once it merges.
+
+        `ci-agents.yml` runs on push to `main` with `scripts/tests/**` in
+        its paths and the test job has no event gate, so the first push to
+        main after this merges runs this census in a checkout where
+        `origin/main` IS `HEAD`. Nothing is new there, and a lower bound over
+        an empty population fails: measured at `22e2bd46` in such a clone,
+        `AssertionError: 0 not greater than 100`, red on main and red for
+        every later push touching those paths.
+
+        A guard whose subject is a diff has to say what it does when the
+        diff is empty. It passes, and prints the reason rather than passing
+        silently -- a green with no population and a green over 122 tests
+        should not read the same to whoever opens the log (#1773, round 17).
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            upstream = self.upstream_with_a_branch(root)
+            subprocess.run(
+                ["git", "clone", "--quiet", "--branch", "work", str(upstream),
+                 str(root / "checkout")],
+                capture_output=True, check=True,
+            )
+            sandbox = root / "checkout"
+            # What a main checkout after the merge looks like: the branch's
+            # own commit is what `origin/main` points at.
+            subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+                           cwd=sandbox, capture_output=True, check=True)
+            base = comparison_base(sandbox)
+            self.assertEqual(base.sha, head_of(sandbox), "the sandbox is not a base-equals-head one")
+            merged = self.census_in(sandbox, ci=True)
+            self.assertIn("OK", merged, f"the census did not pass with an empty population: {merged}")
+            self.assertNotIn("FAILED", merged)
+            self.assertIn("the guard has no population here", merged,
+                          "it passed without saying why, which is the silence this replaces")
 
     # intent: guard
     def test_the_files_outside_the_guard_are_named_rather_than_implied(self) -> None:
@@ -304,40 +562,66 @@ class TheWalkReadsMarkersTheWayItClaimsTests(unittest.TestCase):
     DECORATED = (
         "class T:\n    # intent: guard\n    @unittest.skip('why')\n    def test_decorated(self):\n        pass\n"
     )
+    # Two classes, one test name: the shape a bare-name key loses. The second
+    # is unmarked, so a reader keying on the name reports one marked test and
+    # the unmarked one is simply gone.
+    TWICE = (
+        "class A:\n    # intent: fix\n    def test_same(self):\n        pass\n"
+        "class B:\n    def test_same(self):\n        pass\n"
+    )
+    # A second marker below the first decorator, where a reader that only
+    # looks upwards from the decorator never reaches it.
+    BETWEEN = (
+        "class T:\n    # intent: guard\n    @unittest.skip('why')\n    # intent: fix\n"
+        "    def test_between(self):\n        pass\n"
+    )
 
     # intent: guard
     def test_one_marker_is_read_as_one(self) -> None:
-        self.assertEqual(markers_in(self.ONE), {"test_one": ["fix"]})
+        self.assertEqual(markers_in(self.ONE), {"T.test_one": ["fix"]})
 
     # intent: guard
     def test_a_second_marker_is_reported_rather_than_taken(self) -> None:
         # The defect round 12 left and round 13 had to come back for: a
         # reader that takes the first marker reports `guard` and says nothing.
-        self.assertEqual(markers_in(self.DOUBLE), {"test_two": ["guard", "fix"]})
+        self.assertEqual(markers_in(self.DOUBLE), {"T.test_two": ["guard", "fix"]})
 
     # intent: guard
     def test_a_test_with_no_marker_reads_as_none(self) -> None:
-        self.assertEqual(markers_in(self.NONE), {"test_bare": []})
+        self.assertEqual(markers_in(self.NONE), {"T.test_bare": []})
 
     # intent: guard
     def test_a_marker_inside_a_docstring_is_not_a_marker(self) -> None:
-        self.assertEqual(markers_in(self.IN_DOCSTRING), {"test_doc": []})
+        self.assertEqual(markers_in(self.IN_DOCSTRING), {"T.test_doc": []})
 
     # intent: guard
     def test_a_marker_a_blank_line_away_is_not_this_tests(self) -> None:
-        self.assertEqual(markers_in(self.BLANK_LINE), {"test_far": []})
+        self.assertEqual(markers_in(self.BLANK_LINE), {"T.test_far": []})
 
     # intent: guard
     def test_a_marker_quoted_in_prose_is_not_a_marker(self) -> None:
-        self.assertEqual(markers_in(self.PROSE), {"test_prose": []})
+        self.assertEqual(markers_in(self.PROSE), {"T.test_prose": []})
 
     # intent: guard
     def test_a_nested_test_is_still_a_test(self) -> None:
-        self.assertEqual(markers_in(self.NESTED), {"test_deep": ["control"]})
+        self.assertEqual(markers_in(self.NESTED), {"T.Inner.test_deep": ["control"]})
 
     # intent: guard
     def test_a_decorated_test_keeps_the_marker_above_its_decorator(self) -> None:
-        self.assertEqual(markers_in(self.DECORATED), {"test_decorated": ["guard"]})
+        self.assertEqual(markers_in(self.DECORATED), {"T.test_decorated": ["guard"]})
+
+    # intent: fix
+    def test_two_tests_of_one_name_are_two_tests(self) -> None:
+        # The key is the dotted path, so the unmarked one is still there to
+        # report. Keyed on the bare name this read as a single marked test
+        # and the census counted one where there are two (#1773, round 17).
+        self.assertEqual(markers_in(self.TWICE), {"A.test_same": ["fix"], "B.test_same": []})
+
+    # intent: fix
+    def test_a_marker_between_two_decorators_is_still_this_tests(self) -> None:
+        # Reported as multi-marked rather than missed: the walk reads the
+        # decorator span as well as the run above it (#1773, round 17).
+        self.assertEqual(markers_in(self.BETWEEN), {"T.test_between": ["guard", "fix"]})
 
 
 if __name__ == "__main__":
