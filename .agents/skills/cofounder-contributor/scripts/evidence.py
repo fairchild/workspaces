@@ -29,7 +29,10 @@ from _helpers import (
     log,
     markdown_section,
     removed_section_texts,
+    UNVERIFIED_ANNOUNCEMENT_PREFIX,
     inserted_markdown_section,
+    page_was_not_asked,
+    is_unverified_announcement,
     placement_refusal,
     rejected_section_headings,
     reparsed_without_runaway,
@@ -39,6 +42,8 @@ from _helpers import (
     strip_markdown_section,
     unmovable_block,
     unterminated_block,
+    unverified_announcement,
+    unverified_heading,
 )
 
 # An item's own text carries em-dashes as a matter of house style, so a
@@ -2397,19 +2402,17 @@ def is_stood_down_announcement(announcement: str) -> bool:
 # surface that posts them has to tell it from the other two, because a
 # deletion and a stand-down each name an edit the author can make and this
 # one names a condition of the run (#1773, round 2).
-UNVERIFIED_ANNOUNCEMENT_PREFIX = "the page could not be asked about this write: "
-
-
-def is_unverified_announcement(announcement: str) -> bool:
-    """Whether this sentence says a check could not be run rather than what a write did."""
-    return announcement.startswith(UNVERIFIED_ANNOUNCEMENT_PREFIX)
-
-
 def _announce_unverified(announcements: list[str], note: str) -> None:
-    """Put the unread-page note in the list the author's surface is composed from, once."""
-    sentence = f"{UNVERIFIED_ANNOUNCEMENT_PREFIX}{note}"
-    if sentence not in announcements:
-        announcements.append(sentence)
+    """Put the unread-page note in the list the author's surface is composed from, once.
+
+    The note arrives COMPLETE from `unverified_announcement`, prefix and
+    heading included, rather than being finished here: a sentence half-built
+    at the constructor and half-built at one of its callers is a sentence the
+    other callers get wrong, and one of them did (#1773, round 11). Deduping
+    on the whole sentence therefore keys on the heading as well as the reason.
+    """
+    if note not in announcements:
+        announcements.append(note)
 
 
 def _stood_down(source: str, refusal: str, announcements: list[str] | None = None) -> SectionWrite:

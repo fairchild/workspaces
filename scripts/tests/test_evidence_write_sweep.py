@@ -84,6 +84,12 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
 
     BODIES = 168
     REFUSALS = 22
+    # Bodies this run could not ask the page about: the ones whose shape
+    # reaches a placement check. The same 24 under a permanent cause (the
+    # write stands down) and under a transient one (it goes ahead unverified)
+    # -- what the page can say changes what this instrument SEES, never what
+    # it counts as a cost (#1773, round 11).
+    UNASKED_BODIES = 24
     ANNOUNCED_LOSSES = 2
 
     @classmethod
@@ -196,7 +202,16 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         """
         with page_unavailable(transient=True):
             summary = sweep_script.report(sweep_script.sweep())
-        self.assertEqual(summary["bodies_the_page_could_not_be_asked_about"], 0)
+        # 24, not 0: a transient cause is not a reason to refuse, so every
+        # body is written -- and the page was not asked about the 24 that
+        # reach a placement check, which is exactly what this field counts.
+        # It read 0 until round 11, because the seam that says so built its
+        # note without the prefix the reading keys on and the count grepped
+        # the step log for a phrase instead of asking the predicate.
+        self.assertEqual(
+            summary["bodies_the_page_could_not_be_asked_about"],
+            self.UNASKED_BODIES,
+        )
         self.assertEqual(summary["refusals"], self.REFUSALS)
         self.assertEqual(summary["bodies_losing_a_line_silently"], 0)
         self.assertEqual(summary["bodies_not_a_fixed_point"], 0)

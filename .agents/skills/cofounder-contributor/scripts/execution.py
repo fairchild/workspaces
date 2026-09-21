@@ -14,6 +14,7 @@ from typing import NamedTuple
 
 from _helpers import (
     MARKDOWN,
+    MARKDOWN_LINE_ENDING_RE,
     code_span_ranges,
     inserted_markdown_section,
     AGENT_CLAIM_LABEL,
@@ -59,6 +60,7 @@ from evidence import (
     classify_evidence_errors,
     is_stood_down_announcement,
     is_unverified_announcement,
+    unverified_heading,
     resolve_named_ci_evidence,
     requested_evidence_contract,
     render_execution_summary_body,
@@ -543,7 +545,14 @@ MIXED_NOTES_HEADLINE = "**Part of your `## Evidence Status` section did not surv
 # reader arrives at was decided by the source model alone. Said under either
 # headline above it would be a claim about the author's text, which it is not
 # (#1773, round 2).
-UNVERIFIED_NOTES_HEADLINE = "**A check on your `## Evidence Status` section could not be run.**"
+def unverified_notes_headline(heading: str) -> str:
+    """The headline for notes about a check that could not be run, naming the SECTION.
+
+    A constant naming `## Evidence Status` told an author their status section
+    was unchecked when the note was about `## Mergeability` -- the one seam
+    whose note reached this path is the seeder's (#1773, round 11).
+    """
+    return f"**A check on your `## {heading}` section could not be run.**"
 
 # What GitHub stores for one issue comment. A body past it is refused whole,
 # so the notes are chunked under it rather than posted and lost (#1740,
@@ -600,7 +609,10 @@ def compose_uncarried_notes_comment(
     elif uncarried:
         headline = UNCARRIED_NOTES_HEADLINE
     else:
-        headline = UNVERIFIED_NOTES_HEADLINE
+        # The section the notes are about, read out of the notes rather than
+        # assumed: they carry their heading for exactly this (#1773, round 11).
+        headings = [one for note in unverified if (one := unverified_heading(note))]
+        headline = unverified_notes_headline(headings[0] if headings else EVIDENCE_STATUS_HEADING)
     parts: list[str] = [*([f"*{persona}*", ""] if persona else []), headline, ""]
     if uncarried:
         parts += [
@@ -781,7 +793,19 @@ def _code_spans_blanked(text: str) -> str:
 
 
 def _without_collapsed_blocks(comment: str) -> str:
-    """The comment with every folded block gone, reading a quoted tag as the text it is."""
+    """The comment with every folded block gone, reading a quoted tag as the text it is.
+
+    Line endings are normalised HERE, once, at the boundary a comment from
+    GitHub enters this module -- the way `pr-readiness.py` normalises before
+    either of its views reads a body. Everything below works in LF offsets
+    after this: `_inline_block_bounds` builds its offset table with
+    `split("\n")`, so a comment with bare CR endings collapsed to ONE inline
+    span covering the whole comment, and two backticks anywhere in it then
+    paired across a real `<details` between them. Measured at `9a5db027`: the
+    same comment reads as 4 blocks with LF or CRLF endings and 1 with CR
+    (#1773, round 11).
+    """
+    comment = MARKDOWN_LINE_ENDING_RE.sub("\n", comment)
     masked = _code_spans_blanked(comment)
     kept: list[str] = []
     last = 0

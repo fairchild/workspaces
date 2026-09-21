@@ -354,6 +354,22 @@ class Outcome:
         return self.took and not self.announced
 
 
+def _says_the_page_was_not_asked(note: str) -> bool:
+    """Whether an announcement says the renderer did not answer, either way it ended.
+
+    Both sentences open with the same words and the writer exposes the
+    predicate, so this asks a VALUE rather than grepping the step log for a
+    phrase -- which is what it did until the seam that says it built its note
+    without the prefix the classifier keys on, and the field read 0 for 24
+    bodies the page really had not been asked about (#1773, round 11). A
+    stand-down carries its reason behind a known prefix, so the reason is read
+    out from behind it rather than searched for.
+    """
+    if evidence.is_stood_down_announcement(note):
+        note = note[len(evidence.STOOD_DOWN_ANNOUNCEMENT_PREFIX) :]
+    return evidence.page_was_not_asked(note)
+
+
 def write_once(text: str) -> tuple[str, bool, bool, tuple[str, ...]]:
     """The body after one rewrite, whether the writer declined it, why, and what it said.
 
@@ -374,13 +390,20 @@ def write_once(text: str) -> tuple[str, bool, bool, tuple[str, ...]]:
     could not measure.
     """
     spoke = io.StringIO()
+    announced: list[str] = []
     with contextlib.redirect_stderr(spoke):
         written = evidence.update_evidence_entries(
-            text, {1: {"status": "complete", "detail": RESOLVED_DETAIL}}
+            text, {1: {"status": "complete", "detail": RESOLVED_DETAIL}}, announcements=announced
         )
     said = tuple(line for line in spoke.getvalue().splitlines() if line.strip())
     refused = any("refusing to rewrite" in line for line in said)
-    unasked = any("the page could not be asked" in line for line in said)
+    # By VALUE, through the predicate the writer exposes, rather than by
+    # grepping the step log for a sentence. The grep read "the page could not
+    # be asked" and the seam that says it built its note without that prefix,
+    # so under a transient renderer failure this field read 0 for 24 bodies
+    # the page really had not been asked about -- the same mismatch that sent
+    # the author's note under the wrong headline (#1773, round 11).
+    unasked = any(_says_the_page_was_not_asked(note) for note in announced)
     return written, refused, unasked, said
 
 
