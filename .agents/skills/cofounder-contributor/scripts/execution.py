@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 
 from _helpers import (
+    code_span_ranges,
     AGENT_CLAIM_LABEL,
     AGENT_CLAIM_LABEL_COLOR,
     AGENT_CLAIM_LABEL_DESCRIPTION,
@@ -696,25 +697,33 @@ def _as_the_page_shows_it(text: str) -> str:
 # BELOW a closed disclosure was read as folded away and posted again (#1740,
 # round 4).
 COLLAPSED_BLOCK_RE = re.compile(r"(?is)<details\b.*</details>|<details\b.*\Z")
-# A code span, at any backtick run length. Its contents are text a reader sees
-# as written, not markup -- so a `<details` QUOTED in a note is not a
-# disclosure, and reading it as one stripped from that note to the end of the
-# comment and took the checked line with it. The note then showed nobody
-# anything, nothing was recorded as shown, and the app posted the identical
-# comment again on every run at the same head (#1773, round 3).
-CODE_SPAN_RE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.DOTALL)
-
-
 def _code_spans_blanked(text: str) -> str:
-    """The text with the INSIDE of every code span replaced by spaces, length for length.
+    """The text with every code span replaced by spaces, length for length.
 
     Length-preserving on purpose: the offsets of what the scan below finds are
     used against the ORIGINAL text, so a note keeps the characters it was
     written with while the scan sees no tag inside a span.
+
+    Read by `code_span_ranges`, which walks left to right by CommonMark's own
+    rules. A regex pairing backticks has no model of which ones are
+    delimiters, so it blanked a real `<details` lying between two backticks
+    that open no span -- and a folded note nobody was shown was then recorded
+    as shown, which silences the next run about a note the write dropped.
+    Anyone who can comment could plant it (#1773, round 5).
+
+    Per LINE, because a code span is an inline construct and cannot reach out
+    of the block it is in: a backtick on one line and a backtick three lines
+    down do not make the `<details>` between them into text, and the page
+    says so -- it folds that note in every such shape. Scanning the comment as
+    one string called them a span and left the block unstripped.
     """
-    return CODE_SPAN_RE.sub(
-        lambda match: f"{match.group(1)}{' ' * len(match.group(2))}{match.group(1)}", text
-    )
+    blanked: list[str] = []
+    for line in text.split("\n"):
+        chars = list(line)
+        for start, stop in code_span_ranges(line):
+            chars[start:stop] = " " * (stop - start)
+        blanked.append("".join(chars))
+    return "\n".join(blanked)
 
 
 def _without_collapsed_blocks(comment: str) -> str:

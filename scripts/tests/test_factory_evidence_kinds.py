@@ -9552,6 +9552,222 @@ class TheTwoLowerFindingsTests(unittest.TestCase):
         )
 
 
+class UniquenessIsAClaimAboutThePageTests(unittest.TestCase):
+    """The mark's uniqueness was established against the SOURCE (#1773, round 5).
+
+    `while mark in written` is an exact, case-sensitive substring scan; the
+    comparison it is meant to guarantee normalises whitespace and case over
+    heading text GitHub has already decoded. Four spellings carry no such
+    substring and render as a heading whose text IS the mark, so the page
+    showed the name twice and the exactly-one guard refused a placement the
+    page shows unfolded -- with a sentence saying the heading is not on the
+    page.
+
+    Mirroring `heading_identity` in the source scan would model the renderer,
+    which is the thing the mark exists to avoid. So the scan is the cheap
+    first guess and the PAGE settles it: render, and a name shown twice sends
+    the loop back for the next candidate, bounded so a pathological body
+    refuses rather than spins.
+    """
+
+    HEADING = "Evidence Status"
+    SECTION = "\n## Evidence Status\n\n- [complete] `swift test` -- 1992 tests passed\n"
+    SUMMARY = "## Summary\n\n- one change\n\n"
+    FOLD = "<details>\n<summary>notes</summary>\n\nfolded prose\n\n</details>\n\n"
+
+    # Each carries no substring the source scan can see, and each renders as a
+    # heading whose text is exactly the mark. Red at `3f2d0980`.
+    COLLIDING = {
+        "a character reference": "## Evidence Status wsx7placementprob&#101;",
+        "an empty comment inside the word": "## Evidence Status wsx7placem<!---->entprobe",
+        "a case variant": "## Evidence Status WSX7PLACEMENTPROBE",
+        "an em around its last letter": "## Evidence Status wsx7placementprob<em>e</em>",
+    }
+
+    def body(self, heading: str) -> str:
+        return f"{self.SUMMARY}{self.FOLD}{heading}\n\nsomeone wrote this\n"
+
+    def test_the_source_scan_calls_every_one_of_them_clean(self) -> None:
+        # The premise, asserted so the tests below are not vacuous: the scan
+        # the mark used to rest on sees nothing in any of these.
+        for label, heading in self.COLLIDING.items():
+            with self.subTest(spelling=label):
+                written = self.body(heading) + self.SECTION
+                self.assertNotIn(helpers.PLACEMENT_PROBE_MARK, written)
+                self.assertEqual(
+                    helpers.placement_probe_mark(written), helpers.PLACEMENT_PROBE_MARK
+                )
+
+    def test_a_rendered_heading_equal_to_the_mark_is_what_the_page_shows(self) -> None:
+        # The test the suite could not express: a body whose RAW spelling
+        # lacks the mark and whose RENDERED heading equals it.
+        for label, heading in self.COLLIDING.items():
+            with self.subTest(spelling=label), recorded_page():
+                written = self.body(heading) + self.SECTION
+                line = helpers.section_heading_line(written, self.HEADING)
+                probe = helpers.probe_body_naming_one_heading(
+                    written, self.HEADING, line, helpers.PLACEMENT_PROBE_MARK
+                )
+                page = helpers.rendered_page(probe)
+                self.assertEqual(
+                    len(
+                        helpers.folded_headings_on_the_page(
+                            page.html, f"{self.HEADING} {helpers.PLACEMENT_PROBE_MARK}"
+                        )
+                    ),
+                    2,
+                    f"{label}: the page did not show the name twice",
+                )
+
+    def test_each_one_is_placed_rather_than_refused(self) -> None:
+        for label, heading in self.COLLIDING.items():
+            with self.subTest(spelling=label), recorded_page():
+                body = self.body(heading)
+                answer = helpers.placement_refusal(body, body + self.SECTION, self.HEADING)
+                self.assertIsNone(answer.refusal, label)
+
+    def test_the_next_candidate_is_deterministic_and_skips_the_source(self) -> None:
+        base = helpers.PLACEMENT_PROBE_MARK
+        plain = "## Summary\n\n- one change\n"
+        self.assertEqual(helpers.placement_probe_mark(plain, 0), base)
+        self.assertEqual(helpers.placement_probe_mark(plain, 1), f"{base}1")
+        self.assertEqual(helpers.placement_probe_mark(plain, 2), f"{base}2")
+        # A candidate the body already carries is skipped, at every attempt.
+        crowded = f"{base} and {base}1"
+        self.assertEqual(helpers.placement_probe_mark(crowded, 0), f"{base}2")
+        self.assertEqual(helpers.placement_probe_mark(crowded, 1), f"{base}3")
+        # And the same body asks for the same mark every time, or no recording
+        # ever matches.
+        self.assertEqual(
+            helpers.placement_probe_mark(crowded, 1), helpers.placement_probe_mark(crowded, 1)
+        )
+
+    def test_a_body_colliding_with_every_candidate_refuses_rather_than_spins(self) -> None:
+        # The bound. The page is made to answer "twice" whatever is asked, so
+        # the loop runs out and refuses instead of rendering forever.
+        body = f"{self.SUMMARY}{self.FOLD}"
+        written = body + self.SECTION
+        asked: list[str] = []
+
+        def always_twice(text: str) -> str:
+            asked.append(text)
+            mark = helpers.placement_probe_mark(written, len(asked) - 1)
+            return (
+                "<h2>Summary</h2>"
+                f"<h2>{self.HEADING} {mark}</h2><h2>{self.HEADING} {mark}</h2>"
+            )
+
+        with (
+            mock.patch.object(helpers, "render_markdown", side_effect=always_twice),
+            mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
+        ):
+            answer = helpers.placement_refusal(body, written, self.HEADING)
+        self.assertEqual(len(asked), helpers.PLACEMENT_PROBE_ATTEMPTS)
+        self.assertIsNotNone(answer.refusal)
+        self.assertIn("is not a heading on the page", answer.refusal)
+
+    def test_an_ordinary_body_still_asks_once(self) -> None:
+        body = f"{self.SUMMARY}{self.FOLD}"
+        asked: list[str] = []
+        with recorded_page():
+            recorded = helpers.render_markdown
+            with mock.patch.object(
+                helpers,
+                "render_markdown",
+                side_effect=lambda text: asked.append(text) or recorded(text),
+            ):
+                helpers.placement_refusal(body, body + self.SECTION, self.HEADING)
+        self.assertEqual(len(asked), 1, asked)
+
+
+class TheDedupUsesTheScannerThatAlreadyExistsTests(unittest.TestCase):
+    """Round 3 closed over-stripping and opened under-stripping (#1773, round 5).
+
+    The regex paired backticks with no model of which ones CommonMark treats
+    as delimiters, so a backtick that opens no span still blanked a real
+    `<details` between the pair -- the folded block was then not stripped, a
+    note nobody was shown was recorded as shown, and the next run said nothing
+    about a note the write had dropped. Plantable by anyone who can comment,
+    using the public head sha and the deterministic checked line.
+
+    `code_span_ranges` is the scanner that already existed for exactly this,
+    and it lives in `_helpers` now so both callers share ONE function.
+
+    Per LINE, because a code span cannot reach out of its block -- which the
+    page confirms: it folds the note in every one of these shapes.
+    """
+
+    HEAD = "abc1234"
+    NOTE = "not carried to `## Evidence Notes`: a fence with no closing line"
+
+    def execution(self):
+        return sys.modules["execution"]
+
+    def comment(self, prefix: str) -> str:
+        execution = self.execution()
+        return (
+            f"{execution.UNCARRIED_NOTES_HEADLINE}\n\n"
+            f"{prefix}<details><summary>more</summary>\n\n- {self.NOTE}\n\n</details>\n\n"
+            f"{execution.uncarried_notes_checked_line(self.HEAD)}\n"
+        )
+
+    BYPASSES = {
+        "an escaped backtick before the tag": "a note \\` and ",
+        "a lone backtick before the tag": "a note ` and ",
+        "a backtick pair straddling the tag": "a `span ",
+    }
+
+    def shown(self, comment: str) -> set[str]:
+        execution = self.execution()
+        return execution._notes_a_reader_has_been_shown(
+            comment, execution.uncarried_notes_checked_line(self.HEAD)
+        )
+
+    def test_a_folded_note_is_never_recorded_as_shown(self) -> None:
+        for label, prefix in {"no stray backtick": "", **self.BYPASSES}.items():
+            with self.subTest(shape=label):
+                self.assertEqual(self.shown(self.comment(prefix)), set(), label)
+
+    def test_a_note_in_the_open_is_still_recorded_as_shown(self) -> None:
+        # The property the strip exists beside: a note a reader can see does
+        # suppress the next run's copy.
+        execution = self.execution()
+        comment = (
+            f"{execution.UNCARRIED_NOTES_HEADLINE}\n\n- {self.NOTE}\n\n"
+            f"{execution.uncarried_notes_checked_line(self.HEAD)}\n"
+        )
+        self.assertEqual(len(self.shown(comment)), 1)
+
+    def test_a_tag_inside_a_real_code_span_is_still_text(self) -> None:
+        # The other direction, unchanged: a `<details` a note QUOTES is not a
+        # disclosure, which is what round 3 fixed.
+        execution = self.execution()
+        quoted = helpers.code_span('<details data-note="a `tick`">')
+        comment = (
+            f"{execution.UNCARRIED_NOTES_HEADLINE}\n\n- a note naming {quoted}\n\n"
+            f"{execution.uncarried_notes_checked_line(self.HEAD)}\n"
+        )
+        self.assertEqual(len(self.shown(comment)), 1)
+
+    def test_the_scanner_is_one_function_both_callers_share(self) -> None:
+        helpers_source = (
+            REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "_helpers.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("def code_span_ranges(", helpers_source)
+        for name in ("evidence.py", "execution.py"):
+            source = (
+                REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / name
+            ).read_text(encoding="utf-8")
+            with self.subTest(module=name):
+                self.assertIn("code_span_ranges", source)
+                self.assertNotIn("def code_span_ranges(", source)
+                # The backtick-pairing regex this round removed, by its own
+                # name. `LEADING_CODE_SPAN_RE` is a different, older thing --
+                # it reads a command out of the START of a string -- so the
+                # check names what went rather than matching a substring.
+                self.assertNotIn("\nCODE_SPAN_RE = ", source)
+
+
 class RecordedRendererResponseForThePlacementTests(unittest.TestCase):
     """The recordings this suite reads, and that they are the gate's own.
 
