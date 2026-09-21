@@ -303,6 +303,52 @@ def _parsed(body: str) -> list[Token]:
     return MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", body))
 
 
+def code_span_ranges(text: str) -> list[tuple[int, int]]:
+    """Half-open ranges covering each code span, by CommonMark's own rules.
+
+    Two callers ask this, so it lives here: a `--` inside a span is an
+    argument rather than a boundary (`resolve_persona.py -- mara` is one
+    name), and a `<details` inside one is text rather than a disclosure. A
+    regex that pairs backticks without CommonMark's rules answers both
+    questions wrongly in opposite directions -- it blanked a real `<details`
+    between two backticks that open no span at all, so a note nobody was
+    shown was recorded as shown and the write stayed silent about a note it
+    had dropped (#1773, round 5).
+
+    A backtick run opens a span and the next run of equal length closes it; a
+    run that finds no match is literal text. Backslash escapes hide a backtick
+    in ordinary prose but do nothing inside a span, which is why this reads
+    left to right rather than masking escapes up front: `\\`` opens nothing,
+    while the same sequence inside a span still closes it.
+    """
+    ranges: list[tuple[int, int]] = []
+    index, length = 0, len(text)
+    while index < length:
+        if text[index] == "\\":
+            index += 2
+            continue
+        if text[index] != "`":
+            index += 1
+            continue
+        opened = index
+        while index < length and text[index] == "`":
+            index += 1
+        width = index - opened
+        probe = index
+        while probe < length:
+            if text[probe] != "`":
+                probe += 1
+                continue
+            run = probe
+            while probe < length and text[probe] == "`":
+                probe += 1
+            if probe - run == width:
+                ranges.append((opened, probe))
+                index = probe
+                break
+    return ranges
+
+
 def heading_identity(text: str) -> str:
     """One heading's text reduced to what decides whether two headings are one.
 
@@ -1363,8 +1409,14 @@ def unverified_note(reason: str) -> str:
 PLACEMENT_PROBE_MARK = "wsx7placementprobe"
 
 
-def placement_probe_mark(written: str) -> str:
-    """A mark this body does not already carry, chosen the same way every time.
+# How many marks to try before giving up. Each retry costs one render, and a
+# body that collides with three of them in a row is a body nothing should keep
+# rendering for.
+PLACEMENT_PROBE_ATTEMPTS = 3
+
+
+def placement_probe_mark(written: str, attempt: int = 0) -> str:
+    """The `attempt`-th mark this body does not already carry, chosen the same way every time.
 
     Uniqueness by construction rather than by hoping. The base is a string no
     author writes, which is not the same as one no author CAN write -- by
@@ -1378,15 +1430,28 @@ def placement_probe_mark(written: str) -> str:
     probe on every run or no fixture ever matches. Counting up terminates
     because the body is finite and the candidates are not.
 
-    With the mark absent by construction, the exactly-one check downstream is
-    a guard against the renderer showing something the source does not, rather
-    than the thing uniqueness rests on.
+    This scan is the cheap FIRST GUESS and not the guarantee. It is an exact,
+    case-sensitive substring scan of the source, and the property is about the
+    PAGE: `## Evidence Status wsx7placementprob&#101;` carries no such
+    substring and renders as a heading whose text is exactly the mark, as do a
+    case variant, an empty comment inside the word, and an `<em>` around its
+    last letter. All four were confirmed against the renderer, and all four
+    made the page show the name twice -- so the exactly-one check refused a
+    placement the page shows unfolded (#1773, round 5).
+
+    Mirroring `heading_identity` in this scan would model the renderer, which
+    is the thing the mark exists to avoid. So `attempt` lets the caller ask
+    for the next candidate and settle the question where it lives: render,
+    and if the page shows the name more than once, come back for another mark.
     """
-    mark, suffix = PLACEMENT_PROBE_MARK, 0
-    while mark in written:
+    seen, suffix = 0, 0
+    while True:
+        mark = PLACEMENT_PROBE_MARK if suffix == 0 else f"{PLACEMENT_PROBE_MARK}{suffix}"
+        if mark not in written:
+            if seen == attempt:
+                return mark
+            seen += 1
         suffix += 1
-        mark = f"{PLACEMENT_PROBE_MARK}{suffix}"
-    return mark
 SETEXT_UNDERLINE_RE = re.compile(r"^[ \t]{0,3}(=+|-+)[ \t]*$")
 
 
@@ -1508,24 +1573,30 @@ def placement_refusal(body: str, written: str, heading: str) -> PlacementAnswer:
     heading_line = section_heading_line(written, heading)
     if heading_line is None or not could_be_folded(written):
         return PlacementAnswer()
-    mark = placement_probe_mark(written)
-    probe = probe_body_naming_one_heading(written, heading, heading_line, mark)
-    if probe is None:
-        return PlacementAnswer(refusal=_unshown_refusal(body, heading))
-    page = rendered_page(probe)
-    if page.unverified is not None:
-        return PlacementAnswer(unverified=unverified_note(page.unverified))
-    marked = f"{heading} {mark}"
-    shown = folded_headings_on_the_page(page.html, marked)
-    if not shown:
-        # A heading the parse reads and the page does not show at all. The
-        # same refusal as a swallowed section, because that is what it is.
-        return PlacementAnswer(refusal=_unshown_refusal(body, heading))
-    if len(shown) != 1:
-        # The mark is absent from the body by construction, so more than one
-        # heading carrying it is the PAGE showing what the source does not --
-        # a defensive guard rather than the thing uniqueness rests on.
-        # Refusing says so rather than picking one.
+    # Uniqueness is settled against the PAGE, because that is what it is a
+    # claim about. The source scan picks a candidate, the page is asked, and a
+    # name the page shows twice sends the loop back for the next candidate --
+    # bounded, so a pathological body refuses rather than spins (#1773,
+    # round 5).
+    shown: list[bool] = []
+    for attempt in range(PLACEMENT_PROBE_ATTEMPTS):
+        mark = placement_probe_mark(written, attempt)
+        probe = probe_body_naming_one_heading(written, heading, heading_line, mark)
+        if probe is None:
+            return PlacementAnswer(refusal=_unshown_refusal(body, heading))
+        page = rendered_page(probe)
+        if page.unverified is not None:
+            return PlacementAnswer(unverified=unverified_note(page.unverified))
+        shown = folded_headings_on_the_page(page.html, f"{heading} {mark}")
+        if not shown:
+            # A heading the parse reads and the page does not show at all. The
+            # same refusal as a swallowed section, because that is what it is.
+            return PlacementAnswer(refusal=_unshown_refusal(body, heading))
+        if len(shown) == 1:
+            break
+    else:
+        # Every candidate collided on the page. Refusing says so rather than
+        # picking one of them.
         return PlacementAnswer(refusal=_unshown_refusal(body, heading))
     # Exactly the heading this write places, because the probe gave it a name
     # nothing else has. "Any heading of this name" was the round-2 answer and

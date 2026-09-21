@@ -21,6 +21,7 @@ from _helpers import (
     contract_read_refusal,
     has_markdown_section,
     code_span,
+    code_span_ranges,
     heading_identity,
     inline_text,
     insert_markdown_section,
@@ -404,46 +405,6 @@ SAFE_CANDIDATE_ENV_KEYS = {
 }
 
 
-def _code_span_ranges(text: str) -> list[tuple[int, int]]:
-    """Half-open ranges covering each code span, by CommonMark's own rules.
-
-    A `--` inside one is an argument rather than a boundary: `resolve_persona.py
-    -- mara` is one name.
-
-    A backtick run opens a span and the next run of equal length closes it; a
-    run that finds no match is literal text. Backslash escapes hide a backtick
-    in ordinary prose but do nothing inside a span, which is why this reads
-    left to right rather than masking escapes up front: `\\`` opens nothing,
-    while the same sequence inside a span still closes it.
-    """
-    ranges: list[tuple[int, int]] = []
-    index, length = 0, len(text)
-    while index < length:
-        if text[index] == "\\":
-            index += 2
-            continue
-        if text[index] != "`":
-            index += 1
-            continue
-        opened = index
-        while index < length and text[index] == "`":
-            index += 1
-        width = index - opened
-        probe = index
-        while probe < length:
-            if text[probe] != "`":
-                probe += 1
-                continue
-            run = probe
-            while probe < length and text[probe] == "`":
-                probe += 1
-            if probe - run == width:
-                ranges.append((opened, probe))
-                index = probe
-                break
-    return ranges
-
-
 def _evidence_status_boundaries(rest: str) -> list[tuple[int, int, str]]:
     """`(item_end, detail_start, separator)` for every reading, leftmost first.
 
@@ -454,7 +415,7 @@ def _evidence_status_boundaries(rest: str) -> list[tuple[int, int, str]]:
     line's first and last non-blank character instead of stripping two fresh
     slices per candidate. Both leave the same readings the loop always had.
     """
-    spans = _code_span_ranges(rest)
+    spans = code_span_ranges(rest)
     span_starts = [start for start, _ in spans]
     first_visible = len(rest) - len(rest.lstrip())
     last_visible = len(rest.rstrip())
