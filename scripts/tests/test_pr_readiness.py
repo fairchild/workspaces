@@ -58,6 +58,16 @@ def all_of(cases, expected: set[str], label: str):
     and round 4's "accepted at base, refused at head" rested on those tables
     happening to be populated (#1771, round 6).
 
+    THE PREDICATE, stated once and checked against the whole population
+    rather than one table at a time: every fixture a test READS -- walked,
+    looked up, or spliced -- is guarded on its NAMES (the exact set) AND on
+    the NON-VACUITY of what each row asserts. A row's claim cannot be
+    emptied, replaced by a neighbour's, or replaced by a same-token donor
+    without a test naming the row. Six rounds each closed one level and
+    called it closed: names without values, values without donors, pins
+    without pins of their own. The granularity was what kept slipping, so it
+    is written down here rather than re-derived per table (#1771, round 15).
+
     The NAMES rather than the count, because a count answers "how many" and
     the claim is about WHICH: a shape swapped for another of the same size --
     a weaker spelling in place of the one a claim rests on -- passed this
@@ -2532,6 +2542,13 @@ class ThePageReaderTableTests(unittest.TestCase):
             "a row's name claims a shape with nothing pinning it",
         )
         self.assertEqual(sorted(set(claims) - set(table)), [], "a claim for a row that is gone")
+        # The claims table is a fixture this test READS, so it is guarded the
+        # same way: its NAMES by the two assertions above, which bind it to a
+        # table whose names `all_of` pins, and the NON-VACUITY of each row's
+        # claim here. `((), (), ())` in place of a row's claim asserted
+        # nothing and passed (#1771, round 15).
+        empty = sorted(name for name, claim in claims.items() if not any(claim))
+        self.assertEqual(empty, [], "a row's claim asserts nothing at all")
         for name, (contains, absent, order) in claims.items():
             with self.subTest(row=name):
                 text = table[name][0]
@@ -3742,15 +3759,24 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
         # The rule this reader is written to, asserted rather than described:
         # one spelling of the wrapper for all three readers, so a shape the
         # written view takes cannot be one this reader misses.
-        table = {**all_of(
-            self.PADDED_STATUSES,
+        table = all_of(
+            {**all_of(
+                self.PADDED_STATUSES,
+                {
+                    "a space inside the backticks",
+                    "double-backtick padding",
+                    "a punctuation gap after the token",
+                },
+                "PADDED_STATUSES",
+            ), "plain backticks": "- `[blocked]` waiting"},
             {
                 "a space inside the backticks",
                 "double-backtick padding",
                 "a punctuation gap after the token",
+                "plain backticks",
             },
-            "PADDED_STATUSES",
-        ), "plain backticks": "- `[blocked]` waiting"}
+            "AWrapperTheWrittenViewTolerates.table",
+        )
         for name, line in table.items():
             with self.subTest(spelling=name):
                 self.assertTrue(pr_readiness.PRINTED_PENDING_RE.match(line), name)
@@ -3938,7 +3964,14 @@ REAL_PLAIN = "## Evidence Status\n\n- [complete] swift test -- ok\n\n"
 PAGE_READER_CLAIMS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[tuple[str, str], ...]]] = {
     "a block tag after prose": (("Context <div>",), (), ()),
     "a pre after prose": (("Context <pre>",), (), ()),
-    "a break after prose": (("Context <br>",), ("- ",), ()),
+    # The bare break: none of the other rows' markers, because six of them
+    # also carry `Context <br>` and a containment claim alone takes any of
+    # them as this row (#1771, round 15).
+    "a break after prose": (
+        ("Context <br>",),
+        ("- ", "`", "***", "\n---\n", "<blockquote>", "<ul><li>", "<details>", "> ## "),
+        (),
+    ),
     "a break inside a list item": (("- complete <br>",), (), ()),
     "an unparsed tag the page prints": (("<x:y>",), (), ()),
     "a type parameter mid-line": (("Vec<T>",), (), ()),
@@ -3996,7 +4029,13 @@ SWALLOWED_CLAIMS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[tuple[
     "the blank line the message asks for": (("</details>\n\n## Evidence Status",), (), ()),
     "a fenced example of the heading": (("```",), (), (("```", "## Evidence Status"),)),
     "an indented example of the heading": (("    ## Evidence Status",), ("```",), ()),
-    "swallowed blocked above an emphasised section": (("[blocked]", "## **Evidence Status**"), (), (("[blocked]", "## **Evidence Status**"),)),
+    # LF endings, which is what makes the CRLF row beside it a different
+    # shape rather than a donor for this one (#1771, round 15).
+    "swallowed blocked above an emphasised section": (
+        ("[blocked]", "## **Evidence Status**"),
+        ("\r\n",),
+        (("[blocked]", "## **Evidence Status**"),),
+    ),
     "swallowed blocked above a setext section": (("[blocked]", "Evidence Status\n------"), (), ()),
     "swallowed blocked above a plain section": (("[blocked]", "<div>", "\n## Evidence Status\n\n- [complete]"), ("**Evidence Status**",), ()),
     "swallowed blocked above an emphasised section, CRLF": (("\r\n", "[blocked]", "## **Evidence Status**"), (), ()),
@@ -4207,18 +4246,21 @@ class TheSwallowedHeadingTableTests(unittest.TestCase):
     def test_each_row_is_the_shape_its_name_claims(self) -> None:
         """The pin the name guard cannot be: the SHAPE a row's name claims.
 
-        `all_of` asserts which names a table carries. A row given its
+        `all_of` asserts which names THIS table carries. A row given its
         neighbour's value with its key untouched keeps the count and the
-        name, so the guard passes and the coverage leaves -- measured on this
-        table for `a break inside a list item`, round 4's `<br>` inside a
-        list item, which went silently because the sibling shape test pins
-        tokens over the JOINED corpus and another row still carries `<br>`
-        (#1771, round 13).
+        name, so the guard passes and the coverage leaves -- measured here on
+        `a pre block, a bold status with no marker`, round 5's absent list
+        marker, which went silently because the sibling test pins tokens over
+        the JOINED corpus and the marker-bearing row beside it still carries
+        `**[blocked]**` (#1771, rounds 13 and 15). Round 13 gave this test
+        the page-reader table's docstring verbatim, citing a row that is not
+        in this table at all.
 
-        Every row of this table states a property, so every row has a claim
-        here; a row whose name is a bare label would be listed in
-        SWALLOWED_LABELS instead, and a name that claims something with no
-        claim written for it fails the completeness check below.
+        Every row of this table states a property, so every row has a claim;
+        a row whose name is a bare label would be listed in SWALLOWED_LABELS
+        instead. The claims are themselves a fixture this test reads, so
+        their names are bound to the table's by the two assertions below and
+        each claim is checked for asserting anything at all.
         """
         table = SWALLOWED_HEADING_TABLE
         claims = SWALLOWED_CLAIMS
@@ -4229,6 +4271,13 @@ class TheSwallowedHeadingTableTests(unittest.TestCase):
             "a row's name claims a shape with nothing pinning it",
         )
         self.assertEqual(sorted(set(claims) - set(table)), [], "a claim for a row that is gone")
+        # The claims table is a fixture this test READS, so it is guarded the
+        # same way: its NAMES by the two assertions above, which bind it to a
+        # table whose names `all_of` pins, and the NON-VACUITY of each row's
+        # claim here. `((), (), ())` in place of a row's claim asserted
+        # nothing and passed (#1771, round 15).
+        empty = sorted(name for name, claim in claims.items() if not any(claim))
+        self.assertEqual(empty, [], "a row's claim asserts nothing at all")
         for name, (contains, absent, order) in claims.items():
             with self.subTest(row=name):
                 text = table[name][0]
@@ -6431,6 +6480,14 @@ class ThePagePlaneIsAskedAboutTheInvisibleClassTests(unittest.TestCase):
     def test_the_page_prints_the_status_behind_every_one_of_the_marks(self) -> None:
         # The count this claim was about is the set now: 22 names, each one
         # the mark it is about.
+        # Each row is the mark its NAME says: a mapping whose keys are built
+        # from its values can still be edited apart, and the names guard
+        # cannot see that (#1771, round 15).
+        self.assertEqual(
+            [name for name, code in self.MARKS.items() if name != f"U+{code:04X}"],
+            [],
+            "a row's key is not the spelling of its own code point",
+        )
         for mark, code in all_of(
             self.MARKS,
             {
@@ -6581,7 +6638,15 @@ def preflight(body: str, *, files: list[str] | None = None, args: list[str] | No
             "--changed-files", str(files_path),
             *(args or []),
         ]
-        local_env = {k: v for k, v in os.environ.items() if k not in CI_ENV_KEYS}
+        local_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in all_of(
+                CI_ENV_KEYS,
+                {"GITHUB_ACTIONS", "GITHUB_STEP_SUMMARY", "READINESS_COMMENT_PATH"},
+                "CI_ENV_KEYS",
+            )
+        }
         stdout = io.StringIO()
         with mock.patch.dict(os.environ, local_env, clear=True):
             with contextlib.redirect_stdout(stdout):
@@ -6835,6 +6900,26 @@ class EvidenceDeliveryPreflightTests(unittest.TestCase):
             "another base beside it": ["--check-evidence-delivery", "42", "--base", "other"],
             "an expected head with no delivery check": ["--expected-head", self.HEAD],
         }
+        # Each invocation is the one its name claims, so a row given another
+        # row's argv with its key kept is caught here rather than passing as
+        # a name the table still carries (#1771, round 15).
+        says = {
+            "a pull request number of zero": lambda a: a[1] == "0",
+            "a negative number": lambda a: a[1] == "-1",
+            "a body file beside it": lambda a: "--body-file" in a,
+            "an event file beside it": lambda a: any(one.startswith("--event") for one in a),
+            "a changed-files list beside it": lambda a: "--changed-files" in a,
+            "another base beside it": lambda a: "--base" in a,
+            "an expected head with no delivery check": lambda a: (
+                "--expected-head" in a and "--check-evidence-delivery" not in a
+            ),
+        }
+        self.assertEqual(sorted(says), sorted(invalid), "a named invocation with nothing saying what it is")
+        self.assertEqual(
+            [name for name, argv in invalid.items() if not says[name](argv)],
+            [],
+            "an invocation is not the shape its name claims",
+        )
         for name, argv in all_of(
             invalid,
             {
