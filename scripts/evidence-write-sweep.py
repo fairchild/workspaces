@@ -183,7 +183,7 @@ def _recorded_items(text: str) -> set[str]:
     }
 
 
-def _entry_line_numbers(lines: list[str], text: str, recorded: set[str]) -> set[int]:
+def _entry_line_numbers(lines: list[str], text: str, source: str) -> set[int]:
     """Which lines are the status entries this write owns.
 
     Three conditions, and each one answers a way the filter was wrong.
@@ -214,11 +214,18 @@ def _entry_line_numbers(lines: list[str], text: str, recorded: set[str]) -> set[
     readable section has none either: both are the conservative answer, which
     is that every line is the author's.
 
-    `recorded` is read from the body BEFORE its metadata comment is stripped,
-    and `text` is the body after -- the comment is not the author's and does
-    not take part in the comparison, but it is where the entries are written
-    down.
+    `source` is the body BEFORE its metadata comment is stripped and `text` is
+    the body after -- the comment is not the author's and does not take part in
+    the comparison, but it is where the entries are written down, so both the
+    items this write records and the lines it last rendered are read from
+    `source` HERE rather than at each call site. Reading the cap's lines from
+    `text` instead handed the one function an empty cap on every body, so the
+    write took its own unreadable line by byte identity while this instrument
+    called the same line the author's and lost -- finding 2's mechanism, one
+    file over, and the corpus cannot show it because every generated body's
+    lines parse (#1751, round 8).
     """
+    recorded = _recorded_items(source)
     if not recorded:
         return set()
     bounds = helpers._section_bounds(text, "Evidence Status")
@@ -235,7 +242,7 @@ def _entry_line_numbers(lines: list[str], text: str, recorded: set[str]) -> set[
     # this called the same line lost -- the disagreement the branch exists to
     # close, reopened by the cap that closed part of it (#1751, round 6).
     section = helpers.markdown_section(text, "Evidence Status")
-    owned = evidence.rendered_entry_lines(evidence.evidence_entries_of(text))
+    owned = evidence.rendered_entry_lines(evidence.evidence_entries_of(source))
     return {
         index
         for index, start in enumerate(starts)
@@ -263,7 +270,7 @@ def author_lines(text: str) -> list[str]:
     source = MARKDOWN_LINE_ENDING_RE.sub("\n", text)
     normalized = evidence._strip_evidence_metadata(source)
     lines = normalized.split("\n")
-    owned = _entry_line_numbers(lines, normalized, _recorded_items(source))
+    owned = _entry_line_numbers(lines, normalized, source)
     return [
         line
         for index, line in enumerate(lines)
@@ -295,7 +302,7 @@ def author_seams(text: str) -> list[tuple[str, str]]:
     source = MARKDOWN_LINE_ENDING_RE.sub("\n", text)
     normalized = evidence._strip_evidence_metadata(source)
     lines = normalized.split("\n")
-    owned = _entry_line_numbers(lines, normalized, _recorded_items(source))
+    owned = _entry_line_numbers(lines, normalized, source)
     seams, previous = [], None
     for index, line in enumerate(lines):
         if not line.strip() or index in owned:

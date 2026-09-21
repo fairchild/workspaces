@@ -2450,6 +2450,45 @@ def evidence_entries_of(body: str) -> list[object] | None:
     return entries if isinstance(entries, list) else None
 
 
+# The statuses a status line may carry, named once: the renderer's filter and
+# the cap's reconstruction both read it, so an entry cannot be renderable to
+# one and not the other.
+VALID_EVIDENCE_STATUSES = frozenset({"complete", "blocked", "pending-ci"})
+
+
+def renderable_entries(entries: object) -> list[dict[str, object]]:
+    """The entries the write will render, normalised exactly as it renders them.
+
+    ONE definition, because there were two. `_render_structured_entries`
+    renders an entry only where its index is at least 1, its status is in the
+    vocabulary and its item and detail are non-empty; `rendered_entry_lines`
+    built a line for any entry with a non-empty item, status and detail. An
+    entry at index 0 was therefore reconstructed by one and skipped by the
+    other -- so the cap claimed a line the write never rendered, and the
+    author's own `- [blocked] release approval -- the signing profile is
+    missing` was taken for the machine's and replaced, with nothing in
+    `## Evidence Notes`, nothing on stderr and no refusal (#1751, round 8).
+
+    `_encodable` runs here too, so a line reconstructed from an entry is the
+    same bytes the write would have produced for it.
+    """
+    renderable: list[dict[str, object]] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            index = int(entry["index"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        item = _encodable(str(entry.get("item", "")).strip())
+        status = str(entry.get("status", "")).strip()
+        detail = _encodable(str(entry.get("detail", "")).strip())
+        if index < 1 or not item or status not in VALID_EVIDENCE_STATUSES or not detail:
+            continue
+        renderable.append({"index": index, "item": item, "status": status, "detail": detail})
+    return renderable
+
+
 def rendered_entry_lines(entries: object) -> list[str]:
     """The status line the write renders for each recorded entry, as it stands.
 
@@ -2462,16 +2501,10 @@ def rendered_entry_lines(entries: object) -> list[str]:
     field nobody counted as a change and the uncapped rate came back with zero
     status changes (#1751, round 6).
     """
-    lines: list[str] = []
-    for entry in entries if isinstance(entries, list) else []:
-        if not isinstance(entry, dict):
-            continue
-        item = str(entry.get("item", "")).strip()
-        status = str(entry.get("status", "")).strip()
-        detail = str(entry.get("detail", "")).strip()
-        if item and status and detail:
-            lines.append(f"- [{status}] {item} -- {detail}")
-    return lines
+    return [
+        f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
+        for entry in renderable_entries(entries)
+    ]
 
 
 def is_machine_status_line(
@@ -2484,14 +2517,22 @@ def is_machine_status_line(
 
     `line` is the author's own bytes. Two claims, in order:
 
-    Byte identity, on BOTH sides. The write knows the bytes it rendered, and a
-    line identical to one of them is its own -- the only claim available for a
-    line no reader can parse. It compared the PAGE'S reading of the body line
-    against the RAW bytes of the rendered lines, which is two spellings of one
-    comparison and exactly the disagreement this branch exists to close: an
-    author who wrote the machine's text with a `*` marker had their line taken
-    and deleted, while the instrument that measures the write called it lost
-    (#1751, round 6).
+    Byte identity, on BOTH sides, and bytes means bytes. The write knows the
+    bytes it rendered, and a line identical to one of them is its own -- the
+    only claim available for a line no reader can parse. It compared the
+    PAGE'S reading of the body line against the RAW bytes of the rendered
+    lines, which is two spellings of one comparison and exactly the
+    disagreement this branch exists to close: an author who wrote the
+    machine's text with a `*` marker had their line taken and deleted, while
+    the instrument that measures the write called it lost (#1751, round 6).
+
+    It then compared `line.strip()` against `one.strip()`, which is STRIPPED
+    identity wearing byte identity's name -- and measured, it took four shapes
+    an exact match does not: a trailing hard break, a trailing tab, and a
+    one- or four-space indent. Each is an author's edit, and the first costs
+    them something: a hard break plus a continuation line loses the
+    continuation. A line that differs from what the write rendered is the
+    author's, whatever the difference (#1751, round 8).
 
     Then the rule, asked of the page's reading of the line against the items
     in hand, in the caller's context.
@@ -2501,7 +2542,7 @@ def is_machine_status_line(
     itself and the sweep asked it with no cap at all, so the cap was the
     write's alone and the two answered differently on the first shape tried.
     """
-    if line.strip() in {str(one).strip() for one in rendered}:
+    if line in {str(one) for one in rendered}:
         return True
     return is_recorded_status_line(
         status_line_as_page_reads_it(line, context), recorded_items, context
@@ -3081,7 +3122,12 @@ def render_execution_summary_body(
         # write instead read `source`, which by then carries THIS run's
         # entries on both paths, so it rebuilt the lines `rendered` already
         # held and capped nothing (#1751, round 7).
-        previously_rendered=rendered_entry_lines(evidence_entries_of(summary_body)),
+        # From the PUBLISHED body, which is the only copy holding the last
+        # run's entries. `summary_body` is the model's text for this turn, and
+        # the metadata is inserted after the write -- so reconstructing from
+        # it produced an empty list on every push and the turn's cap never ran
+        # at all (#1751, round 8).
+        previously_rendered=rendered_entry_lines(evidence_entries_of(published_body)),
     )
     rendered, write_refusal = write.body, write.refusal
     if announcements is not None:
@@ -4093,27 +4139,9 @@ def _render_structured_entries(
     nowhere to go (#1740). A caller that passes a list gets them and posts
     them; a caller that does not is unchanged.
     """
-    rendered_entries: list[dict[str, object]] = []
-    for entry in updated_entries:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            index = int(entry["index"])
-        except (KeyError, TypeError, ValueError, OverflowError):
-            continue
-        item = _encodable(str(entry.get("item", "")).strip())
-        status = str(entry.get("status", "")).strip()
-        detail = _encodable(str(entry.get("detail", "")).strip())
-        if index < 1 or not item or status not in {"complete", "blocked", "pending-ci"} or not detail:
-            continue
-        rendered_entries.append(
-            {
-                "index": index,
-                "item": item,
-                "status": status,
-                "detail": detail,
-            }
-        )
+    # The same definition the cap reconstructs from, so a line the cap claims
+    # is a line this renders (#1751, round 8).
+    rendered_entries = renderable_entries(updated_entries)
 
     if rendered_entries:
         write = write_evidence_status_section(

@@ -9152,6 +9152,10 @@ class OneReadingInOneContextForEverythingComparedTests(unittest.TestCase):
         )
 
 
+def helpers_section(body: str) -> str:
+    return sys.modules["_helpers"].markdown_section(body, "Evidence Status")
+
+
 class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
     """The cap reopened the disagreement this branch exists to close (#1751, round 6).
 
@@ -9183,17 +9187,103 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
         "a span in the item": ("run ", "<span>run</span> "),
     }
 
-    def test_the_two_readers_agree_on_every_spelling(self) -> None:
+    def test_the_write_s_path_and_the_sweep_s_path_agree_on_every_spelling(self) -> None:
+        """The two PATHS, each with the arguments it forms itself (#1751, round 8).
+
+        This called `is_machine_status_line` twice with identical arguments
+        and reported "0 of 8 disagree" -- a tautology wearing a measurement's
+        name, over five spellings and not eight. One function is necessary and
+        not sufficient: the disagreement lives in what each path HANDS it, and
+        the sweep formed the cap from the body with the metadata already
+        stripped, so its cap was empty on every body and the machine's own
+        unreadable line read as the author's, lost.
+        """
+        helpers = sys.modules["_helpers"]
         evidence = self.evidence()
-        section = f"{self.rendered}\n"
-        disagreements = []
+        sweep = load_module(
+            "evidence_write_sweep_agreement", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        disagreements: list[str] = []
         for label, swap in self.SPELLINGS.items():
             line = self.rendered if swap is None else self.rendered.replace(*swap, 1)
-            write = evidence.is_machine_status_line(line, [self.ITEM], section, [self.rendered])
-            sweep = evidence.is_machine_status_line(line, [self.ITEM], section, [self.rendered])
-            if write != sweep:
-                disagreements.append(label)
-        self.assertEqual(disagreements, [], "one function answered two ways")
+            source = self.body_with_line(line)
+            # The write's path: the section it parses, the lines it last rendered.
+            write_says = evidence.is_machine_status_line(
+                line,
+                {self.ITEM},
+                helpers.markdown_section(source, "Evidence Status"),
+                evidence.rendered_entry_lines(evidence.evidence_entries_of(source)),
+            )
+            # The sweep's path: its own scan over the body's physical lines.
+            normalized = evidence._strip_evidence_metadata(
+                sweep.MARKDOWN_LINE_ENDING_RE.sub("\n", source)
+            )
+            lines = normalized.split("\n")
+            owned = sweep._entry_line_numbers(lines, normalized, source)
+            sweep_says = lines.index(line) in owned
+            if write_says != sweep_says:
+                disagreements.append(f"{label} (write {write_says}, sweep {sweep_says})")
+        self.assertEqual(
+            disagreements,
+            [],
+            f"{len(disagreements)} of {len(self.SPELLINGS)} spellings read two ways",
+        )
+
+    def body_with_line(self, line: str) -> str:
+        return (
+            "<!-- evidence-status:v1\n"
+            + json.dumps(
+                {
+                    "entries": [
+                        {
+                            "index": 1,
+                            "item": self.ITEM,
+                            "status": "complete",
+                            "detail": self.DETAIL,
+                            "kind": "test",
+                        }
+                    ]
+                }
+            )
+            + "\n-->\n\n## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            + f"{line}\n\n## Validation\n\n- ran it\n"
+        )
+    def test_an_authors_edit_of_the_machines_own_line_is_never_the_machines(self) -> None:
+        """Byte identity means bytes, measured (#1751, round 8).
+
+        The comparison was `line.strip() == one.strip()`, which is STRIPPED
+        identity wearing byte identity's name. Measured, a stripped match
+        takes four shapes an exact one does not, and each is an author's edit
+        of a line no reader can parse -- the hard break costs them the
+        continuation line that follows it.
+        """
+        evidence = self.evidence()
+        edits = {
+            "a trailing hard break": self.rendered + "  ",
+            "a trailing tab": self.rendered + "\t",
+            "a one-space indent": " " + self.rendered,
+            "a four-space indent": "    " + self.rendered,
+        }
+        taken = []
+        for label, line in edits.items():
+            source = self.body_with_line(line)
+            if evidence.is_machine_status_line(
+                line,
+                {self.ITEM},
+                helpers_section(source),
+                evidence.rendered_entry_lines(evidence.evidence_entries_of(source)),
+            ):
+                taken.append(label)
+        self.assertEqual(taken, [], "an author's edit was taken as the machine's")
+        source = self.body_with_line(self.rendered)
+        self.assertTrue(
+            evidence.is_machine_status_line(
+                self.rendered,
+                {self.ITEM},
+                helpers_section(source),
+                evidence.rendered_entry_lines(evidence.evidence_entries_of(source)),
+            )
+        )
 
     def test_a_differently_spelled_author_line_is_never_the_machines(self) -> None:
         evidence = self.evidence()
@@ -9309,33 +9399,54 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             self.assertEqual(self.counts(body), (1, 0))
         self.assertIn("- [complete] ", body)
 
-    def test_the_turn_s_own_render_caps_it_too(self) -> None:
-        """The summary path, which had no test and no working source (#1751, round 7).
+    def test_the_turn_caps_it_too_through_the_entry_point_production_uses(self) -> None:
+        """The turn path, driven where production drives it (#1751, round 8).
 
-        `render_execution_summary_body` is the factory turn's render, and it
-        passed no previous lines at all -- the reconstruction inside the write
-        was its only source, and that source reads a body whose metadata this
-        run has already replaced. So the turn's path accrued a copy per push
-        exactly as the lane path had, and nothing said so.
+        Round 7's version called `render_execution_summary_body` with a body
+        carrying metadata, and the turn path cannot produce one: on that path
+        `summary_body` is `data["body"]`, the MODEL's text for this turn, and
+        the metadata comment is inserted by the write itself. So the
+        reconstruction read a body that never holds the previous run's
+        entries, `previously_rendered` was `[]` on every push, and the cap
+        never ran in production at all -- while a test on a hand-made body
+        killed its mutant.
 
-        The caller passes the lines now, from the body it was handed, which is
-        the same shape the lane path passes.
+        The body that holds the last run's entries is `published_body`, which
+        is what GitHub currently has. This drives `build_execution_summary_body`
+        with the two bodies split the way the turn splits them.
         """
-        run_contributor = sys.modules["run_contributor_evidence_kinds"]
-        body = self.body_with(f"{self.DETAIL} on head aaaaaaaaaaaX")
+        execution = sys.modules["execution"]
+        detail = f"{self.DETAIL} on head aaaaaaaaaaaX"
+        published = self.body_with(detail)
+        # The model's text for this turn: the same section, no metadata --
+        # which is what the turn hands in.
+        model = published.split("-->\n\n", 1)[1]
+        self.assertNotIn("evidence-status:v1", model)
         seen = []
         for push in range(3):
             with contextlib.redirect_stderr(io.StringIO()):
-                body, errors = run_contributor.render_execution_summary_body(
-                    body,
+                written, errors = execution.build_execution_summary_body(
+                    {"body": model},
                     requested_evidence=[self.ITEM],
-                    evidence_complete=None,
-                    evidence_blocked=None,
-                    evidence_pending_ci=[f"1 -- {self.DETAIL} on head aaaaaaaaaaa{push}"],
+                    visual_evidence_available=False,
+                    published_body=published,
                 )
             self.assertEqual(errors, [])
-            seen.append(self.counts(body))
+            seen.append(self.counts(written))
+            published, model = written, written.split("-->\n\n", 1)[1]
         self.assertEqual(seen, [(1, 0)] * 3)
+
+    def test_the_turn_reconstructs_from_the_published_body_and_not_the_model_s(self) -> None:
+        # The mechanism directly: the same expression over the two bodies
+        # gives different answers, and only one of them is the last run's.
+        evidence = self.evidence()
+        published = self.body_with(f"{self.DETAIL} on head aaaaaaaaaaaX")
+        model = published.split("-->\n\n", 1)[1]
+        self.assertEqual(evidence.rendered_entry_lines(evidence.evidence_entries_of(model)), [])
+        self.assertEqual(
+            evidence.rendered_entry_lines(evidence.evidence_entries_of(published)),
+            [f"- [pending-ci] {self.ITEM} -- {self.DETAIL} on head aaaaaaaaaaaX"],
+        )
 
     def test_the_line_the_last_run_rendered_is_reconstructible(self) -> None:
         evidence = self.evidence()
@@ -9345,6 +9456,108 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             [f"- [pending-ci] {self.ITEM} -- a detail"],
         )
         self.assertEqual(evidence.rendered_entry_lines(None), [])
+
+
+class OneDefinitionOfWhichEntriesTheWriteRendersTests(unittest.TestCase):
+    """A metadata entry the write never renders deleted an owner's line (#1751, round 8).
+
+    `_render_structured_entries` renders an entry only at index >= 1 with an
+    in-vocabulary status and a non-empty item and detail; the cap's
+    reconstruction built a line for any entry with a non-empty item, status
+    and detail. So a `{"index": 0, ...}` entry was reconstructed by one reader
+    and skipped by the other, the cap claimed a line the write had never
+    rendered, and the author's own line matching it was replaced -- nothing in
+    `## Evidence Notes`, nothing on stderr, no refusal. Two readers of "which
+    entries exist", which is this family's shape for the tenth time, closed the
+    way #1782 round 3 closed it: one function, asked by both.
+    """
+
+    ITEM = "run `swift test"
+    DETAIL = "--filter QA` passed"
+    OWNERS = "- [blocked] release approval -- the signing profile is missing"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def body(self, *, with_the_unrenderable_entry: bool) -> str:
+        entries = [
+            {"index": 1, "item": self.ITEM, "status": "pending-ci",
+             "detail": self.DETAIL, "kind": "test"},
+        ]
+        if with_the_unrenderable_entry:
+            entries.insert(0, {"index": 0, "item": "release approval", "status": "blocked",
+                               "detail": "the signing profile is missing", "kind": "manual"})
+        return (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": entries}) + "\n-->\n\n"
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {self.ITEM} -- {self.DETAIL}\n{self.OWNERS}\n"
+            "\n## Validation\n\n- ran it\n"
+        )
+
+    def written(self, body: str) -> tuple[str, str]:
+        evidence = self.evidence()
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            written = evidence.update_evidence_entries(
+                body, {1: {"status": "complete", "detail": "passed on head aaaaaaaaaaa1"}}
+            )
+        return written, stderr.getvalue()
+
+    def test_an_entry_the_write_would_not_render_does_not_take_the_owners_line(self) -> None:
+        written, stderr = self.written(self.body(with_the_unrenderable_entry=True))
+        self.assertIn(self.OWNERS, written, f"the owner's line went; stderr said {stderr!r}")
+
+    def test_the_control_without_it_keeps_the_line_too(self) -> None:
+        written, _ = self.written(self.body(with_the_unrenderable_entry=False))
+        self.assertIn(self.OWNERS, written)
+
+    def test_the_reconstruction_names_exactly_the_lines_the_write_renders(self) -> None:
+        evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
+        body = self.body(with_the_unrenderable_entry=True)
+        entries = evidence.evidence_entries_of(body)
+        self.assertEqual(len(entries), 2)
+        reconstructed = evidence.rendered_entry_lines(entries)
+        written, _ = self.written(body)
+        rendered = [
+            line
+            for line in helpers.markdown_section(written, "Evidence Status").splitlines()
+            if line.startswith("- [")
+        ]
+        self.assertEqual(len(reconstructed), 1)
+        self.assertEqual(len(rendered), 1)
+        # Same count and same shape: one reader of which entries exist.
+        self.assertEqual(
+            [line.split(" -- ")[0] for line in reconstructed],
+            [f"- [pending-ci] {self.ITEM}"],
+        )
+
+    def test_the_turn_path_carries_the_same_two_bodies_and_the_same_metadata(self) -> None:
+        """The axis neither the product nor the corpus can produce (#1751, round 8).
+
+        Every generated body holds exactly one valid entry and is written into
+        and read back out of ONE body. Both round-8 defects live where those
+        two things come apart: metadata whose entries are not all renderable,
+        and a reconstruction source that is a different body from the one
+        being written. This drives both paths over exactly that fixture.
+        """
+        execution = sys.modules["execution"]
+        published = self.body(with_the_unrenderable_entry=True)
+        model = published.split("-->\n\n", 1)[1]
+        with contextlib.redirect_stderr(io.StringIO()):
+            written, errors = execution.build_execution_summary_body(
+                {"body": model},
+                requested_evidence=[self.ITEM],
+                visual_evidence_available=False,
+                published_body=published,
+            )
+        self.assertEqual(errors, [])
+        self.assertIn(self.OWNERS, written)
+        # And the previous run's line is still capped on the turn path: the
+        # section holds one status entry, not one per push.
+        helpers = sys.modules["_helpers"]
+        section = helpers.markdown_section(written, "Evidence Status")
+        self.assertEqual(len([one for one in section.splitlines() if one.startswith("- [")]), 1)
 
 
 if __name__ == "__main__":
