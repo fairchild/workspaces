@@ -8515,7 +8515,7 @@ class TheWriterRefusesACollidingIndexItself(unittest.TestCase):
             ),
             [],
         )
-        self.assertIsNone(evidence.entry_index({"index": float("inf")}))
+        self.assertIsNone(evidence._claimed_index({"index": float("inf")}))
 
 
 if __name__ == "__main__":
