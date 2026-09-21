@@ -2124,7 +2124,9 @@ class ThePageReaderMayOnlyAddRefusalsTests(unittest.TestCase):
 #   a top-level `<h2>` whose text reads as `Evidence Status` by
 #   `heading_identity`; a nested one only when no top-level one did.
 # what closes it:
-#   the next `<h1>` or `<h2>` at the depth the section was opened at.
+#   the next `<h1>` or `<h2>` at the depth the section was opened at, or
+#   shallower -- a section inside a quotation is over once the document
+#   has left the quotation (`_boundary_depth`, compared with `<=`).
 # what is transparent (a heading inside it is still the document's):
 #   `<details>`.
 # what is opaque (a heading inside it is someone else's):
@@ -2972,6 +2974,72 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
             "<pre>\n## Evidence Status\n- [complete] ran it -- 1992 tests passed\n</pre>"
         ),
     }
+
+    # The same shape, with the status wrapped the way a reader sees it inside
+    # a block that prints characters. In ordinary markdown a code span strips
+    # one space of padding, so `` ` [blocked] ` `` renders as `[blocked]` and
+    # the rendered view catches it; inside a raw block the page prints the
+    # backticks and the spaces, and this reader caught none of these three --
+    # so the gate PASSED a body showing a reader a blocked status (#1771).
+    PADDED_STATUSES = {
+        "a space inside the backticks": "- ` [blocked] ` waiting",
+        "double-backtick padding": "- `` [blocked] `` waiting",
+        "a punctuation gap after the token": "- **[blocked]:** waiting",
+    }
+
+    def padded_body(self, line: str) -> str:
+        return self.body(f"<pre>\n## Evidence Status\n{line}\n</pre>\n\n")
+
+    def test_a_padded_status_inside_a_raw_block_is_refused_by_name(self) -> None:
+        """Models the rule: what this gate's raw-block reader calls a status.
+
+        The half that asks reality is the sibling below, which reads the
+        recorded page for the same three bodies.
+        """
+        for name, line in self.PADDED_STATUSES.items():
+            with self.subTest(spelling=name):
+                body = self.padded_body(line)
+                self.assertEqual(pr_readiness.status_heading_candidates(body), [])
+                failure = pr_readiness.unread_status_heading_failure(body)
+                self.assertIsNotNone(failure, name)
+                self.assertIn("inside a raw HTML block", failure)
+                self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok, name)
+
+    def test_the_page_prints_every_one_of_those_spellings_to_a_reader(self) -> None:
+        """Asks reality: GitHub's own answer for the same three bodies.
+
+        A raw block prints its contents as characters, so the wrapper and its
+        padding reach the page -- which is why they are statuses here and not
+        in ordinary markdown.
+        """
+        for name, line in self.PADDED_STATUSES.items():
+            with self.subTest(spelling=name), recorded_page():
+                html = pr_readiness.render_markdown(self.padded_body(line))
+            text = re.sub(r"<[^>]+>", "", html)
+            self.assertIn(line, text, f"{name}: the page did not print the line as written")
+
+    def test_a_wrapper_the_written_view_tolerates_is_tolerated_here(self) -> None:
+        # The rule this reader is written to, asserted rather than described:
+        # one spelling of the wrapper for all three readers, so a shape the
+        # written view takes cannot be one this reader misses.
+        for name, line in {**self.PADDED_STATUSES, "plain backticks": "- `[blocked]` waiting"}.items():
+            with self.subTest(spelling=name):
+                self.assertTrue(pr_readiness.RAW_HTML_PENDING_RE.match(line), name)
+                self.assertTrue(
+                    pr_readiness.PENDING_STATUS_RE.search(f"## Evidence Status\n\n{line}\n"), name
+                )
+
+    def test_a_line_that_names_no_status_is_still_not_one(self) -> None:
+        # The control, and the direction that matters: a wider wrapper must
+        # not make an ordinary line a status.
+        for line in (
+            "- [complete] the item -- proof",
+            "- `[complete]` the item -- proof",
+            "- the lane is [blocked]x by nothing",
+            "- ` [complete] ` done",
+        ):
+            with self.subTest(line=line):
+                self.assertIsNone(pr_readiness.RAW_HTML_PENDING_RE.match(line), line)
 
     def test_a_swallowed_heading_with_no_pending_status_under_it_is_silent(self) -> None:
         for name, block in self.SWALLOWED_WITH_NOTHING_PENDING.items():
