@@ -2507,6 +2507,45 @@ def rendered_entry_lines(entries: object) -> list[str]:
     ]
 
 
+class RenderedLines:
+    """The lines a write rendered, each owning at most ONE line of the body.
+
+    A write renders one line per entry, so it owns one line per entry -- the
+    invariant the section's own writer states. Held as a SET, one entry owned
+    every byte-identical copy of its line: a body carrying the machine's
+    unreadable line twice had BOTH taken, one written back, nothing carried to
+    `## Evidence Notes` and nothing said, which is the silent deletion this
+    branch exists to stop, reached through the guard added to stop it (#1751,
+    round 9).
+
+    A multiset says what the invariant already said. The first body line
+    matching a rendered line is that line's; a second copy is the author's,
+    and it is carried and announced like any other line no reader can parse.
+
+    One owner per write, shared by the write's reader and by the instrument
+    that measures the write, so the two cannot disagree about how many lines
+    one entry owns.
+    """
+
+    def __init__(self, rendered: Iterable[str]) -> None:
+        self._remaining: list[str] = [str(one) for one in rendered]
+
+    def claim(self, line: str) -> bool:
+        """Whether one of the lines still unclaimed is this one, byte for byte."""
+        if line in self._remaining:
+            self._remaining.remove(line)
+            return True
+        return False
+
+    def __bool__(self) -> bool:
+        return bool(self._remaining)
+
+
+def owned_lines(rendered: Iterable[str]) -> RenderedLines:
+    """One owner for one scan of one body: see `RenderedLines`."""
+    return rendered if isinstance(rendered, RenderedLines) else RenderedLines(rendered)
+
+
 def is_machine_status_line(
     line: str,
     recorded_items: Iterable[str],
@@ -2542,7 +2581,7 @@ def is_machine_status_line(
     itself and the sweep asked it with no cap at all, so the cap was the
     write's alone and the two answered differently on the first shape tried.
     """
-    if line in {str(one) for one in rendered}:
+    if owned_lines(rendered).claim(line):
         return True
     return is_recorded_status_line(
         status_line_as_page_reads_it(line, context), recorded_items, context
@@ -2952,7 +2991,9 @@ def write_evidence_status_section(
     # and a run URL and changes on every push, so a cap keyed on the rendered
     # line brought the uncapped rate back with zero status changes (#1751,
     # round 6).
-    owned = [*rendered, *previously_rendered]
+    # One owner for this write, so a rendered line owns one body line and not
+    # every byte-identical copy of it (#1751, round 9).
+    owned = owned_lines([*rendered, *previously_rendered])
     # Every line this write is about to render, asked of its own reader. A
     # line the reader cannot read back is one the next run will take for the
     # author's and carry a copy of, per run -- so it is said here rather than
@@ -3094,10 +3135,6 @@ def render_execution_summary_body(
     evidence_map.update(
         _owner_written_entries(published_body, requested_evidence, mark_carried=True)
     )
-    evidence_lines = [
-        f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
-        for index, entry in sorted(evidence_map.items())
-    ]
     structured_entries = [
         {
             "index": entry["index"],
@@ -3108,6 +3145,14 @@ def render_execution_summary_body(
         }
         for _, entry in sorted(evidence_map.items())
     ]
+    # Composed by the one function that says what a rendered line IS, rather
+    # than by a copy of its f-string here. The copy took the item RAW while
+    # `renderable_entries` strips it, so an item with a trailing space
+    # rendered `...y  -- ...` and reconstructed `...y -- ...`: the write could
+    # not recognise its own line on the next push, in the one dimension round
+    # 8 claimed closed. Both renderers and both reconstructions call this now
+    # (#1751, round 9).
+    evidence_lines = rendered_entry_lines(structured_entries)
 
     stripped_body = _strip_evidence_metadata(summary_body)
     # Untrimmed, because that is the text the writer cuts and the text the

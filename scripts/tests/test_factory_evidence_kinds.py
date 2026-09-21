@@ -9316,12 +9316,38 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
             )
         self.assertIn(star, write.body)
 
-    def test_the_sweep_asks_the_same_function(self) -> None:
-        # Not that it gets the same answer -- that it is the same call, which
-        # is what stops the two from drifting again.
-        source = (REPO_ROOT / "scripts" / "evidence-write-sweep.py").read_text(encoding="utf-8")
-        self.assertIn("evidence.is_machine_status_line(", source)
-        self.assertNotIn("evidence.is_recorded_status_line(", source)
+    def test_the_sweep_and_the_write_answer_the_same_on_the_same_lines(self) -> None:
+        """The two readers CALLED, not grepped (#1751, round 9).
+
+        This asserted that `evidence-write-sweep.py` contains the text
+        `evidence.is_machine_status_line(` -- a claim about a spelling wearing
+        a structural property's name, which a rename or an alias satisfies and
+        a wrong answer does not disturb. The property is that the two readers
+        answer the same about the same lines, so it is asked of both.
+        """
+        evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
+        sweep = load_module(
+            "evidence_write_sweep_answers", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        for label, swap in self.SPELLINGS.items():
+            line = self.rendered if swap is None else self.rendered.replace(*swap, 1)
+            source = self.body_with_line(line)
+            with self.subTest(spelling=label):
+                write_says = evidence.is_machine_status_line(
+                    line,
+                    {self.ITEM},
+                    helpers.markdown_section(source, "Evidence Status"),
+                    evidence.rendered_entry_lines(evidence.evidence_entries_of(source)),
+                )
+                normalized = evidence._strip_evidence_metadata(
+                    sweep.MARKDOWN_LINE_ENDING_RE.sub("\n", source)
+                )
+                lines = normalized.split("\n")
+                sweep_says = lines.index(line) in sweep._entry_line_numbers(
+                    lines, normalized, source
+                )
+                self.assertEqual(write_says, sweep_says, label)
 
 
 class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
@@ -9515,22 +9541,63 @@ class OneDefinitionOfWhichEntriesTheWriteRendersTests(unittest.TestCase):
         evidence = self.evidence()
         helpers = sys.modules["_helpers"]
         body = self.body(with_the_unrenderable_entry=True)
-        entries = evidence.evidence_entries_of(body)
-        self.assertEqual(len(entries), 2)
-        reconstructed = evidence.rendered_entry_lines(entries)
+        self.assertEqual(len(evidence.evidence_entries_of(body)), 2)
         written, _ = self.written(body)
+        # Both read off the body the write PRODUCED: the lines it rendered,
+        # and the lines its own metadata says it rendered. A write renders
+        # exactly the lines its reconstruction rebuilds, or the cap is
+        # claiming lines nothing wrote.
+        reconstructed = evidence.rendered_entry_lines(evidence.evidence_entries_of(written))
         rendered = [
             line
             for line in helpers.markdown_section(written, "Evidence Status").splitlines()
             if line.startswith("- [")
         ]
-        self.assertEqual(len(reconstructed), 1)
-        self.assertEqual(len(rendered), 1)
-        # Same count and same shape: one reader of which entries exist.
+        # EQUALITY, which is what the name claims. Two counts and a
+        # hand-written prefix let the predicate be copied back inline and the
+        # mutant survive: the structure was right and the composer was not
+        # (#1751, round 9).
+        self.assertEqual(reconstructed, rendered)
         self.assertEqual(
-            [line.split(" -- ")[0] for line in reconstructed],
-            [f"- [pending-ci] {self.ITEM}"],
+            reconstructed, [f"- [complete] {self.ITEM} -- passed on head aaaaaaaaaaa1"]
         )
+
+    def test_the_turn_renderer_renders_what_the_reconstruction_rebuilds(self) -> None:
+        """The same equality on the OTHER renderer (#1751, round 9).
+
+        The lane renderer called the one composer and the turn renderer
+        carried a copy of its f-string, taking the item raw where the composer
+        strips it. An item with a trailing space rendered `...y  -- ...` and
+        reconstructed `...y -- ...`, so the write could not recognise its own
+        line on the next push.
+        """
+        evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
+        item = "run `swift test "
+        with contextlib.redirect_stderr(io.StringIO()):
+            written, errors = evidence.render_execution_summary_body(
+                "## Summary\n\n- one change\n\n## Validation\n\n- ran it\n",
+                requested_evidence=[item],
+                evidence_complete=["1 -- --filter QA` passed"],
+                evidence_blocked=[],
+                evidence_pending_ci=[],
+                published_body="",
+            )
+        self.assertEqual(errors, [])
+        rendered = [
+            line
+            for line in helpers.markdown_section(written, "Evidence Status").splitlines()
+            if line.startswith("- [")
+        ]
+        self.assertEqual(
+            evidence.rendered_entry_lines(evidence.evidence_entries_of(written)), rendered
+        )
+        # And what that one composer produces, stated as bytes. Agreement
+        # alone cannot see a change that moves BOTH sides: with one function
+        # answering, a predicate that stopped stripping the item would render
+        # `...test  -- ...` and reconstruct it identically, and the equality
+        # above would hold while every author's copy of the line diverged.
+        self.assertEqual(rendered, [f"- [complete] {item.strip()} -- --filter QA` passed"])
 
     def test_the_turn_path_carries_the_same_two_bodies_and_the_same_metadata(self) -> None:
         """The axis neither the product nor the corpus can produce (#1751, round 8).
@@ -9558,6 +9625,108 @@ class OneDefinitionOfWhichEntriesTheWriteRendersTests(unittest.TestCase):
         helpers = sys.modules["_helpers"]
         section = helpers.markdown_section(written, "Evidence Status")
         self.assertEqual(len([one for one in section.splitlines() if one.startswith("- [")]), 1)
+
+
+class OneEntryOwnsOneLineTests(unittest.TestCase):
+    """The cap was a set, so one entry owned every copy of its line (#1751, round 9).
+
+    A write renders one line per entry, so it owns one line per entry -- the
+    invariant the section's writer states. The cap held its lines in a set, so
+    a body carrying the machine's unreadable line TWICE had both taken: one
+    written back, nothing carried to `## Evidence Notes`, nothing on stderr
+    about the second, and no refusal. A silent deletion reached through the
+    guard added to stop silent deletions.
+
+    And it was invisible: round 8's fix gave the sweep a non-empty cap, whose
+    set semantics then met the sweep's own multiset accounting and made
+    `lines_lost` return `[]` where it had returned both lines. A correctness
+    fix that stops a defect being detectable is worse than the defect, so the
+    instrument's sight is restored in the same change -- by construction, not
+    by copy: both readers take the same `RenderedLines` owner.
+    """
+
+    ITEM = "run `swift test"
+    DETAIL = "--filter QA` passed"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    @property
+    def line(self) -> str:
+        return f"- [pending-ci] {self.ITEM} -- {self.DETAIL}"
+
+    def body(self, copies: int) -> str:
+        entry = {"index": 1, "item": self.ITEM, "status": "pending-ci",
+                 "detail": self.DETAIL, "kind": "test"}
+        return (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            + "\n".join([self.line] * copies)
+            + "\n\n## Validation\n\n- ran it\n"
+        )
+
+    def counts(self, text: str) -> tuple[int, int]:
+        helpers = sys.modules["_helpers"]
+        pattern = re.compile(r"\[(complete|blocked|pending-ci)\]")
+        return tuple(
+            len([line for line in helpers.markdown_section(text, heading).splitlines()
+                 if pattern.search(line)])
+            for heading in ("Evidence Status", "Evidence Notes")
+        )
+
+    def written(self, copies: int) -> tuple[str, str]:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            body = self.evidence().update_evidence_entries(
+                self.body(copies), {1: {"status": "complete", "detail": self.DETAIL}}
+            )
+        return body, stderr.getvalue()
+
+    def test_the_second_identical_line_is_the_authors_and_is_carried(self) -> None:
+        written, said = self.written(2)
+        self.assertEqual(self.counts(written), (1, 1), f"stderr said {said!r}")
+        self.assertIn("not readable back", said)
+
+    def test_one_copy_is_still_the_machines_and_is_replaced(self) -> None:
+        written, _ = self.written(1)
+        self.assertEqual(self.counts(written), (1, 0))
+        self.assertIn("- [complete] ", written)
+
+    def test_the_owner_hands_out_each_line_once(self) -> None:
+        owner = self.evidence().owned_lines([self.line, self.line, "- [complete] other -- d"])
+        self.assertTrue(owner.claim(self.line))
+        self.assertTrue(owner.claim(self.line))
+        self.assertFalse(owner.claim(self.line))
+        self.assertTrue(owner.claim("- [complete] other -- d"))
+        self.assertFalse(owner.claim("- [complete] other -- d"))
+
+    def test_the_instrument_calls_the_second_copy_the_authors_too(self) -> None:
+        # The sweep's sight, restored by construction: it builds the same
+        # owner, so exactly one of the two identical lines is the machine's to
+        # it. With the cap a set again this returns both, and the write
+        # deletes both -- which is the pair of facts round 8 made invisible.
+        evidence = self.evidence()
+        sweep = load_module(
+            "evidence_write_sweep_multiset", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        source = sweep.MARKDOWN_LINE_ENDING_RE.sub("\n", self.body(2))
+        normalized = evidence._strip_evidence_metadata(source)
+        lines = normalized.split("\n")
+        owned = sweep._entry_line_numbers(lines, normalized, source)
+        self.assertEqual(len(owned), 1, "the instrument gave one entry both copies")
+
+    def test_the_instrument_reports_the_loss_when_the_write_takes_both(self) -> None:
+        # What `lines_lost` says about a write that deleted the second copy:
+        # the line, rather than nothing. Asked of the instrument directly with
+        # a written body that kept one line, which is what the set-semantics
+        # write produced.
+        evidence = self.evidence()
+        sweep = load_module(
+            "evidence_write_sweep_loss", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        source = self.body(2)
+        took_both = self.body(1).replace("- [pending-ci] ", "- [complete] ", 1)
+        self.assertIn(self.line, sweep.lines_lost(source, took_both))
 
 
 if __name__ == "__main__":

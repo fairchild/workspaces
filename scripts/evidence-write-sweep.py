@@ -242,7 +242,12 @@ def _entry_line_numbers(lines: list[str], text: str, source: str) -> set[int]:
     # this called the same line lost -- the disagreement the branch exists to
     # close, reopened by the cap that closed part of it (#1751, round 6).
     section = helpers.markdown_section(text, "Evidence Status")
-    owned = evidence.rendered_entry_lines(evidence.evidence_entries_of(source))
+    # One owner for this body, the same multiset the write builds: a rendered
+    # line owns ONE body line, so two identical copies are one line of the
+    # machine's and one of the author's at both readers (#1751, round 9).
+    owned = evidence.owned_lines(
+        evidence.rendered_entry_lines(evidence.evidence_entries_of(source))
+    )
     return {
         index
         for index, start in enumerate(starts)
