@@ -526,6 +526,14 @@ entry records it: the macOS evidence lane re-resolves only entries still
 hand for a test, a screenshot or any lane-resolved item survives every later
 run and clears the label.
 
+A record this code cannot render every entry of is not rewritten at all. An
+index that is not a whole number above zero, a status outside the vocabulary,
+an empty item or detail — any of these and the write leaves the section and
+the metadata as the author left them and says which entry it could not
+account for, the way it already refuses two entries sharing an index. The rule
+behind both: nothing the author wrote leaves the body without a line saying it
+left.
+
 For a reviewer: a completion in the comment is a claim, not a proof. The run
 link an entry carries is recorded, not verified, so it takes you
 to a run page to read as evidence rather than as proof that the entry is

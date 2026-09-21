@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import ast
 import json
 import subprocess
 import sys
@@ -70,7 +71,7 @@ def ci_entry(
     return entry
 
 
-def body_with_entries(entries: list[dict[str, object]]) -> str:
+def body_deriving_contract(entries: list[dict[str, object]]) -> str:
     """A body whose contract is derived from its entries -- the shape to avoid.
 
     Kept as a one-line wrapper over `body_with_contract` so the migration is
@@ -89,7 +90,7 @@ def body_with_contract(
 ) -> str:
     """A body whose contract, metadata and visible lines are given SEPARATELY.
 
-    `body_with_entries` derives all three from one list, so no fixture built
+    `body_deriving_contract` derives all three from one list, so no fixture built
     with it can express an entry that disagrees with the contract -- a
     requirement deleted from the metadata, one added, one retargeted to
     another check, or a visible line that says something the metadata does
@@ -224,6 +225,7 @@ class CheckRunResolutionTests(unittest.TestCase):
 
 
 class VerificationSelectionTests(unittest.TestCase):
+    # intent: fix
     def test_every_ci_entry_needs_verification_whatever_it_records(self) -> None:
         # Entry 3 is the one this changed: `complete` and bound to the current
         # head used to be skipped, which is how a completion typed into the
@@ -413,7 +415,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
 
     def run_over(self, entries, *, runs, labels=("blocked:evidence",)):
         """`process_pr` over one body, reporting the body written and the gh commands."""
-        body = body_with_entries(entries)
+        body = body_deriving_contract(entries)
         pr = pr_payload(body, labels=list(labels))
         written: dict[str, str] = {}
         gh_calls: list[list[str]] = []
@@ -461,6 +463,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         }
     ]
 
+    # intent: fix
     def test_a_forged_completion_whose_live_run_failed_is_returned_to_pending(self) -> None:
         # The headline. On `016d94ba` this body's entry is skipped, the label
         # is cleared, and the forged `[complete]` line survives the run.
@@ -472,6 +475,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertIn("https://example.invalid/run/9", body)
         self.assertFalse(self.cleared(gh_calls), gh_calls)
 
+    # intent: fix
     def test_a_forged_completion_naming_a_check_that_does_not_exist_is_undone(self) -> None:
         # The other way a forgery shows: an item naming a check nobody runs.
         # An answered query that came back empty is the case that says the
@@ -481,6 +485,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertIn("may not match a check on this repository", body)
         self.assertFalse(self.cleared(gh_calls), gh_calls)
 
+    # intent: fix
     def test_a_run_that_has_not_finished_says_nothing_and_writes_nothing(self) -> None:
         # An indefinite answer -- a check mid-re-run -- cannot unsay a
         # completion, so the entry keeps what it records and the body is not
@@ -493,6 +498,26 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertIsNone(body, "an indefinite answer rewrote the body")
         self.assertFalse(self.cleared(gh_calls), gh_calls)
 
+    # intent: fix
+    def test_a_completed_run_beside_one_still_running_says_nothing_either(self) -> None:
+        # The shape that falsified the rule at the function: an older
+        # completed run and a newer one mid-flight. Asking for ANY completed
+        # run made this definite, so a recorded completion was rewritten from
+        # a verdict the newer run is in the middle of replacing (#1778,
+        # round 11). It is indefinite now, so the record stands and the next
+        # answer decides.
+        body, gh_calls = self.run_over(
+            [ci_entry(**self.FORGED)],
+            runs=[
+                *self.FAILED_RUN,
+                {"status": "in_progress", "conclusion": None,
+                 "started_at": "2026-08-27T02:00:00Z"},
+            ],
+        )
+        self.assertIsNone(body, "a verdict was taken while a re-run was in flight")
+        self.assertFalse(self.cleared(gh_calls), gh_calls)
+
+    # intent: fix
     def test_a_genuine_completion_stays_complete_and_still_clears_the_label(self) -> None:
         # The control, and the property that says the change costs an honest
         # body nothing: the same recorded entry, a green live run.
@@ -502,6 +527,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertIn("https://example.invalid/run/1", body)
         self.assertTrue(self.cleared(gh_calls), gh_calls)
 
+    # intent: control
     def test_an_honest_body_the_run_confirms_is_returned_byte_for_byte(self) -> None:
         """"Unchanged" asserted as BYTES, not as logical completion.
 
@@ -521,7 +547,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
             check_name="Web CI",
             proof_url="https://example.invalid/run/1",
         )
-        source = body_with_entries([entry])
+        source = body_deriving_contract([entry])
         written: list[str] = []
         pr = pr_payload(source, labels=["blocked:evidence"])
         gh_calls: list[list[str]] = []
@@ -554,6 +580,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
             source,
         )
 
+    # intent: fix
     def test_a_completion_is_re_read_even_when_the_recorded_sha_matches(self) -> None:
         # The condition that was doing the skipping, asserted directly rather
         # than only through the seam.
@@ -570,6 +597,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
             [],
         )
 
+    # intent: fix
     def test_the_clear_counts_what_this_run_verified_and_not_what_the_body_says(self) -> None:
         # The second half of the hole. Even with the entries re-verified, a
         # clear computed from the recorded entries would pass a body whose
@@ -609,6 +637,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
             )
         )
 
+    # intent: fix
     def test_a_lookup_failure_leaves_the_body_and_the_label_alone(self) -> None:
         # `check_runs_for` returning None is a failed query, which says
         # nothing about the check -- so it neither clears the label nor
@@ -619,6 +648,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertIsNone(body, "a failed lookup rewrote the body")
         self.assertFalse(self.cleared(gh_calls), gh_calls)
 
+    # intent: guard
     def test_an_entry_with_no_recorded_completion_is_still_written_on_an_indefinite_answer(
         self,
     ) -> None:
@@ -632,6 +662,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertIn("waiting for checks", body)
         self.assertFalse(self.cleared(gh_calls), gh_calls)
 
+    # intent: fix
     def test_a_correction_the_body_refuses_still_holds_the_label(self) -> None:
         """The case that makes the second half of the fix load-bearing.
 
@@ -685,6 +716,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
             verify._recorded_contract_is_complete(verify.evidence_entries(unwritable), HEAD)
         )
 
+    # intent: fix
     def test_one_check_run_read_per_ci_entry_per_run(self) -> None:
         # The cost, measured rather than asserted. Three `ci` entries, three
         # reads -- and the non-ci entry beside them costs nothing, because the
@@ -696,7 +728,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
             {"index": 4, "item": "a screenshot of the sidebar", "status": "complete",
              "detail": "uploaded", "kind": "screenshot"},
         ]
-        body = body_with_entries(entries)
+        body = body_deriving_contract(entries)
         pr = pr_payload(body, labels=["blocked:evidence"])
         reads: list[tuple[str, str]] = []
 
@@ -799,7 +831,7 @@ class TheSuiteCanExpressASequenceTests(unittest.TestCase):
         answering a question about a pull request that no longer exists
         (#1778, round 3).
         """
-        body = body_with_entries(entries)
+        body = body_deriving_contract(entries)
         carried = list(labels)
         body, first_calls = self.one_run(body, first, labels=carried, reviews=reviews or [])
         if ["pr", "edit", "321", "--remove-label", "blocked:evidence"] in first_calls:
@@ -807,6 +839,7 @@ class TheSuiteCanExpressASequenceTests(unittest.TestCase):
         body, second_calls = self.one_run(body, second, labels=carried, reviews=reviews or [])
         return body, first_calls, second_calls
 
+    # intent: guard
     def test_the_second_run_sees_the_label_the_first_removed(self) -> None:
         # The fixture's own property, asserted so it cannot quietly stop
         # carrying: run 1 clears the label, run 2 is not asked to clear it
@@ -819,6 +852,7 @@ class TheSuiteCanExpressASequenceTests(unittest.TestCase):
         self.assertTrue(self.cleared(first), first)
         self.assertFalse(self.cleared(second), "run 2 cleared a label run 1 had removed")
 
+    # intent: guard
     def test_a_transient_failure_does_not_make_the_next_run_see_a_transition(self) -> None:
         """The regression against main (#1778, round 2).
 
@@ -848,6 +882,7 @@ class TheSuiteCanExpressASequenceTests(unittest.TestCase):
             self.dispatched(second), "the second run saw a transition the first invented"
         )
 
+    # intent: control
     def test_a_genuine_completion_re_verified_twice_stays_put(self) -> None:
         # The control on the same axis: two runs, both green, nothing moves
         # and no review is asked for.
@@ -869,6 +904,7 @@ class TheSuiteCanExpressASequenceTests(unittest.TestCase):
         self.assertFalse(self.dispatched(first), first)
         self.assertFalse(self.dispatched(second), second)
 
+    # intent: fix
     def test_a_definite_failure_still_undoes_a_forged_completion_across_two_runs(self) -> None:
         # The gap this pull request closes, on the time axis: the forged entry
         # is undone by the first definite answer and stays undone.
@@ -927,8 +963,9 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
             },
         ]
 
+    # intent: fix
     def test_the_decoy_contract_neither_verifies_nor_clears(self) -> None:
-        body = body_with_entries(self.entries())
+        body = body_deriving_contract(self.entries())
         pr = pr_payload(body, labels=["blocked:evidence"])
         reads: list[str] = []
         gh_calls: list[list[str]] = []
@@ -973,6 +1010,7 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
         self.assertEqual(reads, [], "a contract it cannot read was verified anyway")
         self.assertNotIn("body", written)
 
+    # intent: fix
     def test_a_collision_of_any_kinds_is_named_rather_than_resolved(self) -> None:
         """Inverted from round 2, where this test asserted the defect (#1778, round 3).
 
@@ -1006,6 +1044,7 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
             [],
         )
 
+    # intent: fix
     def test_all_three_readers_take_one_definition_of_an_index(self) -> None:
         # The mechanism, asserted directly: the guard, the write's narrowing
         # and the clear read the same grouping, so none of them can be right
@@ -1029,7 +1068,7 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
             with self.subTest(order=label):
                 self.assertEqual(
                     verify._updates_targeting_unchanged_entries(
-                        body_with_entries(order), update
+                        body_deriving_contract(order), update
                     ),
                     {},
                     label,
@@ -1039,6 +1078,7 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
         self.assertIsNone(verify.usable_entry_index({"index": "1e9999"}))
         self.assertEqual(verify.colliding_indexes([{"item": CI_ITEM}, {"item": CI_ITEM}]), [])
 
+    # intent: fix
     def test_a_verdict_for_another_check_never_counts(self) -> None:
         # The comparison on its own, since the duplicate guard stops the seam
         # test short of it: a verdict is the entry's only if it names the
@@ -1061,11 +1101,12 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
                     clears,
                 )
 
+    # intent: guard
     def test_the_clear_takes_the_same_narrowed_map_the_write_takes(self) -> None:
         # An update whose target index no longer names the check it was
         # computed for does not land in the body, so it may not count toward
         # the clear either.
-        body = body_with_entries([ci_entry(index=1, status="complete", verified_head_sha=HEAD)])
+        body = body_deriving_contract([ci_entry(index=1, status="complete", verified_head_sha=HEAD)])
         stale = {1: {"status": "complete", "verified_head_sha": HEAD, "check_name": "Docs"}}
         self.assertEqual(verify._updates_targeting_unchanged_entries(body, stale), {})
 
@@ -1096,7 +1137,7 @@ class AMixedKindIndexManufacturesACompletionTests(unittest.TestCase):
     DIFF = {"index": 1, "item": DIFF_ITEM, "status": "pending-ci", "detail": "waiting", "kind": "diff"}
 
     def run_over(self, entries):
-        body = body_with_entries([dict(entry) for entry in entries])
+        body = body_deriving_contract([dict(entry) for entry in entries])
         pr = pr_payload(body, labels=["blocked:evidence"])
         written: dict[str, str] = {}
         gh_calls: list[list[str]] = []
@@ -1129,6 +1170,7 @@ class AMixedKindIndexManufacturesACompletionTests(unittest.TestCase):
     def ordered(self, first: str, second: str) -> list[dict[str, object]]:
         return [getattr(self, first), getattr(self, second)]
 
+    # intent: fix
     def test_neither_order_makes_a_check_run_read(self) -> None:
         """The pre-write guard's own signature, and the only one it owns.
 
@@ -1145,6 +1187,7 @@ class AMixedKindIndexManufacturesACompletionTests(unittest.TestCase):
                 _, _, reads = self.run_over(self.ordered(first, second))
                 self.assertEqual(reads, [], f"{label}: a check run was read for a contract it cannot read")
 
+    # intent: fix
     def test_neither_order_writes_or_clears(self) -> None:
         # The outcome, which two guards hold between them: the pre-write one
         # stops the reads and the narrowing stops the write. Neither mutant
@@ -1160,6 +1203,7 @@ class AMixedKindIndexManufacturesACompletionTests(unittest.TestCase):
                     f"{label}: the label was cleared",
                 )
 
+    # intent: fix
     def test_the_order_that_used_to_manufacture_one_is_the_ci_last_order(self) -> None:
         # Named so the record says which half was live: with the `ci` entry
         # last the narrowing kept the update and the write landed it on both
@@ -1168,6 +1212,7 @@ class AMixedKindIndexManufacturesACompletionTests(unittest.TestCase):
         self.assertEqual(verify.colliding_indexes([self.DIFF, self.CI]), [1])
         self.assertEqual(verify.colliding_indexes([self.CI, self.DIFF]), [1])
 
+    # intent: control
     def test_an_honest_mixed_contract_at_distinct_indexes_is_untouched(self) -> None:
         # The control: two kinds are perfectly ordinary as long as each entry
         # has its own index.
@@ -1217,9 +1262,10 @@ class TheNarrowingRefusesACollisionOnTheRetryReadTests(unittest.TestCase):
         }
     ]
 
+    # intent: fix
     def test_the_narrowing_drops_every_update_aimed_at_the_injected_index(self) -> None:
-        clean = body_with_entries([ci_entry(index=1)])
-        injected = body_with_entries(
+        clean = body_deriving_contract([ci_entry(index=1)])
+        injected = body_deriving_contract(
             [ci_entry(index=1), dict(ci_entry(index=1), detail="a second line the owner added")]
         )
         pr = pr_payload(clean, labels=["blocked:evidence"])
@@ -1254,9 +1300,10 @@ class TheNarrowingRefusesACollisionOnTheRetryReadTests(unittest.TestCase):
             ["pr", "edit", "321", "--remove-label", "blocked:evidence"], gh_calls, gh_calls
         )
 
+    # intent: control
     def test_an_unchanged_body_on_the_retry_read_still_writes(self) -> None:
         # The control: the guard re-running must not stop an ordinary write.
-        clean = body_with_entries([ci_entry(index=1)])
+        clean = body_deriving_contract([ci_entry(index=1)])
         pr = pr_payload(clean, labels=["blocked:evidence"])
         written: dict[str, str] = {}
         with (
@@ -1316,8 +1363,8 @@ class TheInLoopGuardCoversWhatTheNarrowingCannotSeeTests(unittest.TestCase):
     }
 
     def run_with_injection(self, injected_entries):
-        clean = body_with_entries([ci_entry(index=1), dict(self.OTHER)])
-        injected = body_with_entries(injected_entries)
+        clean = body_deriving_contract([ci_entry(index=1), dict(self.OTHER)])
+        injected = body_deriving_contract(injected_entries)
         pr = pr_payload(clean, labels=["blocked:evidence"])
         reads = {"n": 0}
         written: dict[str, str] = {}
@@ -1348,6 +1395,7 @@ class TheInLoopGuardCoversWhatTheNarrowingCannotSeeTests(unittest.TestCase):
             verify.process_pr(321, {})
         return written, gh_calls, said.getvalue()
 
+    # intent: fix
     def test_a_collision_at_an_index_this_run_holds_no_update_for_is_not_written(self) -> None:
         """The outcome, which `update_evidence_entries` now holds on its own.
 
@@ -1369,6 +1417,7 @@ class TheInLoopGuardCoversWhatTheNarrowingCannotSeeTests(unittest.TestCase):
             ["pr", "edit", "321", "--remove-label", "blocked:evidence"], gh_calls, gh_calls
         )
 
+    # intent: fix
     def test_the_lane_names_the_collision_in_its_own_voice(self) -> None:
         """The in-loop guard's own signature, which is diagnosis (#1778, round 5).
 
@@ -1387,6 +1436,7 @@ class TheInLoopGuardCoversWhatTheNarrowingCannotSeeTests(unittest.TestCase):
         )
         self.assertIn("PR #321: evidence entries share index(es) 2", said)
 
+    # intent: control
     def test_the_same_body_without_the_twin_is_written_as_before(self) -> None:
         # The control: the guard re-running refuses collisions, not edits.
         written, _, _ = self.run_with_injection(
@@ -1432,10 +1482,11 @@ class AStoodDownWriteDecidesTheLabelOnTheLiveBodyTests(unittest.TestCase):
             proof_url="https://example.invalid/run/1",
         )
 
+    # intent: fix
     def test_a_requirement_added_mid_run_keeps_the_label(self) -> None:
-        settled = body_with_entries([self.settled_entry()])
+        settled = body_deriving_contract([self.settled_entry()])
         # What the owner has since added, live on the PR.
-        live = body_with_entries(
+        live = body_deriving_contract(
             [
                 self.settled_entry(),
                 {
@@ -1482,7 +1533,7 @@ class AStoodDownWriteDecidesTheLabelOnTheLiveBodyTests(unittest.TestCase):
 
     def run_with_live(self, live_body: str | None, *, live_head: str = HEAD):
         """One run whose second PR read answers differently from its first."""
-        settled = body_with_entries([self.settled_entry()])
+        settled = body_deriving_contract([self.settled_entry()])
         pr = pr_payload(settled, labels=["blocked:evidence"])
         reads = {"n": 0}
         gh_calls: list[list[str]] = []
@@ -1514,6 +1565,7 @@ class AStoodDownWriteDecidesTheLabelOnTheLiveBodyTests(unittest.TestCase):
     def cleared(self, gh_calls) -> bool:
         return ["pr", "edit", "321", "--remove-label", "blocked:evidence"] in gh_calls
 
+    # intent: fix
     def test_an_emptied_description_is_a_body_rather_than_a_failed_read(self) -> None:
         """An owner deleting their description mid-run (#1778, round 7).
 
@@ -1527,6 +1579,7 @@ class AStoodDownWriteDecidesTheLabelOnTheLiveBodyTests(unittest.TestCase):
         self.assertEqual(written, [], "this is the stand-down path")
         self.assertFalse(self.cleared(gh_calls), "the label was cleared against an empty body")
 
+    # intent: fix
     def test_a_head_that_moved_mid_run_takes_no_decision_at_all(self) -> None:
         """The byte-identical stand-down returned BEFORE the head check.
 
@@ -1539,9 +1592,10 @@ class AStoodDownWriteDecidesTheLabelOnTheLiveBodyTests(unittest.TestCase):
         self.assertEqual(written, [])
         self.assertFalse(self.cleared(gh_calls), "the label was cleared after the head moved")
 
+    # intent: control
     def test_a_live_body_that_still_says_complete_still_clears(self) -> None:
         # The control: reading the live body is not a reason to stop clearing.
-        settled = body_with_entries([self.settled_entry()])
+        settled = body_deriving_contract([self.settled_entry()])
         pr = pr_payload(settled, labels=["blocked:evidence"])
         gh_calls: list[list[str]] = []
         with (
@@ -1579,11 +1633,13 @@ class TheClearRefusesACollidingIndexTooTests(unittest.TestCase):
         "kind": "diff",
     }
 
+    # intent: fix
     def test_two_complete_non_ci_entries_at_one_index_keep_the_label(self) -> None:
         entries = [dict(self.TWIN), dict(self.TWIN, detail="and the owner said so again")]
         self.assertEqual(verify.colliding_indexes(entries), [1])
         self.assertFalse(verify.should_clear_blocked_label(entries, HEAD, verified={}))
 
+    # intent: fix
     def test_the_same_two_entries_at_distinct_indexes_still_clear(self) -> None:
         entries = [dict(self.TWIN), dict(self.TWIN, index=2)]
         self.assertEqual(verify.colliding_indexes(entries), [])
@@ -1610,6 +1666,7 @@ class OneRuleForWhichIndexAnythingCanActOnTests(unittest.TestCase):
         """
         return sys.modules["evidence"]._claimed_index
 
+    # intent: fix
     def test_an_index_below_one_is_claimed_but_not_actionable(self) -> None:
         for index in (0, -1):
             with self.subTest(index=index):
@@ -1617,21 +1674,24 @@ class OneRuleForWhichIndexAnythingCanActOnTests(unittest.TestCase):
                 self.assertEqual(self.identity()(entry), index)
                 self.assertIsNone(verify.usable_entry_index(entry))
 
+    # intent: fix
     def test_the_verifier_looks_up_no_check_for_a_line_nothing_renders(self) -> None:
         for index in (0, -2):
             with self.subTest(index=index):
                 entries = [{"index": index, "item": CI_ITEM, "status": "pending-ci", "detail": "d"}]
                 self.assertEqual(verify.ci_entries_needing_verification(entries, HEAD), [])
 
+    # intent: fix
     def test_the_response_lane_takes_the_same_definition(self) -> None:
         response = load_module(
             "factory_review_response_indexes", REPO_ROOT / "scripts" / "factory-review-response.py"
         )
-        self.assertIs(response._entry_index, verify.usable_entry_index)
+        self.assertIs(response.usable_entry_index, verify.usable_entry_index)
         for index in (0, -1):
-            self.assertIsNone(response._entry_index({"index": index}))
-        self.assertEqual(response._entry_index({"index": 2}), 2)
+            self.assertIsNone(response.usable_entry_index({"index": index}))
+        self.assertEqual(response.usable_entry_index({"index": 2}), 2)
 
+    # intent: fix
     def test_a_collision_below_one_is_still_a_collision(self) -> None:
         # The identity rule stays wide: the write fans `updates[0]` across
         # every entry claiming 0, so the guard has to see two of them.
@@ -1705,6 +1765,7 @@ class ADecisionIsTakenOnWhatThePullRequestHoldsNowTests(unittest.TestCase):
             proof_url="https://example.invalid/run/1",
         )
 
+    # intent: fix
     def test_an_entry_retargeted_mid_run_keeps_the_label(self) -> None:
         # The run verifies `Web CI` green and would clear on the body it read
         # first. Mid-run the owner retargets that one entry to another check,
@@ -1722,6 +1783,7 @@ class ADecisionIsTakenOnWhatThePullRequestHoldsNowTests(unittest.TestCase):
             "the label was cleared on a body whose one requirement this run never verified",
         )
 
+    # intent: control
     def test_the_same_contract_unchanged_still_clears(self) -> None:
         # The control: reading the live body is not a reason to stop clearing.
         contract = [CI_ITEM]
@@ -1740,6 +1802,7 @@ class ADecisionIsTakenOnWhatThePullRequestHoldsNowTests(unittest.TestCase):
         self.assertEqual(written, [])
         self.assertTrue(self.cleared(gh_calls), gh_calls)
 
+    # intent: fix
     def test_a_head_that_moves_on_the_retry_path_takes_no_decision(self) -> None:
         """The ordering that reached the head check below a return (#1778, round 8).
 
@@ -1810,6 +1873,7 @@ class ADecisionIsTakenOnWhatThePullRequestHoldsNowTests(unittest.TestCase):
         self.assertGreaterEqual(reads["n"], 3, "the run never reached the moved head")
         self.assertEqual(gh_calls, [], "a label was touched at a head this run never verified")
 
+    # intent: fix
     def test_the_narrowings_return_hands_back_this_read_and_not_the_previous_one(self) -> None:
         """Two owner edits across the retry reads (#1778, round 9).
 
@@ -1887,6 +1951,7 @@ class ADecisionIsTakenOnWhatThePullRequestHoldsNowTests(unittest.TestCase):
             "the label was cleared on the read BEFORE the one this return was taken from",
         )
 
+    # intent: guard
     def test_the_collision_return_hands_back_this_read_too(self) -> None:
         """The one return round 9's property did not pin (#1778, round 10).
 
@@ -1953,6 +2018,7 @@ class ADecisionIsTakenOnWhatThePullRequestHoldsNowTests(unittest.TestCase):
             "the label was decided on the colliding body rather than on what the PR holds",
         )
 
+    # intent: guard
     def test_a_requirement_deleted_from_the_metadata_is_not_seen_here(self) -> None:
         """What the clear quantifies over, asserted rather than assumed.
 
@@ -2002,6 +2068,7 @@ class TheIdentityRuleIsNotReachableFromASiteThatActsTests(unittest.TestCase):
     module. That is the property; the test below names the intent.
     """
 
+    # intent: fix
     def test_an_acting_site_reads_no_key_it_has_not_checked(self) -> None:
         """The property, not the private name (#1778, round 10).
 
@@ -2035,6 +2102,7 @@ class TheIdentityRuleIsNotReachableFromASiteThatActsTests(unittest.TestCase):
             "the write acted on an index nothing renders",
         )
 
+    # intent: guard
     def test_no_module_that_acts_imports_the_identity_rule(self) -> None:
         tracked = subprocess.run(
             ["git", "ls-files", "*.py"],
@@ -2053,39 +2121,73 @@ class TheIdentityRuleIsNotReachableFromASiteThatActsTests(unittest.TestCase):
         }
         self.assertEqual(reaching, set(), "an acting site reached past the boundary")
 
-    def test_the_only_caller_of_the_identity_rule_is_the_collision_grouping(self) -> None:
-        evidence = sys.modules["evidence"]
-        source = Path(evidence.__file__).read_text(encoding="utf-8")
-        callers = [
-            line.strip()
-            for line in source.splitlines()
-            if "_claimed_index(" in line and not line.strip().startswith("def ")
-        ]
-        self.assertEqual(len(callers), 2, callers)
-        self.assertTrue(all("index = _claimed_index(entry)" in line for line in callers), callers)
+    # intent: fix
+    def test_every_function_that_can_reach_the_identity_rule_is_named_here(self) -> None:
+        """Which functions, not how many lines (#1778, round 11).
 
+        A count says a new caller appeared; it does not say what the caller
+        does with the answer. These three are the readers that may have it,
+        and each does something with it that is not acting on a line:
+        `usable_entry_index` narrows it to the indexes a reader can take,
+        `entries_by_index` groups by identity so a collision is visible, and
+        `entry_as_rendered` uses it only to choose which sentence the author
+        reads -- it returns a reason, never an index. Adding a fourth is a
+        deliberate edit here, which is the point.
+        """
+        evidence = sys.modules["evidence"]
+        tree = ast.parse(Path(evidence.__file__).read_text(encoding="utf-8"))
+        reaching = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name != "_claimed_index"
+            and any(
+                isinstance(call.func, ast.Name) and call.func.id == "_claimed_index"
+                for call in ast.walk(node)
+                if isinstance(call, ast.Call)
+            )
+        }
+        self.assertEqual(
+            reaching, {"usable_entry_index", "entries_by_index", "entry_as_rendered"}, reaching
+        )
+
+    # intent: fix
     def test_an_index_nothing_renders_is_not_acted_on(self) -> None:
         evidence = sys.modules["evidence"]
         entry = {"index": 0, "item": "release approval", "status": "pending-ci",
                  "detail": "waiting", "kind": "manual"}
         # `lines=` given explicitly, because the visible line IS the thing
         # under test here: the defect was the metadata moving to complete
-        # while this line stayed as it is (#1778, round 10).
-        body = body_with_contract(
-            ["release approval"],
-            [entry],
-            lines=["- [pending-ci] release approval -- waiting"],
+        # while this line stayed as it is (#1778, round 10). The line differs
+        # from the one the entry would render -- the author's own detail, not
+        # the record's -- so dropping the argument changes the fixture rather than
+        # reproducing it, which is what the round-10 mutant table claimed of
+        # this call site and could not have measured (#1778, round 11).
+        visible = "- [pending-ci] release approval -- the signing profile is missing"
+        body = body_with_contract(["release approval"], [entry], lines=[visible])
+        self.assertNotIn(
+            f"- [{entry['status']}] {entry['item']} -- {entry['detail']}",
+            body,
+            "the explicit line is the derived one, so `lines=` proves nothing here",
         )
         said: list[str] = []
         written = evidence.update_evidence_entries(
             body, {0: {"status": "complete", "detail": "done"}}, announcements=said
         )
         self.assertEqual(written, body, "the metadata moved while the visible line did not")
+        self.assertIn(visible, written, "the author's line left the page")
+        # And nothing is said, because nothing happened: the update names an
+        # index nothing can act on, so this write changes no entry and never
+        # reaches the renderer. The sentence about an entry the renderer
+        # cannot account for belongs to a write that would REWRITE the
+        # section, which is the case the kinds suite drives (#1778, round 11).
+        self.assertEqual(said, [])
 
+    # intent: fix
     def test_a_visible_line_disagreeing_with_its_metadata_is_expressible(self) -> None:
         """What `lines=` is for, demonstrated rather than claimed (#1778, round 10).
 
-        `body_with_entries` derives the visible line FROM the entry, so a body
+        `body_deriving_contract` derives the visible line FROM the entry, so a body
         whose page says one thing and whose metadata says another was not a
         fixture this suite could write — and that disagreement is the shape
         the lane's defects keep taking. Here the metadata records a complete
@@ -2122,6 +2224,7 @@ class TheIdentityRuleIsNotReachableFromASiteThatActsTests(unittest.TestCase):
             )
         )
 
+    # intent: fix
     def test_no_entry_that_renders_no_line_counts_toward_a_clear(self) -> None:
         """An index nothing can act on is a requirement with nothing on the page.
 
@@ -2163,6 +2266,7 @@ class TheIdentityRuleIsNotReachableFromASiteThatActsTests(unittest.TestCase):
             )
         )
 
+    # intent: fix
     def test_a_float_and_a_bool_are_not_indexes(self) -> None:
         evidence = sys.modules["evidence"]
         for value in (1.9, 1.0, True, False, "1"):
@@ -2175,6 +2279,7 @@ class TheIdentityRuleIsNotReachableFromASiteThatActsTests(unittest.TestCase):
 class VerdictDefinitenessTests(unittest.TestCase):
     """Which lookups say something about a check, and which fail to (#1778, round 2)."""
 
+    # intent: fix
     def test_a_completed_run_and_an_empty_answer_are_definite(self) -> None:
         self.assertTrue(
             verify.verdict_is_definite(
@@ -2185,10 +2290,53 @@ class VerdictDefinitenessTests(unittest.TestCase):
         self.assertTrue(verdict := verify.verdict_is_definite([]))
         self.assertTrue(verdict)
 
+    # intent: fix
     def test_a_failed_lookup_and_an_unfinished_run_are_not(self) -> None:
         self.assertFalse(verify.verdict_is_definite(None))
         self.assertFalse(
             verify.verdict_is_definite([{"status": "in_progress", "conclusion": None}])
+        )
+
+    # intent: fix
+    def test_a_completed_run_beside_an_unfinished_one_is_not_definite(self) -> None:
+        """No precondition on the caller's query, and no ordering rule (#1778, round 11).
+
+        `latest_completed_run(runs) is not None` answers yes for an older
+        completed run sitting beside a newer `in_progress` one. The caller
+        queries with `filter=latest`, which returns at most one run per app
+        per check name, so reaching that shape takes two apps publishing one
+        name -- probably unreachable here, and unverified against the live
+        API. The rule no longer depends on it: every run has to have
+        finished, in either order, so nothing here rests on which is newer.
+        """
+        completed = {"status": "completed", "conclusion": "failure",
+                     "completed_at": "2026-08-27T00:00:00Z"}
+        running = {"status": "in_progress", "conclusion": None,
+                   "started_at": "2026-08-27T02:00:00Z"}
+        for order in ([completed, running], [running, completed]):
+            with self.subTest(order=[run["status"] for run in order]):
+                self.assertFalse(verify.verdict_is_definite(order))
+
+    # intent: guard
+    def test_two_finished_runs_are_definite_whatever_they_concluded(self) -> None:
+        # The other half: this rule refuses an unfinished run, not a second
+        # opinion. Two apps that both finished say something, and a queued
+        # run is as unfinished as one in progress.
+        self.assertTrue(
+            verify.verdict_is_definite(
+                [
+                    {"status": "completed", "conclusion": "failure", "completed_at": "a"},
+                    {"status": "completed", "conclusion": "success", "completed_at": "b"},
+                ]
+            )
+        )
+        self.assertFalse(
+            verify.verdict_is_definite(
+                [
+                    {"status": "completed", "conclusion": "success", "completed_at": "a"},
+                    {"status": "queued", "conclusion": None},
+                ]
+            )
         )
 
 
@@ -2196,7 +2344,7 @@ class ProcessPrTests(unittest.TestCase):
     maxDiff = None
 
     def test_green_check_completes_entry_and_clears_machine_label(self) -> None:
-        body = body_with_entries([ci_entry()])
+        body = body_deriving_contract([ci_entry()])
         pr = pr_payload(body, labels=["blocked:evidence"])
         written: dict[str, str] = {}
         gh_calls: list[list[str]] = []
@@ -2239,7 +2387,7 @@ class ProcessPrTests(unittest.TestCase):
 
     def run_process_pr(self, entries, *, labels, rejection: bool):
         """process_pr over one PR, reporting the gh commands it issued."""
-        body = body_with_entries(entries)
+        body = body_deriving_contract(entries)
         pr = pr_payload(body, labels=labels)
         gh_calls: list[list[str]] = []
 
@@ -2309,7 +2457,7 @@ class ProcessPrTests(unittest.TestCase):
     def test_a_remaining_blocking_label_holds_the_request_back(self) -> None:
         # A human-applied blocked:evidence is left alone, and the readiness
         # gate would refuse the PR anyway, so asking spends budget for nothing.
-        body = body_with_entries([ci_entry()])
+        body = body_deriving_contract([ci_entry()])
         pr = pr_payload(body, labels=["blocked:evidence"])
         gh_calls: list[list[str]] = []
 
@@ -2350,7 +2498,7 @@ class ProcessPrTests(unittest.TestCase):
         self.assertNotIn(["pr", "edit", "321", "--remove-label", "blocked:evidence"], gh_calls)
 
     def test_head_movement_between_read_and_write_skips_the_write(self) -> None:
-        body = body_with_entries([ci_entry()])
+        body = body_deriving_contract([ci_entry()])
         responses = iter(
             [
                 pr_payload(body),
@@ -2394,7 +2542,7 @@ class ProcessPrTests(unittest.TestCase):
 
     def test_human_applied_label_is_never_removed(self) -> None:
         entries = [ci_entry(status="complete", verified_head_sha=HEAD)]
-        body = body_with_entries(entries)
+        body = body_deriving_contract(entries)
         pr = pr_payload(body, labels=["blocked:evidence"])
 
         # The entry is re-verified now, green, so the clear is reached on its
@@ -2429,7 +2577,7 @@ class BodyChangeRaceGuardTests(unittest.TestCase):
     maxDiff = None
 
     def test_stable_sha_body_change_does_not_write_stale_derived_body(self) -> None:
-        body = body_with_entries([ci_entry()])
+        body = body_deriving_contract([ci_entry()])
         edited_body = with_owner_edit(body, "owner edited the description mid-flight")
         updates = {
             1: verify.entry_update_for_check_run(
@@ -2471,7 +2619,7 @@ class BodyChangeRaceGuardTests(unittest.TestCase):
         self.assertIn(f"- [complete] {CI_ITEM}", written["body"])
 
     def test_race_then_reapply_succeeds_and_completes_verification(self) -> None:
-        body = body_with_entries([ci_entry()])
+        body = body_deriving_contract([ci_entry()])
         edited_body = with_owner_edit(body, "clarify rollout plan")
         pr_initial = pr_payload(body, labels=["blocked:evidence"])
         pr_drifted = pr_payload(edited_body, labels=["blocked:evidence"])
@@ -2519,7 +2667,7 @@ class BodyChangeRaceGuardTests(unittest.TestCase):
         )
 
     def test_gives_up_without_writing_when_body_keeps_changing(self) -> None:
-        body = body_with_entries([ci_entry()])
+        body = body_deriving_contract([ci_entry()])
         drifting_bodies = [
             with_owner_edit(body, f"edit #{i}") for i in range(1, verify.MAX_WRITE_ATTEMPTS + 1)
         ]
@@ -2561,10 +2709,10 @@ class BodyChangeRaceGuardTests(unittest.TestCase):
         """If an owner retargets the evidence line itself (not just prose) to
         a different check between read and write, the stale-index update
         must be dropped, never slapped onto the now-different entry."""
-        body = body_with_entries([ci_entry()])
+        body = body_deriving_contract([ci_entry()])
         retargeted_entry = ci_entry(status="pending-ci")
         retargeted_entry["item"] = "CI: `macOS CI` green on the PR head"
-        retargeted_body = body_with_entries([retargeted_entry])
+        retargeted_body = body_deriving_contract([retargeted_entry])
         updates = {
             1: verify.entry_update_for_check_run(
                 "Web CI",
@@ -2677,7 +2825,7 @@ class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
         """The notes the verifier posted while completing one green check."""
         # A continuation under the status line: the re-render replaces the line
         # from the entries in hand, and the author's second line goes with it.
-        body = body_with_entries([ci_entry()]).replace(
+        body = body_deriving_contract([ci_entry()]).replace(
             "-- waiting for checks\n",
             "-- waiting for checks\n  and the rest of what the author wrote\n",
         )
@@ -2733,7 +2881,7 @@ class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
         # it to the end of the document, so the write cannot say where the
         # section ends, stands the whole body down, and returns it
         # byte-identical.
-        body = body_with_entries([ci_entry()]).replace(
+        body = body_deriving_contract([ci_entry()]).replace(
             "\n\n## Validation\n",
             "\n\n<pre>\nthe run log nobody closed\n\n## Validation\n",
             1,

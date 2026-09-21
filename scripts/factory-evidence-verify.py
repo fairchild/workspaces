@@ -234,23 +234,33 @@ def entry_update_for_check_run(
 def verdict_is_definite(runs: list[dict[str, object]] | None) -> bool:
     """Whether this lookup SAYS something about the check, rather than failing to.
 
-    Three answers are definite: a completed run (whatever it concluded), and
-    an answered query that came back empty, which says the check does not
-    exist. Two are not: a lookup that failed outright (`None`), and a run that
-    exists and has not finished -- a check mid-re-run.
+    Definite: an answered query that came back empty, which says the check
+    does not exist on this head, and a lookup in which every run has finished
+    -- whatever they concluded. Indefinite: a lookup that failed outright
+    (`None`), and one holding a run that has not finished, which is a check
+    mid-re-run.
+
+    EVERY run, not the latest completed one. Asking for any completed run made
+    this true for an older completed run sitting beside a newer `in_progress`
+    one, so a recorded completion could be rewritten from a verdict the newer
+    run is in the middle of replacing. The caller queries with
+    `filter=latest`, which returns at most one run per app per check name, so
+    that shape needs two apps publishing one name -- probably unreachable
+    here, and unverified against the live API either way. A function whose
+    correctness rests on what a query the caller happens to make returns is
+    one that breaks when the caller changes; this one needs no precondition,
+    and it needs no rule for which of two runs is newer (#1778, round 11).
 
     The difference decides whether a recorded completion may be rewritten.
     Demoting one on an indefinite answer wrote `pending-ci` into the body, and
     the NEXT run then read a completion where the one before had read none and
     spent a slot of the review budget on the transition -- which is exactly
     what the recorded reading exists to avoid, and which main did not do
-    (#1778, round 2).
+    (#1778, round 2). Indefinite therefore fails toward the record standing.
     """
     if runs is None:
         return False
-    if not runs:
-        return True
-    return latest_completed_run(runs) is not None
+    return all(str(run.get("status", "")) == "completed" for run in runs)
 
 
 def _recorded_contract_is_complete(entries: list[object] | None, head_sha: str) -> bool:

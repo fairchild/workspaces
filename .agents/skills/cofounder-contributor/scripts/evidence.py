@@ -3608,6 +3608,62 @@ def _encodable(text: str) -> str:
     return text.encode("utf-8", "replace").decode("utf-8")
 
 
+RENDERABLE_STATUSES = ("complete", "blocked", "pending-ci")
+
+
+def entry_as_rendered(entry: object) -> tuple[dict[str, object] | None, str | None]:
+    """What the renderer makes of one entry, and -- when it makes nothing -- why.
+
+    One function, two answers, because they are one rule: a second reader of
+    "does this entry render" written beside the renderer would answer a
+    different question the first time either changed, which is the defect
+    this pull request keeps closing. The renderer takes the dict; the guard
+    below takes the reason and says it to the author.
+
+    The reason is written for a person editing metadata by hand, because that
+    is who can fix it: it names the value it found, so `"2"` reads back as a
+    string rather than as the number the author meant.
+    """
+    if not isinstance(entry, dict):
+        return None, None
+    claimed = entry.get("index")
+    index = usable_entry_index(entry)
+    if index is None:
+        if _claimed_index(entry) is None:
+            return None, f"index {json.dumps(claimed)}, which is not an integer"
+        return None, f"index {claimed}, which numbers no line"
+    item = _encodable(str(entry.get("item", "")).strip())
+    status = str(entry.get("status", "")).strip()
+    detail = _encodable(str(entry.get("detail", "")).strip())
+    if not item:
+        return None, "no item text"
+    if status not in RENDERABLE_STATUSES:
+        return None, f"status {json.dumps(status)}, which is not {', '.join(RENDERABLE_STATUSES)}"
+    if not detail:
+        return None, "no detail"
+    return {"index": index, "item": item, "status": status, "detail": detail}, None
+
+
+def unrenderable_entries(entries: object) -> list[str]:
+    """Every recorded entry the renderer cannot render, named where the author can find it.
+
+    By POSITION in the record rather than by index, because the index is the
+    thing that may be unreadable.
+
+    A record entry that is not an object at all is not named here: nothing
+    ever rendered a line for it, so there is no line of the author's standing
+    for it to lose. Everything with an item is named.
+    """
+    named: list[str] = []
+    for position, entry in enumerate(entries if isinstance(entries, list) else [], start=1):
+        rendered, reason = entry_as_rendered(entry)
+        if rendered is not None or reason is None:
+            continue
+        item = str(entry.get("item", "")).strip() if isinstance(entry, dict) else ""
+        named.append(f"the entry at position {position}" + (f" (`{item}`)" if item else "") + f" has {reason}")
+    return named
+
+
 def _render_structured_entries(
     body: str, updated_entries: list[object], announcements: list[str] | None = None
 ) -> str:
@@ -3617,27 +3673,34 @@ def _render_structured_entries(
     body and nothing else, so every sentence the write owes the author had
     nowhere to go (#1740). A caller that passes a list gets them and posts
     them; a caller that does not is unchanged.
+
+    The rule this write is held to: nothing the author wrote leaves the body
+    without a line saying it left. So a record holding an entry this code
+    cannot render is not rewritten at all -- round 8 moved the renderer onto
+    `usable_entry_index` so that an entry nothing can act on is not acted on,
+    and an entry recorded at index `"2"` then had its status line deleted with
+    its metadata intact, nothing in `## Evidence Notes` and nothing announced
+    (#1778, round 11). An entry this code cannot key is not "not an entry": it
+    is a record the author wrote that this code cannot act on, and the honest
+    answers are to stand down whole or to keep the line and say so. This
+    stands down, the way a colliding index does, so record and page stay as
+    the author left them and the sentence names the entry.
     """
+    if (unrenderable := unrenderable_entries(updated_entries)):
+        refusal = STOOD_DOWN_ANNOUNCEMENT_PREFIX + (
+            "; ".join(unrenderable)
+            + ", so this write cannot render it and will not delete the line it stands for; "
+            "fix the metadata"
+        )
+        log(refusal)
+        if announcements is not None:
+            announcements.append(refusal)
+        return body
     rendered_entries: list[dict[str, object]] = []
     for entry in updated_entries:
-        if not isinstance(entry, dict):
-            continue
-        index = usable_entry_index(entry)
-        if index is None:
-            continue
-        item = _encodable(str(entry.get("item", "")).strip())
-        status = str(entry.get("status", "")).strip()
-        detail = _encodable(str(entry.get("detail", "")).strip())
-        if not item or status not in {"complete", "blocked", "pending-ci"} or not detail:
-            continue
-        rendered_entries.append(
-            {
-                "index": index,
-                "item": item,
-                "status": status,
-                "detail": detail,
-            }
-        )
+        rendered, _ = entry_as_rendered(entry)
+        if rendered is not None:
+            rendered_entries.append(rendered)
 
     if rendered_entries:
         write = write_evidence_status_section(
@@ -3701,7 +3764,7 @@ def usable_entry_index(entry: object) -> int | None:
     Two rules, kept apart on purpose, because they answer different questions
     and were three rules answering them inconsistently (#1778, round 7).
 
-    `entry_index` answers what index an entry CLAIMS. That is an identity, so
+    `_claimed_index` answers what index an entry CLAIMS. That is an identity, so
     it takes any integer: two entries claiming index 0 are two entries at one
     index, the write fans an update across both of them, and the collision
     guard has to see that.
