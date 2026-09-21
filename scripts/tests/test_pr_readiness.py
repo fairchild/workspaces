@@ -993,12 +993,12 @@ class RenderedStatusLineTests(unittest.TestCase):
         # nothing else touches the body, so both views read what the author
         # wrote. A body already in LF reaches them unchanged.
         seen: list[str] = []
-        # Patched where the gate now reads: `status_lines_by_view`, since the
-        # two kinds of line take different readers (#1771, round 2).
+        # Patched where the gate now reads: `rendered_status_lines`, the one
+        # list of lines a reader sees (#1771, round 4).
         with mock.patch.object(
             pr_readiness,
-            "status_lines_by_view",
-            side_effect=lambda body: seen.append(body) or pr_readiness.SectionLines([], []),
+            "rendered_status_lines",
+            side_effect=lambda body: seen.append(body) or [],
         ):
             body = self.body("- [complete] swift test -- 1992 tests passed\n")
             pr_readiness.evaluate(pr(body), self.FILES)
@@ -1076,7 +1076,7 @@ class RenderedStatusLineTests(unittest.TestCase):
         # A bullet written above a delimiter row is not a list item at all: the
         # whole thing is one table, and the marker reaches the first cell as
         # the characters `- `. Without the optional marker in
-        # `RENDERED_PENDING_RE` this widening LOSES a refusal the parser with
+        # `PRINTED_PENDING_RE` this widening LOSES a refusal the parser with
         # no table plugin made -- the escaped form below is invisible to the
         # written view, so nothing else catches it, and the gate passed a body
         # the merge base failed. Found by codex (gpt-5.6-sol, xhigh).
@@ -1135,7 +1135,7 @@ class HtmlBlockStatusLineTests(unittest.TestCase):
     view caught the shapes its own anchor covers, a list marker in front of the
     token, and missed a bare `[blocked]` line, a `<summary>` and a comment. The
     rendered view now reads each run of text between the block's markup through
-    `RENDERED_PENDING_RE`, which can only add refusals to what stands.
+    `PRINTED_PENDING_RE`, which can only add refusals to what stands.
 
     HTML is still never interpreted: taking the markup out of a line is not
     deciding which elements are open, and no run is called visible or hidden.
@@ -1436,7 +1436,7 @@ class HtmlBlockStatusLineTests(unittest.TestCase):
                     [
                         line
                         for line in pr_readiness.rendered_status_lines(written)
-                        if pr_readiness.RENDERED_PENDING_RE.match(line)
+                        if pr_readiness.PRINTED_PENDING_RE.match(line)
                     ],
                     [],
                 )
@@ -1957,7 +1957,7 @@ class ThePageSaysWhereALineStartsTests(unittest.TestCase):
                 page = pr_readiness.page_view(self.body(section))
                 self.assertEqual(page.unverified, None)
                 self.assertEqual(
-                    [line for line in page.lines if pr_readiness.RENDERED_PENDING_RE.match(line)],
+                    [line for line in page.lines if pr_readiness.PRINTED_PENDING_RE.match(line)],
                     [],
                 )
 
@@ -2996,6 +2996,7 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
     def padded_body(self, line: str) -> str:
         return self.body(f"<pre>\n## Evidence Status\n{line}\n</pre>\n\n")
 
+    # intent: fix
     def test_a_padded_status_inside_a_raw_block_is_refused_by_name(self) -> None:
         """Models the rule: what this gate's raw-block reader calls a status.
 
@@ -3011,6 +3012,7 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
                 self.assertIn("inside a raw HTML block", failure)
                 self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok, name)
 
+    # intent: guard
     def test_the_page_prints_every_one_of_those_spellings_to_a_reader(self) -> None:
         """Asks reality: GitHub's own answer for the same three bodies.
 
@@ -3039,29 +3041,40 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
         """A raw block under a heading the page shows, with the status unmarked."""
         return self.body(f"## Evidence Status\n\n<pre>\n{line}\n</pre>\n\n")
 
-    def test_a_raw_block_under_a_real_heading_is_read_by_the_raw_reader(self) -> None:
-        """Models the criterion: which reader each kind of line takes.
+    # intent: guard
+    def test_a_raw_block_under_a_real_heading_puts_its_characters_on_a_line(self) -> None:
+        """Models the criterion: a raw block's characters are lines a reader sees.
+
+        The kind of a line is a SOURCE now, not a reader — every printed line
+        goes through one pattern, whatever produced it (#1771, round 4). What
+        this still pins is that a raw block contributes its own lines at all:
+        an inline run contributes none for it, so a caller reading only parsed
+        text sees nothing here.
 
         The sibling below asks the page whether it prints these characters.
         """
         for name, line in self.UNSWALLOWED.items():
             with self.subTest(spelling=name):
                 body = self.unswallowed_body(line)
-                section = pr_readiness.status_lines_by_view(body)
-                self.assertEqual(section.parsed, [], f"{name}: a raw block has no parsed inline")
-                self.assertIn(line, section.printed, name)
-                # The post-parse reader cannot see it, which is correct for
-                # what that reader is; the gate must not be asking it.
-                self.assertFalse(
-                    any(pr_readiness.RENDERED_PENDING_RE.match(one) for one in section.printed),
-                    f"{name}: the post-parse reader matched printed characters",
-                )
+                lines = pr_readiness.rendered_status_lines(body)
+                self.assertIn(line, lines, name)
                 self.assertTrue(
-                    any(pr_readiness.RAW_HTML_PENDING_RE.match(one) for one in section.printed),
-                    name,
+                    any(pr_readiness.PRINTED_PENDING_RE.match(one) for one in lines), name
                 )
                 self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok, name)
 
+    # intent: control
+    def test_an_unswallowed_raw_block_with_nothing_pending_is_silent(self) -> None:
+        # The control the swallowed shape has and this one did not: the same
+        # heading and the same raw block, holding a COMPLETE status. Nothing
+        # here is pending, so nothing is refused — which is what says the
+        # refusals above are about the status rather than about the block.
+        body = self.unswallowed_body("` [complete] ` done")
+        self.assertIn("` [complete] ` done", pr_readiness.rendered_status_lines(body))
+        result = pr_readiness.evaluate(pr(body), self.FILES)
+        self.assertTrue(result.ok, result.failures)
+
+    # intent: guard
     def test_the_page_prints_those_unmarked_lines_too(self) -> None:
         # Asks reality, from recordings taken with the token.
         for name, line in self.UNSWALLOWED.items():
@@ -3069,6 +3082,7 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
                 html = pr_readiness.render_markdown(self.unswallowed_body(line))
             self.assertIn(line, re.sub(r"<[^>]+>", "", html), name)
 
+    # intent: fix
     def test_a_line_the_parser_left_as_text_takes_the_raw_reader(self) -> None:
         """The kind assigned on the unparsed-tag path (#1771, round 3).
 
@@ -3088,26 +3102,22 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
         where the two readers part. The axis to vary is the wrapper, not the
         effort.
         """
-        for name, line, parts in (
-            ("a double asterisk", "<x:y>**[blocked] the signing profile is missing</x:y>", True),
-            ("a backtick span (resolved, so both agree)", "<x:y>`[blocked]` waiting</x:y>", False),
-            ("a lone asterisk (a marker, so both agree)", "<x:y>*[blocked] waiting</x:y>", False),
+        for name, line in (
+            ("a double asterisk", "<x:y>**[blocked] the signing profile is missing</x:y>"),
+            ("a backtick span", "<x:y>`[blocked]` waiting</x:y>"),
+            ("a lone asterisk", "<x:y>*[blocked] waiting</x:y>"),
         ):
             with self.subTest(spelling=name):
                 body = self.body(f"## Evidence Status\n\n{line}\n\n")
-                section = pr_readiness.status_lines_by_view(body)
+                lines = pr_readiness.rendered_status_lines(body)
                 self.assertTrue(
-                    any(pr_readiness.RAW_HTML_PENDING_RE.match(one) for one in section.printed),
-                    f"{name}: the raw reader did not see it",
-                )
-                self.assertEqual(
-                    any(pr_readiness.RENDERED_PENDING_RE.match(one) for one in section.printed),
-                    not parts,
-                    f"{name}: the two readers parting is the whole point of the kind",
+                    any(pr_readiness.PRINTED_PENDING_RE.match(one) for one in lines),
+                    f"{name}: the line the tag left as text was not read",
                 )
                 self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok, name)
 
-    def test_the_probes_printed_branch_reaches_what_nothing_else_does(self) -> None:
+    # intent: guard
+    def test_the_probes_raw_block_lines_reach_what_nothing_else_does(self) -> None:
         """Survivor 2, resolved by construction rather than by deletion (#1771, round 3).
 
         The pass could not separate this branch from the two readers above it
@@ -3138,7 +3148,7 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
         # 1. the swallowing block holds no status of its own
         self.assertFalse(
             any(
-                pr_readiness.RAW_HTML_PENDING_RE.match(one)
+                pr_readiness.PRINTED_PENDING_RE.match(one)
                 for one in pr_readiness.html_block_text_lines(block.content)
             )
         )
@@ -3149,70 +3159,81 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
         )
         # 2. the written view needs a marker this line does not have
         self.assertIsNone(pr_readiness.PENDING_STATUS_RE.search(written))
-        section = pr_readiness.status_lines_by_view(probe)
-        # 3. a raw block has no parsed lines
-        self.assertEqual(section.parsed, [])
-        self.assertIn("` [blocked] ` waiting", section.printed)
-        # 4. only this reader sees it, and the gate refuses because it does
-        self.assertFalse(
-            any(pr_readiness.RENDERED_PENDING_RE.match(one) for one in section.printed)
+        lines = pr_readiness.rendered_status_lines(probe)
+        # 3. the line comes from the raw block and from nothing else: an
+        #    inline run contributes none of it, so a caller reading only
+        #    parsed text has nothing to match.
+        self.assertIn("` [blocked] ` waiting", lines)
+        self.assertEqual(
+            [one for one in lines if one.strip()],
+            ["` [blocked] ` waiting"],
+            "the raw block is the only source of this line",
         )
+        # 4. and the gate refuses because the probe reads them
         self.assertTrue(
-            any(pr_readiness.RAW_HTML_PENDING_RE.match(one) for one in section.printed)
+            any(pr_readiness.PRINTED_PENDING_RE.match(one) for one in lines)
         )
         self.assertTrue(pr_readiness._a_status_is_kept_out(normalized, block))
         self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok)
 
-    def test_each_reader_takes_the_wrappers_its_input_can_carry(self) -> None:
-        """The criterion, pinned BOTH ways (#1771, round 2).
+    # intent: fix
+    def test_the_two_readers_part_on_the_marker_and_on_nothing_else(self) -> None:
+        """The criterion, restated and pinned BOTH ways (#1771, round 4).
 
-        The round-1 test asserted that two readers accept the same shapes and
-        said nothing about the third, so removing `CLOSING_WRAPPER` from the
-        post-parse reader was green and ADDING `OPENING_WRAPPER` to it -- which
-        would paper over the routing defect above -- was green too. Each
-        reader's accept set AND its reject set are stated here, over all three
-        axes.
+        Round 2 pinned the wrapper axis as the thing that separates the
+        readers, and it does not: an escape and a character reference are
+        markup the parser RESOLVES TO a delimiter character, so a post-parse
+        line can carry one. The axis is the list marker, and what follows the
+        token decides nothing — a reader scanning the section sees the token
+        leading the line in every shape below.
+
+        Both directions: the written view must keep requiring a marker (or an
+        ordinary sentence mentioning a status becomes a refusal), and the
+        printed reader must keep not requiring one (or a `<pre>` line and a
+        bulleted table cell go unread).
         """
         marked, unmarked = "- [blocked] waiting", "[blocked] waiting"
         wrapped, padded = "- `[blocked]` waiting", "- ` [blocked] ` waiting"
-        colon = "- **[blocked]:** waiting"
-        # Pre-parse views take both wrappers and read a marker as characters.
+        colon, emphasised = "- **[blocked]:** waiting", "- **[blocked]** waiting"
+        trailing, second_label = "- _[blocked]_x waiting", "- [blocked][missing] waiting"
         for reader_name, reader, needs_marker in (
             ("the written view", pr_readiness.PENDING_STATUS_RE, True),
-            ("the raw-block view", pr_readiness.RAW_HTML_PENDING_RE, False),
+            ("the printed view", pr_readiness.PRINTED_PENDING_RE, False),
         ):
             with self.subTest(reader=reader_name):
-                search = reader.search if needs_marker else reader.match
-                for line in (marked, wrapped, padded, colon):
-                    self.assertTrue(search(line), f"{reader_name}: {line}")
+                read = reader.search if needs_marker else reader.match
+                for line in (marked, wrapped, padded, colon, emphasised, trailing, second_label):
+                    self.assertTrue(read(line), f"{reader_name}: {line}")
                 self.assertEqual(
-                    bool(search(unmarked)),
-                    not needs_marker,
-                    f"{reader_name}: the marker rule",
+                    bool(read(unmarked)), not needs_marker, f"{reader_name}: the marker rule"
                 )
-        # The post-parse view takes NEITHER wrapper: its input cannot carry
-        # one. It keeps the trailing punctuation, which survives a parse, and
-        # its marker is optional because `- [x] ` and a bulleted cell arrive
-        # as characters.
-        rendered = pr_readiness.RENDERED_PENDING_RE
-        self.assertTrue(rendered.match(marked))
-        self.assertTrue(rendered.match(unmarked))
-        self.assertTrue(rendered.match("- [blocked]: waiting"), "the colon survives a parse")
-        self.assertIsNone(rendered.match(wrapped), "a backtick cannot reach a post-parse line")
-        self.assertIsNone(rendered.match(padded), "nor can its padding")
-        self.assertIsNone(rendered.match("- **[blocked]** waiting"), "nor can emphasis")
+        # And the direction a wider reader could break: a line that only
+        # MENTIONS a status is not one, at either reader.
+        for line in (
+            "- the lane is [blocked]x by nothing",
+            "- waiting on [blocked] elsewhere",
+            "- [complete] the item -- proof",
+            "- `[complete]` the item -- proof",
+        ):
+            with self.subTest(line=line):
+                self.assertIsNone(pr_readiness.PRINTED_PENDING_RE.match(line), line)
+                self.assertIsNone(
+                    pr_readiness.PENDING_STATUS_RE.search(f"## Evidence Status\n\n{line}\n"), line
+                )
 
+    # intent: fix
     def test_a_wrapper_the_written_view_tolerates_is_tolerated_here(self) -> None:
         # The rule this reader is written to, asserted rather than described:
         # one spelling of the wrapper for all three readers, so a shape the
         # written view takes cannot be one this reader misses.
         for name, line in {**self.PADDED_STATUSES, "plain backticks": "- `[blocked]` waiting"}.items():
             with self.subTest(spelling=name):
-                self.assertTrue(pr_readiness.RAW_HTML_PENDING_RE.match(line), name)
+                self.assertTrue(pr_readiness.PRINTED_PENDING_RE.match(line), name)
                 self.assertTrue(
                     pr_readiness.PENDING_STATUS_RE.search(f"## Evidence Status\n\n{line}\n"), name
                 )
 
+    # intent: fix
     def test_a_line_that_names_no_status_is_still_not_one(self) -> None:
         # The control, and the direction that matters: a wider wrapper must
         # not make an ordinary line a status.
@@ -3223,7 +3244,7 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
             "- ` [complete] ` done",
         ):
             with self.subTest(line=line):
-                self.assertIsNone(pr_readiness.RAW_HTML_PENDING_RE.match(line), line)
+                self.assertIsNone(pr_readiness.PRINTED_PENDING_RE.match(line), line)
 
     def test_a_swallowed_heading_with_no_pending_status_under_it_is_silent(self) -> None:
         for name, block in self.SWALLOWED_WITH_NOTHING_PENDING.items():
@@ -4908,6 +4929,160 @@ class WhatTheGateSLongerReadingCostsTests(unittest.TestCase):
         added, dropped = self.moved(self.STATUS_BODY, ["Sources/App.swift"])
         self.assertEqual(added, ["Requested evidence is blocked or still pending CI."])
         self.assertEqual(dropped, [])
+
+
+class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
+    """A wrapper CAN reach a post-parse line, so the criterion was false (#1771, round 4).
+
+    An escape and a character reference are markup the parser RESOLVES TO a
+    delimiter character, not markup it could not pair. So `\\*\\*[blocked]\\*\\*`
+    and `&#42;&#42;[blocked]&#42;&#42;` both print `**[blocked]** waiting`,
+    and a reader that allowed no wrapper "because its input cannot contain
+    one" missed every shape below. Two more escape the old reader another way:
+    what FOLLOWS the token was load-bearing, so `_[blocked]_x` and
+    `[blocked][missing]` slipped past a pattern that demanded whitespace after
+    a run of punctuation.
+
+    Measured at `56ba54d6` through `evaluate`: all seven accepted, the plain
+    control refused. The shapes are stated with the line the page prints, and
+    the sibling class asks GitHub itself.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+    # Each shape: what the author typed, what the page prints, and whether the
+    # WRITTEN view can see it. Five of the seven it cannot — a backslash and
+    # an `&` are not wrapper characters, and resolving them is the parser's
+    # job — so for those the refusal carries the line the page shows, which is
+    # the only place an author can go and look.
+    SHAPES = {
+        "escaped asterisks": ("- \\*\\*[blocked]\\*\\* waiting", "**[blocked]** waiting", False),
+        "asterisk references": ("- &#42;&#42;[blocked]&#42;&#42; waiting", "**[blocked]** waiting", False),
+        "escaped backticks": ("- \\`[blocked]\\` waiting", "`[blocked]` waiting", False),
+        "backtick references": ("- &#96;[blocked]&#96; waiting", "`[blocked]` waiting", False),
+        "underscore references": ("- &#95;[blocked]&#95; waiting", "_[blocked]_ waiting", False),
+        "an intraword underscore": ("- _[blocked]_x waiting", "_[blocked]_x waiting", True),
+        "a second link label": ("- [blocked][missing] waiting", "[blocked][missing] waiting", True),
+    }
+
+    def body(self, line: str) -> str:
+        return GOOD_BODY + f"\n## Evidence Status\n\n{line}\n"
+
+    # intent: fix
+    def test_the_gate_refuses_every_shape_the_page_prints_a_status_on(self) -> None:
+        # The ACCEPTANCE, not a property of a regex: at `56ba54d6` each of
+        # these returns ok.
+        for name, (written, printed, seen) in self.SHAPES.items():
+            with self.subTest(shape=name):
+                result = pr_readiness.evaluate(pr(self.body(written)), self.FILES)
+                self.assertFalse(result.ok, f"{name}: the gate accepted a body showing a status")
+                self.assertIn(
+                    pr_readiness.PENDING_FAILURE if seen else pending(printed),
+                    result.failures,
+                    name,
+                )
+                self.assertEqual(
+                    bool(
+                        pr_readiness.PENDING_STATUS_RE.search(
+                            pr_readiness.extract_section(
+                                self.body(written), "Evidence Status", strip=False
+                            )
+                        )
+                    ),
+                    seen,
+                    f"{name}: what the written view can see",
+                )
+
+    # intent: fix
+    def test_the_models_own_resolved_text_is_what_sees_them(self) -> None:
+        # Tokenless, which is how the gate runs on a laptop: the parser
+        # resolves the escape and the reference, so the line the model holds
+        # is the line the page prints, delimiters and all.
+        for name, (written, printed, _) in self.SHAPES.items():
+            with self.subTest(shape=name):
+                lines = pr_readiness.rendered_status_lines(self.body(written))
+                self.assertIn(printed, lines, name)
+                self.assertTrue(
+                    any(pr_readiness.PRINTED_PENDING_RE.match(one) for one in lines), name
+                )
+
+    # intent: fix
+    def test_an_invisible_character_in_front_of_the_token_is_still_a_status(self) -> None:
+        """The eighth shape, found by attacking the criterion rather than reading it.
+
+        `&#8203;` and `&#173;` resolve to characters that take no width, so
+        the page shows `[blocked] waiting` and the model held a line starting
+        with something the leading run did not allow. A criterion that only
+        covered the seven shapes a review found would be a list wearing a
+        criterion's clothes, so the run is every delimiter character AND every
+        character that occupies no space (#1771, round 4).
+        """
+        for name, written in (
+            ("a zero-width space", "- &#8203;[blocked] waiting"),
+            ("a soft hyphen", "- &#173;[blocked] waiting"),
+            ("a zero-width no-break space", "- &#65279;[blocked] waiting"),
+            ("a non-breaking space", "- &#160;[blocked] waiting"),
+        ):
+            with self.subTest(shape=name):
+                self.assertFalse(
+                    pr_readiness.evaluate(pr(self.body(written)), self.FILES).ok, name
+                )
+
+    # intent: control
+    def test_a_tilde_stays_outside_the_run_because_a_struck_status_is_withdrawn(self) -> None:
+        # The boundary the widening above stops at, and it is a decision
+        # rather than an oversight: #1727 reads a struck-through status as
+        # withdrawn, so the tilde is not a wrapper character here. Adding it
+        # reddens `test_a_struck_status_is_not_the_status_wherever_it_sits`,
+        # measured. The cost is the line below, which the gate accepts.
+        self.assertTrue(
+            pr_readiness.evaluate(pr(self.body("- ~~[blocked] waiting~~")), self.FILES).ok
+        )
+
+    # intent: control
+    def test_a_body_whose_page_shows_no_status_is_still_accepted(self) -> None:
+        # The direction a wider reader could break: the same spellings around
+        # a COMPLETE token, and prose that mentions a blocked status, stay ok.
+        for name, line in (
+            ("escaped asterisks", "- \\*\\*[complete]\\*\\* swift test -- 1992 tests passed"),
+            ("a reference", "- &#96;[complete]&#96; swift test -- 1992 tests passed"),
+            ("prose about a status", "- swift test -- the lane is [blocked]x by nothing"),
+        ):
+            with self.subTest(shape=name):
+                self.assertTrue(pr_readiness.evaluate(pr(self.body(line)), self.FILES).ok, name)
+
+    # intent: control
+    def test_the_plain_control_is_refused_as_it_always_was(self) -> None:
+        result = pr_readiness.evaluate(pr(self.body("- [blocked] waiting")), self.FILES)
+        self.assertFalse(result.ok)
+
+
+class ThePageShowsThoseDelimitersTooTests(unittest.TestCase):
+    """The third side of the hole: `page.lines` carries them too (#1771, round 4).
+
+    `page.lines` holds the element's text as GitHub renders it — delimiter
+    characters included, `**[blocked]** waiting` for a body that wrote
+    `\\*\\*[blocked]\\*\\*` — and the gate only ever asked it the reader that
+    allowed no wrapper. So the page could hand the gate a status and the gate
+    would accept, which is the same defect as #1771 one view over.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+
+    def body(self, line: str) -> str:
+        return GOOD_BODY + f"\n## Evidence Status\n\n{line}\n"
+
+    # intent: fix
+    def test_the_page_prints_the_delimiters_and_the_gate_reads_them(self) -> None:
+        shapes = APrintedLineCanCarryADelimiterCharacterTests.SHAPES
+        for name, (written, printed, _) in shapes.items():
+            with self.subTest(shape=name), recorded_page():
+                body = self.body(written)
+                page = pr_readiness.page_view(body)
+                self.assertIn(printed, page.lines, f"{name}: what the page put on the line")
+                self.assertTrue(
+                    any(pr_readiness.PRINTED_PENDING_RE.match(one) for one in page.lines), name
+                )
+                self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok, name)
 
 
 class ReadinessCommentTests(unittest.TestCase):

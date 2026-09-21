@@ -165,48 +165,53 @@ LINE_ENDING_RE = re.compile(r"\r\n?")
 # piece for every reader below, because three copies of them drifted apart
 # once already and the gap was the same in all three (#1771).
 #
-# WHICH READER TAKES WHICH PIECE IS A CRITERION, not a list. It turns on what
-# a reader's input IS:
+# WHICH READER TAKES WHICH PIECE IS A CRITERION, not a list -- and the axis it
+# turns on is the LIST MARKER, not the wrapper:
 #
-#   A PRE-PARSE view reads the characters an author typed, so it takes both
-#   wrappers and the marker. `PENDING_STATUS_RE` reads the body's own source,
-#   and `RAW_HTML_PENDING_RE` reads the lines a raw HTML block prints -- the
-#   page prints those characters as written, wrapper and all. The marker is
-#   REQUIRED in the written view and optional in the raw-block view, and that
-#   is the same criterion once more: the written view is looking at markdown,
-#   where a line that opens a list item is what a status bullet is, while a
-#   raw block prints whatever sits on the line, marker or no marker.
+#   A line shows a status when the token is the FIRST thing on it, after any
+#   list marker, task box, and any run of delimiter characters or spaces.
+#   What follows the token does not decide it: `[blocked]`, `**[blocked]:**`,
+#   `[blocked][missing]` and `_[blocked]_x` all put the token in front of a
+#   reader, and a reader scanning the section sees the same thing in each.
+#   A line that mentions the token part-way along -- `the lane is [blocked]x
+#   by nothing` -- is prose about a status rather than one.
 #
-#   A line the parser left as TEXT because it modelled no tag is pre-parse
-#   too, and it is the case that looks post-parse and is not:
-#   `<x:y>**[blocked] x</x:y>` is one run of prose to this parser, so the
-#   `**` is still there when the page prints it. Those lines take the
-#   raw-block reader for the same reason a raw block's do -- the characters
-#   reach the page as written (#1771, round 3).
+#   The WRITTEN view (`PENDING_STATUS_RE`) reads the characters an author
+#   typed, which is markdown, and in markdown a status bullet is a line that
+#   opens a list item -- so the marker is REQUIRED there and nowhere else.
 #
-#   A POST-PARSE view reads text a parser has already resolved, so it takes
-#   NEITHER wrapper: by the time it sees the line, a code span has lost its
-#   backticks and emphasis its asterisks, and a pattern allowing them there
-#   would be allowing something its input cannot contain.
-#   `RENDERED_PENDING_RE` is that view. Its marker is optional for a reason of
-#   its own: CommonMark has no task list, so `- [x] ` arrives as characters,
-#   and a line the parser did not model as a list item carries its own marker
-#   as text (a bulleted table cell).
+#   Every PRINTED view (`PRINTED_PENDING_RE`) reads a line as the page puts it
+#   on one, and takes it marker or no marker: a raw HTML block prints whatever
+#   sits on the line; the model's resolved inline text and the page's own text
+#   carry a marker only when the parser did not model one (a bulleted table
+#   cell), and CommonMark has no task list, so `- [x] ` arrives as characters.
 #
-# `CLOSING_WRAPPER` is the exception that proves the criterion rather than
-# breaking it: every view takes it, because a run of punctuation after the
-# token -- `**[blocked]:**`, `[blocked]: https://...` -- survives the parse as
-# text, so it is there to be read in both kinds of input.
+# The wrapper axis does NOT separate the readers, and the sentence here that
+# said it did was wrong twice over. A post-parse line can carry a delimiter
+# character: an escape and a character reference are markup the parser
+# RESOLVES TO one, so `- \*\*[blocked]\*\*`, `- &#42;&#42;[blocked]&#42;&#42;`,
+# `` - \`[blocked]\` ``, `- &#96;[blocked]&#96;`, `- &#95;[blocked]&#95;`,
+# `- _[blocked]_x` and `- [blocked][missing]` each print the token with its
+# delimiters intact -- measured through GitHub's renderer, and through this
+# parser's own resolved text, on all seven (#1771, round 4). Every printed
+# view therefore takes the wrapper, and "allowing them there would be allowing
+# something its input cannot contain" was false of the input.
 #
 # The padding inside a wrapper is part of the wrapper rather than part of the
 # token: a code span written `` ` [blocked] ` `` shows its spaces to a reader
 # wherever the span is printed as characters (#1771).
-OPENING_WRAPPER = r"[`*_]*[ \t]*"
-CLOSING_WRAPPER = r"(?:[^\w\s]|[_ \t])*"
+# The leading run: the inline delimiter characters a wrapper is made of,
+# and the characters that take space on the line without showing anything.
+# The invisible ones are here because the eighth-shape attempt found them
+# (#1771, round 4): `&#8203;[blocked]` prints a zero-width space and then
+# the token, so the page shows `[blocked] waiting` and a reader sees a
+# status where the gate saw a line starting with something else. A tilde
+# is deliberately NOT here: a struck-through status is withdrawn rather
+# than pending, which is #1727's decision and `test_a_struck_status_is_not_the_status_wherever_it_sits` holds it.
+OPENING_WRAPPER = "[`*_\u200b\u00ad\ufeff]*[ \t\u00a0]*"
 STATUS_TOKEN = r"\[(?:blocked|pending-ci)\]"
 PENDING_STATUS_RE = re.compile(
-    rf"(?im)^\s*{LIST_MARKER}\s*(?:\[[ x]\]\s*)?"
-    rf"{OPENING_WRAPPER}{STATUS_TOKEN}{CLOSING_WRAPPER}(?:\s|$)"
+    rf"(?im)^\s*{LIST_MARKER}\s*(?:\[[ x]\]\s*)?{OPENING_WRAPPER}{STATUS_TOKEN}"
 )
 FENCE_OPENER_RE = re.compile(r" {0,3}(?P<run>`{3,}|~{3,})(?P<info>.*)")
 
@@ -450,32 +455,17 @@ MARKDOWN = MarkdownIt("commonmark").enable(["table", "strikethrough"])
 # of a table does -- `- [blocked] | x |` above a delimiter row is one table
 # whose first cell reads `- [blocked]`. Marking it optional here keeps a
 # reader's view of that cell and the gate's the same (#1727).
-RENDERED_PENDING_RE = re.compile(
-    rf"(?i)^(?:{LIST_MARKER}\s*)?(?:\[[ x]\]\s*)?{STATUS_TOKEN}{CLOSING_WRAPPER}(?:\s|$)"
-)
-
-# The same line, in text no markdown parser ever touched. A raw HTML block
-# prints its contents as characters, so `**[blocked]**` inside one is a status
-# a reader sees with two literal asterisks either side of it, where in ordinary
-# markdown the parser resolves the emphasis away long before the pattern above
-# reads the line. So the wrappers the written view tolerates are tolerated
-# here, and the list marker stays optional the way the rendered view has it.
 #
-# Neither existing pattern covers that pair: `RENDERED_PENDING_RE` makes the
-# marker optional and allows no wrapper, and `PENDING_STATUS_RE` allows the
-# wrappers and REQUIRES a marker -- so `` `[blocked]` waiting `` on a line of
-# its own inside a `<pre>` matched neither, and the page prints it (#1742,
-# round 5).
-#
-# The wrapper this shares with the written view is the padded one. A span the
-# page prints as characters shows its padding too, so `` ` [blocked] ` `` and
-# the double-backtick form are statuses a reader sees here where in ordinary
-# markdown the code span strips the padding and the rendered view catches
-# them; this pattern caught neither, and the gate passed a body showing a
-# blocked status inside a raw block (#1771).
-RAW_HTML_PENDING_RE = re.compile(
-    rf"(?i)^(?:{LIST_MARKER}\s*)?(?:\[[ x]\]\s*)?"
-    rf"{OPENING_WRAPPER}{STATUS_TOKEN}{CLOSING_WRAPPER}(?:\s|$)"
+# ONE reader for every printed view: the page's own text, the model's resolved
+# inline text, and the characters a raw HTML block puts on a line. They were
+# two patterns differing in the wrapper, on the reasoning that a post-parse
+# line could not carry one -- and it can, through an escape or a character
+# reference, so the split had the post-parse reader missing seven shapes the
+# page prints and the raw-block reader missing two of them (#1771, round 4).
+# What separates a reader here from the written view is the list marker and
+# nothing else, so there is one spelling of this line to keep in step.
+PRINTED_PENDING_RE = re.compile(
+    rf"(?i)^\s*(?:{LIST_MARKER}\s*)?(?:\[[ x]\]\s*)?{OPENING_WRAPPER}{STATUS_TOKEN}"
 )
 
 
@@ -695,49 +685,27 @@ def _html_block_runs(content: str, *, unparsed_as_tag: bool) -> list[str]:
     return runs
 
 
-class SectionLines(NamedTuple):
-    """The lines under the heading, split by what KIND of text they are.
-
-    `parsed` is post-parse: inline text the markdown parser has resolved, so
-    a code span has lost its backticks by the time it lands here. `printed`
-    is pre-parse: the characters a raw HTML block puts on the page, wrapper
-    and all, because the page prints them as written.
-
-    They are separated because they take different readers, and reading them
-    with one was the criterion violated at its own call site: raw-block
-    characters went to the post-parse reader, which takes no wrapper, so a
-    `<pre>` holding `` ` [blocked] ` waiting `` with no list marker under a
-    real heading was accepted (#1771, round 2).
-    """
-
-    parsed: list[str] = []
-    printed: list[str] = []
-
-    def all(self) -> list[str]:
-        return [*self.parsed, *self.printed]
-
-
-def status_lines_by_view(body: str) -> SectionLines:
-    """The lines under `## Evidence Status`, each with the reader its kind takes."""
-    parsed: list[str] = []
-    printed: list[str] = []
-    for line, is_printed in _status_lines(body):
-        (printed if is_printed else parsed).append(line)
-    return SectionLines(parsed, printed)
-
-
 def rendered_status_lines(body: str) -> list[str]:
-    """Every line a reader sees under `## Evidence Status`, both kinds together.
+    """Every line a reader sees under `## Evidence Status`.
 
-    Callers that go on to MATCH a status read `status_lines_by_view` instead,
-    because the two kinds take different readers; this is for callers that
-    only want the text.
+    ONE list, because the kind of text a line is no longer decides anything.
+    It was two -- `parsed` for inline text the markdown parser had resolved,
+    `printed` for the characters a raw HTML block puts on the page -- on the
+    reasoning that the two take different readers. They do not: a post-parse
+    line can carry a delimiter character, so both take the reader that allows
+    the wrapper, and a field nothing reads differently is a distinction
+    remembered rather than carried (#1771, round 4).
+
+    What the two sources still are is two SOURCES, and every caller asks both:
+    a raw block contributes no parsed lines at all, and an inline run
+    contributes no printed ones, so a caller that drops either loses a status
+    the page shows.
     """
-    return status_lines_by_view(body).all()
+    return _status_lines(body)
 
 
-def _status_lines(body: str) -> list[tuple[str, bool]]:
-    """Each line under the heading, and whether it is printed characters rather than parsed text.
+def _status_lines(body: str) -> list[str]:
+    """Each line under the heading, as the page puts it on one.
 
     A line is what the page puts on one: an inline run the parser models -- a
     list item, a paragraph, a table cell, a sub-heading, a line inside a quote
@@ -783,7 +751,7 @@ def _status_lines(body: str) -> list[tuple[str, bool]]:
                 break
             if token.type == "inline":
                 for part in rendered_inline_text(token.children).split("\n"):
-                    lines.append((part.strip(), False))
+                    lines.append(part.strip())
                     # A `<...>` that opens like a tag and parses as none reaches
                     # here as text, because this parser does not call it a tag
                     # either -- `<x:y>[blocked] x</x:y>` is one run of prose to
@@ -792,9 +760,9 @@ def _status_lines(body: str) -> list[tuple[str, bool]]:
                     # line is read both ways and a status anchors if either
                     # reading starts a line with it (#1736, round 4).
                     if _holds_an_unparsed_tag(part):
-                        lines.extend((one, True) for one in html_block_text_lines(part))
+                        lines.extend(html_block_text_lines(part))
             elif token.type == "html_block":
-                lines.extend((one, True) for one in html_block_text_lines(token.content))
+                lines.extend(html_block_text_lines(token.content))
             index += 1
     return lines
 
@@ -1419,25 +1387,22 @@ def _a_status_is_kept_out(normalized: str, block: Token) -> bool:
     block's own contents are the first half's job and are read there as text,
     which is the reading the page agrees with.
 
-    Read as text, and therefore through `RAW_HTML_PENDING_RE`: markup inside a
+    Read as text, and therefore through `PRINTED_PENDING_RE`: markup inside a
     raw block is characters, so a status wrapped in backticks, asterisks or
     underscores there is a status the page prints wrapped, not one a parser
     unwraps.
     """
-    if any(RAW_HTML_PENDING_RE.match(text) for text in html_block_text_lines(block.content)):
+    if any(PRINTED_PENDING_RE.match(text) for text in html_block_text_lines(block.content)):
         return True
     below = "\n".join(normalized.split("\n")[(block.map or [0, 0])[1] :])
     probe = f"## {EVIDENCE_STATUS_HEADING}\n{below}"
     written, _ = split_fenced_blocks(extract_section(probe, EVIDENCE_STATUS_HEADING, strip=False))
+    # Both sources of printed lines, in one read. The case that needs the
+    # raw-block half is a SECOND raw block below the swallowing one holding an
+    # unmarked status: the written view needs a list marker, and an inline run
+    # contributes nothing for a raw block (#1771, round 3).
     return bool(PENDING_STATUS_RE.search(written)) or any(
-        RENDERED_PENDING_RE.match(text) for text in status_lines_by_view(probe).parsed
-    ) or any(
-        # Not redundant with either reader above, and the case that shows it
-        # is a SECOND raw block below the swallowing one holding an unmarked
-        # status: the written view needs a list marker, the parsed lines of a
-        # raw block are empty, and only this reader sees the characters the
-        # page prints (#1771, round 3).
-        RAW_HTML_PENDING_RE.match(text) for text in status_lines_by_view(probe).printed
+        PRINTED_PENDING_RE.match(text) for text in rendered_status_lines(probe)
     )
 
 
@@ -1814,24 +1779,20 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
             f"Rendered view unverified: {page.unverified}. The gate read this body with its "
             "source model alone, which refuses on the page's behalf but never accepts for it."
         )
-    # Each kind of line to the reader its kind takes. `page.lines` and the
-    # model's parsed lines are post-parse text, so they take the reader that
-    # allows no wrapper; a raw HTML block's lines are characters the page
-    # prints as written, so they take the reader that allows both. Feeding
-    # printed characters to the post-parse reader was the criterion above
-    # violated at its own call site, and a `<pre>` holding
-    # `` ` [blocked] ` waiting `` with no list marker under a real heading was
-    # accepted for it (#1771, round 2).
-    section = status_lines_by_view(body)
+    # Every printed line through one reader: the page's own text, the model's
+    # resolved inline text, and the characters a raw HTML block puts on a
+    # line. `page.lines` holds what GitHub's HTML shows -- the element's text
+    # with its delimiter characters intact, `**[blocked]** waiting` where the
+    # author wrote `\*\*[blocked]\*\*` -- and asking it a reader that allowed
+    # no wrapper accepted seven shapes the page prints a status on (#1771,
+    # round 4). All three sources are asked, because each holds lines the
+    # other two do not.
     rendered_pending = next(
         (
             line
-            for line in (*page.lines, *section.parsed)
-            if RENDERED_PENDING_RE.match(line)
+            for line in (*page.lines, *rendered_status_lines(body))
+            if PRINTED_PENDING_RE.match(line)
         ),
-        None,
-    ) or next(
-        (line for line in section.printed if RAW_HTML_PENDING_RE.match(line)),
         None,
     )
     if written_pending or rendered_pending is not None:
