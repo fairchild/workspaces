@@ -1813,6 +1813,83 @@ class ADecisionIsTakenOnWhatThePullRequestHoldsNowTests(unittest.TestCase):
         self.assertGreaterEqual(reads["n"], 3, "the run never reached the moved head")
         self.assertEqual(gh_calls, [], "a label was touched at a head this run never verified")
 
+    def test_the_narrowings_return_hands_back_this_read_and_not_the_previous_one(self) -> None:
+        """Two owner edits across the retry reads (#1778, round 9).
+
+        Round 8 said this could not be constructed, because on a retry the
+        body in hand was already a live read. It was -- the PREVIOUS one. The
+        ordering that separates them needs a second edit:
+
+        - read 0 records a pending `ci` entry at 1, so the run has a write to
+          make;
+        - the owner retargets index 1 to a complete `diff` entry, so read 1
+          differs at the same head and the loop takes it and retries;
+        - the owner then adds a second `pending-ci` `ci` entry at index 2;
+        - read 2 sees that body, and the narrowing -- asked about read 1's
+          body, where nothing this run concluded still applies -- returns.
+
+        Handing back the body in hand means handing back read 1, whose one
+        entry is complete, and the label comes off a pull request that now
+        records an unmet requirement. Handing back the live body means
+        handing back read 2, and it stays.
+        """
+        contract = [CI_ITEM]
+        retargeted = {
+            "index": 1,
+            "item": DIFF_ITEM,
+            "status": "complete",
+            "detail": "the diff shows it",
+            "kind": "diff",
+        }
+        added = {
+            "index": 2,
+            "item": "CI: `Other CI` green on the PR head",
+            "status": "pending-ci",
+            "detail": "waiting",
+            "kind": "ci",
+        }
+        first = body_with_contract(contract, [ci_entry(index=1)])
+        after_retarget = body_with_contract(contract, [retargeted])
+        after_addition = body_with_contract(contract, [retargeted, added])
+        pr = pr_payload(first, labels=["blocked:evidence"])
+        reads = {"n": 0}
+        gh_calls: list[list[str]] = []
+        written: list[str] = []
+
+        def fake_gh_json(args, env):
+            if not any("pulls/321" in arg for arg in args):
+                return None
+            reads["n"] += 1
+            pr["head"] = {"sha": HEAD}
+            pr["body"] = (
+                first
+                if reads["n"] == 1
+                else after_retarget
+                if reads["n"] == 2
+                else after_addition
+            )
+            return pr
+
+        with (
+            mock.patch.object(verify, "_gh_json", side_effect=fake_gh_json),
+            mock.patch.object(verify, "check_runs_for", return_value=self.GREEN),
+            mock.patch.object(
+                verify, "_write_pr_body", side_effect=lambda n, b, e: written.append(b) or True
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+
+        self.assertGreaterEqual(reads["n"], 3, "the run never reached the second edit")
+        self.assertEqual(written, [], "an update nothing in hand still applies to was written")
+        self.assertFalse(
+            self.cleared(gh_calls),
+            "the label was cleared on the read BEFORE the one this return was taken from",
+        )
+
     def test_a_requirement_deleted_from_the_metadata_is_not_seen_here(self) -> None:
         """What the clear quantifies over, asserted rather than assumed.
 
