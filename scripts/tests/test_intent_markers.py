@@ -23,9 +23,11 @@ defect hides.
 from __future__ import annotations
 
 import ast
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -79,18 +81,38 @@ def markers_in(source: str) -> dict[str, list[str]]:
     return found
 
 
-def new_tests(path: Path, base: str = "origin/main") -> set[str] | None:
-    """Which tests in this file are absent from `base`, or None if git cannot say."""
-    relative = path.relative_to(REPO_ROOT).as_posix()
-    # Two different "no": a base this checkout cannot resolve means the walk
-    # has nothing to compare against and says so; a FILE absent at a base it
-    # can resolve means every test in it is new. Reading both as the first
-    # skipped the whole guard the day a new suite was added.
+FETCH = "git fetch --no-tags --depth=1 origin main  (or check out with fetch-depth: 0)"
+
+
+def comparison_base(base: str = "origin/main") -> str | None:
+    """What "new" is measured against, or None if this checkout cannot say.
+
+    The MERGE BASE of `HEAD` and `origin/main` rather than `origin/main`
+    itself: a pull request checkout is the head or a merge commit, and "new"
+    has to mean new to this pull request rather than new since whatever main
+    has moved to since it branched.
+    """
     if subprocess.run(
         ["git", "rev-parse", "--verify", "--quiet", base],
         capture_output=True, text=True, cwd=REPO_ROOT,
     ).returncode != 0:
         return None
+    merge_base = subprocess.run(
+        ["git", "merge-base", "HEAD", base], capture_output=True, text=True, cwd=REPO_ROOT
+    )
+    return merge_base.stdout.strip() if merge_base.returncode == 0 else base
+
+
+def new_tests(path: Path, base: str | None) -> set[str] | None:
+    """Which tests in this file are absent from `base`, or None if git cannot say."""
+    if base is None:
+        return None
+    relative = path.relative_to(REPO_ROOT).as_posix()
+    # Two different "no": a base this checkout cannot resolve means the walk
+    # has nothing to compare against and says so (`comparison_base` above); a
+    # FILE absent at a base it can resolve means every test in it is new.
+    # Reading both as the first skipped the whole guard the day a new suite
+    # was added.
     shown = subprocess.run(
         ["git", "show", f"{base}:{relative}"],
         capture_output=True, text=True, cwd=REPO_ROOT,
@@ -99,18 +121,50 @@ def new_tests(path: Path, base: str = "origin/main") -> set[str] | None:
     return set(markers_in(path.read_text(encoding="utf-8"))) - at_base
 
 
+def comparison_base_in(root: Path, base: str = "origin/main") -> str | None:
+    """`comparison_base` asked about another checkout, for the seed below."""
+    if subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", base],
+        capture_output=True, text=True, cwd=root,
+    ).returncode != 0:
+        return None
+    found = subprocess.run(["git", "merge-base", "HEAD", base], capture_output=True, text=True, cwd=root)
+    return found.stdout.strip() if found.returncode == 0 else base
+
+
 class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
     """The census over the real tree, which is the part a hand-run script was doing."""
 
-    # intent: fix
+    # intent: guard
+    # marker: `fix` until round 16, and its own base says otherwise -- every test in this
+    # file is green at `f9f522f2`, where the file did not exist, so nothing here can be
+    # behaviourally red at it; a test that pins a property the base already has is a guard
+    # (#1773, round 16). The fix this round is the sibling below.
     def test_every_test_this_branch_adds_declares_exactly_one_intent(self) -> None:
         offenders: dict[str, list[str]] = {"unmarked": [], "multi-marked": [], "unknown kind": []}
         counted = 0
+        base = comparison_base()
+        if base is None:
+            # The two cases are different and the difference is the whole
+            # point of this branch. A LOCAL checkout with no remote cannot
+            # say what is new, and refusing there would fail on a clone
+            # somebody made to read the code. In CI this guard is the only
+            # thing standing between the body's marker counts and a number
+            # nobody checks, and a skipped guard reads as a green one --
+            # which is the silence this test was committed to end, so it
+            # fails and says what to fetch (#1773, round 16).
+            if os.environ.get("GITHUB_ACTIONS"):
+                self.fail(
+                    "the comparison base is missing from this checkout, so the marker census "
+                    f"could not run: {FETCH}"
+                )
+            self.skipTest(
+                "no `origin/main` in this checkout, so what is new cannot be measured; "
+                f"this fails rather than skips under GITHUB_ACTIONS ({FETCH})"
+            )
         for name in MARKED_FILES:
             path = TESTS / name
-            added = new_tests(path)
-            if added is None:
-                self.skipTest("git cannot read origin/main here")
+            added = new_tests(path, base)
             found = markers_in(path.read_text(encoding="utf-8"))
             for test in sorted(added):
                 marks = found[test]
@@ -123,6 +177,68 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
                     offenders["unknown kind"].append(f"{name}::{test} {marks[0]}")
         self.assertEqual({k: v for k, v in offenders.items() if v}, {}, "markers to fix")
         self.assertGreater(counted, 100, "the population collapsed; the walk read too few tests")
+
+    # intent: fix
+    def test_a_checkout_without_the_base_fails_in_ci_and_skips_on_a_laptop(self) -> None:
+        """A skipped guard reads as a green one, and CI is where that matters.
+
+        The lane that runs this file checks out with `actions/checkout`'s
+        default -- one ref, no history -- so `origin/main` does not resolve,
+        the comparison base is None, and the census SKIPPED: measured on a
+        single-branch clone of this branch at `2f614b05`, `Ran 10 tests` /
+        `OK (skipped=1)`. In the one lane that runs it the guard guarded
+        nothing, which is the silence it was committed to end (#1773, round
+        16).
+
+        The two cases answer differently because they are different: a laptop
+        clone with no remote cannot say what is new and skips with the
+        reason; a run under `GITHUB_ACTIONS` fails and says what to fetch.
+        This drives THIS FILE inside a temporary repository that has no
+        `origin/main`, rather than restating either sentence here -- a second
+        spelling of a rule is how the rule drifts.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            sandbox = Path(directory)
+            tests = sandbox / "scripts" / "tests"
+            tests.mkdir(parents=True)
+            (tests / "test_intent_markers.py").write_text(
+                Path(__file__).read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            for name in MARKED_FILES:
+                if name != "test_intent_markers.py":
+                    (tests / name).write_text("", encoding="utf-8")
+            for args in (
+                ("init", "--initial-branch=work"),
+                ("config", "user.email", "tests@example.invalid"),
+                ("config", "user.name", "tests"),
+                ("add", "-A"),
+                ("commit", "-m", "a checkout with no origin/main"),
+            ):
+                subprocess.run(["git", *args], cwd=sandbox, capture_output=True, check=True)
+            self.assertIsNone(
+                comparison_base_in(sandbox), "a checkout with no `origin/main` resolved one"
+            )
+
+            def run(ci: bool) -> str:
+                environment = {**os.environ, "PYTHONPYCACHEPREFIX": str(sandbox / ".pyc")}
+                environment.pop("GITHUB_ACTIONS", None)
+                if ci:
+                    environment["GITHUB_ACTIONS"] = "true"
+                finished = subprocess.run(
+                    [sys.executable, str(tests / "test_intent_markers.py"), "-v",
+                     "TheMarkersThisBranchWritesAreCheckedByCITests"
+                     ".test_every_test_this_branch_adds_declares_exactly_one_intent"],
+                    cwd=sandbox, capture_output=True, text=True, env=environment,
+                )
+                return finished.stdout + finished.stderr
+
+            in_ci = run(ci=True)
+            self.assertIn("FAILED", in_ci, "CI did not fail on a missing base")
+            self.assertIn("could not run", in_ci)
+            self.assertIn("git fetch", in_ci, "the failure does not say what to fetch")
+            on_a_laptop = run(ci=False)
+            self.assertIn("OK (skipped=1)", on_a_laptop, "a laptop clone did not skip")
+            self.assertIn("what is new cannot be measured", on_a_laptop)
 
     # intent: guard
     def test_the_files_outside_the_guard_are_named_rather_than_implied(self) -> None:
