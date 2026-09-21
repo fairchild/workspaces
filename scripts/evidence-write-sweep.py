@@ -99,6 +99,16 @@ SECOND_ENTRY_INDEXES = {
     "a second entry at true": True,
     "a second entry at 2.0": 2.0,
     "a second entry at null": None,
+    # The COLLISION axis. The diff's largest safety property -- a body whose
+    # metadata gives two entries one index is not rewritten at all, because
+    # `updates[index]` fans across both -- had no body in this corpus to
+    # measure it on: every generated record gave its entries distinct indexes,
+    # so 0 of 1,008 bodies reached that refusal and the instrument's figures
+    # said nothing about it (#1778, round 12). Two shapes, because the writer
+    # answers them the same way and a reader might expect it not to: two
+    # entries at one index naming DIFFERENT items, and two naming the same.
+    "a second entry at 1": 1,
+    "a second entry at 1 with the same item": ("collide-same-item", 1),
 }
 
 
@@ -134,11 +144,14 @@ def body(tail: str, successor: str, ending: str, second_index: object = NO_SECON
     ]
     lines = [f"- [pending-ci] {ITEM} -- {DETAIL}"]
     if second_index is not NO_SECOND_ENTRY:
+        item = SECOND_ITEM
+        if isinstance(second_index, tuple):
+            item, second_index = ITEM, second_index[1]
         entries.append(
-            {"index": second_index, "item": SECOND_ITEM, "status": "pending-ci",
+            {"index": second_index, "item": item, "status": "pending-ci",
              "detail": SECOND_DETAIL, "kind": "other"}
         )
-        lines.append(f"- [pending-ci] {SECOND_ITEM} -- {SECOND_DETAIL}")
+        lines.append(f"- [pending-ci] {item} -- {SECOND_DETAIL}")
     meta = {"entries": entries}
     section = "\n".join(lines) + "\n" + tail
     text = (
@@ -362,6 +375,10 @@ class Outcome:
     # the two together would let 672 malformed records hide the 44 declined
     # hazards this corpus was built to count.
     record_is_malformed: bool
+    # Whether this body's record gives two entries one index -- the other
+    # reason the write refuses, and the one no generated body could carry
+    # before the collision axis (#1778, round 12).
+    record_collides: bool
     lost: tuple[str, ...]
     closed: tuple[tuple[str, str], ...]
     announced: tuple[str, ...]
@@ -425,6 +442,35 @@ def write_once(text: str) -> tuple[str, bool, tuple[str, ...]]:
     return written, refused, said
 
 
+def _second_entry_index(second_index: object) -> object:
+    """The index the axis value gives the second entry, tuple form unwrapped."""
+    return second_index[1] if isinstance(second_index, tuple) else second_index
+
+
+def _record_is_malformed(second_index: object) -> bool:
+    """Whether this axis value makes a record the write cannot render."""
+    if second_index is NO_SECOND_ENTRY:
+        return False
+    index = _second_entry_index(second_index)
+    return evidence.entry_as_rendered(
+        {"index": index, "item": SECOND_ITEM, "status": "pending-ci", "detail": SECOND_DETAIL}
+    )[0] is None
+
+
+def _record_collides(second_index: object) -> bool:
+    """Whether this axis value gives two entries one index.
+
+    `True == 1` in Python and `True` is not an index to this codebase -- the
+    identity rule rejects a bool -- so the bool axis value is a MALFORMED
+    record rather than a colliding one, and the two counts would have
+    overlapped by 168 bodies without this (#1778, round 12).
+    """
+    if second_index is NO_SECOND_ENTRY:
+        return False
+    index = _second_entry_index(second_index)
+    return not isinstance(index, bool) and index == 1
+
+
 def sweep() -> list[Outcome]:
     """Every generated body, written twice, with what the write cost it."""
     outcomes = []
@@ -439,13 +485,8 @@ def sweep() -> list[Outcome]:
                         Outcome(
                             label=f"{tail_name} / {successor_name} / {ending_name} / {index_name}",
                             refused=refused,
-                            record_is_malformed=(
-                                second_index is not NO_SECOND_ENTRY
-                                and evidence.entry_as_rendered(
-                                    {"index": second_index, "item": SECOND_ITEM,
-                                     "status": "pending-ci", "detail": SECOND_DETAIL}
-                                )[0] is None
-                            ),
+                            record_is_malformed=_record_is_malformed(second_index),
+                            record_collides=_record_collides(second_index),
                             lost=tuple(lines_lost(source, written)),
                             closed=tuple(seams_closed(source, written)),
                             announced=tuple(line for line in said if "not carried" in line),
@@ -463,11 +504,18 @@ def report(outcomes: list[Outcome]) -> dict[str, object]:
         "refusals_of_a_malformed_record": sum(
             outcome.refused and outcome.record_is_malformed for outcome in outcomes
         ),
+        "refusals_of_a_colliding_record": sum(
+            outcome.refused and outcome.record_collides for outcome in outcomes
+        ),
         "refusals_of_a_hazard_in_the_page": sum(
-            outcome.refused and not outcome.record_is_malformed for outcome in outcomes
+            outcome.refused and not (outcome.record_is_malformed or outcome.record_collides)
+            for outcome in outcomes
         ),
         "malformed_records_written_anyway": sum(
             outcome.record_is_malformed and not outcome.refused for outcome in outcomes
+        ),
+        "colliding_records_written_anyway": sum(
+            outcome.record_collides and not outcome.refused for outcome in outcomes
         ),
         "bodies_losing_a_line_silently": sum(outcome.silent for outcome in outcomes),
         "bodies_losing_a_line_with_a_reason_given": sum(
@@ -499,10 +547,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"{summary['instrument']}: {summary['bodies']} bodies, written twice")
     print(f"  refusals: {summary['refusals']}")
     print(f"    of a malformed record: {summary['refusals_of_a_malformed_record']}")
+    print(f"    of a colliding record: {summary['refusals_of_a_colliding_record']}")
     print(f"    of a hazard in the page: {summary['refusals_of_a_hazard_in_the_page']}")
     print(
         "  malformed records written anyway: "
         f"{summary['malformed_records_written_anyway']}"
+    )
+    print(
+        "  colliding records written anyway: "
+        f"{summary['colliding_records_written_anyway']}"
     )
     print(f"  bodies losing a line silently: {summary['bodies_losing_a_line_silently']}")
     print(

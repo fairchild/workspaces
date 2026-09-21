@@ -44,13 +44,14 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
     is the property that was missing.
     """
 
-    BODIES = 1008
-    REFUSALS = 716
+    BODIES = 1344
+    REFUSALS = 1052
     # The refusals split by what was wrong: a record this write cannot render
     # every entry of, or a hazard in the page it cannot move. 44 rather than
     # round 10's 22 because each hazard body is now generated twice -- once
     # with one entry and once with a second entry at a usable index.
     MALFORMED_RECORD_REFUSALS = 672
+    COLLIDING_RECORD_REFUSALS = 336
     HAZARD_REFUSALS = 44
     ANNOUNCED_LOSSES = 4
 
@@ -120,6 +121,9 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
             self.summary["refusals_of_a_malformed_record"], self.MALFORMED_RECORD_REFUSALS
         )
         self.assertEqual(
+            self.summary["refusals_of_a_colliding_record"], self.COLLIDING_RECORD_REFUSALS
+        )
+        self.assertEqual(
             self.summary["refusals_of_a_hazard_in_the_page"], self.HAZARD_REFUSALS
         )
 
@@ -178,7 +182,8 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         refused = {
             outcome.label.split(" / ")[0]
             for outcome in self.outcomes
-            if outcome.refused and not outcome.record_is_malformed
+            if outcome.refused
+            and not (outcome.record_is_malformed or outcome.record_collides)
         }
         self.assertEqual(refused, {"a fence that never closes", "a comment that never closes"})
         wrote = {
@@ -213,6 +218,7 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
                 label="probe",
                 refused=False,
                 record_is_malformed=False,
+                record_collides=False,
                 lost=lost,
                 closed=closed,
                 announced=announced,
@@ -517,7 +523,7 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         self.assertNotEqual(written, prose)
         self.assertEqual(sweep_script.lines_lost(prose, written), [])
 
-    # intent: fix
+    # intent: guard
     def test_no_body_whose_record_this_write_cannot_render_is_rewritten(self) -> None:
         """The shape no generated body could carry until this round (#1778, round 11).
 
@@ -548,7 +554,39 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
             sweep_script.body(tail, successor, "\n"),
             sweep_script.body(tail, successor, "\n", sweep_script.NO_SECOND_ENTRY),
         )
-        self.assertEqual(len(sweep_script.SECOND_ENTRY_INDEXES), 6)
+        self.assertEqual(len(sweep_script.SECOND_ENTRY_INDEXES), 8)
+
+    # intent: guard
+    def test_every_colliding_record_in_the_corpus_is_refused(self) -> None:
+        """The diff's largest safety property, measured at last (#1778, round 12).
+
+        A body whose metadata gives two entries one index is not rewritten at
+        all, because `updates[index]` fans across both. No generated body
+        could carry that shape -- every record gave its entries distinct
+        indexes -- so 0 of 1,008 bodies reached the refusal and the figures
+        this instrument produces said nothing about it.
+        """
+        colliding = [outcome for outcome in self.outcomes if outcome.record_collides]
+        self.assertEqual(len(colliding), self.COLLIDING_RECORD_REFUSALS)
+        self.assertEqual(self.summary["colliding_records_written_anyway"], 0)
+        self.assertEqual([one.label for one in colliding if not one.refused], [])
+        self.assertEqual([one.label for one in colliding if one.lost], [])
+        # Both shapes of the axis, because a reader might expect the writer to
+        # answer them differently: two entries at one index naming different
+        # items, and two naming the same one.
+        shapes = {one.label.split(" / ")[-1] for one in colliding}
+        self.assertEqual(
+            shapes, {"a second entry at 1", "a second entry at 1 with the same item"}
+        )
+
+    # intent: guard
+    def test_a_bool_index_is_malformed_rather_than_colliding(self) -> None:
+        # `True == 1` in Python, and `True` is not an index to this codebase.
+        # Without the bool check the two counts overlap by 168 bodies.
+        self.assertFalse(sweep_script._record_collides(True))
+        self.assertTrue(sweep_script._record_is_malformed(True))
+        self.assertTrue(sweep_script._record_collides(1))
+        self.assertFalse(sweep_script._record_is_malformed(1))
 
     # intent: guard
     def test_a_line_the_write_cannot_render_is_the_authors_to_this_instrument(self) -> None:

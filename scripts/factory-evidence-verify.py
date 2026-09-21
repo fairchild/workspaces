@@ -40,6 +40,7 @@ from evidence import (  # noqa: E402
     colliding_indexes,
     entries_by_index,
     usable_entry_index,
+    unrenderable_record_refusal,
     update_evidence_entries,
 )
 from execution import APP_BOT_GIT_IDENTITIES, post_uncarried_notes  # noqa: E402
@@ -684,6 +685,16 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
             status, recorded_sha = recorded_status.get(index, ("", ""))
             if not (status == "complete" and recorded_sha == head_sha):
                 updates[index] = update
+        if not updates and (refusal := unrenderable_record_refusal(entries)) is not None:
+            # The stand-down the write would have made, said even though this
+            # run has nothing else to write. It reaches the author only
+            # through the write's announcements, and a record whose only `ci`
+            # entry is malformed produces no updates -- so the most likely
+            # shape of a malformed record was the one shape nobody was told
+            # about, with the label kept and nothing said (#1778, round 12).
+            # `post_uncarried_notes` keeps it to one comment per head.
+            log(refusal)
+            post_uncarried_notes(pr_number, None, [refusal], head_sha, env)
         if updates:
             updated_body = _apply_ci_updates(pr_number, head_sha, body, updates, env)
             if updated_body is None:

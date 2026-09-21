@@ -1279,5 +1279,38 @@ class AccurateAskTests(unittest.TestCase):
         self.assertIn("Review category: unknown", text)
 
 
+class WhatTheAuthorIsToldMatchesWhatTheWriterDoesTests(unittest.TestCase):
+    """A comment that tells an author to wait for a lane that will never run (#1778, round 12).
+
+    `_pending_block` said a pending item "clears on its own" whenever its kind
+    has a completing lane. The writer refuses a record with two entries at one
+    index categorically, so for such a record no lane clears anything and the
+    sentence was an instruction to wait forever.
+    """
+
+    def entry(self, index: object, item: str = "CI: `Web CI` green on the PR head"):
+        return {"index": index, "item": item, "status": "pending-ci", "detail": "waiting"}
+
+    # intent: fix
+    def test_a_colliding_record_is_named_as_waiting_on_the_author(self) -> None:
+        block = response._pending_block([self.entry(1), self.entry(1, "CI: `Other CI` green")])
+        self.assertIn("share an index", block)
+        self.assertNotIn("clears on its own", block)
+        self.assertNotIn("clear on their own", block)
+
+    # intent: guard
+    def test_a_record_the_writer_will_act_on_still_says_it_clears(self) -> None:
+        block = response._pending_block([self.entry(1), self.entry(2, "CI: `Other CI` green")])
+        self.assertIn("clear on their own", block)
+        self.assertNotIn("share an index", block)
+
+    # intent: guard
+    def test_the_lane_asks_the_writers_own_collision_rule(self) -> None:
+        # Not a second reading of the same question: the sentence and the
+        # refusal come from one function.
+        evidence = sys.modules["evidence"]
+        self.assertIs(response.colliding_indexes, evidence.colliding_indexes)
+
+
 if __name__ == "__main__":
     unittest.main()

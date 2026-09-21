@@ -8502,14 +8502,14 @@ class TheWriterRefusesACollidingIndexItself(unittest.TestCase):
         self.assertEqual(written, source)
         self.assertIn("share index(es) 2", said[0])
 
-    # intent: guard
+    # intent: control
     def test_entries_at_distinct_indexes_are_written_as_before(self) -> None:
         source, written, said, _ = self.write([self.entry(1), self.entry(2, kind="diff")])
         self.assertNotEqual(written, source)
         self.assertIn("- [complete] ", written)
         self.assertEqual(said, [])
 
-    # intent: fix
+    # intent: guard
     def test_an_index_no_reader_can_take_is_not_a_collision(self) -> None:
         evidence = self.evidence()
         self.assertEqual(
@@ -8618,7 +8618,7 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
         self.assertEqual(len(said), 1, said)
         self.assertIn("position 2", said[0])
 
-    # intent: guard
+    # intent: fix
     def test_an_entry_the_renderer_drops_for_any_other_reason_stands_down_too(self) -> None:
         # One rule, not one per field: the renderer refuses a status outside
         # the vocabulary, an empty item and an empty detail the same way it
@@ -8639,6 +8639,130 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
                 self.assertIn("position 2", said[0])
                 self.assertIn(named, said[0])
 
+    # intent: fix
+    def test_an_items_own_text_cannot_silence_the_comment_it_appears_in(self) -> None:
+        """Untrusted text in the bot's own comment (#1778, round 12).
+
+        `item` is as editable as the pull request description, and it went
+        into the stand-down announcement raw. An item of `a\n\n<!-- @name`
+        puts an HTML comment on a line of its own inside the comment the lane
+        posts, and GitHub renders neither the recovery instruction under it
+        nor the line the dedup guard keys on -- measured against the real
+        renderer at `2428d188`. One quoting rule covers every PR-editable
+        field that reaches a comment now.
+        """
+        evidence = self.evidence()
+        execution = load_module(
+            "execution_for_quoting",
+            REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "execution.py",
+        )
+        for name, hostile in (
+            ("an html comment on its own line", "a\n\n<!-- @octocat"),
+            ("a backtick then a comment", "a` <!-- @octocat"),
+            ("a fixed-point comment marker", "a\n\n<<!--!-- @octocat"),
+            ("a heading on its own line", "a\n\n## Not a heading"),
+        ):
+            with self.subTest(shape=name):
+                entries = self.entries("2")
+                entries[1]["item"] = hostile
+                _, _, said, _ = self.write(entries)
+                self.assertEqual(len(said), 1, said)
+                comment = execution.compose_uncarried_notes_comment(None, said, "a" * 40)
+                # What a reader is left with: no marker that can open a
+                # comment, no line break out of the note, and both guard
+                # lines still in the comment.
+                self.assertNotIn("<!--", comment)
+                self.assertNotIn("-->", comment)
+                self.assertIn("Closing the block named above", comment)
+                self.assertIn("Not carried from this PR's body", comment)
+                note = next(line for line in comment.splitlines() if "position 2" in line)
+                self.assertEqual(note.count("`") % 2, 0, f"the span is unbalanced: {note}")
+
+    # intent: fix
+    def test_the_turn_stands_down_on_the_same_record_the_lane_stands_down_on(self) -> None:
+        """The recovery path was an instance of the loss it recovers from.
+
+        A full factory turn rebuilds the record from its own inputs, so an
+        entry it cannot render was simply not carried forward: measured at
+        `2428d188` the record came back with one entry instead of two, the
+        author's status line for the other was gone from the page, and
+        `errors`, `announcements` and stderr were all empty. Same rule as the
+        lane's now, and the body stands whole (#1778, round 12).
+        """
+        evidence = self.evidence()
+        recorded = self.entries("2")
+        lines = [f"- [{one['status']}] {one['item']} -- {one['detail']}" for one in recorded]
+        visible = (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            + "\n".join(lines)
+            + "\n\n## Validation\n\n- ran it\n"
+        )
+        published = (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": recorded}) + "\n-->\n\n" + visible
+        )
+        said: list[str] = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            rendered, errors = run_contributor.render_execution_summary_body(
+                visible,
+                requested_evidence=[self.ITEM, self.OTHER],
+                evidence_complete=["1 -- green on head abc"],
+                evidence_blocked=None,
+                evidence_pending_ci=None,
+                published_body=published,
+                announcements=said,
+            )
+        self.assertEqual(rendered, visible, "the turn rewrote a record it cannot render")
+        self.assertIn(lines[1], self.section_of(rendered), "the author's line was deleted")
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("position 2", errors[0])
+        self.assertEqual(said, errors, "the author hears what the turn's caller hears")
+
+    # intent: control
+    def test_a_turn_over_a_record_it_can_render_writes_as_before(self) -> None:
+        evidence = self.evidence()
+        recorded = self.entries(2)
+        lines = [f"- [{one['status']}] {one['item']} -- {one['detail']}" for one in recorded]
+        visible = (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            + "\n".join(lines)
+            + "\n\n## Validation\n\n- ran it\n"
+        )
+        published = (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": recorded}) + "\n-->\n\n" + visible
+        )
+        said: list[str] = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            rendered, errors = run_contributor.render_execution_summary_body(
+                visible,
+                requested_evidence=[self.ITEM, self.OTHER],
+                evidence_complete=["1 -- green on head abc"],
+                evidence_blocked=None,
+                evidence_pending_ci=None,
+                published_body=published,
+                announcements=said,
+            )
+        self.assertEqual(errors, [])
+        self.assertIn(f"- [complete] {self.ITEM} -- green on head abc", self.section_of(rendered))
+
+    # intent: guard
+    def test_every_field_that_reaches_a_comment_goes_through_one_rule(self) -> None:
+        # The property, not the call site: the same two helpers the
+        # review-response lane quotes with are the ones the writer's
+        # announcements use, so closing this hazard in one lane closes it in
+        # both.
+        evidence = self.evidence()
+        response = load_module(
+            "factory_review_response_quoting", REPO_ROOT / "scripts" / "factory-review-response.py"
+        )
+        self.assertIs(response._quotable, evidence.comment_safe)
+        self.assertIs(response._inert, evidence.as_code_span)
+        # To a FIXED POINT: one pass over `<<!--!--` leaves `<!--` behind,
+        # which is how the review-response lane's first attempt at this was
+        # still openable (the whitespace the newlines collapse to stays).
+        self.assertEqual(evidence.comment_safe("a\n\n<<!--!-- x"), "a  x")
+        self.assertEqual(evidence.quoted_for_comment("a`b"), "`ab`")
+        self.assertEqual(evidence.quoted_for_comment("   "), "")
+
     # intent: control
     def test_entries_this_code_can_account_for_are_written_as_before(self) -> None:
         source, written, said, _ = self.write(self.entries(2))
@@ -8647,7 +8771,7 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
         self.assertIn(f"- [pending-ci] {self.OTHER} -- device booked", written)
         self.assertEqual(said, [])
 
-    # intent: guard
+    # intent: fix
     def test_the_reason_the_author_reads_names_the_index_it_found(self) -> None:
         evidence = self.evidence()
         said: list[str] = []

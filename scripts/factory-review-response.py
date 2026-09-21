@@ -43,6 +43,9 @@ if str(CONTRIBUTOR_SCRIPTS) not in sys.path:
 from evidence import (  # noqa: E402
     _evidence_item_kind,
     _extract_evidence_metadata,
+    as_code_span,
+    colliding_indexes,
+    comment_safe,
     usable_entry_index,
 )
 
@@ -405,34 +408,13 @@ def evidence_entries(body: str) -> list[dict[str, Any]]:
     return [entry for entry in entries if isinstance(entry, dict)]
 
 
-def _quotable(text: str, limit: int = ITEM_QUOTE_LIMIT) -> str:
-    """PR-controlled text, flattened and bounded, for use inside a code span.
-
-    Backticks and newlines come out, so a quoted item cannot break out of the
-    span or the line it sits on, and HTML comment delimiters come out to a
-    fixed point -- one pass left `<<!--!--` behind as `<!--`. Rendering is
-    `_inert`'s job; this is about what the string may contain at all.
-    """
-    flattened = " ".join(text.replace("`", "").split())
-    while "<!--" in flattened or "-->" in flattened:
-        flattened = flattened.replace("<!--", "").replace("-->", "")
-    if len(flattened) <= limit:
-        return flattened
-    return flattened[: limit - 1].rstrip() + "…"
-
-
-def _inert(text: str) -> str:
-    """PR-controlled text, rendered so none of it can act.
-
-    A code span, not an escape list. Escaping `<` stopped the HTML-comment
-    class -- deleting `<!--` ran once, so `<<!--!--` survived it as `<!--` and
-    could comment out the instructions through the real trailing marker -- but
-    left every markdown construct alive: `[text](url)`, an image, an autolink,
-    a nested list marker, a mention. Inside a span all of them are characters,
-    and `_quotable` has already taken the backticks out, so nothing in the
-    text can close the span it sits in.
-    """
-    return f"`{text}`" if text else text
+# The two halves of one rule, bound here rather than written twice: what a
+# PR-editable string may CONTAIN before it enters a comment, and how it is
+# RENDERED so none of it can act. This lane had them and the writer's
+# announcements did not, so the hazard they close was live one field over
+# (#1778, round 12). The account of it is on `comment_safe`.
+_quotable = comment_safe
+_inert = as_code_span
 
 
 def _recognition_label(entry: dict[str, Any]) -> str:
@@ -486,18 +468,21 @@ def _entry_kind(entry: dict[str, Any]) -> str:
     return _evidence_item_kind(str(entry.get("item") or ""))
 
 
-# The index this entry claims, when it is one anything can act on -- the
 # The shared definition is imported above and called by its own name. This
 # lane had a local one, with its own rule below 1, and it disagreed with the
 # verifier's: an index-0 entry was a check the verifier looked up and a line
 # this lane named to nobody (#1778, round 7). It was then kept as the alias
 # `_entry_index`, which reads like the identity rule and is bound to the
 # usable one -- a near-name for a rule that has a real name, in a module where
-# the two rules are the distinction everything turns on (#1778, round 11). The
-# reason the shared one catches OverflowError holds here too: `1e309` decodes
-# to infinity and `int()` of that raises a class the other two do not cover,
-# which here would abort the lane before it posts anything and turn a bad
-# index into silence instead of a comment.
+# the two rules are the distinction everything turns on (#1778, round 11).
+#
+# What the shared rule does with a hostile index, from source rather than from
+# the account this comment used to give: it calls no `int()` and catches no
+# `OverflowError`. The identity rule it asks answers whether the value IS an
+# int, so `1e309` -- which decodes to a float infinity -- comes back None with
+# no exception raised, and the lane names such an entry "an unnamed item" and
+# goes on posting. That is the property the old comment was reaching for
+# (#1778, round 12).
 
 
 def evidence_blockers(entries: list[dict[str, Any]]) -> list[Blocker]:
@@ -594,8 +579,31 @@ def _attestation_block(blocked: list[dict[str, Any]]) -> str:
     )
 
 
+def _colliding(entries: list[dict[str, Any]]) -> bool:
+    """Whether this record holds two entries at one index -- the writer's own rule.
+
+    Asked through the shared `colliding_indexes` rather than re-derived, so
+    what this lane TELLS an author and what the writer DOES cannot drift.
+    """
+    return bool(colliding_indexes(entries))
+
+
 def _pending_block(pending: list[dict[str, Any]]) -> str:
-    """One line per lane: which items it clears, and when."""
+    """One line per lane: which items it clears, and when.
+
+    "Clears on its own" is true of a record the writer will act on, and a
+    record with two entries at one index is not one: `update_evidence_entries`
+    refuses such a body categorically, so no lane completes those items and
+    the sentence would be telling the author to wait for something that will
+    never happen. Such a record is named as waiting on them instead (#1778,
+    round 12).
+    """
+    if _colliding(pending):
+        return (
+            f"{_index_phrase(pending)} cannot be completed by any lane while two entries "
+            "share an index: an update aimed at one would land on both, so the write "
+            "refuses the record. Give each item its own index to let the lanes run."
+        )
     grouped: dict[str, list[dict[str, Any]]] = {}
     for entry in pending:
         # Only allowlisted kinds reach here; the caller sends the rest to the
