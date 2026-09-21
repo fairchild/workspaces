@@ -485,6 +485,17 @@ def _apply_ci_updates(
         # is genuinely empty (#1778, round 7).
         current_body = str(current.get("body") or "") if isinstance(current, dict) else None
         live = body if current_body is None else current_body
+        if current_sha != head_sha:
+            # Directly after the read and above every return, because a moved
+            # head is not a decision to hand anyone: this run's conclusions
+            # are about a commit the pull request has left, and `None` is how
+            # this function says "take no decision". Below the two returns
+            # that hand back the live body it was reachable -- read, the owner
+            # retargets the entry, retry, the owner pushes, and the attempt
+            # that drops every update returned a body for the caller to clear
+            # the label on at a head nothing here verified (#1778, round 8).
+            log(f"PR #{pr_number} advanced during verification; taking no decision")
+            return None
         # Re-run on every body this loop is about to write, not once before
         # it. The retry re-reads a body an owner may have edited in between,
         # and a collision arriving there at an index this run holds no update
@@ -507,17 +518,6 @@ def _apply_ci_updates(
             return live
         uncarried: list[str] = []
         new_body = update_evidence_entries(body, safe_updates, announcements=uncarried)
-        if current_sha != head_sha:
-            # Above both returns, because a moved head means this run's
-            # conclusions are about a commit the PR has left -- so there is no
-            # body to hand the caller and no decision to take on one. The
-            # stand-down path reached this check only after returning, so a
-            # push mid-run took the label off against the body from before it.
-            log(
-                f"PR #{pr_number} advanced during verification; "
-                + ("leaving the stand-down unsaid" if new_body == body else "skipping write")
-            )
-            return None
         if new_body == body:
             # Same reason as the review-time completion: the write stands down
             # whole on a block whose closer never came, which returns the body
