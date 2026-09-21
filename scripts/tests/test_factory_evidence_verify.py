@@ -750,12 +750,37 @@ class TheSuiteCanExpressASequenceTests(unittest.TestCase):
     def cleared(gh_calls) -> bool:
         return ["pr", "edit", "321", "--remove-label", "blocked:evidence"] in gh_calls
 
+    @staticmethod
+    def cleared(gh_calls) -> bool:
+        return ["pr", "edit", "321", "--remove-label", "blocked:evidence"] in gh_calls
+
     def two_runs(self, entries, first, second, *, labels=(), reviews=None):
-        """Run, feed the written body back, run again."""
+        """Run, feed the written body AND the label state back, run again.
+
+        The label state carries across because the workflow does: run 1 can
+        remove `blocked:evidence`, and a run 2 that still saw it set was
+        answering a question about a pull request that no longer exists
+        (#1778, round 3).
+        """
         body = body_with_entries(entries)
-        body, first_calls = self.one_run(body, first, labels=labels, reviews=reviews or [])
-        body, second_calls = self.one_run(body, second, labels=labels, reviews=reviews or [])
+        carried = list(labels)
+        body, first_calls = self.one_run(body, first, labels=carried, reviews=reviews or [])
+        if ["pr", "edit", "321", "--remove-label", "blocked:evidence"] in first_calls:
+            carried = [name for name in carried if name != "blocked:evidence"]
+        body, second_calls = self.one_run(body, second, labels=carried, reviews=reviews or [])
         return body, first_calls, second_calls
+
+    def test_the_second_run_sees_the_label_the_first_removed(self) -> None:
+        # The fixture's own property, asserted so it cannot quietly stop
+        # carrying: run 1 clears the label, run 2 is not asked to clear it
+        # again because it is no longer there.
+        forged = [ci_entry(status="complete", verified_head_sha=HEAD)]
+        _, first, second = self.two_runs(
+            forged, lambda name: self.GREEN, lambda name: self.GREEN,
+            labels=["blocked:evidence"],
+        )
+        self.assertTrue(self.cleared(first), first)
+        self.assertFalse(self.cleared(second), "run 2 cleared a label run 1 had removed")
 
     def test_a_transient_failure_does_not_make_the_next_run_see_a_transition(self) -> None:
         """The regression against main (#1778, round 2).
@@ -911,15 +936,71 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
         self.assertEqual(reads, [], "a contract it cannot read was verified anyway")
         self.assertNotIn("body", written)
 
-    def test_the_duplicate_is_named_rather_than_resolved(self) -> None:
-        self.assertEqual(verify.duplicate_ci_indexes(self.entries()), [1])
-        # Distinct indices, and a non-ci entry sharing one, are not this.
+    def test_a_collision_of_any_kinds_is_named_rather_than_resolved(self) -> None:
+        """Inverted from round 2, where this test asserted the defect (#1778, round 3).
+
+        It read "a non-ci entry sharing an index is not this", which is how a
+        mixed-kind index passed the guard and one green run manufactured a
+        completion on a line no check covers. What is ambiguous is which entry
+        the verdict belongs to; the kinds of the colliding entries change
+        nothing about that.
+        """
+        self.assertEqual(verify.colliding_indexes(self.entries()), [1])
+        # A `ci` entry and a non-`ci` entry at one index IS a collision --
+        # the assertion this test used to make in reverse.
         self.assertEqual(
-            verify.duplicate_ci_indexes(
+            verify.colliding_indexes(
                 [ci_entry(index=1), ci_entry(index=2), {"index": 1, "item": DIFF_ITEM}]
+            ),
+            [1],
+        )
+        # Two non-`ci` entries at one index are one too.
+        self.assertEqual(
+            verify.colliding_indexes(
+                [{"index": 3, "item": DIFF_ITEM}, {"index": 3, "item": "a screenshot"}]
+            ),
+            [3],
+        )
+        # Distinct indices are not, whatever the kinds.
+        self.assertEqual(
+            verify.colliding_indexes(
+                [ci_entry(index=1), {"index": 2, "item": DIFF_ITEM}, {"index": 3, "item": "x"}]
             ),
             [],
         )
+
+    def test_all_three_readers_take_one_definition_of_an_index(self) -> None:
+        # The mechanism, asserted directly: the guard, the write's narrowing
+        # and the clear read the same grouping, so none of them can be right
+        # about an index while another is wrong.
+        mixed = [
+            ci_entry(index=1),
+            {"index": 1, "item": DIFF_ITEM, "status": "pending-ci", "detail": "waiting"},
+        ]
+        self.assertEqual(sorted(verify.entries_by_index(mixed)), [1])
+        self.assertEqual(len(verify.entries_by_index(mixed)[1]), 2)
+        self.assertEqual(verify.colliding_indexes(mixed), [1])
+        # An index more than one entry claims has no single check name, so the
+        # write's narrowing drops its updates too.
+        update = {1: {"status": "complete", "check_name": "Web CI"}}
+        for label, order in (
+            ("the non-ci entry last", mixed),
+            # The order that matters: keyed on the LAST entry, this one hands
+            # back the `ci` check name and the update lands on both lines.
+            ("the ci entry last", list(reversed(mixed))),
+        ):
+            with self.subTest(order=label):
+                self.assertEqual(
+                    verify._updates_targeting_unchanged_entries(
+                        body_with_entries(order), update
+                    ),
+                    {},
+                    label,
+                )
+        # And an entry claiming no readable index is invisible to all three.
+        self.assertIsNone(verify.entry_index({"item": CI_ITEM}))
+        self.assertIsNone(verify.entry_index({"index": "1e9999"}))
+        self.assertEqual(verify.colliding_indexes([{"item": CI_ITEM}, {"item": CI_ITEM}]), [])
 
     def test_a_verdict_for_another_check_never_counts(self) -> None:
         # The comparison on its own, since the duplicate guard stops the seam
@@ -950,6 +1031,168 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
         body = body_with_entries([ci_entry(index=1, status="complete", verified_head_sha=HEAD)])
         stale = {1: {"status": "complete", "verified_head_sha": HEAD, "check_name": "Docs"}}
         self.assertEqual(verify._updates_targeting_unchanged_entries(body, stale), {})
+
+
+class AMixedKindIndexManufacturesACompletionTests(unittest.TestCase):
+    """One index carrying two kinds let a green run invent a completion (#1778, round 3; #1784).
+
+    The round-2 guard counted `ci` entries only, so a `ci` entry and a
+    non-`ci` entry at one index passed it — and `update_evidence_entries`
+    applies `updates[index]` to EVERY entry at that index. One green `Web CI`
+    run rewrote a `pending-ci` `diff` entry into a complete `ci` one bound to
+    the head, and the label cleared. Both entries start `pending-ci`; nothing
+    is typed by hand, and the shape is present on main.
+
+    What made it reachable is that three readers disagreed about what an
+    index is. They take one definition now.
+    """
+
+    GREEN = [
+        {
+            "status": "completed",
+            "conclusion": "success",
+            "completed_at": "2026-08-27T00:00:00Z",
+            "html_url": "https://example.invalid/run/1",
+        }
+    ]
+    CI = dict(ci_entry(index=1))
+    DIFF = {"index": 1, "item": DIFF_ITEM, "status": "pending-ci", "detail": "waiting", "kind": "diff"}
+
+    def run_over(self, entries):
+        body = body_with_entries([dict(entry) for entry in entries])
+        pr = pr_payload(body, labels=["blocked:evidence"])
+        written: dict[str, str] = {}
+        gh_calls: list[list[str]] = []
+        reads: list[str] = []
+        with (
+            mock.patch.object(
+                verify,
+                "_gh_json",
+                side_effect=lambda args, env: pr if any("pulls/321" in a for a in args) else None,
+            ),
+            mock.patch.object(
+                verify, "check_runs_for", side_effect=lambda n, s, e: reads.append(n) or self.GREEN
+            ),
+            mock.patch.object(
+                verify, "_write_pr_body", side_effect=lambda n, b, e: written.update(body=b) or True
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+        return written.get("body"), gh_calls, reads
+
+    def test_neither_order_writes_verifies_or_clears(self) -> None:
+        for label, entries in (
+            ("the non-ci entry last", [self.CI, self.DIFF]),
+            ("the ci entry last", [self.DIFF, self.CI]),
+        ):
+            with self.subTest(order=label):
+                body, gh_calls, reads = self.run_over(entries)
+                self.assertIsNone(body, f"{label}: a contract it cannot read was written")
+                self.assertEqual(reads, [], f"{label}: it was verified anyway")
+                self.assertNotIn(
+                    ["pr", "edit", "321", "--remove-label", "blocked:evidence"],
+                    gh_calls,
+                    f"{label}: the label was cleared",
+                )
+
+    def test_the_order_that_used_to_manufacture_one_is_the_ci_last_order(self) -> None:
+        # Named so the record says which half was live: with the `ci` entry
+        # last the narrowing kept the update and the write landed it on both
+        # lines; with it first the narrowing dropped the update and only the
+        # clear was at risk. Two halves of one path, not two guards.
+        self.assertEqual(verify.colliding_indexes([self.DIFF, self.CI]), [1])
+        self.assertEqual(verify.colliding_indexes([self.CI, self.DIFF]), [1])
+
+    def test_an_honest_mixed_contract_at_distinct_indexes_is_untouched(self) -> None:
+        # The control: two kinds are perfectly ordinary as long as each entry
+        # has its own index.
+        body, gh_calls, reads = self.run_over([self.CI, dict(self.DIFF, index=2)])
+        self.assertEqual(reads, ["Web CI"])
+        self.assertIsNotNone(body)
+        self.assertIn("- [complete] ", body)
+
+
+class TheGuardRunsOnEveryBodyTheRunWritesTests(unittest.TestCase):
+    """A collision arriving mid-flight took a false completion (#1778, round 3).
+
+    The guard ran once, in `process_pr`, before the write. `_apply_ci_updates`
+    then re-reads the live body on a retry — an owner edited the description
+    between the read and the write — and re-applied the updates to whatever
+    came back, without asking again. A twin entry injected there named the
+    same check, so the narrowing kept the update and the write landed a
+    `[complete]` on both lines.
+    """
+
+    GREEN = [
+        {
+            "status": "completed",
+            "conclusion": "success",
+            "completed_at": "2026-08-27T00:00:00Z",
+            "html_url": "https://example.invalid/run/1",
+        }
+    ]
+
+    def test_a_collision_injected_on_the_retry_read_is_refused(self) -> None:
+        clean = body_with_entries([ci_entry(index=1)])
+        injected = body_with_entries(
+            [ci_entry(index=1), dict(ci_entry(index=1), detail="a second line the owner added")]
+        )
+        pr = pr_payload(clean, labels=["blocked:evidence"])
+        reads = {"n": 0}
+        written: dict[str, str] = {}
+        gh_calls: list[list[str]] = []
+
+        def fake_gh_json(args, env):
+            if not any("pulls/321" in arg for arg in args):
+                return None
+            reads["n"] += 1
+            # 1: `process_pr`'s own read, clean. 2 onward: the retry's read,
+            # by which time the description carries the collision.
+            pr["body"] = clean if reads["n"] == 1 else injected
+            return pr
+
+        with (
+            mock.patch.object(verify, "_gh_json", side_effect=fake_gh_json),
+            mock.patch.object(verify, "check_runs_for", return_value=self.GREEN),
+            mock.patch.object(
+                verify, "_write_pr_body", side_effect=lambda n, b, e: written.update(body=b) or True
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+
+        self.assertNotIn("body", written, "a collision arriving mid-flight was written")
+        self.assertNotIn(
+            ["pr", "edit", "321", "--remove-label", "blocked:evidence"], gh_calls, gh_calls
+        )
+
+    def test_an_unchanged_body_on_the_retry_read_still_writes(self) -> None:
+        # The control: the guard re-running must not stop an ordinary write.
+        clean = body_with_entries([ci_entry(index=1)])
+        pr = pr_payload(clean, labels=["blocked:evidence"])
+        written: dict[str, str] = {}
+        with (
+            mock.patch.object(
+                verify,
+                "_gh_json",
+                side_effect=lambda args, env: pr if any("pulls/321" in a for a in args) else None,
+            ),
+            mock.patch.object(verify, "check_runs_for", return_value=self.GREEN),
+            mock.patch.object(
+                verify, "_write_pr_body", side_effect=lambda n, b, e: written.update(body=b) or True
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(verify, "_gh", return_value=True),
+        ):
+            verify.process_pr(321, {})
+        self.assertIn("- [complete] ", written.get("body", ""))
 
 
 class VerdictDefinitenessTests(unittest.TestCase):

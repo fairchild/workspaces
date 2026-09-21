@@ -223,35 +223,62 @@ def entry_update_for_check_run(
     }
 
 
-def duplicate_ci_indexes(entries: list[object] | None) -> list[int]:
-    """Indexes more than one `ci` entry claims, which is two answers to one requirement.
+def entry_index(entry: object) -> int | None:
+    """The index this entry claims, or None if it claims none this lane can read.
+
+    ONE definition, because three readers had three. `duplicate_ci_indexes`
+    counted only `ci` entries, `_updates_targeting_unchanged_entries` keyed on
+    the LAST entry at an index whatever its kind, and
+    `should_clear_blocked_label` iterated every `ci` entry -- and the gap
+    between them was not theoretical: one index carrying a `ci` entry and a
+    non-`ci` one passed the guard, and `update_evidence_entries` applied the
+    update to EVERY entry at that index. One green `Web CI` run rewrote a
+    `pending-ci` `diff` entry to a complete `ci` one bound to the head and
+    cleared the label, with nothing typed by hand (#1778, round 3, filed as
+    #1784).
+
+    `OverflowError` too: `1e9999` in the PR-editable metadata parses as
+    infinity, and `int()` of that raises a class the others do not cover.
+    """
+    if not isinstance(entry, dict):
+        return None
+    try:
+        return int(entry["index"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def entries_by_index(entries: list[object] | None) -> dict[int, list[dict[str, object]]]:
+    """Every entry this lane can read, grouped by the index it claims -- ALL kinds."""
+    grouped: dict[int, list[dict[str, object]]] = {}
+    for entry in entries or []:
+        index = entry_index(entry)
+        if index is not None:
+            grouped.setdefault(index, []).append(entry)  # type: ignore[arg-type]
+    return grouped
+
+
+def colliding_indexes(entries: list[object] | None) -> list[int]:
+    """Indexes more than one entry claims, of ANY kind.
 
     An entry's index is its identity to everything downstream: the updates
-    map is keyed by it, and a second entry at the same index means one of the
-    two verdicts silently replaces the other and lands on both lines. Which
-    one wins is decided by the order the entries happen to be written in, and
+    map is keyed by it, and a second entry at the same index means one
+    verdict silently replaces the other and lands on both lines. Which one
+    wins is decided by the order the entries happen to be written in, and
     that is not a fact about the checks.
+
+    ANY kind, not `ci` alone. Scoping it to `ci` was this guard's own defect:
+    a mixed-kind index passed it, and one green run then manufactured a
+    completion on a line no check covers. The kinds of the colliding entries
+    change nothing about the ambiguity -- what is ambiguous is which entry the
+    verdict belongs to (#1778, round 3).
 
     So neither verdict is acted on. The same answer `_indistinguishable` gives
     two requested items that read alike: two answers the lane cannot choose
     between are reported as malformed rather than resolved, where the author
     can still fix it (#1778, round 2).
     """
-    seen: set[int] = set()
-    duplicates: list[int] = []
-    for entry in entries or []:
-        if not isinstance(entry, dict):
-            continue
-        if _evidence_item_kind(str(entry.get("item", "")).strip()) != "ci":
-            continue
-        try:
-            index = int(entry["index"])
-        except (KeyError, TypeError, ValueError, OverflowError):
-            continue
-        if index in seen and index not in duplicates:
-            duplicates.append(index)
-        seen.add(index)
-    return duplicates
+    return sorted(index for index, at in entries_by_index(entries).items() if len(at) > 1)
 
 
 def verdict_is_definite(runs: list[dict[str, object]] | None) -> bool:
@@ -338,9 +365,8 @@ def should_clear_blocked_label(
         item = str(entry.get("item", "")).strip()
         if _evidence_item_kind(item) != "ci":
             continue
-        try:
-            index = int(entry["index"])
-        except (KeyError, TypeError, ValueError, OverflowError):
+        index = entry_index(entry)
+        if index is None:
             return False
         update = confirmed.get(index)
         if not isinstance(update, dict):
@@ -409,17 +435,14 @@ def _updates_targeting_unchanged_entries(
     entries = evidence_entries(body)
     if entries is None:
         return {}
-    current_check_names: dict[int, str | None] = {}
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            index = int(entry["index"])
-        # OverflowError too: `1e9999` in the PR-editable metadata parses as
-        # infinity, and `int()` of that raises a class the others do not cover.
-        except (KeyError, TypeError, ValueError, OverflowError):
-            continue
-        current_check_names[index] = _ci_check_name(str(entry.get("item", "")).strip())
+    # The same grouping the guard uses, so the two cannot disagree about what
+    # an index is. An index more than one entry claims has no single check
+    # name and keeps none: its updates are dropped here as well as refused
+    # there (#1778, round 3).
+    current_check_names: dict[int, str | None] = {
+        index: (_ci_check_name(str(at[0].get("item", "")).strip()) if len(at) == 1 else None)
+        for index, at in entries_by_index(entries).items()
+    }
     return {
         index: update
         for index, update in updates.items()
@@ -460,6 +483,17 @@ def _apply_ci_updates(
     against the head it belongs to.
     """
     for attempt in range(1, MAX_WRITE_ATTEMPTS + 1):
+        # Re-run on every body this loop is about to write, not once before
+        # it. The retry re-reads a body an owner may have edited in between,
+        # and a collision arriving there took a false `[complete]` from
+        # another check's verdict because the guard had already had its turn
+        # (#1778, round 3).
+        if (shared := colliding_indexes(evidence_entries(body))):
+            log(
+                f"PR #{pr_number}: evidence entries share index(es) "
+                f"{', '.join(str(index) for index in shared)}; leaving the contract for the author"
+            )
+            return body
         safe_updates = _updates_targeting_unchanged_entries(body, updates)
         if not safe_updates:
             return body
@@ -581,7 +615,7 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
 
     updates: dict[int, dict[str, object]] = {}
     verified: dict[int, dict[str, object]] = {}
-    if (shared := duplicate_ci_indexes(entries)):
+    if (shared := colliding_indexes(entries)):
         # Two entries at one index are two answers to one requirement, and
         # which of them a verdict belongs to is decided by the order they
         # happen to be written in. Neither is acted on: nothing is verified,
@@ -591,17 +625,14 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
             f"{', '.join(str(index) for index in shared)}; leaving the contract for the author"
         )
     else:
-        recorded_status: dict[int, tuple[str, str]] = {}
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            try:
-                recorded_status[int(entry["index"])] = (
-                    str(entry.get("status", "")).strip(),
-                    str(entry.get("verified_head_sha", "")).strip(),
-                )
-            except (KeyError, TypeError, ValueError, OverflowError):
-                continue
+        recorded_status = {
+            index: (
+                str(at[0].get("status", "")).strip(),
+                str(at[0].get("verified_head_sha", "")).strip(),
+            )
+            for index, at in entries_by_index(entries).items()
+            if len(at) == 1
+        }
         for index, check_name in ci_entries_needing_verification(entries, head_sha):
             runs = check_runs_for(check_name, head_sha, env)
             update = entry_update_for_check_run(
