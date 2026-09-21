@@ -9309,6 +9309,34 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             self.assertEqual(self.counts(body), (1, 0))
         self.assertIn("- [complete] ", body)
 
+    def test_the_turn_s_own_render_caps_it_too(self) -> None:
+        """The summary path, which had no test and no working source (#1751, round 7).
+
+        `render_execution_summary_body` is the factory turn's render, and it
+        passed no previous lines at all -- the reconstruction inside the write
+        was its only source, and that source reads a body whose metadata this
+        run has already replaced. So the turn's path accrued a copy per push
+        exactly as the lane path had, and nothing said so.
+
+        The caller passes the lines now, from the body it was handed, which is
+        the same shape the lane path passes.
+        """
+        run_contributor = sys.modules["run_contributor_evidence_kinds"]
+        body = self.body_with(f"{self.DETAIL} on head aaaaaaaaaaaX")
+        seen = []
+        for push in range(3):
+            with contextlib.redirect_stderr(io.StringIO()):
+                body, errors = run_contributor.render_execution_summary_body(
+                    body,
+                    requested_evidence=[self.ITEM],
+                    evidence_complete=None,
+                    evidence_blocked=None,
+                    evidence_pending_ci=[f"1 -- {self.DETAIL} on head aaaaaaaaaaa{push}"],
+                )
+            self.assertEqual(errors, [])
+            seen.append(self.counts(body))
+        self.assertEqual(seen, [(1, 0)] * 3)
+
     def test_the_line_the_last_run_rendered_is_reconstructible(self) -> None:
         evidence = self.evidence()
         entries = evidence.evidence_entries_of(self.body_with("a detail"))

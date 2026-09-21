@@ -2872,6 +2872,17 @@ def write_evidence_status_section(
     first, because the cut's pattern ended on one and a heading on the last
     line was a section to every reader and none to the cut; the parser reads
     that heading, so the terminator is no longer part of the question.
+
+    `previously_rendered` is the lines the LAST run rendered, and it comes
+    from the CALLER on both paths -- reconstructed from the body that caller
+    was handed, before its metadata was stripped. There is one source for it
+    because there was briefly two: a reconstruction inside this function read
+    `source`, which by the time the write runs carries THIS run's entries on
+    both paths, so it rebuilt the lines `rendered` already held and capped
+    nothing. It was dead on the lane path and the only source on the turn's,
+    where nothing exercised it (#1751, round 7). Both callers now pass the
+    same shape, which is what makes this the one-function case rather than
+    the one-rule-and-one-target case.
     """
     source = body
     # Read once: the items are walked for every line of every section, and a
@@ -2900,12 +2911,7 @@ def write_evidence_status_section(
     # and a run URL and changes on every push, so a cap keyed on the rendered
     # line brought the uncapped rate back with zero status changes (#1751,
     # round 6).
-    metadata = _extract_evidence_metadata(source)
-    owned = [
-        *rendered,
-        *previously_rendered,
-        *rendered_entry_lines(metadata.get("entries") if isinstance(metadata, dict) else None),
-    ]
+    owned = [*rendered, *previously_rendered]
     # Every line this write is about to render, asked of its own reader. A
     # line the reader cannot read back is one the next run will take for the
     # author's and carry a copy of, per run -- so it is said here rather than
@@ -3070,6 +3076,12 @@ def render_execution_summary_body(
         stripped_body,
         evidence_lines,
         recorded_items=[str(entry["item"]) for _, entry in sorted(evidence_map.items())],
+        # From the body this was HANDED, before its metadata was stripped --
+        # the same source the lane path passes. Reconstructing it inside the
+        # write instead read `source`, which by then carries THIS run's
+        # entries on both paths, so it rebuilt the lines `rendered` already
+        # held and capped nothing (#1751, round 7).
+        previously_rendered=rendered_entry_lines(evidence_entries_of(summary_body)),
     )
     rendered, write_refusal = write.body, write.refusal
     if announcements is not None:
