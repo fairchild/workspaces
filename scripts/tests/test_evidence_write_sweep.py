@@ -17,11 +17,13 @@ Safe to run with no network, no secrets, no GitHub and no UI.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "evidence-write-sweep.py"
@@ -31,6 +33,38 @@ assert spec and spec.loader
 sweep_script = importlib.util.module_from_spec(spec)
 sys.modules["evidence_write_sweep"] = sweep_script
 spec.loader.exec_module(sweep_script)
+
+helpers = sys.modules["_helpers"]
+
+# What a run with no token raises, in the words the runtime uses. The
+# environment is an INPUT to this suite rather than something it inherits: the
+# figures below depend on whether the placement check can see the page, and a
+# suite that reads that off the ambient environment says one thing on a laptop
+# and another on the CI leg that carries a token -- which is what it did
+# (#1773, round 7). It also keeps the suite off the network, the way the kinds
+# suite's module-wide refusal does.
+NO_TOKEN = "no GH_TOKEN or GITHUB_TOKEN in the environment"
+
+
+@contextlib.contextmanager
+def page_unavailable(*, transient: bool):
+    """The renderer seam raising one named cause, whatever the environment holds.
+
+    `transient=False` is the tokenless laptop: a permanent local condition, so
+    the write refuses rather than placing a section on a weaker check than a
+    lane runs. `transient=True` is a blip -- an HTTP failure, an unreachable
+    renderer -- where the write proceeds unverified and says so.
+    """
+    reason = NO_TOKEN if not transient else "the renderer answered HTTP 503"
+
+    def refuse(text: str) -> str:
+        raise helpers.RendererUnavailable(reason, transient=transient)
+
+    with (
+        mock.patch.object(helpers, "render_markdown", side_effect=refuse),
+        mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
+    ):
+        yield
 
 
 class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
@@ -49,7 +83,11 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.outcomes = sweep_script.sweep()
+        # Driven, not inherited: see `page_unavailable`. These are the figures
+        # a tokenless run prints, which is the run the committed instrument
+        # makes on a laptop and in any lane without a token.
+        with page_unavailable(transient=False):
+            cls.outcomes = sweep_script.sweep()
         cls.summary = sweep_script.report(cls.outcomes)
 
     def test_no_body_loses_a_line_without_the_runtime_saying_so(self) -> None:
@@ -107,15 +145,20 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         self.assertEqual(self.summary["refusals"], self.REFUSALS)
 
     def test_the_bodies_this_run_could_not_measure_are_counted_and_named(self) -> None:
-        """What a tokenless run cannot see, said rather than absorbed (#1773, round 6).
+        """What a run without a page cannot see, said rather than absorbed (#1773, round 6).
 
         Every corpus body carrying a `<details>` is one the placement check
-        would ask the page about, and with no token there is no page. The
-        write refuses those rather than placing a section on a weaker check
-        than a lane runs -- the right answer for the write, and a blind spot
-        for this instrument, so the instrument names it. A figure a pull
-        request quotes is worth quoting only with its denominator, and the
-        denominator here is 168 minus these.
+        asks the page about, and a permanent local condition -- no token --
+        means there is no page to ask. The write refuses those rather than
+        placing a section on a weaker check than a lane runs: the right answer
+        for the write, and a blind spot for this instrument, so the instrument
+        names it. A figure a pull request quotes is worth quoting only with
+        its denominator, and the denominator here is 168 minus these.
+
+        Round 6 wrote this test against the ambient environment, so it passed
+        on a laptop and failed on the CI leg that carries a token. The
+        environment is an input now: the cause is raised inside the test, and
+        the sibling below drives the other one.
         """
         unmeasured = [outcome for outcome in self.outcomes if outcome.unasked]
         self.assertEqual(self.summary["bodies_the_page_could_not_be_asked_about"], len(unmeasured))
@@ -123,12 +166,35 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
             {outcome.label.split(" / ")[0] for outcome in unmeasured},
             {"a closed details note", "an element left open"},
         )
+        self.assertEqual(self.summary["refusals"], self.REFUSALS)
         # Disjoint over this corpus: a hazard refusal and an unasked page are
         # never the same body, so the two figures add up to every refusal.
         self.assertEqual(
             self.summary["refusals"] + self.summary["bodies_the_page_could_not_be_asked_about"],
             sum(outcome.refused for outcome in self.outcomes),
         )
+
+    def test_a_cause_the_write_proceeds_past_leaves_nothing_unmeasured(self) -> None:
+        """The sibling: the count tracks the CAUSE, not the corpus (#1773, round 7).
+
+        A blip -- an HTTP failure, an unreachable renderer -- is not a reason
+        to refuse, so the write goes ahead unverified and every body is
+        measured. The hazard refusals are the same 22 either way, which is the
+        property worth having: what the page can or cannot say changes what
+        this instrument can SEE and never changes what it counts as a cost.
+
+        Which half asks reality: neither of these two drives a real page --
+        both raise a named cause at the seam, so they answer the same on a
+        laptop and on a lane with a token. The live both-mode figures are in
+        the pull request body, measured by running the committed instrument
+        each way.
+        """
+        with page_unavailable(transient=True):
+            summary = sweep_script.report(sweep_script.sweep())
+        self.assertEqual(summary["bodies_the_page_could_not_be_asked_about"], 0)
+        self.assertEqual(summary["refusals"], self.REFUSALS)
+        self.assertEqual(summary["bodies_losing_a_line_silently"], 0)
+        self.assertEqual(summary["bodies_not_a_fixed_point"], 0)
 
     def test_the_refusals_are_the_two_hazards_and_not_a_shape_that_should_write(self) -> None:
         # A refusal count is only a cost if it is the cost of the hazards. Both
