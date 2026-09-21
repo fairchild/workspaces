@@ -9196,6 +9196,43 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
         self.assertEqual([note for note in said if "replaced this line" in note], [])
 
     # intent: guard
+    def test_a_line_that_extends_a_rendered_item_is_not_that_item(self) -> None:
+        """Where the item match has to stop, and why the tail is checked.
+
+        The items the write rendered are matched against the line's text
+        after the status token, and a match that stopped at "starts with the
+        item" would call `[pending-ci] verify build on macOS -- waiting` a
+        line rendered for the item `verify build`. The author's line then
+        leaves the body with nothing said, which is the silence this whole
+        change is about. The tail after the item has to be the detail
+        separator or nothing at all (#1778, round 19).
+        """
+        entries = [
+            {"index": 1, "item": "verify build", "status": "pending-ci",
+             "detail": "waiting", "kind": "ci"},
+            "legacy",
+        ]
+        unowned = "- [pending-ci] verify build on macOS -- waiting"
+        source = self.body(entries).replace(
+            "\n\n## Validation", f"\n{unowned}\n\n## Validation", 1
+        )
+        said: list[str] = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            written = self.evidence().update_evidence_entries(
+                source, {1: {"status": "complete", "detail": "green"}}, announcements=said
+            )
+        self.assertNotIn(unowned.lstrip("- "), written, "the line did not leave; the case is not built")
+        self.assertEqual(len(said), 1, said)
+        self.assertIn(
+            "This write replaced this line with nothing: "
+            "`[pending-ci] verify build on macOS -- waiting`.",
+            said[0],
+        )
+        # And the entry's own line, rendered back under the shorter item, is
+        # not named beside it.
+        self.assertNotIn("`[complete] verify build --", said[0])
+
+    # intent: guard
     def test_an_item_carrying_the_separator_matches_its_own_line(self) -> None:
         """Round 16's defect in the shape a contract-less split brings back.
 
