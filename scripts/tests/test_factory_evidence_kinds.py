@@ -8610,7 +8610,6 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 self.assertIn(self.THEIRS, self.flat(twice))
                 self.assertEqual(said, [])
 
-    # intent: guard
     # Guards: a stale reading of a recorded item stays the machine's -- green on main,
     # and the half of the rule this round's readers must not break.
     # intent: control
@@ -8739,7 +8738,6 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             )
         )
 
-    # intent: guard
     # Guards: the writer reads the wrapped spellings as the page does -- true on main,
     # said out loud here so the reader this arc unified cannot quietly narrow.
     # intent: control
@@ -9520,7 +9518,6 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             f"- [pending-ci] {self.ITEM} -- {detail}\n\n## Validation\n\n- ran it\n"
         )
 
-    # intent: guard
     # Guards: seven pushes with a changing detail accrue nothing.
     # intent: fix
     def test_seven_pushes_with_a_changing_detail_and_no_status_change(self) -> None:
@@ -9537,7 +9534,6 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             seen.append(self.counts(body))
         self.assertEqual(seen, [(1, 0)] * 7)
 
-    # intent: guard
     # Guards: a status change costs no copy. Main passes it under a different key;
     # it pins the property the entry key has to keep.
     # intent: fix
@@ -9564,7 +9560,6 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             self.assertEqual(self.counts(body), (1, 0))
         self.assertIn("- [complete] ", body)
 
-    # intent: guard
     # Guards: the cap runs on the path production takes, not only on a hand-made body.
     # intent: fix
     def test_the_turn_caps_it_too_through_the_entry_point_production_uses(self) -> None:
@@ -9861,7 +9856,6 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         written, _ = self.written(3, recorded="complete")
         self.assertEqual(self.counts(written), (1, 2))
 
-    # intent: guard
     # Guards: the ordinary one-copy body -- the case the cap must leave alone.
     # intent: control
     def test_one_copy_is_still_the_machines_and_is_replaced(self) -> None:
@@ -9936,7 +9930,6 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertTrue(owner.claim(line), "the second entry's claim was collapsed away")
         self.assertFalse(owner.claim(line))
 
-    # intent: guard
     # Guards: no accrual for the mirror pair. Green on main, red at `15e80e9e`: it
     # guards a regression this PR introduced and then fixed.
     # intent: fix
@@ -9994,7 +9987,6 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertEqual(sorted(instrument), claimed)
         self.assertEqual(len(claimed), 1, "one entry, one line")
 
-    # intent: guard
     # Guards: the instrument's owner holds the line the write is about to
     # render, over an update detail carrying a construct and one past the
     # length limit. Green at `76c65118`; it is the test that kills the

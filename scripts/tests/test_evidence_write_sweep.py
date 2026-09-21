@@ -761,7 +761,6 @@ class TheTwoProducersOfOneReadingAgreeAcrossTheGrammarTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.forms = list(generated_status_forms())
 
-    # intent: guard
     # Guards: the generated grammar covers every axis the suite claims -- a property
     # of the fixture generator, which main's generator also had.
     # intent: control
