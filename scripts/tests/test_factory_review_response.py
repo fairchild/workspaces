@@ -1289,7 +1289,13 @@ class WhatTheAuthorIsToldMatchesWhatTheWriterDoesTests(unittest.TestCase):
     """
 
     def entry(self, index: object, item: str = "CI: `Web CI` green on the PR head"):
-        return {"index": index, "item": item, "status": "pending-ci", "detail": "waiting"}
+        return {
+            "index": index,
+            "item": item,
+            "status": "pending-ci",
+            "detail": "waiting",
+            "kind": "ci",
+        }
 
     # intent: fix
     def test_a_colliding_record_is_named_as_waiting_on_the_author(self) -> None:
@@ -1303,6 +1309,44 @@ class WhatTheAuthorIsToldMatchesWhatTheWriterDoesTests(unittest.TestCase):
         block = response._pending_block([self.entry(1), self.entry(2, "CI: `Other CI` green")])
         self.assertIn("clear on their own", block)
         self.assertNotIn("share an index", block)
+
+    # intent: fix
+    def test_a_pending_entry_colliding_with_any_status_waits_on_the_author(self) -> None:
+        """Round 12 asked the collision of the PENDING slice (#1778, round 13).
+
+        `update_evidence_entries` refuses a record with two entries at one
+        index whatever their statuses are, so a pending entry sharing an
+        index with a COMPLETE or BLOCKED one is just as unwritable as two
+        pending ones — and the lane told the author it "clears on its own",
+        which is an instruction to wait for a lane that will never run. The
+        collision is asked of the whole record now.
+        """
+        pending = self.entry(1)
+        for name, sibling in (
+            ("complete", dict(self.entry(1, "manual QA on device"), status="complete")),
+            ("blocked", dict(self.entry(1, "manual QA on device"), status="blocked")),
+            ("a second pending", self.entry(1, "CI: `Other CI` green on the PR head")),
+        ):
+            with self.subTest(sibling=name):
+                keys = [one.key for one in response.evidence_blockers([pending, sibling])]
+                self.assertIn("evidence-colliding-index", keys, keys)
+                self.assertNotIn("evidence-pending-ci", keys, keys)
+                said = " ".join(
+                    one.detail for one in response.evidence_blockers([pending, sibling])
+                )
+                self.assertIn("carries more than one evidence entry", said)
+                self.assertNotIn("clears on its own", said)
+
+    # intent: control
+    def test_distinct_indexes_still_clear_on_their_own(self) -> None:
+        keys = [
+            one.key
+            for one in response.evidence_blockers(
+                [self.entry(1), dict(self.entry(2, "manual QA on device"), status="complete")]
+            )
+        ]
+        self.assertIn("evidence-pending-ci", keys, keys)
+        self.assertNotIn("evidence-colliding-index", keys, keys)
 
     # intent: guard
     def test_the_lane_asks_the_writers_own_collision_rule(self) -> None:

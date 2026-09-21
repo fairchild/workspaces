@@ -3076,10 +3076,12 @@ class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
         ):
             verify.process_pr(321, {})
         said = [note for notes in posted for note in notes]
+        # Exact rather than by keyword: the repaired body writes cleanly, so
+        # the note list composed from it is EMPTY. Composed from the stale
+        # copy it carries the block's sentence, which is the comment the
+        # author had already acted on.
         self.assertEqual(
-            [note for note in said if "code fence" in note or "never came" in note or "<pre" in note],
-            [],
-            f"the author was told to close a block they had already closed: {said}",
+            said, [], f"the author was told to fix what they had just fixed: {said}"
         )
 
     # intent: control
