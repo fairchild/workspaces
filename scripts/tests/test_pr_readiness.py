@@ -167,19 +167,67 @@ def every_claim_says_something(claims, label: str):
     return claims
 
 
-def claims_tables(namespace: dict) -> set[str]:
-    """Every claims table a module binds, by KIND rather than by a list.
+def a_claim_shaped_value(value: object) -> bool:
+    """Whether this is what a claims table's rows hold: `(contains, absent, order)`."""
+    if not isinstance(value, tuple) or len(value) != 3:
+        return False
+    contains, absent, order = value
+    if not all(isinstance(axis, tuple) for axis in (contains, absent, order)):
+        return False
+    if not all(isinstance(needle, str) for needle in (*contains, *absent)):
+        return False
+    return all(
+        isinstance(pair, tuple) and len(pair) == 2 and all(isinstance(end, str) for end in pair)
+        for pair in order
+    )
 
-    The population the round's thesis is about. A hardcoded pair of readers
-    meant a third claims table with no guard at all left the suite green
-    (measured at `8d7bf4c1`: `Ran 319 tests`, `OK`), so what a table IS gets
-    stated -- a module-level mapping whose name ends in `_CLAIMS` -- and the
-    tables are read off the module rather than written down twice.
+
+def claim_shaped_tables(namespace: dict) -> set[str]:
+    """Every binding whose VALUE is a claims table, whatever it is called.
+
+    The kind, read off the thing rather than off its label. A name suffix is
+    a surface property: it says what somebody called the binding, not what
+    the binding is, and a population enumerated by a surface property is the
+    defect this branch has closed at five levels (#1771, round 17).
     """
     return {
         name
         for name, value in namespace.items()
-        if name.endswith(CLAIMS_TABLE_SUFFIX) and isinstance(value, dict)
+        if isinstance(value, dict)
+        and value
+        and all(a_claim_shaped_value(row) for row in value.values())
+    }
+
+
+def claims_tables(namespace: dict) -> set[str]:
+    """Every claims table a module binds: named as one AND shaped as one.
+
+    The population the round's thesis is about. A hardcoded pair of readers
+    meant a third claims table with no guard at all left the suite green
+    (measured at `8d7bf4c1`: `Ran 319 tests`, `OK`), so what a table IS gets
+    stated and the tables are read off the module rather than written down
+    twice. Both halves are asked, because either alone is a surface: the
+    suffix says what it was called, the shape says what it holds, and
+    `mislabelled` is what keeps them the same set over this module.
+    """
+    return {
+        name for name in claim_shaped_tables(namespace) if name.endswith(CLAIMS_TABLE_SUFFIX)
+    }
+
+
+def mislabelled(namespace: dict) -> dict[str, list[str]]:
+    """Where the two enumerations of one kind disagree, named both ways.
+
+    A claim-shaped table nobody labelled is a table the population check
+    would miss; a binding labelled `_CLAIMS` that holds something else is a
+    label with nothing behind it. Neither is an error on its own -- this is
+    what reports them.
+    """
+    labelled = {name for name in namespace if name.endswith(CLAIMS_TABLE_SUFFIX)}
+    shaped = claim_shaped_tables(namespace)
+    return {
+        "claim-shaped but not named `_CLAIMS`": sorted(shaped - labelled),
+        "named `_CLAIMS` but not claim-shaped": sorted(labelled - shaped),
     }
 
 
@@ -334,20 +382,25 @@ class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
         differ. Both directions are seeded, because a predicate that rejects
         everything would pass the rejecting half alone.
         """
+        # Asked through the GUARD rather than through the predicate directly:
+        # the guard is the seam both tables come through, and it exists at
+        # every base this is measured at, so what this reports is behaviour
+        # rather than a name this round adds.
         for shape, claim in self.SAYS_NOTHING.items():
             with self.subTest(rejects=shape):
-                self.assertFalse(says_something(claim), f"{shape}: read as a claim")
                 with self.assertRaises(AssertionError) as raised:
                     every_claim_says_something({"a row that pins nothing": claim}, "seed")
                 self.assertIn("a row that pins nothing", str(raised.exception))
         for shape, claim in self.WHOLE.items():
             with self.subTest(accepts=shape):
-                self.assertTrue(says_something(claim), f"{shape}: a real claim was rejected")
-        # And the real tables pass it, which is the other direction over the
-        # population this file actually has.
-        for name in sorted(claims_tables(vars(sys.modules[__name__]))):
-            with self.subTest(table=name):
-                every_claim_says_something(getattr(sys.modules[__name__], name), name)
+                self.assertIs(
+                    every_claim_says_something({"a row": claim}, "seed")["a row"], claim,
+                    f"{shape}: a real claim was rejected",
+                )
+        # What the REAL tables do under it is not asserted here: each table's
+        # own test calls the guard on every run, and a hand list of the two
+        # names written for this loop would be the shape this round removes
+        # one level up.
 
     def readers_of(self, tables: set[str]) -> list[str]:
         """The qualnames of the tests whose own source names a claims table.
@@ -438,17 +491,54 @@ class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
         planted = {
             "PAGE_READER_CLAIMS": {"a row": (("x",), (), ())},
             "THIRD_CLAIMS": {"a planted row": ((), (), ())},
-            "NOT_A_TABLE": ("x", "y"),
-            "SOMETHING_ELSE": {"a row": (("x",), (), ())},
+            # Named as a table and shaped like nothing: the member that says
+            # the suffix alone is not the kind. Without it, dropping the
+            # shape half of the enumerator left the suite green (a surviving
+            # mutant of this round).
+            "WRONG_SHAPE_CLAIMS": ("x", "y"),
+            # A claims table nobody labelled: found by SHAPE and reported as
+            # unlabelled, which is the other direction of the same question.
+            "PAGE_READER_SHAPES": {"a row": (("x",), (), ())},
+            # Labelled, a dict, and holding something that is not a claim.
+            "MALFORMED_CLAIMS": {"a row": ("x", (), ())},
+            "NOT_A_TABLE_AT_ALL": 7,
         }
         self.assertEqual(
             claims_tables(planted), {"PAGE_READER_CLAIMS", "THIRD_CLAIMS"},
             "the enumerator reads something other than claims tables, or misses one",
         )
         self.assertEqual(
+            mislabelled(planted),
+            {
+                "claim-shaped but not named `_CLAIMS`": ["PAGE_READER_SHAPES"],
+                "named `_CLAIMS` but not claim-shaped": ["MALFORMED_CLAIMS", "WRONG_SHAPE_CLAIMS"],
+            },
+            "the two enumerations of one kind do not report their disagreement",
+        )
+        self.assertEqual(
             unguarded(claims_tables(planted), {"PAGE_READER_CLAIMS"}), ["THIRD_CLAIMS"]
         )
         self.assertEqual(unguarded(claims_tables(planted), {"PAGE_READER_CLAIMS", "THIRD_CLAIMS"}), [])
+
+    # intent: fix
+    # marker: red at `8d7bf4c1`, its own base, on the NAMES this round adds
+    # (`mislabelled`, `claim_shaped_tables`): the two enumerations do not
+    # exist there to disagree (#1771, round 17).
+    def test_the_two_enumerations_of_the_kind_agree_over_this_module(self) -> None:
+        """A name suffix says what a binding was called; the shape says what it is.
+
+        The population check reads both and takes the intersection, so this
+        is what keeps that intersection from quietly dropping a member: a
+        claim-shaped table nobody labelled would be outside the population,
+        and a labelled binding holding something else would be a label with
+        nothing behind it. Over this module the two enumerations are the same
+        set, and this says so rather than assuming it.
+        """
+        self.assertEqual(
+            mislabelled(vars(sys.modules[__name__])),
+            {"claim-shaped but not named `_CLAIMS`": [], "named `_CLAIMS` but not claim-shaped": []},
+            "this module's claims tables and its `_CLAIMS` bindings are not the same set",
+        )
 
 
 class TheFixtureGuardNamesWhatItExpectsTests(unittest.TestCase):
