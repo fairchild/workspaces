@@ -67,7 +67,7 @@ def setUpModule() -> None:
 
     def refuse_for_the_skill(text: str) -> str:
         raise helpers.RendererUnavailable(
-            "this suite does not reach the renderer", transient=True
+            "this suite does not reach the renderer", cause="unreachable"
         )
 
     helpers.render_markdown = refuse_for_the_skill
@@ -1759,7 +1759,7 @@ class MergeabilitySeedTests(unittest.TestCase):
 
     def test_seeded_pr_body_passes_readiness_mergeability_checks(self) -> None:
         seeded = run_contributor.seed_mergeability_section(
-            self.SUMMARY_BODY, changed_files=self.CHANGED_FILES
+            self.SUMMARY_BODY, announcements=[], changed_files=self.CHANGED_FILES
         )
         body = run_contributor.compose_pr_body(
             1032, "April Clearwater, Application Lead", seeded
@@ -1773,7 +1773,7 @@ class MergeabilitySeedTests(unittest.TestCase):
 
     def test_seed_prefills_surface_and_agent_sections(self) -> None:
         seeded = run_contributor.seed_mergeability_section(
-            self.SUMMARY_BODY, changed_files=self.CHANGED_FILES
+            self.SUMMARY_BODY, announcements=[], changed_files=self.CHANGED_FILES
         )
         section = pr_readiness.extract_section(seeded, "Mergeability")
 
@@ -1794,7 +1794,7 @@ class MergeabilitySeedTests(unittest.TestCase):
         )
 
     def test_seed_uses_non_blank_placeholders_when_agent_says_nothing(self) -> None:
-        seeded = run_contributor.seed_mergeability_section("", changed_files=[])
+        seeded = run_contributor.seed_mergeability_section("", announcements=[], changed_files=[])
         section = pr_readiness.extract_section(seeded, "Mergeability")
 
         for field in (
@@ -1820,7 +1820,7 @@ class MergeabilitySeedTests(unittest.TestCase):
 
         self.assertEqual(
             run_contributor.seed_mergeability_section(
-                authored, changed_files=["Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift"]
+                authored, announcements=[], changed_files=["Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift"]
             ),
             authored,
         )
@@ -1849,7 +1849,7 @@ class MergeabilitySeedTests(unittest.TestCase):
         self.assertEqual(errors, [])
 
         seeded = run_contributor.seed_mergeability_section(
-            rendered, changed_files=self.CHANGED_FILES
+            rendered, announcements=[], changed_files=self.CHANGED_FILES
         )
         _, evidence_errors = run_contributor.validate_evidence_accounting(
             seeded, ["swift test --filter WorkspaceServiceTests"]
@@ -1895,7 +1895,7 @@ class PRShapeTests(unittest.TestCase):
 
     def test_the_mergeability_seed_reads_the_what_section(self) -> None:
         seeded = run_contributor.seed_mergeability_section(
-            MergeabilitySeedTests.SUMMARY_BODY, changed_files=["web-next/src/lib/db/x.ts"]
+            MergeabilitySeedTests.SUMMARY_BODY, announcements=[], changed_files=["web-next/src/lib/db/x.ts"]
         )
         section = pr_readiness.extract_section(seeded, "Mergeability")
         self.assertIn(
@@ -1905,7 +1905,7 @@ class PRShapeTests(unittest.TestCase):
 
     def test_the_seed_still_reads_a_body_written_under_the_old_heading(self) -> None:
         older = "## Summary\n- Reject dot-only segments in repo names\n"
-        seeded = run_contributor.seed_mergeability_section(older, changed_files=[])
+        seeded = run_contributor.seed_mergeability_section(older, announcements=[], changed_files=[])
         section = pr_readiness.extract_section(seeded, "Mergeability")
         self.assertIn(
             "Reject dot-only segments",
@@ -2747,7 +2747,7 @@ class RevisionTurnTests(unittest.TestCase):
     def _rendered_pr_body(self, data: dict[str, object]) -> str:
         execution = sys.modules["execution"]
         summary, _ = execution.build_execution_summary_body(data, requested_evidence=[])
-        seeded = execution.seed_mergeability_section(summary, changed_files=[])
+        seeded = execution.seed_mergeability_section(summary, announcements=[], changed_files=[])
         return execution.compose_pr_body(42, self.PERSONA, seeded)
 
     def _route(

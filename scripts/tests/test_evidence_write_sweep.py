@@ -60,10 +60,9 @@ def page_unavailable(*, transient: bool):
     def refuse(text: str) -> str:
         raise helpers.RendererUnavailable(
             reason,
-            transient=transient,
-            # A permanent cause carries the action that resolves it, because
-            # refusing without one is a dead end (#1773, round 8).
-            repair=None if transient else "export GH_TOKEN or GITHUB_TOKEN and run again",
+            # The cause names the family and the repair together: a raise site
+            # cannot pair them wrongly (#1773, round 9).
+            cause="server error" if transient else "no token",
         )
 
     with (

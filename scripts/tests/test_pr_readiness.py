@@ -1727,6 +1727,16 @@ RECORD_COMMAND = (
     f"{RECORD_ENV}=1 GH_TOKEN=$(gh auth token) "
     "uv run --script scripts/tests/test_pr_readiness.py"
 )
+# The command that re-asks EVERY recording, whichever suite first made it.
+# The drift test compares all of them and used to name the line above, which
+# re-records only the bodies this suite drives -- so an author told a
+# recording had drifted was handed a command that could not reach most of
+# them (#1790, #1773 round 9). This one walks the index itself.
+REINDEX_COMMAND = (
+    f"{RECORD_ENV}=1 GH_TOKEN=$(gh auth token) uv run --script "
+    "scripts/tests/test_pr_readiness.py "
+    "RecordedRendererResponseTests.test_the_recordings_still_match_the_live_renderer"
+)
 
 
 # Captured before `setUpModule` refuses the renderer for the whole file: the
@@ -2370,13 +2380,20 @@ class RecordedRendererResponseTests(unittest.TestCase):
     def test_the_recordings_still_match_the_live_renderer(self) -> None:
         if not (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")):
             self.skipTest("no GH_TOKEN or GITHUB_TOKEN: the live renderer cannot be asked")
+        # Under the record flag this IS the recorder for every entry: it walks
+        # the index rather than the bodies one suite happens to drive, so the
+        # command its failure names can refresh anything it compares.
+        recording = bool(os.environ.get(RECORD_ENV))
         for digest, entry in rendered_index().items():
             text = indexed_body(entry)
             with self.subTest(digest=digest[:12]):
+                if recording:
+                    record_rendered(text)
+                    continue
                 self.assertEqual(
                     _LIVE_RENDER(text),
                     rendered_fixture_path(text).read_text(encoding="utf-8"),
-                    f"the renderer's output changed; re-record with {RECORD_COMMAND}",
+                    f"the renderer's output changed; re-record with {REINDEX_COMMAND}",
                 )
 
 
@@ -4267,7 +4284,7 @@ class TheRuntimeSeedsASectionAndThisGateThenReadsItTests(unittest.TestCase):
         reader = self.reader()
         self.assertFalse(reader.has_markdown_section(self.FENCED_EXAMPLE_BODY, "Mergeability"))
         seeded = self.seeder().seed_mergeability_section(
-            self.FENCED_EXAMPLE_BODY, changed_files=["Sources/Foo.swift"]
+            self.FENCED_EXAMPLE_BODY, announcements=[], changed_files=["Sources/Foo.swift"]
         )
         self.assertTrue(reader.has_markdown_section(seeded, "Mergeability"))
         self.assertEqual(
@@ -4283,7 +4300,7 @@ class TheRuntimeSeedsASectionAndThisGateThenReadsItTests(unittest.TestCase):
         # the start disagreed. Now both starts do too, so the two readers
         # return the same text and the gate passes the body the factory heals.
         seeded = self.seeder().seed_mergeability_section(
-            self.FENCED_EXAMPLE_BODY, changed_files=["Sources/Foo.swift"]
+            self.FENCED_EXAMPLE_BODY, announcements=[], changed_files=["Sources/Foo.swift"]
         )
         gate_read = pr_readiness.extract_section(seeded, "Mergeability")
         self.assertIn("`Sources/Foo.swift`", gate_read)
@@ -4322,7 +4339,7 @@ class TheRuntimeSeedsASectionAndThisGateThenReadsItTests(unittest.TestCase):
         question does not arise.
         """
         seeded = self.seeder().seed_mergeability_section(
-            self.FENCED_EXAMPLE_BODY, changed_files=["Sources/Foo.swift"]
+            self.FENCED_EXAMPLE_BODY, announcements=[], changed_files=["Sources/Foo.swift"]
         )
         # Every fence in the body closes, and now so does every fence in the
         # gate's slice of it -- because there is none.
@@ -4390,7 +4407,7 @@ class TheSeederAndThisGateAskOneQuestionTests(unittest.TestCase):
         for name, heading in self.SHAPES.items():
             with self.subTest(shape=name):
                 body = self.BODY.format(heading=heading)
-                seeded = self.seeder().seed_mergeability_section(body, changed_files=self.FILES)
+                seeded = self.seeder().seed_mergeability_section(body, announcements=[], changed_files=self.FILES)
                 self.assertEqual(seeded, body, "the seeder wrote a section the body already showed")
                 self.assertEqual(pr_readiness.evaluate(pr(body), self.FILES).failures, [])
 
@@ -4399,14 +4416,14 @@ class TheSeederAndThisGateAskOneQuestionTests(unittest.TestCase):
         # A literal heading the page shows: nothing is written.
         literal = self.BODY.format(heading="## Mergeability")
         self.assertTrue(reader.has_markdown_section(literal, "Mergeability"))
-        self.assertEqual(seeder.seed_mergeability_section(literal, changed_files=self.FILES), literal)
+        self.assertEqual(seeder.seed_mergeability_section(literal, announcements=[], changed_files=self.FILES), literal)
         # A fenced example: the page does not show it, so the seeder goes in --
         # and this gate does not read it either.
         fenced = TheRuntimeSeedsASectionAndThisGateThenReadsItTests.FENCED_EXAMPLE_BODY
         self.assertFalse(reader.has_markdown_section(fenced, "Mergeability"))
         self.assertEqual(pr_readiness.extract_section(fenced, "Mergeability"), "")
         self.assertNotEqual(
-            seeder.seed_mergeability_section(fenced, changed_files=self.FILES), fenced
+            seeder.seed_mergeability_section(fenced, announcements=[], changed_files=self.FILES), fenced
         )
         # And the shapes the page shows: both readers find them, so neither
         # half of the old conjunction is left to be load-bearing.

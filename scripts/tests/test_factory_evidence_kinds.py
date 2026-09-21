@@ -204,7 +204,7 @@ def setUpModule() -> None:
         return
 
     def refuse(text: str) -> str:
-        raise helpers.RendererUnavailable(SUITE_UNVERIFIED, transient=True)
+        raise helpers.RendererUnavailable(SUITE_UNVERIFIED, cause="unreachable")
 
     _RENDERER_REFUSED = mock.patch.object(helpers, "render_markdown", side_effect=refuse)
     _RENDERER_REFUSED.start()
@@ -5852,7 +5852,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
             result = execution.seed_mergeability_section(
-                self.FENCED_EXAMPLE_BODY, changed_files=["docs/x.md"]
+                self.FENCED_EXAMPLE_BODY, announcements=[], changed_files=["docs/x.md"]
             )
         self.assertNotEqual(result, self.FENCED_EXAMPLE_BODY)
         self.assertEqual(spoke.getvalue(), "")
@@ -6101,7 +6101,7 @@ class ASectionStartsAtAHeadingThePageShowsTests(unittest.TestCase):
         body = self.FENCED_ONLY.replace("Evidence Status", "Mergeability").replace(
             self.EXAMPLE, "- Surface: docs"
         )
-        seeded = execution.seed_mergeability_section(body, changed_files=["docs/x.md"])
+        seeded = execution.seed_mergeability_section(body, announcements=[], changed_files=["docs/x.md"])
         self.assertNotEqual(seeded, body)
         self.assertTrue(helpers.has_markdown_section(seeded, "Mergeability"))
         section = helpers.markdown_section(seeded, "Mergeability")
@@ -6118,13 +6118,13 @@ class ASectionStartsAtAHeadingThePageShowsTests(unittest.TestCase):
         body = "## Summary\n\nwhat.\n\n<pre>\nthe log I never closed\n"
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
-            seeded = execution.seed_mergeability_section(body, changed_files=["docs/x.md"])
+            seeded = execution.seed_mergeability_section(body, announcements=[], changed_files=["docs/x.md"])
         self.assertEqual(seeded, body)
         self.assertIn("is not a heading on the page", spoke.getvalue())
         self.assertIn("</pre>", spoke.getvalue())
         # And the control: close the block and the same write goes ahead.
         closed = body + "</pre>\n"
-        written = execution.seed_mergeability_section(closed, changed_files=["docs/x.md"])
+        written = execution.seed_mergeability_section(closed, announcements=[], changed_files=["docs/x.md"])
         self.assertTrue(helpers.has_markdown_section(written, "Mergeability"))
 
     def test_a_heading_the_page_shows_as_code_anywhere_else_is_left_alone(self) -> None:
@@ -9011,7 +9011,7 @@ class AFailedRenderIsNotAnAnswerAboutThisBodyTests(unittest.TestCase):
         def flaky(text: str) -> str:
             attempts.append(text)
             if len(attempts) == 1:
-                raise helpers.RendererUnavailable("the renderer answered HTTP 503", transient=True)
+                raise helpers.RendererUnavailable("the renderer answered HTTP 503", cause="server error")
             return recorded_html(text)
 
         with (
@@ -9565,7 +9565,7 @@ class TheTwoLowerFindingsTests(unittest.TestCase):
         def flaky(text: str) -> str:
             attempts.append(text)
             if len(attempts) == 1:
-                raise helpers.RendererUnavailable("the renderer answered HTTP 503", transient=True)
+                raise helpers.RendererUnavailable("the renderer answered HTTP 503", cause="server error")
             return recorded_html(text)
 
         with (
@@ -9992,33 +9992,81 @@ class TheNotesPathTakesTheSameAnswerAsTheStatusPathTests(unittest.TestCase):
         self.assertIn(f"## {self.HEADING}", written.body)
         self.assertIn(self.NOTE, written.body)
 
-    def test_no_production_caller_drops_an_inserts_answer(self) -> None:
-        """Counted over every tracked Python file, not over two of them (#1773, round 8).
+    def test_every_production_insert_reaches_an_announcement_channel(self) -> None:
+        """The property, driven, not the name, grepped (#1773, round 9).
 
-        The guard this replaces read `evidence.py` and `execution.py`, so a
-        third caller added anywhere else -- `run-contributor.py`, a new
-        script -- kept it green. `git ls-files` is the enumeration, the way
-        the pass counted it.
+        This read production for `insert_markdown_section` -- the name round 8
+        DELETED -- so the change that removed the name retired the guard, and
+        the suite got greener while the property it names was violated at a
+        default parameter the same round left behind. A guard keyed on a name
+        is retired by any rename; one keyed on the property is not.
 
-        The back-compat wrapper is gone rather than kept for the callers that
-        could live with it: after round 8 there were none. Two production call
-        sites remained and both are now `inserted_markdown_section`, so the
-        function had only this suite's convenience left, and a production
-        function alive for its tests is the shape this branch keeps deleting.
+        So each seam that places a section is driven with the page refusing,
+        and each is asked for the note an author can read.
         """
-        tracked = subprocess.run(
-            ["git", "ls-files", "*.py"],
-            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-        ).stdout.split()
-        self.assertGreater(len(tracked), 50, "the enumeration found almost nothing")
-        callers = {
-            f"{path}:{number}": line.strip()
-            for path in tracked
-            if not path.startswith("scripts/tests/")
-            for number, line in enumerate((REPO_ROOT / path).read_text(encoding="utf-8").splitlines(), 1)
-            if re.search(r"(?<!ed)(?<![a-z_])insert_markdown_section\b", line)
+        evidence = sys.modules["evidence"]
+        execution = sys.modules["execution"]
+        folded = (
+            "## Summary\n\n- one change\n\n<details>\n<summary>notes</summary>\n\n"
+            "a note nobody closed\n"
+        )
+
+        def refuse(text: str) -> str:
+            raise helpers.RendererUnavailable(
+                "the renderer answered HTTP 503", cause="server error"
+            )
+
+        seams = {
+            "the Mergeability seed": lambda said: execution.seed_mergeability_section(
+                folded, changed_files=["docs/x.md"], announcements=said
+            ),
+            "the status section write": lambda said: evidence.write_evidence_status_section(
+                folded, ["- [complete] the item -- proof"]
+            ).announcements.extend(said) or said.extend(
+                evidence.write_evidence_status_section(
+                    folded, ["- [complete] the item -- proof"]
+                ).announcements
+            ),
+            "the turn's own render": lambda said: evidence.render_execution_summary_body(
+                folded,
+                requested_evidence=["the item"],
+                evidence_complete=["1 -- proof"],
+                evidence_blocked=[],
+                evidence_pending_ci=[],
+                announcements=said,
+            ),
         }
-        self.assertEqual(callers, {}, "an insert that drops its answer came back")
+        for name, drive in seams.items():
+            with self.subTest(seam=name):
+                said: list[str] = []
+                with (
+                    mock.patch.object(helpers, "render_markdown", side_effect=refuse),
+                    mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
+                    contextlib.redirect_stderr(io.StringIO()),
+                ):
+                    drive(said)
+                self.assertTrue(
+                    any("unverified" in note or "not seeded" in note for note in said),
+                    f"{name}: the page went unread and the author was told nothing: {said}",
+                )
+
+    def test_no_production_seam_takes_its_announcements_by_default(self) -> None:
+        """The shape the defect took, asserted where it can be seen.
+
+        A note that depends on a caller remembering to pass a list is a note
+        the one caller nobody updated does not send. Every production seam
+        that places a section REQUIRES the list its caller owns.
+        """
+        import inspect
+
+        execution = sys.modules["execution"]
+        signature = inspect.signature(execution.seed_mergeability_section)
+        parameter = signature.parameters["announcements"]
+        self.assertIs(
+            parameter.default,
+            inspect.Parameter.empty,
+            "a seam that announces took its channel by default again",
+        )
 
 
 class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
@@ -10125,6 +10173,56 @@ class ACodeSpanCrossesASoftLineBreakTests(unittest.TestCase):
             self.assertIsNotNone(folded, label)
             self.assertIn(self.NOTE, folded.group(0), f"{label}: the page did not fold the note")
 
+    def test_a_table_row_gives_each_cell_its_own_span(self) -> None:
+        """A row's cells shared the row's map (#1773, round 9).
+
+        markdown-it gives every cell of a row the ROW's line map, so three
+        cells came back as three copies of one span and two backticks in cells
+        1 and 3 paired across cell 2 -- blanking a real `<details` between
+        them, leaving the fold unstripped, and recording a note the page hides
+        as one a reader was shown. Measured end to end before the fix: the
+        module said shown, the page emitted a real disclosure.
+
+        Models the parser: each cell is narrowed to where its own content
+        sits. The sibling asks the page.
+        """
+        comment = (
+            f"{self.checked()}\n\n| a | b | c |\n| --- | --- | --- |\n"
+            f"| x `open | <details>more | y` end |\n\n- {self.NOTE}\n"
+        )
+        self.assertIn(
+            "<details",
+            self.execution()._code_spans_blanked(comment),
+            "a real disclosure was blanked across cells",
+        )
+        self.assertNotIn(
+            self.NOTE,
+            self.execution()._notes_a_reader_has_been_shown(comment, self.checked()),
+            "a note the page folds away was recorded as shown",
+        )
+        # Each cell is its own span, so a quoted tag inside ONE cell is still
+        # read as text.
+        quoted = (
+            f"{self.checked()}\n\n| a | b |\n| --- | --- |\n"
+            f"| the writer emits `<details>` when it folds | fine |\n\n- {self.NOTE}\n"
+        )
+        self.assertIn(
+            self.NOTE,
+            self.execution()._notes_a_reader_has_been_shown(quoted, self.checked()),
+        )
+
+    def test_the_page_folds_the_note_below_that_table(self) -> None:
+        # Asks reality, from a recording taken with the token.
+        comment = (
+            f"{self.checked()}\n\n| a | b | c |\n| --- | --- | --- |\n"
+            f"| x `open | <details>more | y` end |\n\n- {self.NOTE}\n"
+        )
+        with recorded_page():
+            html = helpers.render_markdown(comment)
+        folded = re.search(r"<details.*", html, re.S)
+        self.assertIsNotNone(folded)
+        self.assertIn(self.NOTE, folded.group(0))
+
     def test_a_blank_line_ends_the_span_so_a_later_block_is_still_stripped(self) -> None:
         # The control the brief names: a span that closes on the next line,
         # and a `<details>` in a THIRD paragraph, which is still stripped
@@ -10172,8 +10270,7 @@ class EveryInsertTakesTheWritesAnswerTests(unittest.TestCase):
         def refuse(text: str) -> str:
             raise helpers.RendererUnavailable(
                 "the renderer answered HTTP 503" if transient else "the renderer answered HTTP 401",
-                transient=transient,
-                repair=None if transient else "export a token it accepts and run again",
+                cause="server error" if transient else "rejected token",
             )
 
         with (
@@ -10196,24 +10293,33 @@ class EveryInsertTakesTheWritesAnswerTests(unittest.TestCase):
         self.assertIn("## Mergeability", body)
         self.assertTrue(any("unverified" in note for note in said), said)
 
-    def test_no_production_insert_returns_a_body_without_its_reason(self) -> None:
-        # The structural half, counted over every tracked Python file rather
-        # than over the two this round happened to touch.
-        tracked = subprocess.run(
-            ["git", "ls-files", "*.py"],
-            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-        ).stdout.split()
-        self.assertGreater(len(tracked), 50)
-        offenders = [
-            f"{path}:{number}"
-            for path in tracked
-            if not path.startswith("scripts/tests/")
-            for number, line in enumerate(
-                (REPO_ROOT / path).read_text(encoding="utf-8").splitlines(), 1
-            )
-            if re.search(r"(?<!ed)(?<![a-z_])insert_markdown_section\b", line)
-        ]
-        self.assertEqual(offenders, [])
+    def test_the_seed_hands_its_caller_the_reason_rather_than_a_step_log(self) -> None:
+        """The property this class is for, driven at the seam (#1773, round 9).
+
+        The version of this test that grepped production for a deleted name
+        could not fire again, and the property it named was violated at the
+        production call the same round left on a default. Driven, both
+        families of answer reach the caller: a blip announces and places, a
+        permanent cause announces and leaves the body alone.
+        """
+        execution = sys.modules["execution"]
+        for cause, places in (("server error", True), ("rejected token", False)):
+            with self.subTest(cause=cause):
+                said: list[str] = []
+
+                def refuse(text: str, cause=cause) -> str:
+                    raise helpers.RendererUnavailable("a reason", cause=cause)
+
+                with (
+                    mock.patch.object(helpers, "render_markdown", side_effect=refuse),
+                    mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
+                    contextlib.redirect_stderr(io.StringIO()),
+                ):
+                    body = execution.seed_mergeability_section(
+                        self.FOLDED, changed_files=["docs/x.md"], announcements=said
+                    )
+                self.assertEqual("## Mergeability" in body, places, cause)
+                self.assertTrue(said, f"{cause}: nothing reached the caller")
 
 
 class AMissingTokenIsNotABlipTests(unittest.TestCase):
@@ -10251,9 +10357,7 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
     def test_no_token_refuses_and_says_what_to_do_about_it(self) -> None:
         answer = self.answer_when(
             helpers.RendererUnavailable(
-                "no GH_TOKEN or GITHUB_TOKEN in the environment",
-                transient=False,
-                repair="export GH_TOKEN or GITHUB_TOKEN and run again",
+                "no GH_TOKEN or GITHUB_TOKEN in the environment", cause="no token"
             )
         )
         self.assertIsNone(answer.unverified, "a permanent cause was announced as a blip")
@@ -10266,7 +10370,7 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
             ("unreachable", "the renderer was unreachable (timed out)"),
         ):
             with self.subTest(cause=label):
-                answer = self.answer_when(helpers.RendererUnavailable(reason, transient=True))
+                answer = self.answer_when(helpers.RendererUnavailable(reason, cause="server error"))
                 self.assertIsNone(answer.refusal, f"{label}: a blip blocked the write")
                 self.assertIn(reason, answer.unverified)
 
@@ -10287,8 +10391,12 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
                     render("# body")
         return raised.exception
 
-    def http_error(self, code: int, *, rate_limited: bool = False):
+    def http_error(self, code: int, *, rate_limited: bool = False, retry_after: str | None = None):
         headers = {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "soon"} if rate_limited else {}
+        if retry_after is not None:
+            # A SECONDARY rate limit: the quota is not spent, the renderer is
+            # asking for a pause, and `Retry-After` is the time that fixes it.
+            headers = {"retry-after": retry_after, "x-ratelimit-remaining": "42"}
         return urllib.error.HTTPError(
             helpers.MARKDOWN_API_URL, code, "refused", email.message_from_string(
                 "\n".join(f"{name}: {value}" for name, value in headers.items())
@@ -10312,6 +10420,12 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
             ("a rejected token (401)", self.http_error(401), token, False),
             ("a forbidden token (403, not the rate limit)", self.http_error(403), token, False),
             ("a spent rate limit (403)", self.http_error(403, rate_limited=True), token, True),
+            (
+                "a secondary rate limit (403 with Retry-After)",
+                self.http_error(403, retry_after="60"),
+                token,
+                True,
+            ),
             ("a spent rate limit (429)", self.http_error(429, rate_limited=True), token, True),
             ("the renderer erroring (503)", self.http_error(503), token, True),
             ("an unreachable renderer", urllib.error.URLError("timed out"), token, True),
@@ -10322,14 +10436,27 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
                 raised = self.raised_by(error, environment)
                 self.assertEqual(raised.transient, transient, label)
         # And the type refuses to be raised without the decision being made.
+        # A raise site names a cause the table holds, or it raises: a family
+        # and a repair cannot be invented at the site any more.
         with self.assertRaises(TypeError):
-            helpers.RendererUnavailable("a cause nobody classified")
+            helpers.RendererUnavailable("a cause nobody named")
+        with self.assertRaises(KeyError):
+            helpers.RendererUnavailable("a cause the table does not hold", cause="a new thing")
 
     def test_a_rejected_token_refuses_the_placement_like_an_absent_one(self) -> None:
         # The consequence, at the placement: a token the renderer will not
         # take is a local condition the author can act on, so it gets the
         # answer no token gets rather than a write that went ahead unverified.
         raised = self.raised_by(self.http_error(401), {"GH_TOKEN": "a-token"})
+        self.assertEqual(raised.cause, "rejected token")
+        # And the cause a secondary limit gets, which used to be this one: a
+        # 403 that is not the quota being spent read as a refused token and
+        # told the author to export a different one, which would not have
+        # helped (#1773, round 9).
+        paused = self.raised_by(self.http_error(403, retry_after="60"), {"GH_TOKEN": "a-token"})
+        self.assertEqual(paused.cause, "secondary rate limit")
+        self.assertTrue(paused.transient)
+        self.assertIsNone(paused.repair)
         answer = self.answer_when(raised)
         self.assertIsNone(answer.unverified)
         self.assertIn("HTTP 401", answer.refusal)
@@ -10355,6 +10482,7 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
             ("a rejected token (401)", self.http_error(401), token),
             ("a forbidden token (403)", self.http_error(403), token),
             ("a spent rate limit", self.http_error(403, rate_limited=True), token),
+            ("a secondary rate limit", self.http_error(403, retry_after="60"), token),
             ("the renderer erroring (503)", self.http_error(503), token),
             ("an unreachable renderer", urllib.error.URLError("timed out"), token),
         )
@@ -10371,22 +10499,35 @@ class AMissingTokenIsNotABlipTests(unittest.TestCase):
                     self.assertIsNone(answer.unverified, f"{label}: a refusal read as a blip")
                     self.assertIn(raised.repair, answer.refusal, f"{label}: the action went unsaid")
 
-    def test_the_type_refuses_a_classification_that_says_nothing_useful(self) -> None:
-        # The property held where the cause is raised, so the sentence cannot
-        # be composed wrong in the first place.
-        with self.assertRaises(ValueError):
-            helpers.RendererUnavailable("permanent, with no way out", transient=False)
-        with self.assertRaises(ValueError):
-            helpers.RendererUnavailable("a blip", transient=True, repair="wait, then act")
+    def test_every_cause_in_the_table_carries_its_family_and_its_repair(self) -> None:
+        """The table is the only constructor input (#1773, round 9).
+
+        Round 8 made the TYPE enforce that a permanent cause has a repair. It
+        did not and could not enforce that the repair FITS: a secondary rate
+        limit was classified as a rejected token and told the author to export
+        a different one, which is a message and a classification disagreeing
+        while both satisfy the type. Pairing them in one table makes the
+        mismatch unconstructible rather than untested.
+        """
+        for cause, (transient, repair) in helpers.RENDERER_CAUSES.items():
+            with self.subTest(cause=cause):
+                raised = helpers.RendererUnavailable("a reason", cause=cause)
+                self.assertEqual(raised.transient, transient)
+                self.assertEqual(raised.repair, repair)
+                self.assertEqual(bool(repair), not transient, "a family without its repair")
+
+    def test_a_raise_site_cannot_choose_a_family_or_a_repair(self) -> None:
+        with self.assertRaises(TypeError):
+            helpers.RendererUnavailable("x", transient=True)
+        with self.assertRaises(TypeError):
+            helpers.RendererUnavailable("x", cause="no token", repair="something else")
 
     def test_the_page_carries_the_cause_through_rendered_page(self) -> None:
         for transient in (True, False):
             with self.subTest(transient=transient):
                 def raise_it(text: str) -> str:
                     raise helpers.RendererUnavailable(
-                        "a reason",
-                        transient=transient,
-                        repair=None if transient else "do the thing that fixes it",
+                        "a reason", cause="server error" if transient else "no token"
                     )
 
                 with (

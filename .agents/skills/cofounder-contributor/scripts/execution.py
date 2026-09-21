@@ -722,14 +722,28 @@ def _inline_block_bounds(text: str) -> list[tuple[int, int]]:
         starts.append(offset)
         offset += len(line) + 1
     bounds: list[tuple[int, int]] = []
+    cursor = 0
     for token in MARKDOWN.parse(text):
         if token.type != "inline" or not token.map:
             continue
         first, last = token.map
         if first >= len(starts):
             continue
-        stop = starts[last] - 1 if last < len(starts) else len(text)
-        bounds.append((starts[first], min(stop, len(text))))
+        stop = min(starts[last] - 1 if last < len(starts) else len(text), len(text))
+        start = starts[first]
+        # A table ROW gives every one of its cells the row's map, so three
+        # cells come back as three copies of one span -- and two backticks in
+        # cells 1 and 3 then pair across cell 2 and blank a real `<details`
+        # between them. The token knows its own source, so each cell is
+        # narrowed to where its content sits, searching forward so two cells
+        # holding the same text keep their order (#1773, round 9).
+        content = token.content
+        if content:
+            found = text.find(content, max(start, cursor), stop)
+            if found != -1:
+                start, stop = found, found + len(content)
+        cursor = stop
+        bounds.append((start, stop))
     return bounds
 
 
@@ -1049,7 +1063,7 @@ def _changed_surface_files(env: dict[str, str]) -> list[str]:
 
 
 def seed_mergeability_section(
-    summary_body: str, *, changed_files: list[str], announcements: list[str] | None = None
+    summary_body: str, *, changed_files: list[str], announcements: list[str]
 ) -> str:
     """Seed the `## Mergeability` block scripts/pr-readiness.py requires when
     the agent omitted it.
@@ -1121,13 +1135,19 @@ def seed_mergeability_section(
     # gate fails the body loudly for it -- so the body stands and the reason
     # is said.
     placed = inserted_markdown_section(summary_body, "Mergeability", content)
-    if placed.unverified is not None and announcements is not None:
+    # Required, not defaulted. Round 8 made every insert take the write's
+    # answer and left the note's delivery to a caller remembering to pass a
+    # list -- and the production caller passed none, so at a 503 under an
+    # unclosed `<details>` the section went into the fold with the notice on
+    # stderr alone. A default that preserves the old behaviour at the one call
+    # site nobody updated is the fix holding everywhere except where it
+    # matters (#1773, round 9).
+    if placed.unverified is not None:
         announcements.append(placed.unverified)
     if placed.refusal is not None:
         note = f"`## Mergeability` not seeded: {placed.refusal}"
         log(note)
-        if announcements is not None:
-            announcements.append(note)
+        announcements.append(note)
         return summary_body
     return placed.body
 
@@ -1874,6 +1894,8 @@ def route_execution_action(
     summary_body = seed_mergeability_section(
         summary_body,
         changed_files=_changed_surface_files(env),
+        # The list this turn already owns and posts on the pull request.
+        announcements=uncarried,
     )
     pr_body = compose_pr_body(issue_number, persona, summary_body)
     author_label = author_label_for_persona(persona)
