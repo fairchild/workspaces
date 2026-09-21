@@ -2332,8 +2332,14 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
     # sentence into a section of its own would be alteration, not carriage --
     # but the loss is still a loss, and it is said.
     losses: list[tuple[int, str]] = []
+    # The source lines this section could not keep, beside the sentences about
+    # them. A second sentence about a loss has to ask "was THIS line already
+    # spoken about?" -- asking "did anything get spoken about?" skipped every
+    # other loss in the same write (#1778, round 22).
+    uncarried: list[str] = []
     for start, stop in machine:
         if stop - start > 1:
+            uncarried.extend(lines[start + 1 : stop])
             losses.append(
                 (
                     start,
@@ -2366,6 +2372,7 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
         # off its last, which are a line break on the page.
         block = "\n".join(lines[start:stop])
         if (reason := unmovable_block(block)) is not None:
+            uncarried.extend(lines[start:stop])
             # Said, because a loss nobody can see is the failure this file
             # keeps paying for. The line is the one inside this section, which
             # is the only frame this function has.
@@ -2379,7 +2386,7 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
     announcements = [note for _, note in sorted(losses)]
     for announcement in announcements:
         log(announcement)
-    return carried, announcements
+    return carried, announcements, uncarried
 
 
 def _placement_a_reader_cannot_see(written: str) -> str | None:
@@ -2425,6 +2432,10 @@ class SectionWrite(NamedTuple):
     body: str
     refusal: str | None
     announcements: list[str]
+    # The source lines this write could not keep and has already spoken
+    # about, so a later sentence about what left can ask per LINE rather than
+    # per write (#1778, round 22). Empty on a stand-down: nothing left.
+    spoken_for: list[str] = []
 
 
 # How a stand-down announces itself, named rather than spelled twice: the
@@ -2492,10 +2503,12 @@ def write_evidence_status_section(
         return _stood_down(source, refusal)
     notes: list[str] = []
     announcements: list[str] = []
+    spoken_for: list[str] = []
     for section in sections:
-        carried, said = _section_notes(section)
+        carried, said, uncarried = _section_notes(section)
         notes.extend(carried)
         announcements.extend(said)
+        spoken_for.extend(uncarried)
     # The notes section comes out before the status section goes in, so that
     # neither is standing when the other is placed and both land by the same
     # rule. Placing the status around a notes section still in the body put
@@ -2511,7 +2524,7 @@ def write_evidence_status_section(
         unseen = _placement_a_reader_cannot_see(candidate)
         if unseen:
             return _stood_down(source, unseen)
-        return SectionWrite(candidate, None, announcements)
+        return SectionWrite(candidate, None, announcements, spoken_for)
 
     # The note about a heading this reader declined is NOT said here. It was,
     # and it had to be said before the write to see the author's heading alone
@@ -3680,6 +3693,19 @@ def entry_as_rendered(entry: object) -> tuple[dict[str, object] | None, str | No
     detail = _encodable(str(entry.get("detail", "")).strip())
     if not item:
         return None, "no item text"
+    # An item that renders to NOTHING on the page is an item no reader can
+    # see and no reader can own a line by: `&nbsp;`, `&#32;` and `&#x20;` are
+    # bytes in the record and blank on the page. The write used to render a
+    # line for one and then name that very line "replaced with nothing",
+    # because the rewritten-ness question skips an empty item -- a false
+    # accusation about a line sitting in the section. Refused rather than
+    # compared on its raw text: a refusal says what happened and names the
+    # position, and a quiet raw comparison would leave the author with a
+    # status line nobody can read and nothing said about it (#1778, round 22).
+    if not _rendered_inline(item).strip():
+        # The item itself is quoted by the caller that names the position, so
+        # the reason says what is wrong with it and not the bytes again.
+        return None, "an item that renders to nothing on the page"
     if status not in RENDERABLE_STATUSES:
         return None, quoted_sentence(
             "status {value}, which is not " + ", ".join(RENDERABLE_STATUSES),
@@ -3958,7 +3984,7 @@ def _render_structured_entries(
         f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
         for entry in sorted(rendered_entries, key=lambda entry: int(entry["index"]))
     ]
-    carried_notes: list[str] = []
+    carried_lines: list[str] = []
     if rendered_entries:
         write = write_evidence_status_section(
             _strip_evidence_metadata(body), rendered_lines
@@ -3967,7 +3993,7 @@ def _render_structured_entries(
         # Held here as well as handed on, so the second sentence about a loss
         # can ask whether the first was already said even when the caller
         # keeps no list (#1778, round 21).
-        carried_notes = list(write.announcements)
+        carried_lines = list(write.spoken_for)
         if announcements is not None:
             announcements.extend(write.announcements)
         if refusal is not None:
@@ -4066,9 +4092,22 @@ def _render_structured_entries(
 
     items = {_as_the_page_reads(str(entry["item"]).strip()) for entry in rendered_entries}
 
-    def _names_one_of(line: str, known: set[str]) -> bool:
-        """Whether this line is a status line for one of `known`."""
-        prefix = EVIDENCE_STATUS_PREFIX_RE.match(f"- {line.strip().lstrip('-*+').strip()}")
+    def _names_one_of(line: str, known: set[str], *, raw_source: bool = False) -> bool:
+        """Whether this line is a status line for one of `known`.
+
+        `raw_source` says which side the line came from, and the list marker
+        is the difference: a SOURCE line carries one and the page's reading
+        of a line does not, because the reader took it off. Stripping `-*+`
+        from a page reading let an author's line whose RENDERED text opens
+        with a marker and a status token -- `- -- [pending-ci] verify the
+        lane -- mine` reads as `-- [pending-ci] verify the lane -- mine` --
+        match as a line this write rendered, so it left the section and
+        nothing named it (#1778, round 22).
+        """
+        text = line.strip()
+        if raw_source:
+            text = text.lstrip("-*+").strip()
+        prefix = EVIDENCE_STATUS_PREFIX_RE.match(f"- {text}")
         if not prefix:
             return False
         rest = prefix.group("rest").strip()
@@ -4117,29 +4156,30 @@ def _render_structured_entries(
         took `unreadable_after` out of the condition to avoid.
 
         Subsumed today, and kept for the reason the BEFORE half below is
-        kept -- but for neither reason the earlier rounds gave. Round 19's
-        was a universal over `rendered_text` ("every member is a line
-        `_rewritten` answers True for") and round 20's was a narrower
-        universal ("the members it rejects are exactly the ones whose line
-        the page reader cannot read"). Both are false, and the second is
-        false HERE: `rendered_text` is the page's reading of the rendered
-        lines ALONE, and that document carries none of the body's link
-        reference definitions, so an item resolving a reference renders a
-        member reading `[complete] verify [the run][r1] -- green` while
-        `items` -- read in the body, where the definition is -- holds
-        `verify [the run](https://example.invalid/1)`. Four such members are
-        constructible at this head (a full, a collapsed and a shortcut
-        reference, and a reference image), measured, and the page reader
-        handles every one of them.
+        kept. Three arguments for that have been written here and none of
+        them held: a universal over `rendered_text` (round 19), a narrower
+        universal about the page reader (round 20), and a claim that every
+        member `_rewritten` rejects is a reading of a line in a document that
+        does not exist (round 21) -- false, because an item that renders to
+        nothing was rejected for its empty reading with no reference
+        involved.
 
-        The argument is about which readings can MEET rather than about all
-        members. A member `_rewritten` rejects is a reading of a line in a
-        document that does not exist: the body is what `before` is read
-        from, and in the body that line resolves its reference the way
-        `items` does. So such a member is never in `before` -- and this term
-        only ever fires on a member of `before`. That is why the mutant
-        dropping it stays EQUIVALENT, measured over the five suites at this
-        head (#1778, rounds 19, 20 and 21).
+        The argument is about where this term can fire at all, which is a
+        question about `after` rather than about `before`. It is reached only
+        for a line that is in `before`, ABSENT FROM `after`, and rejected by
+        the rewritten-ness question. `rendered_text` is the page's reading of
+        a document built from exactly the lines this write puts in the
+        section, so a line in it is a line the written body holds -- and the
+        written body's section is what `after` is read from. A line the write
+        wrote is therefore absent from `after` only where the reader refused
+        the after page, and there the items this write rendered are what
+        answer for it, which is the rewritten-ness question rather than this
+        one.
+
+        So the term has no reachable input, and that is measured rather than
+        argued: instrumented to log every line it suppresses, it fires ZERO
+        times across all five suites, and the mutant dropping it leaves them
+        green (#1778, rounds 19 to 22).
         """
         return line.strip() in rendered_text
 
@@ -4173,7 +4213,7 @@ def _render_structured_entries(
     # page is not read around the refusal -- that is the second renderer
     # round 17 closed -- the refusal itself is what the sentence carries
     # (#1778, round 21).
-    already_said = any(says_text_was_not_carried(note) for note in carried_notes)
+    already_spoken_for = {line.strip() for line in carried_lines}
     # What LEFT, measured on the author's own bytes rather than on a reading
     # of the page: the page reader has refused, and reconstructing its view
     # around the refusal is the second renderer round 17 closed. The section's
@@ -4181,18 +4221,31 @@ def _render_structured_entries(
     # minus the lines this write rendered, is what the author no longer has --
     # and it is the form they need to put a line back.
     taken = []
-    if unreadable_before is not None and not already_said:
-        rendered_now = {line.strip() for line in rendered_lines}
-        # Anywhere in the written body, not only under the status heading: a
-        # line the write CARRIED (to the notes section) has not left.
-        after_source = {line.strip() for line in reconciled.splitlines()}
+    if unreadable_before is not None:
+        # A term for "this write rendered it" is NOT here: every line the
+        # write renders is in the section it writes, so the set below already
+        # holds it. It was here, and its mutant survived -- an unreachable
+        # term is an unread line rather than defence in depth, and the
+        # measurement is what said so (#1778, round 22).
+        # The two sections this write can put a line in: the one it rewrites
+        # and the one a carry moves text to. Not the whole body -- an echo of
+        # the lost line inside a fenced example somewhere else subtracted it
+        # and nothing was named, which is the silence `_still_written`'s own
+        # docstring refuses sixty lines above (#1778, round 22).
+        after_source = {
+            line.strip()
+            for heading in (EVIDENCE_STATUS_HEADING, EVIDENCE_NOTES_HEADING)
+            for line in markdown_section(reconciled, heading).splitlines()
+        }
         taken = [
             line.strip()
             for line in markdown_section(body, EVIDENCE_STATUS_HEADING).splitlines()
             if line.strip()
             and line.strip() not in after_source
-            and line.strip() not in rendered_now
-            and not _names_one_of(line, raw_items)
+            and not _names_one_of(line, raw_items, raw_source=True)
+            # A line the carry path has already spoken about is not named
+            # twice; every other loss in the same write still is.
+            and line.strip() not in already_spoken_for
         ]
     if taken:
         unread = quoted_sentence(

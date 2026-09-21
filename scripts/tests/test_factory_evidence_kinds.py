@@ -6117,7 +6117,7 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         for name, heading in self.SHAPES.items():
             with self.subTest(shape=name):
                 body = self.body(heading)
-                written, stood_down, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
+                written, stood_down, *_ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
                 self.assertIn(self.AUTHORS_LINE, written, stood_down)
 
     def test_a_plain_heading_is_still_the_section_and_still_rewritten(self) -> None:
@@ -6126,7 +6126,7 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         helpers = self.helpers()
         body = self.body("## Evidence Status")
         self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
-        written, _, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
+        written, _, *_ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
         self.assertNotIn(self.AUTHORS_LINE, written)
 
     def test_emphasis_is_markdown_rather_than_a_tag_and_stays_this_section(self) -> None:
@@ -6138,7 +6138,7 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         helpers = self.helpers()
         body = self.body("## **Evidence Status**")
         self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
-        written, _, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
+        written, _, *_ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
         self.assertNotIn(self.AUTHORS_LINE, written)
 
     def test_the_internal_read_says_why_rather_than_saying_nothing_is_there(self) -> None:
@@ -6228,7 +6228,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
     def written(self, heading: str) -> str:
         """The body the write returns, which is what the note is asked about."""
         with contextlib.redirect_stderr(io.StringIO()):
-            body, refusal, _ = self.evidence().write_evidence_status_section(
+            body, refusal, *_ = self.evidence().write_evidence_status_section(
                 self.body(heading), ["- [complete] the UI lane -- swift test passed"]
             )
         self.assertIsNone(refusal)
@@ -6278,7 +6278,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
         refusing = source.replace("## Validation\n\n- ran\n", "<pre>\nnever closed\n")
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
-            result, refusal, _ = evidence.write_evidence_status_section(
+            result, refusal, *_ = evidence.write_evidence_status_section(
                 refusing, ["- [complete] the UI lane -- swift test passed"]
             )
         self.assertIsNotNone(refusal)
@@ -6300,7 +6300,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
             with self.subTest(shape=name):
                 spoke = io.StringIO()
                 with contextlib.redirect_stderr(spoke):
-                    written, refusal, _ = self.evidence().write_evidence_status_section(
+                    written, refusal, *_ = self.evidence().write_evidence_status_section(
                         self.body(heading), ["- [complete] the UI lane -- swift test passed"]
                     )
                 self.assertIsNone(refusal)
@@ -6761,7 +6761,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
             + "## Validation\n\n- ran\n"
         )
         with contextlib.redirect_stderr(io.StringIO()):
-            written, refusal, _ = evidence.write_evidence_status_section(
+            written, refusal, *_ = evidence.write_evidence_status_section(
                 two_tagged, ["- [complete] the UI lane -- swift test passed"]
             )
         self.assertIsNone(refusal)
@@ -7277,7 +7277,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertLessEqual(len(body), evidence.PR_BODY_LIMIT)
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
-            written, refusal, _ = evidence.write_evidence_status_section(body, [status])
+            written, refusal, *_ = evidence.write_evidence_status_section(body, [status])
         self.assertIsNone(refusal)
         self.assertLessEqual(len(written), evidence.PR_BODY_LIMIT)
         self.assertIn(status, written)
@@ -7285,13 +7285,13 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertIn("not written", spoke.getvalue())
         # The control: the same body one block shorter does carry it.
         shorter = body.replace(note, note[:-32], 1)
-        carried, _, _ = evidence.write_evidence_status_section(shorter, [status])
+        carried, _, *_ = evidence.write_evidence_status_section(shorter, [status])
         self.assertIn("## Evidence Notes", carried)
         # And where the status alone is already past the limit, dropping the
         # notes buys nothing: the edit fails either way, so the text is kept
         # rather than traded for a body that still cannot be stored.
         huge = f"- [complete] {self.ITEM} -- " + "x" * evidence.PR_BODY_LIMIT
-        kept, _, _ = evidence.write_evidence_status_section(body, [huge])
+        kept, _, *_ = evidence.write_evidence_status_section(body, [huge])
         self.assertIn("## Evidence Notes", kept)
 
     def test_a_body_at_the_limit_announces_the_notes_it_dropped(self) -> None:
@@ -9742,6 +9742,145 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
         self.assertIn("`an item carries inline HTML (<b>)`", spoken)
         # And the entry's own line, rewritten in place, is not named beside it.
         self.assertNotIn("the profile", spoken.split("from the page:")[1])
+
+    def written_over(self, item: str, section_extra: str = "", summary_extra: str = ""):
+        """One entry, the author's own text under the heading, and this write."""
+        entries = [
+            {"index": 1, "item": item, "status": "pending-ci", "detail": "waiting", "kind": "ci"},
+            "legacy",
+        ]
+        source = self.body(entries).replace(
+            "\n\n## Validation", f"\n{section_extra}\n\n## Validation", 1
+        ).replace("- one change", f"- one change{summary_extra}", 1)
+        said: list[str] = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            written = self.evidence().update_evidence_entries(
+                source, {1: {"status": "complete", "detail": "green"}}, announcements=said
+            )
+        return source, written, said
+
+    # intent: fix
+    # marker: red at `fce31eae`, its own base, behaviourally: the author's line
+    # leaves the section there and nothing names it (#1778, round 22).
+    def test_an_author_line_whose_reading_opens_with_a_marker_is_still_theirs(self) -> None:
+        """The list marker is the RAW source's, and the page reading has none.
+
+        Round 21 gave `_names_one_of` a `lstrip('-*+')` so that a source line
+        could be matched against the items this write rendered. The same
+        function is asked about the PAGE's reading, where the reader has
+        already taken the marker off -- so stripping again eats the author's
+        own punctuation: `- -- [pending-ci] verify the lane -- mine` reads as
+        `-- [pending-ci] verify the lane -- mine`, the strip makes that
+        `[pending-ci] verify the lane -- mine`, and the line matches as one
+        this write rendered. It left the section and nothing named it, which
+        is the silence this whole change is about. Named at `3be40143`,
+        silent at `fce31eae`.
+        """
+        author = "- -- [pending-ci] verify the lane -- mine"
+        source, written, said = self.written_over("verify the lane", author)
+        evidence = self.evidence()
+        self.assertNotIn(
+            "mine", evidence.markdown_section(written, "Evidence Status"),
+            "the case is not built: the line is still in the section",
+        )
+        spoken = " ".join(said)
+        self.assertIn("mine", spoken, "the author's line left and nothing named it")
+
+    # intent: fix
+    # marker: red at `fce31eae`, its own base, behaviourally: the unowned line
+    # leaves in silence there because another loss was spoken about first
+    # (#1778, round 22).
+    def test_a_loss_the_carry_path_spoke_about_does_not_silence_the_others(self) -> None:
+        """The question is per LINE, not per write.
+
+        The carry path announces text it could not keep -- a continuation
+        under a status line, say. Asking "did anything get spoken about?"
+        made that one sentence suppress the sentence about every OTHER line
+        the same write took, so an author's unowned line left the section
+        beside an announced continuation and nothing said so. The write says
+        which SOURCE LINES it did not keep now, and a later sentence asks
+        about the line in hand.
+        """
+        evidence = self.evidence()
+        section_extra = "  continued by the author\n- [pending-ci] a line no entry owns -- waiting"
+        source, written, said = self.written_over("verify <b>the profile</b>", section_extra)
+        _, unreadable = evidence._rendered_status_lines(source)
+        self.assertIsNotNone(unreadable, "the case is not built: the before page was readable")
+        self.assertNotIn("a line no entry owns", written, "the case is not built")
+        spoken = " ".join(said)
+        self.assertIn("continuing the status line", spoken, "the carry path said nothing")
+        self.assertIn(
+            "a line no entry owns", spoken,
+            "a loss the carry path spoke about silenced the sentence about another line",
+        )
+
+    # intent: fix
+    # marker: red at `fce31eae`, its own base, behaviourally: the echo
+    # subtracts the line and nothing is named (#1778, round 22).
+    def test_a_copy_of_the_lost_line_elsewhere_in_the_body_does_not_subtract_it(self) -> None:
+        """"Still there after" means still in the sections this write can put it in.
+
+        Matching the whole written body made an echo of the lost line
+        anywhere -- inside a fenced example under `## Summary`, say -- read
+        as the line still being there, so it left the section and nothing
+        named it. `_still_written` is bound to the write's own output for
+        exactly this reason, sixty lines above: a copy of a line somewhere
+        else in the body is not the line that left the section.
+        """
+        evidence = self.evidence()
+        author = "- [pending-ci] a line no entry owns -- waiting"
+        echo = "\n\n```\n- [pending-ci] a line no entry owns -- waiting\n```"
+        source, written, said = self.written_over("verify <b>the profile</b>", author, echo)
+        self.assertNotIn(
+            "a line no entry owns",
+            evidence.markdown_section(written, "Evidence Status"),
+            "the case is not built: the line is still in the section",
+        )
+        self.assertIn("```", written, "the echo is gone; the case is not built")
+        self.assertIn(
+            "a line no entry owns", " ".join(said),
+            "an echo elsewhere in the body subtracted the line that left",
+        )
+
+    # intent: fix
+    # marker: red at `fce31eae`, its own base, behaviourally, and identically
+    # red at `3be40143` -- the defect is older than this round, and inside the
+    # class this round claims closed (#1778, round 22).
+    def test_an_item_that_renders_to_nothing_is_refused_rather_than_accused(self) -> None:
+        """An item no reader can see is an entry this write cannot render.
+
+        `&nbsp;`, `&#32;` and `&#x20;` are bytes in the record and nothing on
+        the page. The rewritten-ness question skips an empty item, so the
+        write rendered a line for such an entry and then named THAT line
+        "replaced this line with nothing" while it sat in the section --
+        the false accusation whose repair duplicates the line, three rounds
+        after the first of them.
+
+        Refused rather than compared on the item's raw text: a refusal says
+        what happened and names the position, and a raw comparison would
+        leave the author with a status line nobody can read and nothing said
+        about it. It joins the family the record already has -- an index that
+        numbers no line, a status outside the vocabulary, an empty item.
+        """
+        evidence = self.evidence()
+        for entity in ("&nbsp;", "&#32;", "&#x20;"):
+            with self.subTest(item=entity):
+                source, written, said = self.written_over(entity)
+                self.assertEqual(written, source, f"{entity}: the body was rewritten anyway")
+                self.assertEqual(len(said), 1, said)
+                self.assertIn("renders to nothing on the page", said[0])
+                self.assertIn("position 1", said[0])
+                self.assertEqual(
+                    [note for note in said if "replaced this line" in note], [],
+                    f"{entity}: a line sitting in the body was named as replaced",
+                )
+                self.assertEqual(
+                    evidence.unrenderable_entries(
+                        [{"index": 1, "item": entity, "status": "complete", "detail": "green"}]
+                    ),
+                    [f"the entry at position 1 ({sys.modules['_helpers'].code_span(entity)}) has "
+                     "an item that renders to nothing on the page"],
+                )
 
     # intent: guard
     # marker: red at `3be40143`, its own base, only on a NAME this round adds
