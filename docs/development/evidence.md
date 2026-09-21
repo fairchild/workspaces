@@ -381,7 +381,8 @@ the PR opens completes the entry on the next turn. A status line you edit by
 hand is carried forward by that same turn, marked `(carried forward from an
 earlier revision)` so a reader can tell it was written before the code under
 it. The CI verifier and the macOS lane write only through the hidden metadata,
-so a hand edit does not survive those two; edit the body again after them.
+so a hand edit does not survive a run of those two that rewrites the section;
+edit the body again after them.
 Until the entry completes both sit `pending-ci`, which is visible and fails the
 readiness gate, rather than `blocked`, which puts the PR in front of the owner.
 
@@ -469,7 +470,7 @@ review reads it. And only an `other` line is read at once. A
 `[complete]` written over any other kind reads as the metadata says until a
 factory turn or the lane that owns the item writes it, because nothing but a
 lane or the factory's own reading of the body completes those. Like any hand
-edit, the line does not survive the CI verifier or the macOS lane rewriting
+edit, the line is replaced whenever the CI verifier or the macOS lane rewrites
 the section.
 
 A body with no evidence metadata -- a PR written by hand, or one whose metadata
@@ -498,57 +499,29 @@ does and does not classify.
 
 ### What the metadata comment guarantees
 
-The metadata comment is the hidden `<!-- evidence-status:v1 ... -->` block that
-a factory turn or an evidence lane writes beside the `## Evidence Status`
-section — directly above that heading, or at the end of the body where there is
-no such heading — recording for each requested item the kind it was classified
-as and the status that run gathered. The reader recognises the block by its
-shape rather than by parsing HTML, takes the last one in the body, and trusts
-what it finds: a well-formed entry recording `complete` counts as complete. The
-block carries no signature, no hash and no author, and nothing checks which run
-wrote it.
+The metadata comment is the hidden `<!-- evidence-status:v1 ... -->` block
+beside the `## Evidence Status` section, recording a status for evidence items.
+Anyone who can edit the pull request description can write or change it, a
+recorded completion included.
 
-Anyone who can edit the pull request description can therefore write or change
-the comment, a recorded completion included. There is no provenance check and
-no signing.
+What it records is not independently authenticated: no signing, no provenance
+check. The `verified_head_sha` field binds an entry to a commit, and it is as
+editable as the rest of the block.
 
-The one binding an entry carries is `verified_head_sha`, written by the CI
-verifier when it saw a named check green. It records which commit the entry
-claims to be about, and it is as hand-writable as everything around it, so it
-says nothing about who wrote the entry; what it decides is whether the verifier
-looks again. A `ci` entry recorded `complete` whose `verified_head_sha` is not
-the current head is re-verified against live check-run state on the next run,
-and one bound to the current head is skipped.
+A recorded completion may be re-checked by a later run — for some kinds, in
+some conditions. Which, and when, is the code's to answer rather than this
+page's: `ci_entries_needing_verification` in
+[`scripts/factory-evidence-verify.py`](../../scripts/factory-evidence-verify.py),
+and `evaluate_evidence_accounting` and `_live_ci_evidence_gate_error` in the
+contributor skill's scripts. A sentence here describing one of them is a copy
+of it that goes stale on its own.
 
-That is close to the whole of what a later run re-checks. Both writers rewrite
-the visible status list from the metadata, so a `- [complete] ...` line edited
-by hand is overwritten at the next run — but the entry behind it is not
-re-read. The macOS evidence lane (`_evidence.yml`) re-resolves only entries
-recorded `pending-ci`; one already recorded `complete` passes through and is
-re-rendered as it stands. The CI verifier (`factory-evidence-verify.yml`) looks
-only at `ci` items, and only at those pending or stale against the head.
+The `blocked:evidence` clear reads the recorded entries
+(`should_clear_blocked_label`, `process_pr`). That is the gap
+[#1778](https://github.com/fairchild/workspaces/issues/1778) tracks.
 
-So a completion forged into the metadata and bound to the current head survives
-every later run, and `should_clear_blocked_label` then takes `blocked:evidence`
-off once every entry reads complete. A forged completion of any other kind — a
-statement, an attested test command, a diff — is never re-checked at all.
-[#1778](https://github.com/fairchild/workspaces/issues/1778) tracks that gap.
-
-Nor does editing a body start a run that would close the window: the verifier
-fires on a completed check suite or a manual dispatch, and the evidence lane is
-`workflow_call` only. On a pull request nobody pushes to again, no run follows
-the edit.
-
-One class of entry is re-read rather than trusted, and it is read at review
-time: before an approve counts, `_live_ci_evidence_gate_error` re-verifies
-every named-check item against live check-run state on the current head, so a
-forged `ci` completion does not carry a review. Every other kind the accounting
-and that gate take at their word.
-
-For a reviewer, a completion in the comment is a claim rather than a proof —
-for a `ci` item, a claim the reviewer gate re-checks, and for the rest, one
-nothing downstream checks again. Where it matters, open the run the entry names
-and read it.
+For a reviewer: a completion in the comment is a claim, not a proof. Open the
+run the entry names.
 
 ## How it's enforced
 
