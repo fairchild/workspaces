@@ -245,8 +245,13 @@ def _entry_line_numbers(lines: list[str], text: str, source: str) -> set[int]:
     # One owner for this body, the same multiset the write builds: a rendered
     # line owns ONE body line, so two identical copies are one line of the
     # machine's and one of the author's at both readers (#1751, round 9).
+    # The write's own construction, from the same inputs: a body's entries at
+    # both ends of it. This built a second owner from a list of lines, so
+    # "the same owner" was a claim about a class rather than about a value --
+    # and the two would have parted on the first shape where an (entry, line)
+    # pair and a line disagree (#1751, round 11).
     owned = evidence.owned_lines(
-        evidence.rendered_entry_lines(evidence.evidence_entries_of(source))
+        evidence.evidence_entries_of(source), evidence.evidence_entries_of(source)
     )
     return {
         index

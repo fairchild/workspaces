@@ -2489,6 +2489,20 @@ def renderable_entries(entries: object) -> list[dict[str, object]]:
     return renderable
 
 
+def rendered_entry_claims(entries: object) -> list[tuple[int, str]]:
+    """Each renderable entry's index and the line the write renders for it.
+
+    The key is the entry's `index`, which is what the write itself treats as
+    an entry's identity: the updates map is keyed by it and a second entry at
+    one index is refused as a collision, so within one body an index names at
+    most one entry that reaches a write.
+    """
+    return [
+        (int(entry["index"]), f"- [{entry['status']}] {entry['item']} -- {entry['detail']}")
+        for entry in renderable_entries(entries)
+    ]
+
+
 def rendered_entry_lines(entries: object) -> list[str]:
     """The status line the write renders for each recorded entry, as it stands.
 
@@ -2501,10 +2515,7 @@ def rendered_entry_lines(entries: object) -> list[str]:
     field nobody counted as a change and the uncapped rate came back with zero
     status changes (#1751, round 6).
     """
-    return [
-        f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
-        for entry in renderable_entries(entries)
-    ]
+    return [line for _, line in rendered_entry_claims(entries)]
 
 
 class RenderedLines:
@@ -2522,43 +2533,107 @@ class RenderedLines:
     matching a rendered line is that line's; a second copy is the author's,
     and it is carried and announced like any other line no reader can parse.
 
-    One line per ENTRY, which is not the same as one per source. The owner is
-    built from the lines this run renders AND the lines the last run
-    rendered, and when a verdict has not changed those two are the same bytes
-    for the same entry -- so the entry owned its line twice and the second
-    identical copy was deleted after all. An unchanged verdict is the common
-    case, not the rare one: #1782 re-verifies every recorded CI completion, so
-    every run is a rewrite and most rewrites conclude what the last one did
-    (#1751, round 10). The same bytes are therefore owned once however many
-    sources offer them; a previous line that DIFFERS is a second line that
-    entry owns, which is what lets a changed verdict replace its own old line.
+    One line per ENTRY, which is not the same as one per source and not the
+    same as one per line. A claim is an (entry, line) PAIR, and that key is
+    the whole of the rule:
 
-    One owner per write, shared by the write's reader and by the instrument
-    that measures the write, so the two cannot disagree about how many lines
-    one entry owns.
+    - one entry, two sources, the same bytes -- this run's line and the last
+      run's, where the verdict has not changed -- is ONE claim. An unchanged
+      verdict is the common case, not the rare one (#1782 re-verifies every
+      recorded CI completion, so every run is a rewrite and most rewrites
+      conclude what the last one did), and counting it twice let an entry own
+      two body lines and delete an author's copy (#1751, round 10).
+    - one entry, two sources, DIFFERENT bytes is two claims, which is what
+      lets a changed verdict replace the line it wrote last time.
+    - two entries offering the same bytes is TWO claims. Round 10 keyed on
+      the bytes alone on the reasoning that two renderable entries cannot
+      render one line, and that was false: the ` -- ` boundary can fall in
+      two places in one text, so `{item: "run `a", detail: "b -- c` ok"}` and
+      `{item: "run `a -- b", detail: "c` ok"}` render the same line while
+      their items genuinely differ, and no guard sees a collision. Collapsing
+      their two claims to one left the write owning one of the two lines it
+      had rendered, so it carried its own second line to `## Evidence Notes`
+      on every write -- (2,1), (2,2), (2,3), unbounded, with nothing said
+      (#1751, round 11).
+
+    A dedupe can only remove claims and a claim authorises a deletion, so the
+    failure direction of the coarse key was a carry rather than a loss. That
+    is still the rate round 5's cap exists to bound.
+
+    One owner per write, built by one function for the write's reader and for
+    the instrument that measures the write, so the two cannot disagree about
+    how many lines one entry owns.
     """
 
-    def __init__(self, rendered: Iterable[str]) -> None:
-        # Order-preserving, and deduplicated on the bytes: two renderable
-        # entries cannot render one line (the turn refuses a contract whose
-        # items read alike), so identical bytes are always one entry's line
-        # offered twice.
-        self._remaining: list[str] = list(dict.fromkeys(str(one) for one in rendered))
+    def __init__(self, claims: Iterable[tuple[object, str]]) -> None:
+        # Order-preserving, deduplicated on the PAIR: the key identifies one
+        # entry, the value is one line that entry rendered, and two entries
+        # keep two claims on identical bytes.
+        self._remaining: list[tuple[object, str]] = list(
+            dict.fromkeys((key, str(line)) for key, line in claims)
+        )
 
     def claim(self, line: str) -> bool:
-        """Whether one of the lines still unclaimed is this one, byte for byte."""
-        if line in self._remaining:
-            self._remaining.remove(line)
-            return True
+        """Whether one of the claims still unspent is for this line, byte for byte."""
+        for position, (_, owned) in enumerate(self._remaining):
+            if owned == line:
+                del self._remaining[position]
+                return True
         return False
 
     def __bool__(self) -> bool:
         return bool(self._remaining)
 
 
-def owned_lines(rendered: Iterable[str]) -> RenderedLines:
-    """One owner for one scan of one body: see `RenderedLines`."""
-    return rendered if isinstance(rendered, RenderedLines) else RenderedLines(rendered)
+def owned_lines(entries: object, previous_entries: object = ()) -> RenderedLines:
+    """The lines a write owns for one body, from the entries at both ends of it.
+
+    ONE construction for both readers, from the same two inputs: the entries
+    this run renders and the entries the body it is rewriting records. The
+    write built its owner from two lists of lines and the instrument built a
+    second one from a body's entries -- the same class, two constructions, so
+    "the same owner" was a claim about a type rather than about a value
+    (#1751, round 11). A body read by both now yields the same claims in the
+    same order.
+
+    An `RenderedLines` passed straight through is one already built; a plain
+    iterable of lines is read as one claim each, which is what a caller
+    holding lines and no entries means by handing them over.
+    """
+    if isinstance(entries, RenderedLines):
+        return entries
+    return RenderedLines(
+        [*rendered_entry_claims(entries), *rendered_entry_claims(previous_entries)]
+    )
+
+
+def lines_and_previous_entries_owned(rendered: Iterable[str], previous_entries: object) -> RenderedLines:
+    """The same rule for a caller holding this run's LINES rather than its entries.
+
+    One claim per line rendered, and a line the last run rendered adds a
+    claim only where this run does not render those bytes -- which is the
+    (entry, line) rule written out over lines: an entry's two sources collapse
+    when they agree, and two entries rendering one line keep two claims
+    because the list holds it twice.
+    """
+    lines = [str(line) for line in rendered]
+    claims: list[tuple[object, str]] = list(enumerate(lines))
+    claims.extend(
+        (("previous", line), line)
+        for _, line in rendered_entry_claims(previous_entries)
+        if line not in lines
+    )
+    return RenderedLines(claims)
+
+
+def lines_owned_one_each(lines: Iterable[str]) -> RenderedLines:
+    """An owner over lines whose entries the caller does not have.
+
+    Each line is its own claim, because a caller handing over a list of lines
+    is saying "these, one apiece" -- there is no entry to collapse two of them
+    onto.
+    """
+    return RenderedLines(list(enumerate(str(line) for line in lines)))
 
 
 def is_machine_status_line(
@@ -2596,7 +2671,8 @@ def is_machine_status_line(
     itself and the sweep asked it with no cap at all, so the cap was the
     write's alone and the two answered differently on the first shape tried.
     """
-    if owned_lines(rendered).claim(line):
+    owner = rendered if isinstance(rendered, RenderedLines) else lines_owned_one_each(rendered)
+    if owner.claim(line):
         return True
     return is_recorded_status_line(
         status_line_as_page_reads_it(line, context), recorded_items, context
@@ -2928,7 +3004,8 @@ def write_evidence_status_section(
     status_lines: Iterable[str],
     *,
     recorded_items: Iterable[str],
-    previously_rendered: Iterable[str] = (),
+    entries: object = (),
+    previous_entries: object = (),
 ) -> SectionWrite:
     """The one write of `## Evidence Status`, or the body unchanged and why it stands.
 
@@ -3000,15 +3077,23 @@ def write_evidence_status_section(
             "make each requested item distinct",
         )
     rendered = list(status_lines)
-    # And the lines the LAST run rendered, reconstructed from the metadata the
-    # body carries. The cap keys on the entry rather than on the line, because
-    # a detail is volatile: the verifier's `pending-ci` detail carries a head
+    # The lines this write owns, built from the ENTRIES at both ends of the
+    # body: the ones this run renders and the ones the body it is rewriting
+    # records. The cap keys on the entry rather than on the line, because a
+    # detail is volatile -- the verifier's `pending-ci` detail carries a head
     # and a run URL and changes on every push, so a cap keyed on the rendered
     # line brought the uncapped rate back with zero status changes (#1751,
-    # round 6).
-    # One owner for this write, so a rendered line owns one body line and not
-    # every byte-identical copy of it (#1751, round 9).
-    owned = owned_lines([*rendered, *previously_rendered])
+    # round 6) -- and the claim is an (entry, line) pair, so one entry owns
+    # one body line however many sources offer its bytes and two entries
+    # rendering identical lines keep two (#1751, rounds 9 to 11).
+    #
+    # One function builds this and the instrument's, from the same two
+    # inputs, so a body read by both yields the same claims.
+    owned = (
+        owned_lines(entries, previous_entries)
+        if entries
+        else lines_and_previous_entries_owned(rendered, previous_entries)
+    )
     # Every line this write is about to render, asked of its own reader. A
     # line the reader cannot read back is one the next run will take for the
     # author's and carry a copy of, per run -- so it is said here rather than
@@ -3187,7 +3272,8 @@ def render_execution_summary_body(
         # the metadata is inserted after the write -- so reconstructing from
         # it produced an empty list on every push and the turn's cap never ran
         # at all (#1751, round 8).
-        previously_rendered=rendered_entry_lines(evidence_entries_of(published_body)),
+        entries=structured_entries,
+        previous_entries=evidence_entries_of(published_body),
     )
     rendered, write_refusal = write.body, write.refusal
     if announcements is not None:
@@ -4206,16 +4292,17 @@ def _render_structured_entries(
     if rendered_entries:
         write = write_evidence_status_section(
             _strip_evidence_metadata(body),
-            [
-                f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
-                for entry in sorted(rendered_entries, key=lambda entry: int(entry["index"]))
-            ],
+            # One composer, not a copy of its f-string with a drift test in
+            # front of it: `rendered_entry_lines` is what says what a rendered
+            # line IS, and both renderers call it (#1751, round 11).
+            rendered_entry_lines(sorted(rendered_entries, key=lambda entry: int(entry["index"]))),
             recorded_items=[str(entry["item"]) for entry in rendered_entries],
             # The metadata is stripped before the write, so the lines the LAST
             # run rendered have to travel separately or the cap loses them --
             # which is how a changing `pending-ci` detail brought the uncapped
             # rate back with no status change at all (#1751, round 6).
-            previously_rendered=rendered_entry_lines(evidence_entries_of(body)),
+            entries=rendered_entries,
+            previous_entries=evidence_entries_of(body),
         )
         reconciled, refusal = write.body, write.refusal
         if announcements is not None:

@@ -9711,30 +9711,143 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertEqual(self.counts(written), (1, 0))
         self.assertIn("- [complete] ", written)
 
-    def test_the_owner_hands_out_each_line_once_however_often_it_is_offered(self) -> None:
-        # One line per ENTRY, not per source. The owner is built from this
-        # run's rendered lines AND the last run's, and an unchanged verdict
-        # makes those the same bytes for the same entry -- so offering them
-        # twice must not buy a second body line (#1751, round 10).
+    def entry(self, index: int = 1, status: str = "pending-ci", item: str | None = None,
+              detail: str | None = None) -> dict[str, object]:
+        return {
+            "index": index,
+            "item": self.ITEM if item is None else item,
+            "status": status,
+            "detail": self.DETAIL if detail is None else detail,
+            "kind": "test",
+        }
+
+    def test_one_entry_offering_its_line_from_both_sources_owns_one_line(self) -> None:
+        # One claim per (entry, line). An unchanged verdict makes this run's
+        # rendered line and the last run's the same bytes for the same entry,
+        # and counting that twice let the entry own two body lines (#1751,
+        # round 10).
         evidence = self.evidence()
-        owner = evidence.owned_lines([self.line, self.line, "- [complete] other -- d"])
+        owner = evidence.owned_lines([self.entry()], [self.entry()])
         self.assertTrue(owner.claim(self.line))
         self.assertFalse(owner.claim(self.line))
-        self.assertTrue(owner.claim("- [complete] other -- d"))
-        self.assertFalse(owner.claim("- [complete] other -- d"))
 
     def test_a_previous_line_that_differs_is_a_second_line_that_entry_owns(self) -> None:
         # The other half: a changed verdict means last run's line and this
         # run's are two distinct lines for one entry, and the write owns both
         # -- which is what lets it replace the line it wrote last time.
         evidence = self.evidence()
-        previous = self.line  # `- [pending-ci] ...`, what the last run rendered
         current = f"- [complete] {self.ITEM} -- {self.DETAIL}"
-        owner = evidence.owned_lines([current, previous])
-        self.assertTrue(owner.claim(previous))
+        owner = evidence.owned_lines([self.entry(status="complete")], [self.entry()])
+        self.assertTrue(owner.claim(self.line))
         self.assertTrue(owner.claim(current))
-        self.assertFalse(owner.claim(previous))
+        self.assertFalse(owner.claim(self.line))
         self.assertFalse(owner.claim(current))
+
+    def test_two_entries_rendering_one_line_keep_two_claims(self) -> None:
+        """The mirror pair round 10's key could not tell apart (#1751, round 11).
+
+        The ` -- ` boundary can fall in two places in one text, so two entries
+        whose items genuinely differ render the same line and no guard sees a
+        collision. Keyed on the bytes alone their two claims collapsed to one,
+        and the write then owned one of the two lines it had just rendered --
+        so it carried its own second line to `## Evidence Notes` on every
+        write, unbounded.
+        """
+        evidence = self.evidence()
+        mirrored = [
+            self.entry(index=1, status="complete", item="run `a", detail="b -- c` ok"),
+            self.entry(index=2, status="complete", item="run `a -- b", detail="c` ok"),
+        ]
+        line = "- [complete] run `a -- b -- c` ok"
+        self.assertEqual(evidence.rendered_entry_lines(mirrored), [line, line])
+        self.assertEqual(evidence._indistinguishable([str(one["item"]) for one in mirrored], ""), [])
+        owner = evidence.owned_lines(mirrored, mirrored)
+        self.assertTrue(owner.claim(line))
+        self.assertTrue(owner.claim(line), "the second entry's claim was collapsed away")
+        self.assertFalse(owner.claim(line))
+
+    def test_the_mirror_pair_is_a_fixed_point_rather_than_an_accrual(self) -> None:
+        # Driven through the write, three times: (2,0) each time. At
+        # `15e80e9e` this read (2,1), (2,2), (2,3) -- one machine copy into
+        # `## Evidence Notes` per write, with nothing said about it.
+        evidence = self.evidence()
+        mirrored = [
+            self.entry(index=1, status="complete", item="run `a", detail="b -- c` ok"),
+            self.entry(index=2, status="complete", item="run `a -- b", detail="c` ok"),
+        ]
+        line = "- [complete] run `a -- b -- c` ok"
+        body = (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": mirrored}) + "\n-->\n\n"
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"{line}\n{line}\n\n## Validation\n\n- ran it\n"
+        )
+        seen = []
+        for _ in range(3):
+            with contextlib.redirect_stderr(io.StringIO()):
+                body = evidence.update_evidence_entries(
+                    body, {1: {"status": "complete", "detail": "b -- c` ok"}}
+                )
+            seen.append(self.counts(body))
+        self.assertEqual(seen, [(2, 0)] * 3)
+
+    def test_both_readers_build_one_owner_from_the_same_inputs(self) -> None:
+        """The same VALUE, not merely the same class (#1751, round 11).
+
+        The write built its owner from two lists of lines and the instrument
+        built a second one from a body's entries. Same implementation, two
+        constructions -- so "the same owner" was a claim about a type, and the
+        two would have parted on the first shape where an (entry, line) pair
+        and a line disagree, which the mirror pair above is.
+        """
+        evidence = self.evidence()
+        sweep = load_module(
+            "evidence_write_sweep_owner", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        source = self.body(2, recorded="complete")
+        entries = evidence.evidence_entries_of(source)
+        written = sweep.MARKDOWN_LINE_ENDING_RE.sub("\n", source)
+        normalized = evidence._strip_evidence_metadata(written)
+        lines = normalized.split("\n")
+        # The instrument's owner, built where it builds it.
+        instrument = sweep._entry_line_numbers(lines, normalized, written)
+        # The write's, over the same body: the same entries at both ends.
+        owner = evidence.owned_lines(entries, entries)
+        claimed = [index for index, line in enumerate(lines) if owner.claim(line)]
+        self.assertEqual(sorted(instrument), claimed)
+        self.assertEqual(len(claimed), 1, "one entry, one line")
+
+    def test_both_readers_agree_on_the_shape_the_two_keys_disagree_about(self) -> None:
+        # The mirror pair: two entries, one line, twice in the body. A
+        # line-keyed owner and a pair-keyed one answer the same here only
+        # because a single body offers each entry's line once -- which is why
+        # the instrument's second construction was equivalent rather than
+        # wrong, and why replacing it is a structural fix and not a behaviour
+        # change. Asserted so a future change to the rule cannot move one
+        # reader without the other.
+        evidence = self.evidence()
+        sweep = load_module(
+            "evidence_write_sweep_mirror", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        mirrored = [
+            self.entry(index=1, status="complete", item="run `a", detail="b -- c` ok"),
+            self.entry(index=2, status="complete", item="run `a -- b", detail="c` ok"),
+        ]
+        line = "- [complete] run `a -- b -- c` ok"
+        source = (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": mirrored}) + "\n-->\n\n"
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"{line}\n{line}\n\n## Validation\n\n- ran it\n"
+        )
+        normalized = evidence._strip_evidence_metadata(
+            sweep.MARKDOWN_LINE_ENDING_RE.sub("\n", source)
+        )
+        lines = normalized.split("\n")
+        instrument = sweep._entry_line_numbers(lines, normalized, source)
+        entries = evidence.evidence_entries_of(source)
+        owner = evidence.owned_lines(entries, entries)
+        claimed = [index for index, one in enumerate(lines) if owner.claim(one)]
+        self.assertEqual(sorted(instrument), claimed)
+        self.assertEqual(len(claimed), 2, "two entries, two lines")
 
     def test_the_instrument_calls_the_second_copy_the_authors_too(self) -> None:
         # The sweep's sight, restored by construction: it builds the same
