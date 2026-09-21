@@ -4957,6 +4957,14 @@ class WhatTheGateSLongerReadingCostsTests(unittest.TestCase):
         self.assertEqual(dropped, [])
 
 
+# Measured, not assumed: the size of the leading run each supported
+# interpreter builds. 3.11 (UCD 14.0.0) builds 4,216; 3.12 (15.0.0) and 3.13
+# (15.1.0) both build 4,223. The suite is run under all three, but only one of
+# them at a time, so the other two sizes are literals here (#1771, round 9).
+RUN_UNDER_UCD_14 = 4216
+RUN_UNDER_UCD_15_0 = 4223
+
+
 class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
     """A wrapper CAN reach a post-parse line, so the criterion was false (#1771, round 4).
 
@@ -5183,9 +5191,9 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
         # (15.1.0). The version is the thing that is loud; the size is what
         # the pin above checks where it can.
 
-    # intent: guard
+    # intent: fix
     def test_the_gate_says_the_drift_wherever_it_is_run(self) -> None:
-        """The WIRING, felt wherever the suite runs (#1771, rounds 7 and 8).
+        """The WIRING, felt wherever the suite runs (#1771, rounds 7, 8 and 9).
 
         `evaluate` appends the drift notice to what it returns, and where the
         versions match the notice never fires — so the hook could be deleted
@@ -5198,37 +5206,136 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
         under 3.11 and 3.12, where the un-patched notice really is present
         and the control asserted its absence. Nothing here reads
         `unicodedata.unidata_version` as it comes.
+
+        BOTH DRAFT STATES, for the same reason one layer out (round 9). The
+        draft short-circuit returned before the hook, so the notice was
+        silent in the state a pull request spends most of its life in, and
+        this test's name promised a "wherever" its body did not check. The
+        draft half is what round 9 fixes and is red at `13d5160b`; the
+        non-draft half is the control, green before the fix and after it.
         """
         body = GOOD_BODY
+        advisory = "Draft PR: readiness gate is advisory"
         for version, expected in (
             (pr_readiness.DEFAULT_IGNORABLE_TRANSCRIBED_FROM, None),
             ("14.0.0", "BEHIND"),
             ("16.0.0", "AHEAD"),
         ):
-            with self.subTest(running=version):
-                with mock.patch.object(unicodedata, "unidata_version", version):
-                    result = pr_readiness.evaluate(pr(body), self.FILES)
-                    notice = pr_readiness.unicode_data_notice()
-                said = " ".join(result.notices)
-                self.assertTrue(result.ok, "a drift notice must not fail the body")
-                if expected is None:
-                    self.assertIsNone(notice, "a matching version said something")
-                    self.assertNotIn("Unicode data", said)
-                    self.assertNotIn("BEHIND the gate's table", said)
-                    continue
-                self.assertIsNotNone(notice)
-                self.assertIn(expected, notice, "the notice does not name its direction")
-                self.assertIn(notice, said, "the gate did not carry the drift into its output")
+            for draft in (False, True):
+                with self.subTest(running=version, draft=draft):
+                    with mock.patch.object(unicodedata, "unidata_version", version):
+                        result = pr_readiness.evaluate(pr(body, draft=draft), self.FILES)
+                        notice = pr_readiness.unicode_data_notice()
+                    said = " ".join(result.notices)
+                    self.assertTrue(result.ok, "a drift notice must not fail the body")
+                    # The draft advisory is still said: the fix moved the
+                    # interpreter notice above that return, it did not
+                    # remove the return.
+                    self.assertEqual(advisory in said, draft)
+                    if expected is None:
+                        self.assertIsNone(notice, "a matching version said something")
+                        self.assertNotIn("Unicode data", said)
+                        self.assertNotIn("BEHIND the gate's table", said)
+                        continue
+                    self.assertIsNotNone(notice)
+                    self.assertIn(expected, notice, "the notice does not name its direction")
+                    self.assertIn(notice, said, "the gate did not carry the drift into its output")
+
+    @staticmethod
+    @contextlib.contextmanager
+    def behind_at(version: str, size: int):
+        """One older interpreter, named and sized.
+
+        `unicode_data_notice` reads two things -- the version string and
+        `len(INVISIBLE_LEADING)` -- and under one interpreter only one pair
+        of them is real. The stand-in carries the size, which is all the
+        sentence reads of it; its membership is the running interpreter's and
+        is never asked about here.
+        """
+        run = pr_readiness.INVISIBLE_LEADING
+        run = run[:size] if size <= len(run) else run + "a" * (size - len(run))
+        assert len(run) == size
+        with mock.patch.object(unicodedata, "unidata_version", version):
+            with mock.patch.object(pr_readiness, "INVISIBLE_LEADING", run):
+                yield
+
+    # intent: fix
+    def test_an_older_interpreter_can_build_the_very_same_run(self) -> None:
+        """BEHIND by version, EQUAL by size -- and the sentence said SMALLER.
+
+        3.12 carries UCD 15.0.0 against the 15.1.0 the table was transcribed
+        from, so the version differs; the run it builds is 4,223 characters,
+        exactly the pin, because nothing in `Cf`, `Zs` or the transcribed
+        ranges moved between those two releases. The word was a constant in
+        the sentence and a constant in the test that read it, so both agreed
+        about something neither had measured (#1771, round 9).
+        """
+        with self.behind_at("15.0.0", RUN_UNDER_UCD_15_0):
+            notice = pr_readiness.unicode_data_notice()
+        self.assertIn("BEHIND the gate's table", notice)
+        self.assertIn("EQUAL to the one this gate was measured with", notice)
+        self.assertNotIn("SMALLER", notice)
+        self.assertNotIn("are not covered", notice)
+        # Both numbers, the run's and the pin's, so the reader can see they
+        # are the same rather than take the word for it.
+        self.assertIn(f"({RUN_UNDER_UCD_15_0})", notice)
+        self.assertIn(f"pinned at {pr_readiness.MEASURED_LEADING_RUN_SIZE}", notice)
+        self.assertEqual(RUN_UNDER_UCD_15_0, pr_readiness.MEASURED_LEADING_RUN_SIZE)
 
     # intent: guard
+    def test_an_older_interpreter_that_really_is_smaller_still_says_so(self) -> None:
+        # The half that was already true in WORD: 3.11 (UCD 14.0.0) builds
+        # 4,216 against the pinned 4,223, so seven members this gate was
+        # measured to refuse behind are not covered. Not a control, though
+        # the direction has not changed -- the two numbers are new in the
+        # sentence, so this is red at `13d5160b` like the case beside it.
+        # The round's control is the sibling test below, which asks for what
+        # both heads already say.
+        with self.behind_at("14.0.0", RUN_UNDER_UCD_14):
+            notice = pr_readiness.unicode_data_notice()
+        self.assertIn("BEHIND the gate's table", notice)
+        self.assertIn(
+            f"SMALLER than the one this gate was measured with "
+            f"({RUN_UNDER_UCD_14} against {pr_readiness.MEASURED_LEADING_RUN_SIZE})",
+            notice,
+        )
+        self.assertIn("are not covered", notice)
+        self.assertLess(RUN_UNDER_UCD_14, pr_readiness.MEASURED_LEADING_RUN_SIZE)
+
+    # intent: guard
+    def test_a_smaller_version_with_a_larger_run_is_not_called_equal(self) -> None:
+        """The third case is kept rather than declared impossible.
+
+        An older UCD building a LARGER run would mean a member left `Cf` or
+        `Zs` between it and 15.1.0. Unicode's stability policies cover names
+        and decompositions, not General_Category, so "cannot happen" is a
+        claim this gate would be relying on without being able to check it.
+        The branch says what it sees and asks for a re-measure instead.
+        """
+        with self.behind_at("14.0.0", pr_readiness.MEASURED_LEADING_RUN_SIZE + 1):
+            notice = pr_readiness.unicode_data_notice()
+        self.assertIn("BEHIND the gate's table", notice)
+        self.assertIn("LARGER than the one this gate was measured with", notice)
+        self.assertIn("re-measure before trusting either number", notice)
+
+    # intent: control
     def test_the_two_directions_ask_for_different_things(self) -> None:
+        # ROUND 9'S CONTROL: every assertion here is one both `13d5160b` and
+        # this head already satisfy, and no mutant in this round touches it.
+        # What the round changes is the direction WORD in the BEHIND half and
+        # where the notice is said; what it must not change is which of the
+        # two directions asks for a re-transcription.
+        #
         # Backwards in round 6: under an OLDER interpreter the notice said to
         # re-derive the table from older data, which is re-deriving a newer
         # table from the thing it already leads. Each direction names what it
         # actually wants.
         with mock.patch.object(unicodedata, "unidata_version", "16.0.0"):
             ahead = pr_readiness.unicode_data_notice()
-        with mock.patch.object(unicodedata, "unidata_version", "14.0.0"):
+        # The run is sized as well as the version named: the BEHIND half's
+        # wording depends on BOTH, and reading the running interpreter's run
+        # for one of them is the dependence rounds 8 and 9 took out.
+        with self.behind_at("14.0.0", RUN_UNDER_UCD_14):
             behind = pr_readiness.unicode_data_notice()
         # AHEAD: the table is the stale half, and the cost is a code point
         # it does not know about.
@@ -5241,7 +5348,6 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
         # rebuilding a newer table out of older data.
         self.assertNotIn("Re-transcribe DEFAULT_IGNORABLE_RANGES", behind)
         self.assertIn("Nothing to re-transcribe", behind)
-        self.assertIn("SMALLER", behind)
         self.assertIn("are not covered", behind)
         # And the ordering is numeric rather than lexical, so 9.0.0 is older
         # than 15.1.0 rather than newer.
