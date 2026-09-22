@@ -8869,6 +8869,60 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         self.assertIn(opening, sentences[0], "the sentence does not name the line it opens on")
         self.assertNotIn(closing, sentences[0], "the sentence names the line it ends on")
 
+    # intent: guard
+    # marker: green at `993dc95e` and at `016d94ba`: what it pins is which
+    # PATH each shape takes, and that has been true at both. It is here
+    # because the question was asked of the carry and answered by
+    # measurement rather than by reading (#1751, round 19).
+    def test_a_shape_that_would_end_the_notes_section_never_reaches_the_carry(self) -> None:
+        """Three shapes that create a heading, and the path each one takes.
+
+        The protection under `## Evidence Notes` is the HEADING: a reader
+        takes status lines from under the status heading and nothing else,
+        fenced or bare. So the question worth asking of a carry is whether
+        carried text can END that section and move what follows into one a
+        reader parses.
+
+        Measured: an `## …` line of their own and a setext underline end the
+        STATUS section where they stand, so the text below them is never
+        under the heading and never carried -- they are refused before the
+        carry rather than by it. A footnote definition does travel, and what
+        it does on the page is move itself to the page's own footnote area;
+        it does not end the section for any reader here, and the status
+        section still reads as exactly the line this write rendered.
+        """
+        evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
+        item = "run the QA filter"
+        for shape, text, carried in (
+            ("a footnote definition", "[^note]: a definition of theirs", True),
+            ("a setext underline", "their paragraph\n===", False),
+            ("an h2 of their own", "## Their own heading", False),
+        ):
+            with self.subTest(shape=shape):
+                entries = [{
+                    "index": 1, "item": item, "status": "pending-ci",
+                    "detail": "waiting", "kind": "ci",
+                }]
+                body = (
+                    "<!-- evidence-status:v1\n"
+                    + json.dumps({"entries": entries})
+                    + "\n-->\n\n## Summary\n\n- one change\n\n## Evidence Status\n\n"
+                    f"- [pending-ci] {item} -- waiting\n\n{text}\n\n## Validation\n\n- ran it\n"
+                )
+                with contextlib.redirect_stderr(io.StringIO()):
+                    written = evidence.update_evidence_entries(
+                        body, {1: {"status": "complete", "detail": "green"}}
+                    )
+                notes = helpers.markdown_section(written, "Evidence Notes")
+                self.assertEqual(bool(notes.strip()), carried, notes)
+                # Whatever travelled, the status section still reads as the
+                # one line this write rendered -- the section did not end
+                # early and nothing below it became a status line.
+                lines, unreadable = evidence._rendered_status_lines(written)
+                self.assertIsNone(unreadable, f"{shape}: {unreadable}")
+                self.assertEqual(lines, [f"[complete] {item} -- green"], f"{shape}: {lines}")
+
     # intent: fix
     # marker: red at `993dc95e`, its own base, behaviourally: with no record
     # comment in the body it carries from, the same author line is carried
