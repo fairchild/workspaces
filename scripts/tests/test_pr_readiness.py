@@ -13,6 +13,7 @@ sections in a form GitHub Actions can surface cleanly.
 from __future__ import annotations
 
 import contextlib
+import datetime
 import hashlib
 import importlib.util
 import io
@@ -24,6 +25,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -1725,6 +1727,16 @@ RECORD_COMMAND = (
     f"{RECORD_ENV}=1 GH_TOKEN=$(gh auth token) "
     "uv run --script scripts/tests/test_pr_readiness.py"
 )
+# The command that re-asks EVERY recording, whichever suite first made it.
+# The drift test compares all of them and used to name the line above, which
+# re-records only the bodies this suite drives -- so an author told a
+# recording had drifted was handed a command that could not reach most of
+# them (#1790, #1773 round 9). This one walks the index itself.
+REINDEX_COMMAND = (
+    f"{RECORD_ENV}=1 GH_TOKEN=$(gh auth token) uv run --script "
+    "scripts/tests/test_pr_readiness.py "
+    "RecordedRendererResponseTests.test_the_recordings_still_match_the_live_renderer"
+)
 
 
 # Captured before `setUpModule` refuses the renderer for the whole file: the
@@ -1755,13 +1767,40 @@ def rendered_index() -> dict[str, str]:
     return json.loads(RENDERED_INDEX.read_text(encoding="utf-8"))
 
 
+def indexed_body(entry: object) -> str:
+    """The body one index entry answers for, in either shape it has had.
+
+    Entries were the body text alone; they carry a recording stamp beside it
+    now, so a reader can tell how old an answer is. Both shapes are read
+    because the committed index holds both until every entry is re-asked
+    (#1773, round 8).
+    """
+    if isinstance(entry, dict):
+        return str(entry.get("body", ""))
+    return str(entry)
+
+
 def record_rendered(text: str) -> str:
-    """Ask the live renderer once and store what it said under this body's hash."""
+    """Ask the live renderer for this body and store what it said, overwriting any earlier answer.
+
+    RE-asks under the record flag rather than returning what is on disk. It
+    returned an existing recording untouched, so the command the drift test
+    names -- the one it hands an author when a recording no longer matches the
+    live renderer -- could not refresh the recording it was named for (#1790).
+    """
     rendered = _LIVE_RENDER(text)
     RENDERED_FIXTURES.mkdir(parents=True, exist_ok=True)
     rendered_fixture_path(text).write_text(rendered, encoding="utf-8")
     index = rendered_index()
-    index[hashlib.sha256(text.encode("utf-8")).hexdigest()] = text
+    index[hashlib.sha256(text.encode("utf-8")).hexdigest()] = {
+        "body": text,
+        # From the clock at the moment of the ask, which is the only stamp
+        # that says anything about the answer stored beside it.
+        "recorded_at": datetime.datetime.now(datetime.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+    }
     RENDERED_INDEX.write_text(
         json.dumps(index, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8"
     )
@@ -1789,10 +1828,11 @@ def recorded_page():
 
     def answer(text: str) -> str:
         path = rendered_fixture_path(text)
-        if path.is_file():
-            return path.read_text(encoding="utf-8")
+        # The flag first: see `record_rendered` (#1790).
         if os.environ.get(RECORD_ENV):
             return record_rendered(text)
+        if path.is_file():
+            return path.read_text(encoding="utf-8")
         raise AssertionError(
             f"No recorded renderer response for this body ({path.name}). Record it with:\n"
             f"  {RECORD_COMMAND}"
@@ -2325,7 +2365,8 @@ class RecordedRendererResponseTests(unittest.TestCase):
         self.assertIn(RECORD_COMMAND, str(raised.exception))
 
     def test_every_recording_names_the_body_it_answers(self) -> None:
-        for digest, text in rendered_index().items():
+        for digest, entry in rendered_index().items():
+            text = indexed_body(entry)
             with self.subTest(digest=digest[:12]):
                 self.assertEqual(hashlib.sha256(text.encode("utf-8")).hexdigest(), digest)
                 self.assertTrue(rendered_fixture_path(text).is_file())
@@ -2339,13 +2380,179 @@ class RecordedRendererResponseTests(unittest.TestCase):
     def test_the_recordings_still_match_the_live_renderer(self) -> None:
         if not (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")):
             self.skipTest("no GH_TOKEN or GITHUB_TOKEN: the live renderer cannot be asked")
-        for digest, text in rendered_index().items():
+        # Under the record flag this IS the recorder for every entry: it walks
+        # the index rather than the bodies one suite happens to drive, so the
+        # command its failure names can refresh anything it compares.
+        recording = bool(os.environ.get(RECORD_ENV))
+        for digest, entry in rendered_index().items():
+            text = indexed_body(entry)
             with self.subTest(digest=digest[:12]):
+                if recording:
+                    record_rendered(text)
+                    continue
                 self.assertEqual(
                     _LIVE_RENDER(text),
                     rendered_fixture_path(text).read_text(encoding="utf-8"),
-                    f"the renderer's output changed; re-record with {RECORD_COMMAND}",
+                    f"the renderer's output changed; re-record with {REINDEX_COMMAND}",
                 )
+
+
+class TheGateAndTheOwnerAskTheRendererTheSameThingTests(unittest.TestCase):
+    """One renderer seam, written twice, pinned here the way the parsers are (#1773).
+
+    The contributor skill's placement check asks GitHub whether the section a
+    write places is folded away behind a `<details>`, which is the question
+    the gate already asks about line starts. Each script writes its own copy
+    -- they are standalone PEP 723 scripts with their own pins and their own
+    import graphs, the same trade `ParserDefinitionTests` covers for the
+    markdown parser -- and the cost of that is two places to change, so a
+    change to one of them fails here.
+
+    Compared as the REQUEST rather than as source text: the endpoint, the
+    method, the render mode, the repository context, the token the two read
+    and every header but one. The exception is `User-Agent`, where each names
+    itself, because a caller a rate limit traced back to should be the caller
+    that made the call.
+    """
+
+    HELPERS_PATH = (
+        REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "_helpers.py"
+    )
+    ENVIRONMENT = {"GH_TOKEN": "a-token", "GITHUB_REPOSITORY": "acme/thing"}
+    BODY = "## Evidence Status\n\n- [complete] swift test -- 1992 tests passed\n"
+
+    def owner(self):
+        spec = importlib.util.spec_from_file_location("contributor_helpers", self.HELPERS_PATH)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["contributor_helpers"] = module
+        spec.loader.exec_module(module)
+        return module
+
+    @staticmethod
+    @contextlib.contextmanager
+    def captured():
+        """Every request one renderer call made, with the timeout it passed."""
+        seen: list[tuple[urllib.request.Request, float | None]] = []
+
+        class Answer:
+            def read(self) -> bytes:
+                return b"<p>rendered</p>"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_: object) -> bool:
+                return False
+
+        def urlopen(request, timeout=None):
+            seen.append((request, timeout))
+            return Answer()
+
+        with mock.patch.object(urllib.request, "urlopen", urlopen):
+            yield seen
+
+    def requests(self, environment: dict[str, str] | None = None):
+        """What each copy sends for the same body, in the same environment."""
+        made = []
+        for render in (_LIVE_RENDER, self.owner().render_markdown):
+            with (
+                mock.patch.dict(os.environ, environment or self.ENVIRONMENT, clear=True),
+                self.captured() as seen,
+            ):
+                render(self.BODY)
+            made.append(seen[0])
+        return made
+
+    # intent: guard
+    # marker: red at `016d94ba`, its own base, by API alone and it cannot be otherwise --
+    # the seam it pins is one this branch ADDS, so there is no property to hold at the base
+    # and no drive that makes it behaviourally red (#1773, round 13).
+    def test_both_copies_post_the_same_body_to_the_same_endpoint(self) -> None:
+        (gate, gate_timeout), (owner, owner_timeout) = self.requests()
+        self.assertEqual(gate.full_url, owner.full_url)
+        self.assertEqual(gate.full_url, "https://api.github.com/markdown")
+        self.assertEqual(gate.get_method(), owner.get_method())
+        self.assertEqual(json.loads(gate.data), json.loads(owner.data))
+        self.assertEqual(
+            json.loads(gate.data),
+            {"text": self.BODY, "mode": "gfm", "context": "acme/thing"},
+        )
+        self.assertEqual(gate_timeout, owner_timeout)
+
+    # intent: guard
+    # marker: red at `016d94ba`, its own base, by API alone and it cannot be otherwise --
+    # the seam it pins is one this branch ADDS, so there is no property to hold at the base
+    # and no drive that makes it behaviourally red (#1773, round 13).
+    def test_both_copies_send_the_same_headers_but_their_own_name(self) -> None:
+        (gate, _), (owner, _) = self.requests()
+        self.assertEqual(sorted(gate.headers), sorted(owner.headers))
+        shared = {name: value for name, value in gate.headers.items() if name != "User-agent"}
+        self.assertEqual(
+            shared, {name: value for name, value in owner.headers.items() if name != "User-agent"}
+        )
+        self.assertEqual(shared["Authorization"], "Bearer a-token")
+        for request in (gate, owner):
+            self.assertIn("workspaces", request.headers["User-agent"])
+        self.assertNotEqual(gate.headers["User-agent"], owner.headers["User-agent"])
+
+    # intent: guard
+    # marker: red at `016d94ba`, its own base, by API alone and it cannot be otherwise --
+    # the seam it pins is one this branch ADDS, so there is no property to hold at the base
+    # and no drive that makes it behaviourally red (#1773, round 13).
+    def test_both_copies_read_the_same_tokens_in_the_same_order(self) -> None:
+        for environment, expected in (
+            ({"GH_TOKEN": "first", "GITHUB_TOKEN": "second"}, "Bearer first"),
+            ({"GITHUB_TOKEN": "second"}, "Bearer second"),
+        ):
+            with self.subTest(environment=sorted(environment)):
+                for request, _ in self.requests({**environment, "GITHUB_REPOSITORY": "acme/thing"}):
+                    self.assertEqual(request.headers["Authorization"], expected)
+
+    # intent: guard
+    # marker: red at `016d94ba`, its own base, by API alone and it cannot be otherwise --
+    # the seam it pins is one this branch ADDS, so there is no property to hold at the base
+    # and no drive that makes it behaviourally red (#1773, round 13).
+    def test_both_copies_refuse_rather_than_spend_the_anonymous_allowance(self) -> None:
+        # The anonymous allowance is 60 an hour shared across the host, so a
+        # tokenless call would refuse one author's body and place the next
+        # with nothing changed between them. Neither copy makes one.
+        for module, error in ((pr_readiness, pr_readiness.RendererUnavailable), (owner := self.owner(), owner.RendererUnavailable)):
+            with self.subTest(module=module.__name__):
+                render = _LIVE_RENDER if module is pr_readiness else module.render_markdown
+                with mock.patch.dict(os.environ, {}, clear=True), self.captured() as seen:
+                    with self.assertRaises(error) as raised:
+                        render(self.BODY)
+                self.assertEqual(seen, [])
+                self.assertIn("GH_TOKEN", str(raised.exception))
+
+    # intent: guard
+    # marker: red at `016d94ba`, its own base, by API alone and it cannot be otherwise --
+    # the seam it pins is one this branch ADDS, so there is no property to hold at the base
+    # and no drive that makes it behaviourally red (#1773, round 13).
+    def test_both_copies_name_a_spent_rate_limit_the_same_way(self) -> None:
+        owner = self.owner()
+        error = urllib.error.HTTPError(
+            pr_readiness.MARKDOWN_API_URL,
+            403,
+            "rate limited",
+            {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1789759202"},
+            None,
+        )
+        self.assertEqual(
+            pr_readiness.http_failure_reason(error), owner.http_failure_reason(error)
+        )
+        self.assertIn("rate limit", owner.http_failure_reason(error))
+
+    # intent: guard
+    # marker: red at `016d94ba`, its own base, by API alone and it cannot be otherwise --
+    # the seam it pins is one this branch ADDS, so there is no property to hold at the base
+    # and no drive that makes it behaviourally red (#1773, round 13).
+    def test_the_two_constants_that_decide_the_call_agree(self) -> None:
+        owner = self.owner()
+        for name in ("MARKDOWN_API_URL", "MARKDOWN_API_VERSION", "RENDER_TIMEOUT_SECONDS", "DEFAULT_REPOSITORY"):
+            with self.subTest(constant=name):
+                self.assertEqual(getattr(pr_readiness, name), getattr(owner, name))
 
 
 class ParserDefinitionTests(unittest.TestCase):
@@ -3441,9 +3648,9 @@ class TheLongSHeadingIsNotThisSectionInEitherReaderTests(unittest.TestCase):
         texts, refusal = owner.removed_section_texts(self.ALIASED, "Evidence Status")
         self.assertIsNone(refusal)
         self.assertEqual(len(texts), 1)
-        written = owner.insert_markdown_section(
+        written = owner.inserted_markdown_section(
             self.ALIASED, "Evidence Status", "- [complete] the real item -- re-checked"
-        )
+        ).body
         self.assertIn(self.LONG_S, written)
         self.assertIn("- [complete] the printer's heading -- not this section", written)
         self.assertIn("- [complete] the real item -- re-checked", written)
@@ -4102,7 +4309,7 @@ class TheRuntimeSeedsASectionAndThisGateThenReadsItTests(unittest.TestCase):
         self.assertFalse(reader.has_markdown_section(self.FENCED_EXAMPLE_BODY, "Mergeability"))
         seeded = self.seeder().seed_mergeability_section(
             self.FENCED_EXAMPLE_BODY, changed_files=["Sources/Foo.swift"]
-        )
+        ).body
         self.assertTrue(reader.has_markdown_section(seeded, "Mergeability"))
         self.assertEqual(
             reader.markdown_section(seeded, "Mergeability").splitlines()[0],
@@ -4118,7 +4325,7 @@ class TheRuntimeSeedsASectionAndThisGateThenReadsItTests(unittest.TestCase):
         # return the same text and the gate passes the body the factory heals.
         seeded = self.seeder().seed_mergeability_section(
             self.FENCED_EXAMPLE_BODY, changed_files=["Sources/Foo.swift"]
-        )
+        ).body
         gate_read = pr_readiness.extract_section(seeded, "Mergeability")
         self.assertIn("`Sources/Foo.swift`", gate_read)
         self.assertEqual(gate_read, self.reader().markdown_section(seeded, "Mergeability"))
@@ -4157,7 +4364,7 @@ class TheRuntimeSeedsASectionAndThisGateThenReadsItTests(unittest.TestCase):
         """
         seeded = self.seeder().seed_mergeability_section(
             self.FENCED_EXAMPLE_BODY, changed_files=["Sources/Foo.swift"]
-        )
+        ).body
         # Every fence in the body closes, and now so does every fence in the
         # gate's slice of it -- because there is none.
         self.assertIsNone(pr_readiness.split_fenced_blocks(seeded)[1])
@@ -4224,7 +4431,7 @@ class TheSeederAndThisGateAskOneQuestionTests(unittest.TestCase):
         for name, heading in self.SHAPES.items():
             with self.subTest(shape=name):
                 body = self.BODY.format(heading=heading)
-                seeded = self.seeder().seed_mergeability_section(body, changed_files=self.FILES)
+                seeded = self.seeder().seed_mergeability_section(body, changed_files=self.FILES).body
                 self.assertEqual(seeded, body, "the seeder wrote a section the body already showed")
                 self.assertEqual(pr_readiness.evaluate(pr(body), self.FILES).failures, [])
 
@@ -4233,14 +4440,14 @@ class TheSeederAndThisGateAskOneQuestionTests(unittest.TestCase):
         # A literal heading the page shows: nothing is written.
         literal = self.BODY.format(heading="## Mergeability")
         self.assertTrue(reader.has_markdown_section(literal, "Mergeability"))
-        self.assertEqual(seeder.seed_mergeability_section(literal, changed_files=self.FILES), literal)
+        self.assertEqual(seeder.seed_mergeability_section(literal, changed_files=self.FILES).body, literal)
         # A fenced example: the page does not show it, so the seeder goes in --
         # and this gate does not read it either.
         fenced = TheRuntimeSeedsASectionAndThisGateThenReadsItTests.FENCED_EXAMPLE_BODY
         self.assertFalse(reader.has_markdown_section(fenced, "Mergeability"))
         self.assertEqual(pr_readiness.extract_section(fenced, "Mergeability"), "")
         self.assertNotEqual(
-            seeder.seed_mergeability_section(fenced, changed_files=self.FILES), fenced
+            seeder.seed_mergeability_section(fenced, changed_files=self.FILES).body, fenced
         )
         # And the shapes the page shows: both readers find them, so neither
         # half of the old conjunction is left to be load-bearing.

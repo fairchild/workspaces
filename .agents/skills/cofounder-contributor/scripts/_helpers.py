@@ -9,9 +9,13 @@ import re
 import subprocess
 import sys
 import unicodedata
+import urllib.error
+import urllib.request
 from collections.abc import Callable
+from html.parser import HTMLParser
 from itertools import groupby
 from pathlib import Path
+from typing import NamedTuple
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
@@ -297,6 +301,52 @@ def _parsed(body: str) -> list[Token]:
     body with all of them to another.
     """
     return MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", body))
+
+
+def code_span_ranges(text: str) -> list[tuple[int, int]]:
+    """Half-open ranges covering each code span, by CommonMark's own rules.
+
+    Two callers ask this, so it lives here: a `--` inside a span is an
+    argument rather than a boundary (`resolve_persona.py -- mara` is one
+    name), and a `<details` inside one is text rather than a disclosure. A
+    regex that pairs backticks without CommonMark's rules answers both
+    questions wrongly in opposite directions -- it blanked a real `<details`
+    between two backticks that open no span at all, so a note nobody was
+    shown was recorded as shown and the write stayed silent about a note it
+    had dropped (#1773, round 5).
+
+    A backtick run opens a span and the next run of equal length closes it; a
+    run that finds no match is literal text. Backslash escapes hide a backtick
+    in ordinary prose but do nothing inside a span, which is why this reads
+    left to right rather than masking escapes up front: `\\`` opens nothing,
+    while the same sequence inside a span still closes it.
+    """
+    ranges: list[tuple[int, int]] = []
+    index, length = 0, len(text)
+    while index < length:
+        if text[index] == "\\":
+            index += 2
+            continue
+        if text[index] != "`":
+            index += 1
+            continue
+        opened = index
+        while index < length and text[index] == "`":
+            index += 1
+        width = index - opened
+        probe = index
+        while probe < length:
+            if text[probe] != "`":
+                probe += 1
+                continue
+            run = probe
+            while probe < length and text[probe] == "`":
+                probe += 1
+            if probe - run == width:
+                ranges.append((opened, probe))
+                index = probe
+                break
+    return ranges
 
 
 def heading_identity(text: str) -> str:
@@ -1020,23 +1070,466 @@ def section_heading_offset(body: str, heading: str) -> int | None:
     return line_starts[line] if line < len(line_starts) else len(body)
 
 
-def placement_refusal(body: str, written: str, heading: str) -> str | None:
-    """Why the page would not show the section this write places, or None.
+# GitHub's own answer to the one question a placement asks: would a reader
+# have to open something to see this section? Element nesting across a body is
+# what decides it, and a nesting model is the thing this seam exists not to
+# build -- `unterminated_block` knows the fence and raw-HTML kinds 1 to 5, and
+# a `<details>` is kind 6, which ends at a blank line to the parser while the
+# element stays open on the page (#1742, item 3). `POST /markdown` in `gfm`
+# mode returns the HTML the pull request page shows, and a fold read off that
+# HTML needs no tag grammar and no nesting rules.
+#
+# The readiness gate holds a character-alike copy of this seam. Two copies,
+# because the gate and this skill are standalone scripts with their own PEP
+# 723 pins and their own import graphs -- the same trade the parser definition
+# makes -- and the cost is paid by a test that pins the two request shapes
+# together (`test_pr_readiness.py`, `ParserDefinitionTests` for the parser and
+# the renderer agreement test for this).
+MARKDOWN_API_URL = "https://api.github.com/markdown"
+MARKDOWN_API_VERSION = "2022-11-28"
+# One call per body that could be folded, against a body GitHub caps at 65,536
+# characters. Ten seconds is far past the ~0.2 s the call takes and short
+# enough that a turn waiting on an unreachable renderer still finishes.
+RENDER_TIMEOUT_SECONDS = 10
+DEFAULT_REPOSITORY = "fairchild/workspaces"
+RENDERER_USER_AGENT = "workspaces-contributor"
 
-    A write is a write when a reader can see it. Every placement is either
-    before a heading the page shows or at the end of the body, and the end of
-    a body holding a block that never closes is inside that block: the section
-    is then in the source, absent from the page, and still carried to every
-    gate by the metadata beside it -- an approval over evidence nobody can
-    read (#1734).
 
-    Asked of the result rather than of the shapes that produce it, with the
-    same call that answers whether a body has a section at all. A write whose
-    section the page does not show is wrong however it got there, and a
-    postcondition cannot be argued out of by the next placement rule.
+# Every way the renderer can fail to answer, and for each: whether waiting
+# could change it, and the action that resolves it when waiting cannot. One
+# table, read by the constructor, so a cause's family and its repair are
+# chosen together or not at all (#1773, round 9).
+RENDERER_CAUSES: dict[str, tuple[bool, str | None]] = {
+    "no token": (
+        False,
+        "export GH_TOKEN or GITHUB_TOKEN and run again",
+    ),
+    "rejected token": (
+        False,
+        "the renderer rejected the token; export one it accepts "
+        "(`gh auth token` prints the signed-in account's) and run again",
+    ),
+    "forbidden token": (
+        False,
+        "the renderer refused the token for this repository; export one with access to it "
+        "and run again",
+    ),
+    # The renderer refusing the REQUEST rather than the caller: a 400, 404,
+    # 410, 422 or 451 is an answer about what was sent, and every one of them
+    # says the same thing about waiting -- it changes nothing. These fell
+    # through to `server error` and were marked transient, so a write that
+    # could never be verified proceeded unverified on every run (#1773,
+    # round 15).
+    "refused request": (
+        False,
+        "the renderer refused the request itself, which waiting does not change; check the "
+        "body it was given and re-run once it is something the renderer will take",
+    ),
+    # A secondary rate limit is the renderer asking for a pause, not refusing
+    # the token: `Retry-After` is time fixing it, so waiting is exactly what
+    # changes the answer.
+    "secondary rate limit": (True, None),
+    "spent rate limit": (True, None),
+    "server error": (True, None),
+    "unreachable": (True, None),
+}
+
+
+class RendererUnavailable(Exception):
+    """GitHub did not render the body. The message is why, in one clause.
+
+    `transient` is the discriminator a caller needs to decide what a missing
+    answer MEANS, and the message alone was not one -- every cause read the
+    same way, so a laptop run with no token exported took the fail-open branch
+    on every placement rather than on a rare one. A missing token is a
+    permanent condition of the environment and one the author can act on, so
+    it refuses; an HTTP failure or an unreachable renderer is a blip whose
+    harm is a reading defect, and refusing there would turn a passing outage
+    into a blocked PR, so those proceed unverified with the announcement
+    (#1773, round 6).
+
+    Keyword-only and required: the next cause added here decides which family
+    it belongs to at the raise site, where the cause is known, rather than
+    inheriting a default nobody chose.
+
+    `repair` is what makes the two families different to the author, so a
+    refusing cause has to carry one: refusing without saying what to do is a
+    dead end, and a proceeding cause that implies the author should act sends
+    them after an outage they cannot fix. It is required when `transient` is
+    false and refused when it is true, which is that difference stated where
+    the cause is known rather than checked afterwards (#1773, round 8).
     """
-    if has_markdown_section(written, heading):
-        return None
+
+    def __init__(self, reason: str, *, cause: str) -> None:
+        # The TABLE is the only input. A raise site names the cause and
+        # nothing else, so it cannot pair a family with a repair that does not
+        # fit: the type enforced that a permanent cause HAS a repair, and a
+        # secondary rate limit -- a 403 with `Retry-After` and a remaining
+        # quota -- was still classified as a rejected token and told the
+        # author to export a different one, which is a message and a
+        # classification disagreeing (#1773, round 9). Unconstructible beats
+        # untested.
+        transient, repair = RENDERER_CAUSES[cause]
+        super().__init__(reason)
+        self.cause = cause
+        self.transient = transient
+        self.repair = repair
+
+
+def repository_context() -> str:
+    """The repository the renderer resolves `#123` and `@name` against."""
+    return os.environ.get("GITHUB_REPOSITORY") or DEFAULT_REPOSITORY
+
+
+def rate_limit_is_spent(error: urllib.error.HTTPError) -> bool:
+    """Whether this refusal is the rate limit rather than the token."""
+    headers = error.headers or {}
+    return error.code in {403, 429} and headers.get("x-ratelimit-remaining") == "0"
+
+
+# The words GitHub puts in a secondary-limit body. Documented for the REST
+# API, and the other witness available when the response carries neither
+# `Retry-After` nor an exhausted quota -- which GitHub documents as a shape a
+# secondary limit can take (#1773, round 11).
+SECONDARY_LIMIT_PHRASES = ("secondary rate limit", "abuse detection")
+
+
+def says_secondary_rate_limit(error: urllib.error.HTTPError) -> bool:
+    """Whether the response BODY names a secondary limit, read at most once.
+
+    The header was the only witness, and a header-less secondary 403 with
+    quota remaining therefore read as a forbidden token: the write refused and
+    told the author to export a token the renderer accepts, which would not
+    have helped, because waiting would. A real forbidden token also has quota
+    remaining, so the quota cannot be the witness either -- the message is
+    what separates them, and it is the witness GitHub provides.
+
+    Reading the body consumes it, so the text is cached on the error object:
+    a caller that reads it afterwards for its own message gets the same text
+    rather than an empty stream.
+    """
+    cached = getattr(error, "_body_text", None)
+    if cached is None:
+        try:
+            cached = error.read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 - a body that cannot be read says nothing
+            cached = ""
+        try:
+            error._body_text = cached
+        except Exception:  # noqa: BLE001 - some error objects refuse attributes
+            pass
+    lowered = cached.lower()
+    return any(phrase in lowered for phrase in SECONDARY_LIMIT_PHRASES)
+
+
+def http_failure_reason(error: urllib.error.HTTPError) -> str:
+    """Why a non-2xx answer arrived, naming the rate limit when that is the cause."""
+    if rate_limit_is_spent(error):
+        reset = (error.headers or {}).get("x-ratelimit-reset") or "the next window"
+        return f"the renderer's rate limit is spent (it resets at {reset})"
+    if (retry := (error.headers or {}).get("retry-after")) is not None:
+        return f"the renderer asked for a pause (HTTP {error.code}, retry after {retry})"
+    if error.code in {403, 429} and says_secondary_rate_limit(error):
+        return f"the renderer applied a secondary rate limit (HTTP {error.code})"
+    if 400 <= error.code < 500 and error.code not in {401, 403, 429}:
+        return f"the renderer refused the request (HTTP {error.code})"
+    return f"the renderer answered HTTP {error.code}"
+
+
+def http_failure_cause(error: urllib.error.HTTPError) -> str:
+    """Which cause in `RENDERER_CAUSES` this non-2xx answer is.
+
+    Permanence, not the status class: does waiting change the answer? A 401
+    and a 403 that is not a rate limit are the renderer refusing this token,
+    which waiting does not fix. A spent primary limit and a SECONDARY limit
+    are both time: the first says the window is exhausted, the second asks for
+    a pause, and reading it as a rejected token refused the write and told the
+    author to export a different token, which would not have helped (#1773,
+    round 9).
+
+    A secondary limit has TWO witnesses, because GitHub documents responses
+    that carry neither `Retry-After` nor an exhausted quota: the header when
+    it is there, and the response body's own message when it is not. Quota
+    remaining cannot be the witness -- a real forbidden token has quota
+    remaining too -- so a header-less 403 is read as a secondary limit only
+    when its body says so, and as a forbidden token otherwise. What stays
+    unverifiable here is whether GitHub's live secondary 403 for THIS endpoint
+    carries that message: the classifier is tested against both shapes, and
+    the live shape has not been observed (#1773, round 11).
+    """
+    if rate_limit_is_spent(error):
+        return "spent rate limit"
+    if (error.headers or {}).get("retry-after") is not None:
+        return "secondary rate limit"
+    if error.code in {403, 429} and says_secondary_rate_limit(error):
+        return "secondary rate limit"
+    if error.code == 401:
+        return "rejected token"
+    if error.code == 403:
+        return "forbidden token"
+    # A 429 is Too Many Requests whatever else it carries: with no
+    # `Retry-After` and no phrase in the body it still reaches here, and it
+    # is the clock rather than the request, so it stays transient.
+    if error.code == 429:
+        return "secondary rate limit"
+    # Everything else in the 4xx family is the renderer refusing what it was
+    # SENT. 401 and 403 are about the token; what is left -- 400, 404, 410, 422, 451 and their
+    # siblings -- is an answer waiting cannot change, so it refuses rather
+    # than proceeding unverified. 5xx and anything else stay transient,
+    # because a server error and an unreachable renderer are outages and
+    # waiting is exactly what fixes them.
+    if 400 <= error.code < 500:
+        return "refused request"
+    return "server error"
+
+
+def render_markdown(text: str) -> str:
+    """The HTML GitHub shows for `text`, or `RendererUnavailable` saying why not.
+
+    `POST /markdown` needs no permission beyond a token that authenticates: it
+    reads nothing of the repository except the `context` it resolves
+    references against, so a lane passes the token it already has and a laptop
+    passes whatever `gh` exported. An unauthenticated call is not attempted,
+    because the anonymous allowance is 60 an hour shared across the whole
+    host, and a check spending it would refuse one author's body and place the
+    next one with nothing changed between them.
+    """
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if not token:
+        raise RendererUnavailable(
+            "no GH_TOKEN or GITHUB_TOKEN in the environment", cause="no token"
+        )
+    payload = json.dumps({"text": text, "mode": "gfm", "context": repository_context()})
+    request = urllib.request.Request(
+        MARKDOWN_API_URL,
+        data=payload.encode("utf-8"),
+        method="POST",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "X-GitHub-Api-Version": MARKDOWN_API_VERSION,
+            "Authorization": f"Bearer {token}",
+            "User-Agent": RENDERER_USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=RENDER_TIMEOUT_SECONDS) as response:
+            return response.read().decode("utf-8")
+    except urllib.error.HTTPError as error:
+        raise RendererUnavailable(
+            http_failure_reason(error), cause=http_failure_cause(error)
+        ) from error
+    except (urllib.error.URLError, OSError) as error:
+        raise RendererUnavailable(
+            f"the renderer was unreachable ({error})", cause="unreachable"
+        ) from error
+
+
+class RenderedPage(NamedTuple):
+    """What the renderer said about a body, or why it said nothing.
+
+    `unverified` is the whole fallback contract in one field: when it is set
+    no page was seen and the check stands on the source model's answer, and it
+    says so on the run's output, because a write placed without the page's
+    answer was placed by a weaker check than the one a lane runs.
+
+    A tuple rather than a dataclass because this module is loaded by path in
+    several suites, and a dataclass resolves its annotations through
+    `sys.modules` under `from __future__ import annotations` -- which a loader
+    that never registered the module does not have.
+    """
+
+    html: str = ""
+    unverified: str | None = None
+    # Whether the cause was a blip. A permanent one -- no token exported, a
+    # token the renderer rejects -- is not something to proceed past, and it
+    # carries the action that resolves it: see `RendererUnavailable`.
+    transient: bool = True
+    repair: str | None = None
+
+
+_RENDERED_PAGES: dict[str, RenderedPage] = {}
+
+
+def rendered_page(text: str) -> RenderedPage:
+    """The page's answer for this body, asked of GitHub once per text.
+
+    Cached on the text: a turn writes the status section and then the notes
+    section beside it, and both writes ask this question of a body that may
+    already have been rendered.
+    """
+    if text in _RENDERED_PAGES:
+        return _RENDERED_PAGES[text]
+    try:
+        html = render_markdown(text)
+    except RendererUnavailable as unavailable:
+        # Not cached. A failure is not an answer about this body: a 503, a
+        # spent minute of a rate limit or a dropped connection says nothing
+        # about the text, and storing it disabled the check for that body for
+        # the rest of the process -- so a turn that writes twice would take
+        # the fallback on the second write after the renderer had come back
+        # (#1773, round 2).
+        return RenderedPage(
+            unverified=str(unavailable),
+            transient=unavailable.transient,
+            repair=unavailable.repair,
+        )
+    _RENDERED_PAGES[text] = RenderedPage(html=html)
+    return _RENDERED_PAGES[text]
+
+
+# A disclosure's opening tag, as a tag NAME rather than a prefix: `<detailsx>`
+# is a different element, and `</details>` is not an opening tag at all -- the
+# `<` there is followed by `/`, which this cannot match.
+DISCLOSURE_OPEN_RE = re.compile(r"<details(?=[\s>/]|$)", re.IGNORECASE)
+DISCLOSURE_CLOSE_RE = re.compile(r"</details(?=[\s>]|$)", re.IGNORECASE)
+# An HTML comment, including one nobody closed -- which runs to the end of the
+# text it was opened in, exactly as CommonMark and the page read it.
+HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
+
+
+def _blanked(match: re.Match[str]) -> str:
+    """The match with every character but its line breaks replaced, so later lines keep their numbers."""
+    return "".join(char if char == "\n" else " " for char in match.group(0))
+
+
+class FoldedSectionReader(HTMLParser):
+    """Every heading the page shows that reads as this section, and whether a fold holds it.
+
+    A LIST rather than the first match, because the question a placement asks
+    is not "is a heading of this name folded" but "is THE heading this write
+    is about to land on folded". Those differ on a body carrying the name
+    twice: `section_heading_index` skips a heading carrying inline HTML, so
+    with `## Evidence <del>Status</del>` at the top level and a plain
+    `## Evidence Status` below an unclosed `<details>`, a reader that answered
+    about the first match said "not folded" about the struck-out one and the
+    write landed in the fold -- and the rewrite took the `</details>` with it,
+    folding `## Validation` too (#1773, round 2, reproduced against GitHub's
+    own renderer).
+
+    The identity of the target is carried into the question instead: the
+    caller knows which of the body's headings of this name the source model
+    chose, and asks about that one by position. So this enumerates the SAME
+    SET the source enumerates rather than applying the source's acceptance
+    rule -- a `<br>` is a space here because `inline_text` makes it one there,
+    and a heading carrying a tag is counted here because it is counted there,
+    even though neither reader would choose it.
+
+    A stack rather than a count, because whether a heading is folded is
+    whether any disclosure still open around it is CLOSED. `<details open>` is
+    displayed on load and hides nothing, so it contributes no fold; a closed
+    one nested inside an open one still does (#1773, round 3). A `<details>`
+    written INSIDE a heading opens after the `h2` start tag, so the heading's
+    own state is taken before it and such a heading is not its own fold.
+    """
+
+    def __init__(self, heading: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.wanted = heading_identity(heading)
+        # One entry per heading the page shows that reads as this section, in
+        # document order: True where a fold holds it.
+        self.folded: list[bool] = []
+        # One entry per `<details>` still open, True where it is a CLOSED one.
+        self._folds: list[bool] = []
+        self._heading: list[str] | None = None
+        self._heading_folded = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        name = tag.lower()
+        if name == "details":
+            # `<details open>` shows its contents on load, so it hides nothing
+            # and folds nothing. GitHub returns it as `<details open="">`, and
+            # counting it refused a section the page displays (#1773, round 3).
+            # A CLOSED disclosure nested inside an open one still folds what it
+            # holds, which is why this is a stack rather than a flag.
+            self._folds.append(not any(key.lower() == "open" for key, _ in attrs))
+        elif name == "br" and self._heading is not None:
+            # A space, which is what `inline_text` makes of a break in a
+            # heading. The two readers have to enumerate one set.
+            self._heading.append(" ")
+        elif name == "h2":
+            self._heading = []
+            self._heading_folded = any(self._folds)
+
+    def handle_endtag(self, tag: str) -> None:
+        name = tag.lower()
+        if name == "details":
+            # A `</details>` the renderer emits without an opening one is not a
+            # document this reader has to model, and popping an empty stack
+            # would read a later fold as no fold at all.
+            if self._folds:
+                self._folds.pop()
+        elif name == "h2" and self._heading is not None:
+            text, self._heading = "".join(self._heading), None
+            if heading_identity(text) == self.wanted:
+                self.folded.append(self._heading_folded)
+
+    def handle_data(self, data: str) -> None:
+        if self._heading is not None:
+            self._heading.append(data)
+
+
+def folded_headings_on_the_page(html: str, heading: str) -> list[bool]:
+    """One entry per heading the page shows reading as this section: True where a fold holds it."""
+    reader = FoldedSectionReader(heading)
+    reader.feed(html)
+    reader.close()
+    return reader.folded
+
+
+def section_heading_line(body: str, heading: str) -> int | None:
+    """Which line `## <heading>` opens on, zero-based, or None if the body shows none."""
+    tokens = _parsed(body)
+    index = section_heading_index(tokens, heading)
+    return None if index is None or tokens[index].map is None else tokens[index].map[0]
+
+
+def open_disclosure_line(body: str, before_line: int) -> int | None:
+    """The line a `<details>` still open at `before_line` was opened on, zero-based, or None.
+
+    Read off the raw-HTML blocks the parser found rather than off the body's
+    text, so a `<details>` inside a fenced example is not named as the one
+    that folded something: a fence is a `fence` token and never an
+    `html_block`. A disclosure written inside a paragraph is not read either
+    -- the token that holds it carries the paragraph's line and not its own --
+    so a fold from one is a refusal that names no line, which is the whole of
+    what it costs.
+
+    A commented-out disclosure is not one. The factory writes its own metadata
+    as an HTML comment and authors leave notes in them, so a `<details>` a
+    comment holds counted toward the nesting and named a line whose repair
+    does nothing (#1773, round 2). The comment's text is blanked rather than
+    removed, so the line numbers of everything after it still hold.
+
+    The OUTERMOST of the ones still open is named, not the innermost. The
+    refusal tells an author which element to close, and closing an inner
+    disclosure inside an outer one that is also open leaves the section
+    folded by the outer one -- a repair that does not repair. The outermost is
+    the one whose closing puts the section back on the page.
+
+    This counts opening tags against closing ones, which is the nesting model
+    the page is asked to replace. It decides nothing: the page has already
+    said the section is folded, and this only looks for the line to name.
+    """
+    opened: list[int] = []
+    for token in _parsed(body):
+        if token.type != "html_block" or token.map is None or token.map[0] >= before_line:
+            continue
+        content = HTML_COMMENT_RE.sub(_blanked, token.content)
+        tags = sorted(
+            [(match.start(), True) for match in DISCLOSURE_OPEN_RE.finditer(content)]
+            + [(match.start(), False) for match in DISCLOSURE_CLOSE_RE.finditer(content)]
+        )
+        for offset, opens in tags:
+            if opens:
+                opened.append(token.map[0] + content.count("\n", 0, offset))
+            elif opened:
+                opened.pop()
+    return opened[0] if opened else None
+
+
+def _unshown_refusal(body: str, heading: str) -> str:
+    """Why a section the page does not show as a heading is not a write, naming the block that ate it."""
     lines = MARKDOWN_LINE_ENDING_RE.split(body)
     written_lines = len(lines) - 1 if lines and lines[-1] == "" else len(lines)
     open_block = unterminated_block(_parsed(body), written_lines)
@@ -1051,34 +1544,362 @@ def placement_refusal(body: str, written: str, heading: str) -> str | None:
     )
 
 
-def insert_markdown_section(
+# How much of the author's line a refusal quotes. The line is named by its
+# NUMBER, so the quotation is there to recognise it by, not to reproduce it --
+# and a `<details …>` carrying a long attribute is a line a body can hold
+# 65,536 characters of, which composed a comment past what GitHub stores and
+# got the whole note refused (#1773, round 3).
+QUOTED_LINE_LIMIT = 200
+
+
+def _quotable(line: str) -> str:
+    """Enough of a line to recognise it by, with an ellipsis where the rest went."""
+    return line if len(line) <= QUOTED_LINE_LIMIT else f"{line[: QUOTED_LINE_LIMIT - 1]}\u2026"
+
+
+def _folded_refusal(written: str, heading: str) -> str:
+    """Why a section the page folds away is not a write, naming the disclosure that folds it."""
+    line = section_heading_line(written, heading)
+    at = None if line is None else open_disclosure_line(written, line)
+    if at is None:
+        where = "inside a `<details>`"
+    else:
+        # `code_span`, not a pair of backticks: the opening line is the
+        # author's characters, this sentence reaches a comment the app posts,
+        # and a backtick inside the tag closes a hand-written span early --
+        # after which an `@name` in the same tag is a mention GitHub delivers
+        # to someone with nothing to do with this (#1730, round 2; #1773,
+        # round 2).
+        opening = _quotable(MARKDOWN_LINE_ENDING_RE.split(written)[at].strip())
+        where = f"inside the `<details>` opened at line {at + 1} ({code_span(opening)})"
+    return (
+        f"the `## {heading}` section this write places renders {where}, so the page folds it "
+        "away and a reader sees a disclosure where the section should be; closing that element "
+        "above the section is what puts the section back on the page"
+    )
+
+
+# Both sentences an author can get when the renderer did not answer open with
+# these words, and one predicate reads them: the write that went ahead
+# unverified (a transient cause) and the write that stood down (a permanent
+# one). The instrument that counts them grepped the step log for this phrase
+# instead, which is a reading of a sentence rather than of a fact -- and the
+# two parted the moment one seam built its note without the prefix the
+# classifier keys on (#1773, round 11).
+PAGE_NOT_ASKED_PREFIX = "the page could not be asked"
+UNVERIFIED_ANNOUNCEMENT_PREFIX = f"{PAGE_NOT_ASKED_PREFIX} about this write: "
+
+
+def page_was_not_asked(text: str) -> bool:
+    """Whether this sentence says the renderer did not answer -- either way it can end."""
+    return text.startswith(PAGE_NOT_ASKED_PREFIX)
+
+
+def unverified_announcement(heading: str, reason: str) -> str:
+    """The sentence an author is owed when the page could not be asked about their write.
+
+    ONE constructor, and it is the same fact the classifier reads. The note
+    used to be built here without the prefix `is_unverified_announcement`
+    matches, and one seam appended it raw -- so the note travelled fine and
+    arrived under "Text under your `## Evidence Status` heading was not
+    carried", telling an author lines had been dropped when nothing had been
+    dropped and the check was about `## Mergeability` (#1773, round 11). A
+    constructor and a classifier that are two spellings of one fact disagree
+    the first time either moves; these are one function and its predicate.
+
+    The HEADING is in the sentence for a second reason: two sections failing
+    for one reason are two notes, not one. `_announce_unverified` dedupes on
+    the sentence, so without the heading the second section's note collapsed
+    into the first's and the author was told about one section when two were
+    unchecked. With it the dedup key is (heading, reason), which is what the
+    author needs to act on.
+    """
+    return (
+        f"{UNVERIFIED_ANNOUNCEMENT_PREFIX}`## {heading}`: rendered view unverified: {reason}. "
+        "Whether the section this write places is folded away behind a disclosure was decided "
+        "by the source model alone, which cannot see a fold"
+    )
+
+
+def is_unverified_announcement(announcement: str) -> bool:
+    """Whether this sentence says a check could not be run rather than what a write did."""
+    return announcement.startswith(UNVERIFIED_ANNOUNCEMENT_PREFIX)
+
+
+def unverified_heading(announcement: str) -> str | None:
+    """The section an unverified note is about, read back out of the note itself."""
+    if not is_unverified_announcement(announcement):
+        return None
+    rest = announcement[len(UNVERIFIED_ANNOUNCEMENT_PREFIX) :]
+    match = re.match(r"`## (?P<heading>[^`]+)`: ", rest)
+    return match["heading"] if match else None
+
+
+def _unasked_refusal(heading: str, reason: str, repair: str) -> str:
+    """What an author is told when the page could not be asked and, as things stand, never can be.
+
+    The repair comes from the cause rather than from here: a sentence naming
+    one action for every permanent cause told an author whose token came back
+    401 to export a token the renderer accepts, which is what they did.
+    """
+    return (
+        f"{PAGE_NOT_ASKED_PREFIX} whether the `## {heading}` section this write places is "
+        f"folded away: {reason}. That is a condition of this environment rather than a blip, so "
+        f"the write stands down instead of placing a section on a weaker check than a lane runs -- "
+        f"{repair}"
+    )
+
+
+# The base of the token appended to the heading this write places, so the page
+# can be asked about THAT heading and no other. Renaming a heading cannot
+# change what folds it, so the probe body's fold structure is the real one.
+PLACEMENT_PROBE_MARK = "wsx7placementprobe"
+
+
+# How many marks to try before giving up. Each retry costs one render, and a
+# body that collides with three of them in a row is a body nothing should keep
+# rendering for.
+PLACEMENT_PROBE_ATTEMPTS = 3
+
+
+def placement_probe_mark(written: str, attempt: int = 0) -> str:
+    """The `attempt`-th mark this body does not already carry, chosen the same way every time.
+
+    Uniqueness by construction rather than by hoping. The base is a string no
+    author writes, which is not the same as one no author CAN write -- by
+    accident, or by someone who has read this code -- and a body already
+    carrying it puts two matches on the page and draws the ambiguity refusal:
+    safe, but a refusal on a legitimate body with a message about a heading
+    the author cannot see (#1773, round 4).
+
+    Deterministic, never random: the recorded renderer responses are keyed by
+    the sha256 of the probe body, so the same body has to produce the same
+    probe on every run or no fixture ever matches. Counting up terminates
+    because the body is finite and the candidates are not.
+
+    This scan is the cheap FIRST GUESS and not the guarantee. It is an exact,
+    case-sensitive substring scan of the source, and the property is about the
+    PAGE: `## Evidence Status wsx7placementprob&#101;` carries no such
+    substring and renders as a heading whose text is exactly the mark, as do a
+    case variant, an empty comment inside the word, and an `<em>` around its
+    last letter. All four were confirmed against the renderer, and all four
+    made the page show the name twice -- so the exactly-one check refused a
+    placement the page shows unfolded (#1773, round 5).
+
+    Mirroring `heading_identity` in this scan would model the renderer, which
+    is the thing the mark exists to avoid. So `attempt` lets the caller ask
+    for the next candidate and settle the question where it lives: render,
+    and if the page shows the name more than once, come back for another mark.
+    """
+    seen, suffix = 0, 0
+    while True:
+        mark = PLACEMENT_PROBE_MARK if suffix == 0 else f"{PLACEMENT_PROBE_MARK}{suffix}"
+        if mark not in written:
+            if seen == attempt:
+                return mark
+            seen += 1
+        suffix += 1
+
+
+SETEXT_UNDERLINE_RE = re.compile(r"^[ \t]{0,3}(=+|-+)[ \t]*$")
+
+
+def probe_body_naming_one_heading(
+    written: str, heading: str, heading_line: int, mark: str = PLACEMENT_PROBE_MARK
+) -> str | None:
+    """`written` with the heading this write places renamed to something unique, or None.
+
+    The page cannot be asked "is the heading I placed folded" while several
+    headings read as that name, and which rendered heading is which cannot be
+    decided without a model of what the renderer does to a heading carrying a
+    tag -- a model round 2 measured as needing two branches. So the question
+    is made unambiguous instead of the answer being guessed: the placed
+    heading gets a name nothing else has, and the page is asked about that.
+
+    A setext underline below the renamed line goes, because the line above it
+    is an ATX heading now and the underline would be a rule of its own. The
+    replacement is one line for one line, so every line number below it holds
+    and the body's block structure -- which is what folds anything -- is
+    untouched.
+    """
+    lines = MARKDOWN_LINE_ENDING_RE.split(written)
+    if not 0 <= heading_line < len(lines):
+        return None
+    lines[heading_line] = f"## {heading} {mark}"
+    following = heading_line + 1
+    if following < len(lines) and SETEXT_UNDERLINE_RE.match(lines[following]):
+        lines[following] = ""
+    return "\n".join(lines)
+
+
+def could_be_folded(written: str) -> bool:
+    """Whether anything above this heading could fold it, read as text rather than as structure.
+
+    A page folds a heading only inside a `<details>`, and a `<details>` is
+    text an author wrote. So a body with no such opening tag has nothing to
+    ask the page about, and asking anyway would spend a request on every
+    ordinary write.
+
+    The WHOLE body, not the text above the heading. Gating on what sits above
+    while asking a question about the body was a rule whose answer depended on
+    where an unrelated disclosure happened to sit -- the same body refused or
+    placed according to something that had nothing to do with it (#1773,
+    round 3). The gate and the question are about the same text now.
+
+    Read as text on purpose, which makes it over-inclusive: a `<details>`
+    inside a fenced example costs one call and the page answers that nothing
+    is folded. Under-inclusive it cannot be -- a fold needs the tag -- and
+    that is the direction that would matter.
+    """
+    return DISCLOSURE_OPEN_RE.search(written) is not None
+
+
+class PlacementAnswer(NamedTuple):
+    """What a placement check decided, and what it could not ask.
+
+    Two fields because they are two different things a caller owes an author.
+    `refusal` is why this write did not happen. `unverified` is a question
+    that went unasked -- the renderer was unreachable, so the check that ran
+    is weaker than the one a lane runs -- and it travels on an ACCEPTED write
+    too, which is the case it exists for: a renderer 503 used to accept a
+    folded placement with nothing visible anywhere (#1773, round 2).
+    """
+
+    refusal: str | None = None
+    unverified: str | None = None
+
+
+def placement_refusal(body: str, written: str, heading: str) -> PlacementAnswer:
+    """Why the page would not show the section this write places, or None.
+
+    A write is a write when a reader can see it. Every placement is either
+    before a heading the page shows or at the end of the body, and the end of
+    a body holding a block that never closes is inside that block: the section
+    is then in the source, absent from the page, and still carried to every
+    gate by the metadata beside it -- an approval over evidence nobody can
+    read (#1734).
+
+    Asked of the result rather than of the shapes that produce it, with the
+    same call that answers whether a body has a section at all. A write whose
+    section the page does not show is wrong however it got there, and a
+    postcondition cannot be argued out of by the next placement rule.
+
+    Absent from the page is one way to be unreadable and folded away is the
+    other, and the parse cannot see the second: a `<details>` ends at a blank
+    line to CommonMark while the element stays open on the page, so a section
+    written below an unclosed one is a heading to every reader here and a
+    heading behind a disclosure to everyone else (#1742, item 3). Which is a
+    question about element nesting across a whole body, so it is asked of the
+    page rather than modelled -- the move the readiness gate made for the
+    status lines it reads (#1745), with the same fallback: no page means the
+    source model's answer and a sentence saying the page went unread, never a
+    silent accept of something the model would not accept on its own. That
+    sentence comes BACK to the caller rather than going to a log, because
+    every plane that runs this check runs it where stderr is a step log and
+    the author is somewhere else (#1740, #1773 round 2).
+
+    What the page is asked is whether it folds ANY heading reading as this
+    section, not whether it folds the one this write lands on. The first
+    version asked about the first heading of that name, which is a true answer
+    about the wrong element: a struck-out `## Evidence <del>Status</del>` above
+    a plain heading inside a fold answered "not folded" for a write that landed
+    in the fold, and took the `</details>` with it so `## Validation` folded too
+    (#1773, round 2). Picking the right one instead needs a model of what the
+    renderer does to a heading carrying a tag -- it decorates some and leaves
+    others -- and that model is the thing this seam exists not to build. The
+    question with no index in it has neither problem and errs toward refusing.
+
+    A section is refused for the fold the page shows, not for the fold its own
+    text makes. A `<details>` an author opens INSIDE the section folds that
+    section's contents, and whether those contents are readable is the reader's
+    question -- the gate reads folded text and refuses a folded status on its
+    own account (#1769). What a placement decides is whether the heading is
+    somewhere a reader arrives at, so a heading the page shows unfolded is
+    placed whatever its section then holds.
+    """
+    if not has_markdown_section(written, heading):
+        return PlacementAnswer(refusal=_unshown_refusal(body, heading))
+    heading_line = section_heading_line(written, heading)
+    if heading_line is None or not could_be_folded(written):
+        return PlacementAnswer()
+    # Uniqueness is settled against the PAGE, because that is what it is a
+    # claim about. The source scan picks a candidate, the page is asked, and a
+    # name the page shows twice sends the loop back for the next candidate --
+    # bounded, so a pathological body refuses rather than spins (#1773,
+    # round 5).
+    shown: list[bool] = []
+    for attempt in range(PLACEMENT_PROBE_ATTEMPTS):
+        mark = placement_probe_mark(written, attempt)
+        probe = probe_body_naming_one_heading(written, heading, heading_line, mark)
+        if probe is None:
+            return PlacementAnswer(refusal=_unshown_refusal(body, heading))
+        page = rendered_page(probe)
+        if page.unverified is not None:
+            if not page.transient:
+                return PlacementAnswer(
+                    refusal=_unasked_refusal(heading, page.unverified, page.repair or "")
+                )
+            return PlacementAnswer(
+                unverified=unverified_announcement(heading, page.unverified)
+            )
+        shown = folded_headings_on_the_page(page.html, f"{heading} {mark}")
+        if not shown:
+            # A heading the parse reads and the page does not show at all. The
+            # same refusal as a swallowed section, because that is what it is.
+            return PlacementAnswer(refusal=_unshown_refusal(body, heading))
+        if len(shown) == 1:
+            break
+    else:
+        # Every candidate collided on the page. Refusing says so rather than
+        # picking one of them.
+        return PlacementAnswer(refusal=_unshown_refusal(body, heading))
+    # Exactly the heading this write places, because the probe gave it a name
+    # nothing else has. "Any heading of this name" was the round-2 answer and
+    # it refused placements a reader can see: a raw `<h2>Evidence Status</h2>`
+    # inside a CLOSED `<details>`, or a heading inside a `<summary>`, is a
+    # folded heading of this name that the PARSER never reads as an h2 at all
+    # -- so `rejected_heading_note` cannot flag it either, and the author got
+    # a refusal naming no line and no repair (#1773, round 3).
+    return PlacementAnswer(refusal=_folded_refusal(written, heading) if shown[0] else None)
+
+
+class SectionInsert(NamedTuple):
+    """The body an insert produced, why it stood down, and what it could not ask."""
+
+    body: str
+    refusal: str | None = None
+    unverified: str | None = None
+
+
+def inserted_markdown_section(
     body: str,
     heading: str,
     content: str,
     *,
     before_heading: str | None = None,
     after_heading: str | None = None,
-) -> str:
-    """The body with this section rewritten, where the author already had one.
+) -> SectionInsert:
+    """The body an insert produced, and the reason it declined, together.
 
-    A section that exists is replaced where it stands. Placement is a question
-    only about a section the body does not have yet: moving one an author
-    placed reorders their document for them, and it did -- the rewrite that
-    stopped deleting a `# Release blockers` heading under Evidence Status then
-    lifted Evidence Status out from under it, because the cut was shorter and
-    the re-insert went to the placement point rather than back to the offset
-    it came from (#1734, round 2). Keeping the content is the headline;
-    keeping it where its author put it is the property.
+    The reason comes back rather than only reaching a log, because the body an
+    insert declines to write is a body with no such section -- so a caller
+    that asked the postcondition about it a second time was told "not a
+    heading on the page", and the fold that actually stopped the write stayed
+    in a step log nobody opens. The specific reason is the one an author can
+    act on (#1773).
 
-    `before_heading` and `after_heading` place a NEW section: above a heading
-    the page shows, or directly below one, respectively. `after_heading` is
-    how a carried-notes section lands under the status list it was carried out
-    of, rather than merely somewhere above the next heading.
+    This is the only insert now. A back-compat wrapper returned the body
+    alone, and every caller that took it dropped a refusal on the floor: an
+    author's `## Evidence Notes` went that way, and the `## Mergeability` and
+    `## Validation` seeds nearly did. When the last production caller took the
+    answer the wrapper had none left, so it is gone rather than kept for the
+    tests that found it convenient (#1773, round 8).
+
+    `unverified` rides along for the same reason one step further: a write
+    that went ahead without the page having been asked was decided by a
+    weaker check than a lane runs, and a caller with a surface the author
+    reads is the only place that fact is worth anything (#1773, round 2).
     """
-    # Newlines only, at both ends. The first line's indentation is content
-    # where a block was written as indented code -- taking four spaces off it
-    # turns a `## Validation` a reviewer pasted as an example into a heading --
-    # and the trailing spaces on the last line are a line break on the page.
     section = f"## {heading}\n{content.strip(chr(10))}".rstrip("\n")
     # The author's body, untrimmed, because that is the text the cut is made
     # on and the text `section_write_refusal` answers about. Trimming here and
@@ -1090,12 +1911,15 @@ def insert_markdown_section(
         # whose old one could not be removed would leave two, and returning
         # the body without saying so let a caller believe it had written.
         log(f"refusing to rewrite the `{heading}` section: {refusal}")
-        return body
+        return SectionInsert(body, refusal)
     written = _rewritten(body, bounds, removed, section, heading, before_heading, after_heading)
-    if (unshown := placement_refusal(body, written, heading)) is not None:
-        log(f"refusing to write the `{heading}` section: {unshown}")
-        return body
-    return written
+    answer = placement_refusal(body, written, heading)
+    if answer.unverified is not None:
+        log(answer.unverified)
+    if answer.refusal is not None:
+        log(f"refusing to write the `{heading}` section: {answer.refusal}")
+        return SectionInsert(body, answer.refusal, answer.unverified)
+    return SectionInsert(written, None, answer.unverified)
 
 
 def _rewritten(
