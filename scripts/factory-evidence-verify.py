@@ -41,6 +41,7 @@ from evidence import (  # noqa: E402
     entries_by_index,
     usable_entry_index,
     colliding_record_refusal,
+    unrenderable_entries,
     unrenderable_record_refusal,
     update_evidence_entries,
 )
@@ -339,6 +340,16 @@ def should_clear_blocked_label(
     # it gets the same answer: the label stays and the author is left the
     # contract.
     if colliding_indexes(entries):
+        return False
+    # And an entry no write can render is the same unanswerable question one
+    # field over. The writer stands the whole record down for one of them --
+    # an index that numbers no line, a status outside the vocabulary, an
+    # empty item, an item that renders to nothing or runs onto a second line
+    # -- so the section on the page is not what the record says, and clearing
+    # the gate on a record the write refused opens it over a body nobody
+    # rewrote. Measured at `614eb162`: the refusal stood and this still
+    # answered True (#1778, round 23).
+    if unrenderable_entries(entries):
         return False
     confirmed = verified or {}
     for entry in entries:

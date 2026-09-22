@@ -9882,6 +9882,145 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
                      "an item that renders to nothing on the page"],
                 )
 
+    LIST_MARKERS = {
+        "a hyphen bullet": "-",
+        "a star bullet": "*",
+        "a plus bullet": "+",
+        "an ordered marker": "1.",
+        "an ordered marker with a paren": "1)",
+        "a two-digit ordered marker": "10.",
+        "an indented hyphen bullet": "  -",
+        "an indented ordered marker": "  1.",
+    }
+
+    # intent: fix
+    # marker: red at `614eb162`, its own base, behaviourally, on the four
+    # ordered spellings -- `FAILED (failures=4)` -- and green there on the
+    # four bullet ones, which is what makes those the controls inside it
+    # (#1778, round 23).
+    def test_the_marker_a_line_opens_with_is_the_readers_marker_not_a_character_set(self) -> None:
+        """`lstrip("-*+")` is a character set standing in for a definition.
+
+        The section's reader accepts an ordered marker -- `1.`, `1)`, `10.` --
+        and an indent before either kind, so a line the author wrote as
+        `1. [pending-ci] <recorded item> -- waiting` kept its marker through
+        the strip, failed to match the item, and was named as taken while
+        this write rendered it back. Measured at `614eb162`: the three
+        ordered spellings name the entry's own line and the bullets do not.
+
+        Written once as what the reader takes off a line, and asked of every
+        spelling the reader accepts.
+        """
+        item = "verify <b>the profile</b>"
+        for shape, marker in self.LIST_MARKERS.items():
+            with self.subTest(marker=shape):
+                entries = [
+                    {"index": 1, "item": item, "status": "pending-ci",
+                     "detail": "waiting", "kind": "ci"},
+                    "legacy",
+                ]
+                unowned = "- [pending-ci] a line no entry owns -- waiting"
+                source = self.body(entries).replace(
+                    f"- [pending-ci] {item} -- waiting",
+                    f"{marker} [pending-ci] {item} -- waiting",
+                    1,
+                ).replace("\n\n## Validation", f"\n{unowned}\n\n## Validation", 1)
+                said: list[str] = []
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.evidence().update_evidence_entries(
+                        source, {1: {"status": "complete", "detail": "green"}},
+                        announcements=said,
+                    )
+                spoken = " ".join(said)
+                self.assertIn("a line no entry owns", spoken, f"{shape}: the loss went unsaid")
+                self.assertNotIn(
+                    item, spoken.split("from the page:")[-1],
+                    f"{shape}: the write named a line it rendered back",
+                )
+
+    # intent: fix
+    # marker: red at `614eb162`, its own base, behaviourally: the escaped
+    # line leaves and nothing names it (`AssertionError`). The backstop is
+    # what silences it there (#1778, round 23).
+    def test_an_escaped_bracket_line_of_theirs_is_not_a_line_this_write_rendered(self) -> None:
+        """The backstop is reachable, and this is the input that reaches it.
+
+        With the item `verify [r1]`, `[r1]: …` defined in the body, and the
+        author's own `- [complete] verify \\[r1] -- green`, the escaped
+        line's page reading is the literal `verify [r1]` -- and the write's
+        own rendered line read the same way, because the document
+        `rendered_text` came from carried none of the body's definitions. Two
+        different lines flattened into one reading, and the loss was silenced.
+
+        Both sides are read in the body's context now, so the match is about
+        what the page makes of a line rather than about which definitions the
+        reader happened to have.
+        """
+        item = "verify [r1]"
+        entries = [
+            {"index": 1, "item": item, "status": "pending-ci", "detail": "waiting", "kind": "ci"},
+            "legacy",
+        ]
+        theirs = "- [complete] verify \\[r1] -- green"
+        source = self.body(entries).replace(
+            "\n\n## Validation", f"\n{theirs}\n\n## Validation", 1
+        ) + "\n[r1]: https://example.invalid/1\n"
+        said: list[str] = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            written = self.evidence().update_evidence_entries(
+                source, {1: {"status": "complete", "detail": "green"}}, announcements=said
+            )
+        self.assertNotIn("verify \\[r1]", written, "the case is not built: the line is still there")
+        self.assertIn("verify [r1]", " ".join(said), "a line of theirs left and nothing named it")
+
+    # intent: fix
+    # marker: red at `614eb162`, its own base, behaviourally: the write
+    # renders such an entry there and then names its own first physical line
+    # as taken (`AssertionError`) (#1778, round 23).
+    def test_an_item_that_renders_as_two_lines_is_refused(self) -> None:
+        """One status line is one line, and an item carrying a break is not one.
+
+        Three spellings of the break reach it from a record: a bare newline,
+        a hard break (two trailing spaces or a trailing backslash), and the
+        `&#10;` / `&#xa;` entity that decodes to one. The first two make the
+        source two physical lines, which is how the write came to name its
+        own first line as taken; the entity keeps the source on one line and
+        renders as two, which is the arm round 21's `Enumerated:` line
+        recorded as read and never drove.
+
+        Refused with the position named, like every other entry this write
+        cannot render.
+        """
+        for shape, item in (
+            ("a bare newline", "verify the lane\ncontinued"),
+            ("a carriage return and newline", "verify the lane\r\ncontinued"),
+            ("two trailing spaces", "verify the lane  \ncontinued"),
+            ("a trailing backslash", "verify the lane\\\ncontinued"),
+            ("the &#10; entity", "verify the lane&#10;continued"),
+            ("the &#xa; entity", "verify the lane&#xa;continued"),
+        ):
+            with self.subTest(item=shape):
+                entries = [
+                    {"index": 1, "item": item, "status": "pending-ci",
+                     "detail": "waiting", "kind": "ci"},
+                    "legacy",
+                ]
+                source = self.body(entries)
+                said: list[str] = []
+                with contextlib.redirect_stderr(io.StringIO()):
+                    written = self.evidence().update_evidence_entries(
+                        source, {1: {"status": "complete", "detail": "green"}},
+                        announcements=said,
+                    )
+                self.assertEqual(written, source, f"{shape}: the body was rewritten anyway")
+                self.assertEqual(len(said), 1, said)
+                self.assertIn("line break", said[0], f"{shape}: {said}")
+                self.assertIn("position 1", said[0])
+                self.assertEqual(
+                    [note for note in said if "replaced this line" in note], [],
+                    f"{shape}: a line this write rendered was named as taken",
+                )
+
     # intent: guard
     # marker: red at `3be40143`, its own base, only on a NAME this round adds
     # -- `ERROR: AttributeError: says_text_was_not_carried` -- and red the

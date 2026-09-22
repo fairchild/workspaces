@@ -706,6 +706,20 @@ def _unreadable_inline(children: list[Token] | None) -> str | None:
     return None
 
 
+# What the section's reader takes as a list marker, written once: an indent it
+# does not read as code, then a bullet or an ordered marker, then the space
+# after it. `lstrip("-*+")` was a character SET standing in for that
+# definition, and the reader accepts `1.`, `1)` and `10.` which the set does
+# not -- so an author's `1. [pending-ci] <recorded item> -- waiting` was named
+# as taken while this write rendered it back (#1778, round 23).
+LIST_MARKER_RE = re.compile(r"^ {0,3}(?:[-*+]|[0-9]{1,9}[.)])[ \t]+")
+
+
+def without_its_list_marker(line: str) -> str:
+    """A source line with the list marker the page reader would take off it, taken off."""
+    return LIST_MARKER_RE.sub("", line, count=1)
+
+
 def _rendered_inline(text: str) -> str:
     """Markdown text, such as a requested item or a recorded detail, read as a status line is."""
     tokens = MARKDOWN.parseInline(text)
@@ -3693,6 +3707,16 @@ def entry_as_rendered(entry: object) -> tuple[dict[str, object] | None, str | No
     detail = _encodable(str(entry.get("detail", "")).strip())
     if not item:
         return None, "no item text"
+    # One status line is ONE line. An item carrying a break -- a bare newline,
+    # a hard break, or the `&#10;` / `&#xa;` entity that decodes to one --
+    # renders as two lines in a PR body, so the write cannot render it as the
+    # line it is about to claim. It joins the family the record already has
+    # rather than being written and then argued about: at `614eb162` the
+    # write rendered it and then named the entry's OWN first physical line as
+    # taken, because the source line it walks carries only that much
+    # (#1778, round 23).
+    if (broken := _unreadable_inline(MARKDOWN.parseInline(item)[0].children if MARKDOWN.parseInline(item) else None)) is not None and "line break" in broken:
+        return None, broken
     # An item that renders to NOTHING on the page is an item no reader can
     # see and no reader can own a line by: `&nbsp;`, `&#32;` and `&#x20;` are
     # bytes in the record and blank on the page. The write used to render a
@@ -4106,7 +4130,7 @@ def _render_structured_entries(
         """
         text = line.strip()
         if raw_source:
-            text = text.lstrip("-*+").strip()
+            text = without_its_list_marker(line).strip()
         prefix = EVIDENCE_STATUS_PREFIX_RE.match(f"- {text}")
         if not prefix:
             return False
@@ -4137,8 +4161,23 @@ def _render_structured_entries(
     # (#1778, round 21).
     raw_items = {str(entry["item"]).strip() for entry in rendered_entries}
 
+    # Read in the BODY's context, like every other reading here. Built from
+    # the rendered lines alone, this document carried none of the body's link
+    # reference definitions, so a line of the author's whose escaped text
+    # reads as `verify [r1]` matched a rendered line whose `verify [r1]`
+    # simply had nowhere to resolve -- and the backstop then silenced a real
+    # loss. The definitions the body holds are appended so both sides resolve
+    # the same names (#1778, round 23).
+    definitions = "\n".join(
+        f"[{label}]: {reference.get('href', '')}"
+        for label, reference in sorted((reading_context.get("references") or {}).items())
+        if isinstance(reference, dict)
+    )
     rendered_as_read, _ = _rendered_status_lines(
-        f"## {EVIDENCE_STATUS_HEADING}\n\n" + "\n".join(rendered_lines) + "\n"
+        f"## {EVIDENCE_STATUS_HEADING}\n\n"
+        + "\n".join(rendered_lines)
+        + "\n"
+        + (f"\n{definitions}\n" if definitions else "")
     )
     rendered_text = set(rendered_as_read)
 
@@ -4155,31 +4194,28 @@ def _render_structured_entries(
         section, and suppressing that naming would be the silence round 17
         took `unreadable_after` out of the condition to avoid.
 
-        Subsumed today, and kept for the reason the BEFORE half below is
-        kept. Three arguments for that have been written here and none of
-        them held: a universal over `rendered_text` (round 19), a narrower
-        universal about the page reader (round 20), and a claim that every
-        member `_rewritten` rejects is a reading of a line in a document that
-        does not exist (round 21) -- false, because an item that renders to
-        nothing was rejected for its empty reading with no reference
-        involved.
+        REACHABLE, and rounds 19 to 22 each argued otherwise in a
+        different form. The input that reaches it: an item of `verify [r1]`
+        with `[r1]: …` defined in the body, and an author's own
+        `- [complete] verify \\[r1] -- green` beside it. The escaped line's
+        page reading is that literal text; `rendered_text` held the same
+        literal text, because the document it was read from carried only the
+        rendered lines and none of the body's definitions -- so the member
+        was in `before` and in `rendered_text` at once, and this term
+        silenced a loss that had really happened.
 
-        The argument is about where this term can fire at all, which is a
-        question about `after` rather than about `before`. It is reached only
-        for a line that is in `before`, ABSENT FROM `after`, and rejected by
-        the rewritten-ness question. `rendered_text` is the page's reading of
-        a document built from exactly the lines this write puts in the
-        section, so a line in it is a line the written body holds -- and the
-        written body's section is what `after` is read from. A line the write
-        wrote is therefore absent from `after` only where the reader refused
-        the after page, and there the items this write rendered are what
-        answer for it, which is the rewritten-ness question rather than this
-        one.
+        Round 22 reported that it fires zero times under the four suites and
+        read that as unreachability. Zero fires under a suite measures
+        COVERAGE, and the shape above was outside it.
 
-        So the term has no reachable input, and that is measured rather than
-        argued: instrumented to log every line it suppresses, it fires ZERO
-        times across all five suites, and the mutant dropping it leaves them
-        green (#1778, rounds 19 to 22).
+        What it does now, and why it stays: `rendered_text` is read in the
+        body's own context, like every other reading here, so a line matches
+        only when the page makes it the same line rather than when a missing
+        definition happens to flatten two readings together. What remains for
+        this term is the case round 18 added it for -- a line the after-page
+        reader cannot read back at all, where the write's own knowledge of
+        what it rendered is the only claim available (#1778, rounds 18
+        to 23).
         """
         return line.strip() in rendered_text
 
