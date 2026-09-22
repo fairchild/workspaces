@@ -4161,63 +4161,19 @@ def _render_structured_entries(
     # (#1778, round 21).
     raw_items = {str(entry["item"]).strip() for entry in rendered_entries}
 
-    # Read in the BODY's context, like every other reading here. Built from
-    # the rendered lines alone, this document carried none of the body's link
-    # reference definitions, so a line of the author's whose escaped text
-    # reads as `verify [r1]` matched a rendered line whose `verify [r1]`
-    # simply had nowhere to resolve -- and the backstop then silenced a real
-    # loss. The definitions the body holds are appended so both sides resolve
-    # the same names (#1778, round 23).
-    definitions = "\n".join(
-        f"[{label}]: {reference.get('href', '')}"
-        for label, reference in sorted((reading_context.get("references") or {}).items())
-        if isinstance(reference, dict)
-    )
-    rendered_as_read, _ = _rendered_status_lines(
-        f"## {EVIDENCE_STATUS_HEADING}\n\n"
-        + "\n".join(rendered_lines)
-        + "\n"
-        + (f"\n{definitions}\n" if definitions else "")
-    )
-    rendered_text = set(rendered_as_read)
-
-    def _still_written(line: str) -> bool:
-        """A line this write itself put back is not a line that left the body.
-
-        The backstop under the rewritten-ness question, and it is about the
-        write's OWN output rather than about the body's text: a line that is
-        THERE was not replaced with nothing, and the sentence saying it was
-        is a false accusation the author acts on by writing a duplicate
-        (#1778, round 18). Bound to what the write rendered rather than to a
-        substring of the body, because a copy of a line somewhere else in the
-        body -- inside a fenced example, say -- is not the line that left the
-        section, and suppressing that naming would be the silence round 17
-        took `unreadable_after` out of the condition to avoid.
-
-        REACHABLE, and rounds 19 to 22 each argued otherwise in a
-        different form. The input that reaches it: an item of `verify [r1]`
-        with `[r1]: …` defined in the body, and an author's own
-        `- [complete] verify \\[r1] -- green` beside it. The escaped line's
-        page reading is that literal text; `rendered_text` held the same
-        literal text, because the document it was read from carried only the
-        rendered lines and none of the body's definitions -- so the member
-        was in `before` and in `rendered_text` at once, and this term
-        silenced a loss that had really happened.
-
-        Round 22 reported that it fires zero times under the four suites and
-        read that as unreachability. Zero fires under a suite measures
-        COVERAGE, and the shape above was outside it.
-
-        What it does now, and why it stays: `rendered_text` is read in the
-        body's own context, like every other reading here, so a line matches
-        only when the page makes it the same line rather than when a missing
-        definition happens to flatten two readings together. What remains for
-        this term is the case round 18 added it for -- a line the after-page
-        reader cannot read back at all, where the write's own knowledge of
-        what it rendered is the only claim available (#1778, rounds 18
-        to 23).
-        """
-        return line.strip() in rendered_text
+    # The backstop that read a second rendering of this write's own lines is
+    # GONE, and so is the rendering. It was kept through rounds 18 to 22 on
+    # an argument that it could not fire, which was false -- an item of
+    # `verify [r1]` with the definition in the body and an author's escaped
+    # `verify \\[r1]` beside it reached it, and it silenced that loss, because
+    # the document it read from carried none of the body's definitions and
+    # flattened two different lines into one reading. Reading it in the
+    # body's context closes that, and then nothing reaches the term at all:
+    # not the four suites, not the 27 item shapes the pass drove, not the
+    # class this branch measures. A term no input reaches is an unread line
+    # rather than defence in depth, and the rewritten-ness question above --
+    # which asks the ITEMS this write rendered, in the body's own context --
+    # is the claim that was doing the work (#1778, round 23).
 
     # The BEFORE half is redundant TODAY and kept deliberately: this reader
     # answers an unreadable section with no lines at all, so the list would
@@ -4234,7 +4190,7 @@ def _render_structured_entries(
         else [
             line
             for line in before
-            if line not in after and not _rewritten(line) and not _still_written(line)
+            if line not in after and not _rewritten(line)
         ]
     )
     # An empty `replaced` because nothing was replaced and an empty one
