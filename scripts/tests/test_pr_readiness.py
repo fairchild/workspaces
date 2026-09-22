@@ -12,6 +12,7 @@ sections in a form GitHub Actions can surface cleanly.
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import hashlib
 import importlib.util
@@ -22,6 +23,7 @@ import re
 import sys
 import tempfile
 import time
+import unicodedata
 import unittest
 import urllib.error
 from pathlib import Path
@@ -47,6 +49,222 @@ spec.loader.exec_module(pr_readiness)
 PENDING_TEXT = getattr(
     pr_readiness, "PENDING_FAILURE", "Requested evidence is blocked or still pending CI."
 )
+
+
+def all_of(cases, expected: set[str], label: str):
+    """A fixture table, with its exact contents asserted before anything iterates it.
+
+    A table-driven test iterates a dict nothing requires to be non-empty, so
+    emptying the table leaves five principal tests reporting OK in 0.000s --
+    and round 4's "accepted at base, refused at head" rested on those tables
+    happening to be populated (#1771, round 6).
+
+    THE PREDICATE, stated once and checked against the whole population
+    rather than one table at a time: every fixture a test READS -- walked,
+    looked up, or spliced -- is guarded on its NAMES (the exact set) AND on
+    the NON-VACUITY of what each row asserts. A row's claim cannot be
+    emptied, replaced by a neighbour's, or replaced by a same-token donor
+    without a test naming the row. Six rounds each closed one level and
+    called it closed: names without values, values without donors, pins
+    without pins of their own. The granularity was what kept slipping, so it
+    is written down here rather than re-derived per table (#1771, round 15).
+
+    The NAMES rather than the count, because a count answers "how many" and
+    the claim is about WHICH: a shape swapped for another of the same size --
+    a weaker spelling in place of the one a claim rests on -- passed this
+    guard silently and took the coverage with it (#1771, round 10). The
+    caller names the keys it expects, so a swap is as loud as a deletion and
+    the count is implied. Duplicates are a difference too: a table naming one
+    shape twice is a shape short.
+    """
+    names = set(cases)
+    missing, unexpected = sorted(expected - names), sorted(names - expected)
+    # Two terms decide and a third only describes. An unexpected name cannot
+    # be the ONLY signal: if a name arrived and none went missing then the
+    # table's names strictly contain the expected ones, so there are more
+    # distinct names than expected names and at least as many rows as
+    # distinct names -- the length term fires on every such table. It is in
+    # the message, where it says what arrived, and out of the decision, where
+    # it was a clause no input could reach alone (#1771, round 11).
+    if missing or len(cases) != len(expected):
+        raise AssertionError(
+            f"{label}: missing {missing}, unexpected {unexpected}, {len(cases)} rows for "
+            f"{len(expected)} names -- the table this test's claim rests on was changed; "
+            "re-measure the claim or update the set"
+        )
+    return cases
+
+
+# What makes a binding a claims table, stated once: a module-level mapping
+# from a row's name to the three axes a row's claim is written on. The
+# population this file's thesis quantifies over is READ by this, never listed
+# -- a hardcoded pair left a third table guarded by nothing (#1771, round 17).
+CLAIMS_TABLE_SUFFIX = "_CLAIMS"
+
+
+def holds_of(claim, text: str) -> bool:
+    """Whether every axis of this claim is true of this text.
+
+    The row test's own three loops, as one expression, so the guard below
+    asks exactly what the test asks and the two cannot drift.
+    """
+    contains, absent, order = claim
+    if not all(needle in text for needle in contains):
+        return False
+    if any(needle in text for needle in absent):
+        return False
+    return all(
+        first in text and second in text and text.index(first) < text.index(second)
+        for first, second in order
+    )
+
+
+def tells_its_row_from_every_other(claim, text: str, siblings: dict[str, str]) -> list[str]:
+    """The sibling rows this claim also holds of -- empty when it tells its row from all of them."""
+    return sorted(name for name, other in siblings.items() if holds_of(claim, other))
+
+
+def every_claim_says_something(claims, label: str, texts: dict[str, str]):
+    """Each row's claim HOLDS of its own row's text and FAILS on every sibling's.
+
+    THE QUANTIFIER, not another predicate over the needle. Rounds 15, 16 and
+    17 each moved a floor -- `((), (), ()))`, then the second copy of the
+    rule, then `(("",), (), ())` -- and each time the predicate was written
+    over the NEEDLE, so the next needle that no text can fail walked in
+    behind it: `(("## Evidence Status",), (), ())` passes every needle-level
+    test there is, and 27 of the 28 page-reader fixtures carry that heading.
+    Vacuity is not a property of a needle. It is a property of a needle
+    AGAINST THE POPULATION: a claim's job is to tell its row from its
+    siblings, and no predicate over a single needle can decide that
+    (#1771, round 18).
+
+    UNIVERSAL, not existential. "Holds of its row and fails on at least one
+    sibling" is population-relative in form and needle-relative in effect,
+    and the effect is table-dependent: on the page-reader table one row's
+    text lacks the literal heading, so the vacuous claim above "fails on a
+    sibling" for free and is accepted on 27 of 28 rows; on the swallowed
+    table it is sound, 0 of 27. A reader who opens one table must not take
+    its behaviour for the other's, so the form is the one that holds on
+    both: fails on EVERY sibling.
+
+    DISTINGUISHING IS NOT CHARACTERIZING, and this does not chase it. A
+    claim keyed on some incidental token unique to its row still fails the
+    moment a donor's value arrives in that row, which is the property this
+    guard exists to protect. What it does not claim is to be the last word:
+    it is the sixth attempt at this floor, and it is written at the level
+    the defect lives at rather than one wrapper above it.
+
+    `all_of` pins WHICH rows a table has; this pins that the claim written
+    for a row tells that row apart. `texts` is the population -- the row
+    name to its fixture text -- because the predicate cannot be asked
+    without it.
+
+    One function rather than the same three lines under each claims table:
+    the two copies were a rule with two spellings, and with ONE of them
+    removed the suite stayed green -- so nothing exercised the rule itself,
+    and a seed had nowhere to call it (#1771, round 16). Returns the claims,
+    the way `all_of` returns its table, so a caller binds what it asked
+    about.
+
+    `label` is the claims TABLE's own name, not the calling test's: the
+    recorder that checks every table went through this guard compares names
+    against the enumerated population, and two call sites passing the same
+    bare method name could not tell "both tables came through" from "one
+    came through twice" (#1771, round 17).
+    """
+    for name, claim in claims.items():
+        text = texts[name]
+        if not holds_of(claim, text):
+            raise AssertionError(
+                f"{label}: a row's claim does not hold of its own row's text: {name} -- "
+                "the claim and the fixture disagree; fix whichever is wrong"
+            )
+        twins = tells_its_row_from_every_other(
+            claim, text, {other: body for other, body in texts.items() if other != name}
+        )
+        if twins:
+            raise AssertionError(
+                f"{label}: a row's claim does not tell it from its siblings: {name} "
+                f"(also holds of: {twins}) -- the row is named here and pinned by nothing "
+                "it does not share; add what separates them"
+            )
+    return claims
+
+
+def a_claim_shaped_value(value: object) -> bool:
+    """Whether this is what a claims table's rows hold: `(contains, absent, order)`."""
+    if not isinstance(value, tuple) or len(value) != 3:
+        return False
+    contains, absent, order = value
+    if not all(isinstance(axis, tuple) for axis in (contains, absent, order)):
+        return False
+    if not all(isinstance(needle, str) for needle in (*contains, *absent)):
+        return False
+    return all(
+        isinstance(pair, tuple) and len(pair) == 2 and all(isinstance(end, str) for end in pair)
+        for pair in order
+    )
+
+
+def claim_shaped_tables(namespace: dict) -> set[str]:
+    """Every binding whose VALUE is a claims table, whatever it is called.
+
+    The kind, read off the thing rather than off its label. A name suffix is
+    a surface property: it says what somebody called the binding, not what
+    the binding is, and a population enumerated by a surface property is the
+    defect this branch has closed at five levels (#1771, round 17).
+    """
+    return {
+        name
+        for name, value in namespace.items()
+        if isinstance(value, dict)
+        and value
+        and all(a_claim_shaped_value(row) for row in value.values())
+    }
+
+
+def claims_tables(namespace: dict) -> set[str]:
+    """Every claims table a module binds: named as one AND shaped as one.
+
+    The population the round's thesis is about. A hardcoded pair of readers
+    meant a third claims table with no guard at all left the suite green
+    (measured at `8d7bf4c1`: `Ran 319 tests`, `OK`), so what a table IS gets
+    stated and the tables are read off the module rather than written down
+    twice. Both halves are asked, because either alone is a surface: the
+    suffix says what it was called, the shape says what it holds, and
+    `mislabelled` is what keeps them the same set over this module.
+    """
+    return {
+        name for name in claim_shaped_tables(namespace) if name.endswith(CLAIMS_TABLE_SUFFIX)
+    }
+
+
+def mislabelled(namespace: dict) -> dict[str, list[str]]:
+    """Where the two enumerations of one kind disagree, named both ways.
+
+    A claim-shaped table nobody labelled is a table the population check
+    would miss; a binding labelled `_CLAIMS` that holds something else is a
+    label with nothing behind it. Neither is an error on its own -- this is
+    what reports them.
+    """
+    labelled = {name for name in namespace if name.endswith(CLAIMS_TABLE_SUFFIX)}
+    shaped = claim_shaped_tables(namespace)
+    return {
+        "claim-shaped but not named `_CLAIMS`": sorted(shaped - labelled),
+        "named `_CLAIMS` but not claim-shaped": sorted(labelled - shaped),
+    }
+
+
+def unguarded(tables: set[str], asked: set[str]) -> list[str]:
+    """Which claims tables no test read through the guard, named.
+
+    Names rather than a count, for the reason `all_of` gives: a count
+    answers "how many" where the claim is about WHICH. The round-16 recorder
+    asserted a count over labels that were the same string at both call
+    sites, so one table going through twice read as two tables going through
+    (#1771, round 17).
+    """
+    return sorted(tables - asked)
 
 
 def pending(matched: str) -> str:
@@ -101,6 +319,613 @@ what the tests below now cover. Two files, +48 -31; no behavior a user sees.
 - [x] None
 - [ ] Blocked on evidence
 """
+
+
+class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
+    """What `every_claim_says_something` is asked for, asked of it.
+
+    The guard that catches an emptied claim was the only thing standing
+    between `((), (), ())` and a row nothing pins -- and nothing exercised
+    the guard. Measured at `bb149390`: with one of its two copies removed
+    the suite is green, and with both removed and a row's claim emptied it
+    is still green. A guard that only ever fires on a defect the tree does
+    not contain is untested until something plants the defect, which is what
+    these seeds are (#1771, round 16).
+
+    The mappings here are DATA -- synthetic claims, not a fixture the tree
+    reads -- so the population this file guards does not grow a member whose
+    only purpose is to be broken.
+    """
+
+    WHOLE = {
+        "contains something": (("[blocked]",), (), ()),
+        "absent something": ((), ("[complete]",), ()),
+        "an order between two things": ((), (), (("first", "second"),)),
+    }
+
+    # The population those claims are about. Each holds of its own row's text
+    # and of no other, which is what the guard now asks -- a claims table
+    # cannot be judged without the texts it is written for.
+    TEXTS = {
+        # Each text makes its own row's claim hold and every other row's
+        # fail: the `[blocked]` row is the only one carrying that token, the
+        # `[complete]`-absent row is the only one WITHOUT that one, and the
+        # order row is the only one where `first` precedes `second`.
+        "contains something": "shared scaffolding [blocked] and [complete], second then first",
+        "absent something": "shared scaffolding, second then first",
+        "an order between two things": "shared scaffolding [complete] first then second",
+    }
+
+    def planted(self, claim, name: str = "a row that pins nothing") -> dict:
+        """One table holding the real rows and this claim on a row of its own."""
+        return {**self.WHOLE, name: claim}
+
+    def planted_texts(self, name: str = "a row that pins nothing", text: str = "") -> dict:
+        # The planted row's own text satisfies NO real row's claim, so the
+        # offender the guard names is the planted row and not a real one.
+        return {**self.TEXTS, name: text or "shared scaffolding [complete], second then first"}
+
+    # intent: guard
+    # marker: red at `bb149390`, its own base, only on the NAME this round adds
+    # (`NameError: every_claim_says_something`). The property it pins holds there --
+    # the two inline copies of the rule enforce it -- so it is a guard, and the two
+    # numbers are counted apart (#1771, round 16).
+    def test_a_claim_with_nothing_in_it_is_named(self) -> None:
+        with self.assertRaises(AssertionError) as raised:
+            every_claim_says_something(
+                self.planted(((), (), ())), "seed", self.planted_texts()
+            )
+        message = str(raised.exception)
+        self.assertIn("a row that pins nothing", message)
+        self.assertIn("seed", message)
+        # The OFFENDER is the row, and the siblings it could not be told from
+        # are named after it -- which is the sentence that says what to add.
+        offender, _, twins = message.partition("also holds of")
+        self.assertTrue(twins, message)
+        for name in self.WHOLE:
+            self.assertNotIn(name, offender, f"{name}: a row with a claim was named as the offender")
+
+    # intent: guard
+    # marker: red at `bb149390`, its own base, only on the NAME this round adds
+    # (`NameError: every_claim_says_something`). The property it pins holds there --
+    # the two inline copies of the rule enforce it -- so it is a guard, and the two
+    # numbers are counted apart (#1771, round 16).
+    def test_a_claim_is_whole_when_any_one_of_its_three_parts_is(self) -> None:
+        # Each of `contains`, `absent` and `order` is enough on its own, and
+        # the guard hands the mapping back the way `all_of` hands back its
+        # table, so a caller iterates what it asked about.
+        self.assertIs(
+            every_claim_says_something(self.WHOLE, "seed", self.TEXTS), self.WHOLE
+        )
+        for name, claim in self.WHOLE.items():
+            with self.subTest(row=name):
+                # A table of ONE row has no siblings to be told from, so the
+                # universal half is vacuously true and what is asked is that
+                # the claim holds of its own row -- the two halves are seeded
+                # apart below.
+                self.assertIs(
+                    every_claim_says_something(
+                        {name: claim}, "seed", {name: self.TEXTS[name]}
+                    )[name],
+                    claim,
+                )
+
+    # The claims a needle-level predicate accepts and a population-level one
+    # does not. Each holds of its own row AND of a sibling, which is what
+    # makes it say nothing: the first is the heading every fixture carries,
+    # the second a letter every text has, the third a live axis whose
+    # siblings are degenerate, and the fourth an order pair over scaffolding
+    # every row shares (#1771, round 18).
+    SAYS_NOTHING_ABOUT_ITS_ROW = {
+        "a needle every row carries": (("shared scaffolding",), (), ()),
+        "a single common letter": (("a",), (), ()),
+        # A live axis beside one that can never fire: the `absent` needle is
+        # a string no text in the population carries, so it rules nothing
+        # out and the `contains` needle is shared by every row.
+        "one live axis with a degenerate sibling axis": (("shared",), ("nothing carries this",), ()),
+        "an order pair over shared scaffolding": ((), (), (("shared", "scaffolding"),)),
+    }
+
+    # intent: fix
+    # marker: red at `f341728e`, its own base, behaviourally: the predicate
+    # there is a property of the NEEDLE, so every shape above is accepted.
+    # Measured by asking that base's own two-argument guard for each of the
+    # four, one at a time: all four ACCEPTED, so the assertion this test
+    # makes fails there four times. (Ported verbatim it stops earlier, on
+    # the helper names this round adds -- `planted`, `planted_texts` and the
+    # guard's third parameter -- which is why the behaviour is measured
+    # through the base's own signature rather than read off that error.)
+    # (#1771, round 18).
+    def test_a_claim_that_could_not_fail_on_a_sibling_is_named(self) -> None:
+        """Vacuity is a property of the needle AGAINST THE POPULATION.
+
+        A claim's job is to tell its row from its siblings. `()` was round
+        15's floor, `("",)` round 17's, and `("## Evidence Status",)` walks
+        through both -- 27 of 28 page-reader fixtures carry that heading, so
+        a claim made of it pins nothing while passing every predicate
+        written over the needle alone. The floor moved a level each round
+        because the predicate was never written at the level the defect
+        lives at.
+
+        Each shape below is rejected, and the message names the ROW and the
+        SIBLING it could not be told from -- which is the sentence that says
+        what to add. Both directions are seeded: the real claims of the
+        planted table are accepted in the same call.
+        """
+        for shape, claim in self.SAYS_NOTHING_ABOUT_ITS_ROW.items():
+            with self.subTest(rejects=shape):
+                with self.assertRaises(AssertionError) as raised:
+                    every_claim_says_something(
+                        self.planted(claim), "seed", self.planted_texts()
+                    )
+                message = str(raised.exception)
+                self.assertIn("a row that pins nothing", message)
+                self.assertIn("also holds of", message, message)
+                # The sibling is named, not just the row: a guard that says
+                # "this pins nothing" leaves an author guessing which other
+                # row it collided with.
+                named = message.partition("also holds of: ")[2]
+                self.assertTrue(
+                    any(row in named for row in self.WHOLE), f"{shape}: no sibling named"
+                )
+
+    # intent: guard
+    # marker: at `f341728e`, its own base, this is red ONLY on names this
+    # round adds: ported alone it errors on `planted_texts`, `holds_of` and
+    # `tells_its_row_from_every_other`, and the quantifier it compares has no
+    # counterpart there at all (that base's predicate reads one needle, so
+    # neither form of the sibling test exists to be told apart). What it
+    # pins is this round's strength: the mutant universal -> existential is
+    # red under it here (#1771, round 18).
+    def test_the_existential_form_is_not_the_one_this_guard_uses(self) -> None:
+        """"Fails on at least one sibling" is population-relative in form and needle-relative in effect.
+
+        On a table with one degenerate row -- a row whose text carries none
+        of the scaffolding -- a claim made of that scaffolding "fails on a
+        sibling" for free and is accepted, while telling its own row from
+        every other row it actually shares a page with. Measured on the real
+        page-reader table at this head: the existential form accepts
+        `(("## Evidence Status",), (), ())` on 27 of its 28 rows, because one
+        fixture's text lacks the literal heading.
+
+        So the form is the universal one, and this is what says so: the same
+        claim, the same table, accepted by the weaker reading and rejected by
+        the one the guard uses.
+        """
+        claim = (("shared scaffolding",), (), ())
+        texts = {
+            **self.planted_texts(),
+            "a degenerate row": "nothing in common with the others",
+        }
+        claims = {**self.planted(claim), "a degenerate row": (("nothing in common",), (), ())}
+        mine = texts["a row that pins nothing"]
+        siblings = {name: text for name, text in texts.items() if name != "a row that pins nothing"}
+        # Existentially: it fails on the degenerate row, so it passes.
+        self.assertTrue(
+            any(not holds_of(claim, text) for text in siblings.values()),
+            "the degenerate row does not make the existential form pass; the seed is not built",
+        )
+        # Universally: it holds of a sibling, so it is rejected -- and the
+        # guard is the universal one.
+        self.assertTrue(tells_its_row_from_every_other(claim, mine, siblings))
+        with self.assertRaises(AssertionError):
+            every_claim_says_something(claims, "seed", texts)
+
+    # intent: guard
+    # marker: red at `f341728e` on `tells_its_row_from_every_other`, a name
+    # this round adds; the property underneath was measured there by running
+    # the same predicate over that base's own tables -- 5 of 28
+    # `PAGE_READER_CLAIMS` rows hold of a sibling (`a break after prose` of
+    # `a sibling heading after a top-level section`, `a quoted heading
+    # inside` of two, `an unclosed blockquote before` of `a sibling heading
+    # after a nested section`, that row of `a shallower heading after a
+    # blockquote section`, and `a raw pre holding the status` of `a pre after
+    # prose`) and 0 of 27 `SWALLOWED_CLAIMS` rows do. Those five claims moved
+    # this round; the rest of the tables did not (#1771, round 18).
+    def test_no_real_claim_holds_of_a_sibling_row(self) -> None:
+        """A row given its neighbour's value is caught by its own claim.
+
+        That is what the donor swap tests one row at a time and what this
+        says of every row of both real tables at once: for each claim, the
+        texts of all its siblings fail it. Five page-reader claims did not
+        hold this at the previous head -- `a break after prose`,
+        `a quoted heading inside`, `an unclosed blockquote before`,
+        `a sibling heading after a nested section` and
+        `a raw pre holding the status` -- and each was strengthened until it
+        did.
+        """
+        module = sys.modules[__name__]
+        for claims_name in sorted(claims_tables(vars(module))):
+            claims = getattr(module, claims_name)
+            table_name = claims_name.replace("_CLAIMS", "_TABLE")
+            table = getattr(module, table_name, None) or getattr(
+                module, claims_name.replace("_CLAIMS", "_HEADING_TABLE")
+            )
+            texts = {row: shape[0] for row, shape in table.items()}
+            for name, claim in claims.items():
+                with self.subTest(table=claims_name, row=name):
+                    siblings = {
+                        other: text for other, text in texts.items() if other != name
+                    }
+                    self.assertEqual(
+                        tells_its_row_from_every_other(claim, texts[name], siblings),
+                        [],
+                        f"{claims_name}: {name} cannot be told from its siblings",
+                    )
+
+    # intent: guard
+    # marker: GREEN at `f341728e`, its own base, measured -- ported alone
+    # onto that tree's own file it passes (`Ran 1 test` / `OK`), because the
+    # enumerators there already refuse these shapes. Nothing read that, which
+    # is the seed gap it closes: a control that plants what must be ACCEPTED
+    # without one that plants what must be REJECTED, and the mutants that
+    # walked through it -- `len(value) != 3` weakened to `< 3`, the non-empty
+    # check dropped from the table enumerator -- are red under it here
+    # (#1771, round 18).
+    def test_the_shapes_the_enumerators_must_refuse(self) -> None:
+        """What is not a claim, not a claims table, and not a reader.
+
+        Arity: a claim is three axes. A four-tuple iterates and unpacks
+        nowhere, and a length check written `< 3` takes it; asked at 2, 3, 4
+        and 5, so the check is exercised at a length on both sides of the
+        one it admits.
+
+        A table: a mapping whose ROWS are claim-shaped. An empty dict has no
+        row that is not claim-shaped, so `all()` over it is true and an empty
+        binding named `_CLAIMS` became a claims table -- one the guard then
+        "checked" without reading anything.
+
+        A reader: what unittest COLLECTS, which is every method whose name
+        starts with `test` -- `testsomething` included, its default
+        `testMethodPrefix` being `test` and not `test_`. The narrower prefix
+        would read fewer tests than the lane runs, which is the disagreement
+        this file exists to close, so it is the broader one and this says why.
+        """
+        for length, shape in (
+            (2, (("a",), ())),
+            (3, (("a",), (), ())),
+            (4, (("a",), (), (), ())),
+            (5, (("a",), (), (), (), ())),
+        ):
+            with self.subTest(arity=length):
+                self.assertEqual(
+                    a_claim_shaped_value(shape), length == 3, f"{length} axes read as a claim"
+                )
+        # A claims table is a mapping with rows in it.
+        self.assertEqual(claim_shaped_tables({"EMPTY_CLAIMS": {}}), set())
+        self.assertEqual(claims_tables({"EMPTY_CLAIMS": {}}), set())
+        self.assertEqual(
+            claim_shaped_tables({"REAL_CLAIMS": {"a row": (("a",), (), ())}}),
+            {"REAL_CLAIMS"},
+        )
+        # And the prefix is unittest's own. Asked of the loader rather than
+        # restated: a test method named without the underscore is collected,
+        # so a reader scan that misses it reads fewer tests than the lane.
+        class _Collected(unittest.TestCase):
+            def testsomething(self) -> None:
+                pass
+
+        names = unittest.TestLoader().getTestCaseNames(_Collected)
+        self.assertIn("testsomething", names, "unittest does not collect what this claims it does")
+        self.assertTrue(
+            all(name.startswith("test") for name in names),
+            "the prefix this file scans for is not the loader's",
+        )
+
+    # What a claim can look like and still assert nothing about its row. Each
+    # is a non-empty container -- which is all `any(claim)` ever asked --
+    # holding a needle no text can fail (#1771, round 17).
+    SAYS_NOTHING = {
+        "an empty `contains` needle": (("",), (), ()),
+        "a blank `contains` needle": (("   ",), (), ()),
+        "an empty `absent` needle": ((), ("",), ()),
+        "an order pair of two empty needles": ((), (), (("", ""),)),
+        "an order pair of one needle with itself": ((), (), (("a", "a"),)),
+    }
+
+    # intent: fix
+    # marker: red at `8d7bf4c1`, its own base, behaviourally: `any(claim)`
+    # accepts every shape above, and the suite stays green with one of them
+    # in either real table (#1771, round 17).
+    def test_a_claim_that_asserts_nothing_is_named_however_it_is_spelled(self) -> None:
+        """The predicate over its whole domain, not over its containers.
+
+        Round 15 closed `()` and round 16 closed the second copy of the rule,
+        and each moved the floor because the predicate was never written in
+        terms of what a claim must ASSERT. `(("",), (), ())` is a non-empty
+        tuple, so `any(claim)` said yes, and `assertIn("", text)` is then
+        true of every fixture -- measured at `8d7bf4c1`, `Ran 318 tests` /
+        `OK` with that claim in `PAGE_READER_CLAIMS`, and again with it in
+        `SWALLOWED_CLAIMS`.
+
+        Each axis, each of its members: a `contains` or `absent` needle that
+        is non-empty text, or an `order` pair of two non-empty needles that
+        differ. Both directions are seeded, because a predicate that rejects
+        everything would pass the rejecting half alone.
+        """
+        # Asked through the GUARD rather than through the predicate directly:
+        # the guard is the seam both tables come through, and it exists at
+        # every base this is measured at, so what this reports is behaviour
+        # rather than a name this round adds.
+        for shape, claim in self.SAYS_NOTHING.items():
+            with self.subTest(rejects=shape):
+                with self.assertRaises(AssertionError) as raised:
+                    every_claim_says_something(
+                        self.planted(claim), "seed", self.planted_texts()
+                    )
+                self.assertIn("a row that pins nothing", str(raised.exception))
+        for shape, claim in self.WHOLE.items():
+            with self.subTest(accepts=shape):
+                self.assertIs(
+                    every_claim_says_something(self.WHOLE, "seed", self.TEXTS)[shape],
+                    claim,
+                    f"{shape}: a real claim was rejected",
+                )
+        # What the REAL tables do under it is not asserted here: each table's
+        # own test calls the guard on every run, and a hand list of the two
+        # names written for this loop would be the shape this round removes
+        # one level up.
+
+    # intent: control
+    # marker: GREEN at `f341728e`, its own base, measured -- ported alone it
+    # passes, and nothing about it can be red anywhere: it asserts only that
+    # the table it reads is non-empty. It is here to BE FOUND. Its name lacks
+    # the underscore because `test` is the prefix unittest collects on, so a
+    # scan narrowed to `test_` would miss a reader the loader runs; the
+    # assertion that it is found is in the recorder test below, and that
+    # narrowing is red under the pair (#1771, round 18).
+    def testthiscensusreaderreadsaclaimstable(self) -> None:
+        self.assertTrue(PAGE_READER_CLAIMS, "the table this reader names is empty")
+
+    def readers_of(self, tables: set[str]) -> list[str]:
+        """The qualnames of the tests whose own source names a claims table.
+
+        Not `tests_that_read`: a helper whose name starts with `test` is a
+        test to unittest and an unmarked one to the marker census.
+
+        A list of readers written by hand is the defect one level up: it was
+        a two-tuple, and a third claims table with a test of its own left it
+        untouched. The readers are FOUND -- a test that reads a claims table
+        names it -- and what they did once found is recorded rather than
+        assumed, which a source scan cannot do.
+        """
+        source = Path(__file__).read_text(encoding="utf-8")
+        found: list[str] = []
+        for klass in ast.walk(ast.parse(source)):
+            if not isinstance(klass, ast.ClassDef):
+                continue
+            for method in klass.body:
+                if not isinstance(method, ast.FunctionDef) or not method.name.startswith("test"):
+                    continue
+                # The NAMES a test refers to, not the text of its source: a
+                # docstring naming a table is prose about one, and searching
+                # the segment made every test that mentions a table read as
+                # one that reads it -- the same "a comment quoting it is not
+                # it" rule the marker census keeps.
+                named = {
+                    node.id for node in ast.walk(method) if isinstance(node, ast.Name)
+                }
+                if named & tables:
+                    found.append(f"{klass.name}.{method.name}")
+        return found
+
+    # intent: fix
+    # marker: red at `8d7bf4c1`, its own base, behaviourally -- the count
+    # there passes with one table out of the funnel and the other calling
+    # twice, and names no table at all (#1771, round 17). Round 18 adds one
+    # assertion inside it, about the prefix the scan agrees with the loader
+    # on: that clause is GREEN at `f341728e` (the scan there already reads
+    # `test`), and it is what makes the narrowing to `test_` red.
+    def test_every_claims_table_this_module_binds_is_read_through_it(self) -> None:
+        """The population, read by kind, against the tables that actually came through.
+
+        The seeds above pin the function; this pins that every claims table
+        goes through it. Both halves were wrong at `8d7bf4c1`: the readers
+        were a hardcoded pair, so a third claims table with no guard left the
+        suite green (`Ran 319 tests`, `OK`), and the assertion was a COUNT
+        over labels that were the same bare method name at both call sites,
+        so one table through twice read as two tables through once (measured
+        green with exactly that swap).
+
+        Names, not a count -- `all_of`'s own reason, applied to the
+        population this round is about -- and the population is enumerated
+        from the module's bindings rather than listed here.
+        """
+        module = sys.modules[__name__]
+        tables = claims_tables(vars(module))
+        self.assertTrue(tables, "no claims table was found; the enumerator reads nothing")
+        readers = self.readers_of(tables)
+        # The scan's prefix is the LOADER's. A reader named without the
+        # underscore is a test unittest collects, so a scan that misses it
+        # reads fewer tests than the lane runs -- which is the disagreement
+        # this file exists to close (#1771, round 18).
+        self.assertIn(
+            f"{type(self).__name__}.testthiscensusreaderreadsaclaimstable",
+            readers,
+            "the reader scan misses a test the loader collects",
+        )
+        original = every_claim_says_something
+        asked: list[str] = []
+
+        def recording(claims, label, texts):
+            asked.append(label)
+            return original(claims, label, texts)
+
+        with mock.patch.object(module, "every_claim_says_something", recording):
+            suite = unittest.TestLoader().loadTestsFromNames(readers, module)
+            outcome = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
+        self.assertTrue(outcome.wasSuccessful(), outcome.failures + outcome.errors)
+        self.assertEqual(
+            unguarded(tables, set(asked)), [],
+            "a claims table this module binds went through no guard; name it in a test",
+        )
+        self.assertEqual(
+            sorted(set(asked)), sorted(tables),
+            "the guard was asked about something that is not one of this module's claims tables",
+        )
+
+    # intent: fix
+    # marker: red at `8d7bf4c1`, its own base, on the NAMES this round adds
+    # (`claims_tables`, `unguarded`) -- the population it enumerates does not
+    # exist there to be asked (#1771, round 17).
+    def test_the_enumerator_finds_a_table_nothing_guards_and_names_it(self) -> None:
+        """The control the enumerator should FIND and REJECT, planted outside this module.
+
+        A synthetic third table in a namespace of its own rather than in this
+        file's bindings: a scanner that eventually scans the thing describing
+        it is the exclusion-list road this branch keeps refusing.
+        """
+        planted = {
+            "PAGE_READER_CLAIMS": {"a row": (("x",), (), ())},
+            "THIRD_CLAIMS": {"a planted row": ((), (), ())},
+            # Named as a table and shaped like nothing: the member that says
+            # the suffix alone is not the kind. Without it, dropping the
+            # shape half of the enumerator left the suite green (a surviving
+            # mutant of this round).
+            "WRONG_SHAPE_CLAIMS": ("x", "y"),
+            # A claims table nobody labelled: found by SHAPE and reported as
+            # unlabelled, which is the other direction of the same question.
+            "PAGE_READER_SHAPES": {"a row": (("x",), (), ())},
+            # Labelled, a dict, and holding something that is not a claim.
+            "MALFORMED_CLAIMS": {"a row": ("x", (), ())},
+            "NOT_A_TABLE_AT_ALL": 7,
+        }
+        self.assertEqual(
+            claims_tables(planted), {"PAGE_READER_CLAIMS", "THIRD_CLAIMS"},
+            "the enumerator reads something other than claims tables, or misses one",
+        )
+        self.assertEqual(
+            mislabelled(planted),
+            {
+                "claim-shaped but not named `_CLAIMS`": ["PAGE_READER_SHAPES"],
+                "named `_CLAIMS` but not claim-shaped": ["MALFORMED_CLAIMS", "WRONG_SHAPE_CLAIMS"],
+            },
+            "the two enumerations of one kind do not report their disagreement",
+        )
+        self.assertEqual(
+            unguarded(claims_tables(planted), {"PAGE_READER_CLAIMS"}), ["THIRD_CLAIMS"]
+        )
+        self.assertEqual(unguarded(claims_tables(planted), {"PAGE_READER_CLAIMS", "THIRD_CLAIMS"}), [])
+
+    # intent: fix
+    # marker: red at `8d7bf4c1`, its own base, on the NAMES this round adds
+    # (`mislabelled`, `claim_shaped_tables`): the two enumerations do not
+    # exist there to disagree (#1771, round 17).
+    def test_the_two_enumerations_of_the_kind_agree_over_this_module(self) -> None:
+        """A name suffix says what a binding was called; the shape says what it is.
+
+        The population check reads both and takes the intersection, so this
+        is what keeps that intersection from quietly dropping a member: a
+        claim-shaped table nobody labelled would be outside the population,
+        and a labelled binding holding something else would be a label with
+        nothing behind it. Over this module the two enumerations are the same
+        set, and this says so rather than assuming it.
+        """
+        self.assertEqual(
+            mislabelled(vars(sys.modules[__name__])),
+            {"claim-shaped but not named `_CLAIMS`": [], "named `_CLAIMS` but not claim-shaped": []},
+            "this module's claims tables and its `_CLAIMS` bindings are not the same set",
+        )
+
+
+class TheFixtureGuardNamesWhatItExpectsTests(unittest.TestCase):
+    """What `all_of` is asked for, asked of `all_of` itself.
+
+    Round 6 gave SEVEN of this file's fixture tables a guard, because
+    emptying a table left five principal tests reporting OK in 0.000s. It
+    was written here as "every table-driven test", which was false at the
+    head that wrote it -- sixteen more class-level tables and two
+    module-level ones were iterated with nothing checking them until rounds
+    11 and 12 (#1771, round 12). What that guard read was the SIZE, which is
+    an answer to "how many" where the claim is about WHICH.
+
+    What it checks now is the set of NAMES, and what it does not check is
+    the shape a name labels: a row's VALUE replaced by another row's, its
+    key untouched, is invisible here. Where the name is itself a claim about
+    the shape, the shape is pinned in that table's own suite.
+    """
+
+    NAMES = {
+        "a space inside the backticks",
+        "double-backtick padding",
+        "a punctuation gap after the token",
+    }
+    TABLE = {
+        "a space inside the backticks": "- ` [blocked] ` waiting",
+        "double-backtick padding": "- `` [blocked] `` waiting",
+        "a punctuation gap after the token": "- **[blocked]:** waiting",
+    }
+
+    def raised_by(self, cases, names=None) -> str:
+        with self.assertRaises(AssertionError) as raised:
+            all_of(cases, self.NAMES if names is None else names, "T")
+        return str(raised.exception)
+
+    # intent: guard
+    def test_a_row_swapped_for_another_of_the_same_size_is_loud(self) -> None:
+        # The hole a count leaves: three shapes in, three shapes out, and the
+        # one the claim rests on replaced by a weaker spelling. The guard
+        # says which name went and which arrived (#1771, round 10).
+        swapped = dict(self.TABLE)
+        del swapped["a punctuation gap after the token"]
+        swapped["a plain backticked token"] = "- `[blocked]` waiting"
+        self.assertEqual(len(swapped), len(self.TABLE))
+        message = self.raised_by(swapped)
+        self.assertIn("missing ['a punctuation gap after the token']", message)
+        self.assertIn("unexpected ['a plain backticked token']", message)
+        self.assertIn("re-measure the claim or update the set", message)
+
+    # intent: control
+    def test_the_table_as_it_stands_passes_through(self) -> None:
+        # The guard returns the table itself, so a call site iterates what it
+        # asked about rather than a copy.
+        self.assertIs(all_of(self.TABLE, self.NAMES, "T"), self.TABLE)
+
+    # intent: guard
+    def test_emptying_and_trimming_are_still_loud(self) -> None:
+        # Round 6's two shapes, which the set catches for the same reason it
+        # catches a swap: they are differences in the names.
+        self.assertIn("missing [", self.raised_by({}))
+        trimmed = dict(list(self.TABLE.items())[:2])
+        self.assertIn("missing ['a punctuation gap after the token']", self.raised_by(trimmed))
+
+    # intent: guard
+    def test_a_shape_replaced_by_a_repeat_of_its_neighbour_is_loud(self) -> None:
+        """The missing term, reached where the length term cannot help.
+
+        Rows `[a, a]` against `{a, b}`: two rows for two names, so counting
+        says the table is whole, and only asking WHICH names are there finds
+        that `b` is gone. The mutant that drops this term from the decision
+        is red here and nowhere else in the suite (#1771, round 11).
+        """
+        message = self.raised_by(
+            ("double-backtick padding", "double-backtick padding"),
+            {"double-backtick padding", "a space inside the backticks"},
+        )
+        self.assertIn("missing ['a space inside the backticks']", message)
+        self.assertIn("2 rows for 2 names", message)
+
+    # intent: guard
+    def test_a_sequence_naming_one_shape_twice_is_a_shape_short(self) -> None:
+        """The length clause, reached where no name is missing or extra.
+
+        Round 10's version of this test named three shapes against a
+        two-shape sequence, so it fired through `missing` and the length
+        clause could be deleted with the suite green (#1771, round 11). The
+        rows here are `[a, a, b]` against `{a, b}`: the NAMES agree, and only
+        counting the rows can tell that a shape is gone.
+
+        Every table this file guards is a mapping today, where a duplicate
+        key cannot survive the literal, so the clause is about the helper's
+        contract for a sequence caller rather than about a table that exists
+        -- which is why it needs a test of its own rather than a table's.
+        """
+        message = self.raised_by(
+            ("double-backtick padding", "double-backtick padding", "a space inside the backticks"),
+            {"double-backtick padding", "a space inside the backticks"},
+        )
+        self.assertIn("missing [], unexpected []", message)
+        self.assertIn("3 rows for 2 names", message)
 
 
 class PRReadinessTests(unittest.TestCase):
@@ -886,13 +1711,13 @@ class RenderedStatusLineTests(unittest.TestCase):
     FILES = ["Sources/WorkspaceManager/Foo.swift"]
     PENDING = PendingLineShapeTests.PENDING
     # The three writings of `- [pending-ci] item -- waiting` the written view
-    # misses: an escaped bracket, bracket character references, and a tag pair
-    # around the token.
-    SHAPES = (
-        "- \\[pending-ci] item -- waiting",
-        "- &#91;pending-ci&#93; item -- waiting",
-        "- <span>[pending-ci]</span> item -- waiting",
-    )
+    # misses. Named rather than positional so the guard below can say WHICH
+    # of them a table is missing (#1771, round 10).
+    SHAPES = {
+        "an escaped bracket": "- \\[pending-ci] item -- waiting",
+        "bracket character references": "- &#91;pending-ci&#93; item -- waiting",
+        "a tag pair around the token": "- <span>[pending-ci]</span> item -- waiting",
+    }
 
     # #1727. The issue's own reproduction: a section whose list item is
     # complete and whose table cell is not.
@@ -910,15 +1735,31 @@ class RenderedStatusLineTests(unittest.TestCase):
         return GOOD_BODY + f"\n## Evidence Status\n{section}"
 
     def test_each_written_shape_of_a_pending_line_fails(self) -> None:
-        for shape in self.SHAPES:
-            with self.subTest(shape=shape):
+        for name, shape in all_of(
+            self.SHAPES,
+            {
+                "an escaped bracket",
+                "bracket character references",
+                "a tag pair around the token",
+            },
+            "RenderedStatusLineTests.SHAPES",
+        ).items():
+            with self.subTest(shape=name):
                 self.assertEqual(
                     self.failures(self.body(f"{shape}\n")), [pending("[pending-ci] item -- waiting")]
                 )
 
     def test_a_blocked_token_fails_in_the_same_three_shapes(self) -> None:
-        for shape in self.SHAPES:
-            with self.subTest(shape=shape):
+        for name, shape in all_of(
+            self.SHAPES,
+            {
+                "an escaped bracket",
+                "bracket character references",
+                "a tag pair around the token",
+            },
+            "RenderedStatusLineTests.SHAPES",
+        ).items():
+            with self.subTest(shape=name):
                 self.assertEqual(
                     self.failures(self.body(f"{shape.replace('pending-ci', 'blocked')}\n")),
                     [pending("[blocked] item -- waiting")],
@@ -928,8 +1769,16 @@ class RenderedStatusLineTests(unittest.TestCase):
         # `evaluate` rewrites CR and CRLF to LF before anything reads the body,
         # and reads the section from that same normalized text, so the rendered
         # view sees the shape the author wrote.
-        for shape in self.SHAPES:
-            with self.subTest(shape=shape):
+        for name, shape in all_of(
+            self.SHAPES,
+            {
+                "an escaped bracket",
+                "bracket character references",
+                "a tag pair around the token",
+            },
+            "RenderedStatusLineTests.SHAPES",
+        ).items():
+            with self.subTest(shape=name):
                 body = self.body(f"{shape}\n").replace("\n", "\r\n")
                 self.assertEqual(self.failures(body), [pending("[pending-ci] item -- waiting")])
 
@@ -937,20 +1786,48 @@ class RenderedStatusLineTests(unittest.TestCase):
         self.assertEqual(self.failures(self.body("- [pending-ci] item -- waiting\n")), [self.PENDING])
 
     def test_a_complete_line_still_passes_in_every_shape(self) -> None:
-        for shape in ("- [complete] item -- proof", *(s.replace("pending-ci", "complete") for s in self.SHAPES)):
+        complete = [
+            one.replace("pending-ci", "complete")
+            for _, one in all_of(
+                self.SHAPES,
+                {
+                    "an escaped bracket",
+                    "bracket character references",
+                    "a tag pair around the token",
+                },
+                "RenderedStatusLineTests.SHAPES",
+            ).items()
+        ]
+        for shape in ("- [complete] item -- proof", *complete):
             with self.subTest(shape=shape):
                 self.assertEqual(self.failures(self.body(f"{shape}\n")), [])
 
     def test_a_rendered_only_shape_inside_a_fence_is_still_an_example(self) -> None:
         complete = "- [complete] swift test -- 1992 tests passed\n"
-        for shape in self.SHAPES:
-            with self.subTest(shape=shape):
+        for name, shape in all_of(
+            self.SHAPES,
+            {
+                "an escaped bracket",
+                "bracket character references",
+                "a tag pair around the token",
+            },
+            "RenderedStatusLineTests.SHAPES",
+        ).items():
+            with self.subTest(shape=name):
                 self.assertEqual(self.failures(self.body(f"{complete}\n```markdown\n{shape}\n```\n")), [])
 
     def test_a_task_box_in_front_of_a_rendered_only_shape_still_fails(self) -> None:
         for box in ("- [ ] ", "- [x] ", "1. [X] "):
-            for shape in self.SHAPES:
-                with self.subTest(box=box, shape=shape):
+            for name, shape in all_of(
+                self.SHAPES,
+                {
+                    "an escaped bracket",
+                    "bracket character references",
+                    "a tag pair around the token",
+                },
+                "RenderedStatusLineTests.SHAPES",
+            ).items():
+                with self.subTest(box=box, shape=name):
                     line = box + shape.split(" ", 1)[1]
                     self.assertEqual(
                         self.failures(self.body(f"{line}\n")),
@@ -960,7 +1837,17 @@ class RenderedStatusLineTests(unittest.TestCase):
     def test_the_rendered_view_reads_a_raw_body_without_the_gate(self) -> None:
         # The check reached directly, on the body as written: each shape
         # flattens to the text a reader sees.
-        section = "".join(f"{shape}\n" for shape in self.SHAPES)
+        section = "".join(
+            f"{shape}\n" for _, shape in all_of(
+                self.SHAPES,
+                {
+                    "an escaped bracket",
+                    "bracket character references",
+                    "a tag pair around the token",
+                },
+                "RenderedStatusLineTests.SHAPES",
+            ).items()
+        )
         self.assertEqual(
             pr_readiness.rendered_status_lines(self.body(section)),
             ["[pending-ci] item -- waiting"] * 3,
@@ -993,7 +1880,13 @@ class RenderedStatusLineTests(unittest.TestCase):
         # nothing else touches the body, so both views read what the author
         # wrote. A body already in LF reaches them unchanged.
         seen: list[str] = []
-        with mock.patch.object(pr_readiness, "rendered_status_lines", side_effect=lambda body: seen.append(body) or []):
+        # Patched where the gate now reads: `rendered_status_lines`, the one
+        # list of lines a reader sees (#1771, round 4).
+        with mock.patch.object(
+            pr_readiness,
+            "rendered_status_lines",
+            side_effect=lambda body: seen.append(body) or [],
+        ):
             body = self.body("- [complete] swift test -- 1992 tests passed\n")
             pr_readiness.evaluate(pr(body), self.FILES)
             self.assertEqual(seen, [body])
@@ -1070,12 +1963,21 @@ class RenderedStatusLineTests(unittest.TestCase):
         # A bullet written above a delimiter row is not a list item at all: the
         # whole thing is one table, and the marker reaches the first cell as
         # the characters `- `. Without the optional marker in
-        # `RENDERED_PENDING_RE` this widening LOSES a refusal the parser with
+        # `PRINTED_PENDING_RE` this widening LOSES a refusal the parser with
         # no table plugin made -- the escaped form below is invisible to the
         # written view, so nothing else catches it, and the gate passed a body
         # the merge base failed. Found by codex (gpt-5.6-sol, xhigh).
         items = ("- [blocked] | x |", "- \\[blocked] | x |", "* [pending-ci] | x |", "1. [blocked] | x |")
-        for item in items:
+        for item in all_of(
+            items,
+            {
+                "- [blocked] | x |",
+                "- \\[blocked] | x |",
+                "* [pending-ci] | x |",
+                "1. [blocked] | x |",
+            },
+            "ABulletedRowThatBecameATable.items",
+        ):
             with self.subTest(item=item):
                 body = self.body(f"{item}\n  | --- | --- |\n")
                 cell = item.split("|")[0].strip().replace("\\", "")
@@ -1129,7 +2031,7 @@ class HtmlBlockStatusLineTests(unittest.TestCase):
     view caught the shapes its own anchor covers, a list marker in front of the
     token, and missed a bare `[blocked]` line, a `<summary>` and a comment. The
     rendered view now reads each run of text between the block's markup through
-    `RENDERED_PENDING_RE`, which can only add refusals to what stands.
+    `PRINTED_PENDING_RE`, which can only add refusals to what stands.
 
     HTML is still never interpreted: taking the markup out of a line is not
     deciding which elements are open, and no run is called visible or hidden.
@@ -1430,7 +2332,7 @@ class HtmlBlockStatusLineTests(unittest.TestCase):
                     [
                         line
                         for line in pr_readiness.rendered_status_lines(written)
-                        if pr_readiness.RENDERED_PENDING_RE.match(line)
+                        if pr_readiness.PRINTED_PENDING_RE.match(line)
                     ],
                     [],
                 )
@@ -1655,7 +2557,17 @@ class HtmlBlockStatusLineTests(unittest.TestCase):
         The over-refusals this brings back land on malformed markup alone, and
         each names the run it matched, which is the cost the rule accepts.
         """
-        for name, under in self.UNPARSED_TAGS.items():
+        for name, under in all_of(
+            self.UNPARSED_TAGS,
+            {
+                "two attributes with no space between them",
+                "an attribute with an empty value",
+                "a slash inside the name",
+                "a quote inside an unquoted value",
+                "a namespaced name",
+            },
+            "HtmlBlockStatusLineTests.UNPARSED_TAGS",
+        ).items():
             with self.subTest(shape=name):
                 failures = self.failures(self.body(f"{under}\n"))
                 pending = [text for text in failures if text.startswith(self.PENDING)]
@@ -1876,7 +2788,16 @@ class ThePageSaysWhereALineStartsTests(unittest.TestCase):
         return pr_readiness.evaluate(pr(body), self.FILES)
 
     def test_a_block_tag_after_prose_starts_a_line_the_page_shows(self) -> None:
-        for shape, section in self.SHAPES.items():
+        for shape, section in all_of(
+            self.SHAPES,
+            {
+                "a div after prose",
+                "a pre after prose",
+                "a break after prose",
+                "a break inside a list item",
+            },
+            "ThePageSaysWhereALineStartsTests.SHAPES",
+        ).items():
             with self.subTest(shape=shape), recorded_page():
                 failures = self.failures(self.body(section))
                 self.assertTrue(
@@ -1893,7 +2814,16 @@ class ThePageSaysWhereALineStartsTests(unittest.TestCase):
         # The fallback, stated as the cost it is: with no renderer the gate
         # stands on the source model, which does not see these, and it says so
         # rather than passing quietly.
-        for shape, section in self.SHAPES.items():
+        for shape, section in all_of(
+            self.SHAPES,
+            {
+                "a div after prose",
+                "a pre after prose",
+                "a break after prose",
+                "a break inside a list item",
+            },
+            "ThePageSaysWhereALineStartsTests.SHAPES",
+        ).items():
             with self.subTest(shape=shape):
                 result = self.result(self.body(section))
                 self.assertEqual(result.failures, [])
@@ -1951,7 +2881,7 @@ class ThePageSaysWhereALineStartsTests(unittest.TestCase):
                 page = pr_readiness.page_view(self.body(section))
                 self.assertEqual(page.unverified, None)
                 self.assertEqual(
-                    [line for line in page.lines if pr_readiness.RENDERED_PENDING_RE.match(line)],
+                    [line for line in page.lines if pr_readiness.PRINTED_PENDING_RE.match(line)],
                     [],
                 )
 
@@ -2067,7 +2997,11 @@ class ThePageReaderMayOnlyAddRefusalsTests(unittest.TestCase):
     }
 
     def test_an_unclosed_container_before_the_heading_hides_nothing(self) -> None:
-        for shape, container in self.UNCLOSED_BEFORE_THE_HEADING.items():
+        for shape, container in all_of(
+            self.UNCLOSED_BEFORE_THE_HEADING,
+            {"a blockquote", "a list item"},
+            "ThePageReaderMayOnlyAddRefusalsTests.UNCLOSED_BEFORE_THE_HEADING",
+        ).items():
             with self.subTest(shape=shape), recorded_page():
                 body = GOOD_BODY + f"\n{container}\n\n## Evidence Status\n\n{self.BR_STATUS}\n"
                 failures = self.failures(body)
@@ -2124,7 +3058,9 @@ class ThePageReaderMayOnlyAddRefusalsTests(unittest.TestCase):
 #   a top-level `<h2>` whose text reads as `Evidence Status` by
 #   `heading_identity`; a nested one only when no top-level one did.
 # what closes it:
-#   the next `<h1>` or `<h2>` at the depth the section was opened at.
+#   the next `<h1>` or `<h2>` at the depth the section was opened at, or
+#   shallower -- a section inside a quotation is over once the document
+#   has left the quotation (`_boundary_depth`, compared with `<=`).
 # what is transparent (a heading inside it is still the document's):
 #   `<details>`.
 # what is opaque (a heading inside it is someone else's):
@@ -2135,36 +3071,36 @@ class ThePageReaderMayOnlyAddRefusalsTests(unittest.TestCase):
 # A row is (name, middle, lines, ok): the text placed after a passing body's
 # opening, every line the page shows under the heading, and the gate's
 # verdict. Adding a shape here is adding a test.
-PAGE_READER_TABLE = (
-    ("a block tag after prose", '## Evidence Status\n\nContext <div>[blocked] x</div>\n', ('Context', '[blocked] x'), False),
-    ("a pre after prose", '## Evidence Status\n\nContext <pre>[blocked] x</pre>\n', ('Context', '[blocked] x'), False),
-    ("a break after prose", '## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
-    ("a break inside a list item", '## Evidence Status\n\n- complete <br>[blocked] x\n', ('complete', '[blocked] x'), False),
-    ("an unparsed tag the page prints", '## Evidence Status\n\n<x:y>[blocked] x</x:y>\n', ('<x:y>[blocked] x</x:y>',), False),
-    ("a type parameter mid-line", '## Evidence Status\n\n<div>API note: Vec<T> [blocked] names an enum case</div>\n', ('API note: Vec [blocked] names an enum case',), True),
-    ("a fenced example", '## Evidence Status\n\n```\n- [blocked] x\n```\n', (), True),
-    ("an indented example", '## Evidence Status\n\n    - [blocked] x\n', (), False),
-    ("a code span", '## Evidence Status\n\n- `[blocked]` x\n', ('[blocked] x',), False),
-    ("a code span after a break", '## Evidence Status\n\nContext <br>`[blocked]` x\n', ('Context', '[blocked] x'), False),
-    ("a rule of asterisks", '## Evidence Status\n\n***\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
-    ("a dash rule", '## Evidence Status\n\n---\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
-    ("a quoted heading inside", '## Evidence Status\n\n> ## Note\n\nContext <br>[blocked] x\n', ('Note', 'Context', '[blocked] x'), False),
-    ("a heading inside a list item", '## Evidence Status\n\n- outer\n  - ## Note\n\nContext <br>[blocked] x\n', ('outer', 'Note', 'Context', '[blocked] x'), False),
-    ("a quoted example elsewhere", '## Notes\n\n> ## Evidence Status\n> - [blocked] an example\n\n## Evidence Status\n\n- [complete] ran it -- 1992 tests passed\n', ('[complete] ran it -- 1992 tests passed',), True),
-    ("a long-s heading", '## Evidence Statuſ\n\n- [blocked] x\n', (), False),
-    ("a fold holding the section", '<details>\n<summary>notes</summary>\n\n## Evidence Status\n\n- [blocked] x\n', ('[blocked] x',), False),
-    ("a fold holding a quoted heading", '## Evidence Status\n\n<details>\n<summary>s</summary>\n\n> ## Note\n\nContext <br>[blocked] x\n', ('s', 'Note', 'Context', '[blocked] x'), False),
-    ("an unclosed blockquote before", '<blockquote>\n\n## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
-    ("an unclosed list item before", '<ul><li>\n\n## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
-    ("an unclosed blockquote inside", '## Evidence Status\n\n<blockquote>\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
-    ("a break inside a quoted heading", '## Evidence Status\n\n> ## Context<br>[blocked] x\n', ('Context', '[blocked] x'), False),
-    ("a sibling heading after a top-level section", '## Evidence Status\n\n## Notes\n\nContext <br>[blocked] x\n', (), True),
-    ("a sibling heading after a nested section", '<blockquote>\n\n## Evidence Status\n\n## Notes\n\nContext <br>[blocked] x\n', (), True),
-    ("a shallower heading after a quoted section", '> ## Evidence Status\n> - [complete] ran it\n\n## Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
-    ("a shallower heading after a blockquote section", '<blockquote>\n\n## Evidence Status\n\n- [complete] ran it\n\n</blockquote>\n\n## Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
-    ("a shallower h1 after a quoted section", '> ## Evidence Status\n> - [complete] ran it\n\n# Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
-    ("a raw pre holding the status", '## Evidence Status\n\n<pre>\nnote\n[blocked] x\n</pre>\n', ('note', '[blocked] x'), False),
-)
+PAGE_READER_TABLE = {
+    "a block tag after prose": ('## Evidence Status\n\nContext <div>[blocked] x</div>\n', ('Context', '[blocked] x'), False),
+    "a pre after prose": ('## Evidence Status\n\nContext <pre>[blocked] x</pre>\n', ('Context', '[blocked] x'), False),
+    "a break after prose": ('## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    "a break inside a list item": ('## Evidence Status\n\n- complete <br>[blocked] x\n', ('complete', '[blocked] x'), False),
+    "an unparsed tag the page prints": ('## Evidence Status\n\n<x:y>[blocked] x</x:y>\n', ('<x:y>[blocked] x</x:y>',), False),
+    "a type parameter mid-line": ('## Evidence Status\n\n<div>API note: Vec<T> [blocked] names an enum case</div>\n', ('API note: Vec [blocked] names an enum case',), True),
+    "a fenced example": ('## Evidence Status\n\n```\n- [blocked] x\n```\n', (), True),
+    "an indented example": ('## Evidence Status\n\n    - [blocked] x\n', (), False),
+    "a code span": ('## Evidence Status\n\n- `[blocked]` x\n', ('[blocked] x',), False),
+    "a code span after a break": ('## Evidence Status\n\nContext <br>`[blocked]` x\n', ('Context', '[blocked] x'), False),
+    "a rule of asterisks": ('## Evidence Status\n\n***\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    "a dash rule": ('## Evidence Status\n\n---\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    "a quoted heading inside": ('## Evidence Status\n\n> ## Note\n\nContext <br>[blocked] x\n', ('Note', 'Context', '[blocked] x'), False),
+    "a heading inside a list item": ('## Evidence Status\n\n- outer\n  - ## Note\n\nContext <br>[blocked] x\n', ('outer', 'Note', 'Context', '[blocked] x'), False),
+    "a quoted example elsewhere": ('## Notes\n\n> ## Evidence Status\n> - [blocked] an example\n\n## Evidence Status\n\n- [complete] ran it -- 1992 tests passed\n', ('[complete] ran it -- 1992 tests passed',), True),
+    "a long-s heading": ('## Evidence Statuſ\n\n- [blocked] x\n', (), False),
+    "a fold holding the section": ('<details>\n<summary>notes</summary>\n\n## Evidence Status\n\n- [blocked] x\n', ('[blocked] x',), False),
+    "a fold holding a quoted heading": ('## Evidence Status\n\n<details>\n<summary>s</summary>\n\n> ## Note\n\nContext <br>[blocked] x\n', ('s', 'Note', 'Context', '[blocked] x'), False),
+    "an unclosed blockquote before": ('<blockquote>\n\n## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    "an unclosed list item before": ('<ul><li>\n\n## Evidence Status\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    "an unclosed blockquote inside": ('## Evidence Status\n\n<blockquote>\n\nContext <br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    "a break inside a quoted heading": ('## Evidence Status\n\n> ## Context<br>[blocked] x\n', ('Context', '[blocked] x'), False),
+    "a sibling heading after a top-level section": ('## Evidence Status\n\n## Notes\n\nContext <br>[blocked] x\n', (), True),
+    "a sibling heading after a nested section": ('<blockquote>\n\n## Evidence Status\n\n## Notes\n\nContext <br>[blocked] x\n', (), True),
+    "a shallower heading after a quoted section": ('> ## Evidence Status\n> - [complete] ran it\n\n## Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
+    "a shallower heading after a blockquote section": ('<blockquote>\n\n## Evidence Status\n\n- [complete] ran it\n\n</blockquote>\n\n## Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
+    "a shallower h1 after a quoted section": ('> ## Evidence Status\n> - [complete] ran it\n\n# Notes\n\nContext <br>[blocked] x\n', ('[complete] ran it',), True),
+    "a raw pre holding the status": ('## Evidence Status\n\n<pre>\nnote\n[blocked] x\n</pre>\n', ('note', '[blocked] x'), False),
+}
 
 
 class ThePageReaderTableTests(unittest.TestCase):
@@ -2182,22 +3118,168 @@ class ThePageReaderTableTests(unittest.TestCase):
         return GOOD_BODY + f"\n{middle}"
 
     def test_every_probed_shape_shows_the_lines_the_table_says(self) -> None:
-        for name, middle, lines, _ in PAGE_READER_TABLE:
+        for name, (middle, lines, _) in all_of(
+            PAGE_READER_TABLE,
+            {
+                "a block tag after prose",
+                "a pre after prose",
+                "a break after prose",
+                "a break inside a list item",
+                "an unparsed tag the page prints",
+                "a type parameter mid-line",
+                "a fenced example",
+                "an indented example",
+                "a code span",
+                "a code span after a break",
+                "a rule of asterisks",
+                "a dash rule",
+                "a quoted heading inside",
+                "a heading inside a list item",
+                "a quoted example elsewhere",
+                "a long-s heading",
+                "a fold holding the section",
+                "a fold holding a quoted heading",
+                "an unclosed blockquote before",
+                "an unclosed list item before",
+                "an unclosed blockquote inside",
+                "a break inside a quoted heading",
+                "a sibling heading after a top-level section",
+                "a sibling heading after a nested section",
+                "a shallower heading after a quoted section",
+                "a shallower heading after a blockquote section",
+                "a shallower h1 after a quoted section",
+                "a raw pre holding the status",
+            },
+            "PAGE_READER_TABLE",
+        ).items():
             with self.subTest(shape=name), recorded_page():
                 page = pr_readiness.page_view(self.body(middle))
                 self.assertIsNone(page.unverified, name)
                 self.assertEqual(page.lines, lines, name)
 
     def test_every_probed_shape_gets_the_verdict_the_table_says(self) -> None:
-        for name, middle, _, ok in PAGE_READER_TABLE:
+        for name, (middle, _, ok) in all_of(
+            PAGE_READER_TABLE,
+            {
+                "a block tag after prose",
+                "a pre after prose",
+                "a break after prose",
+                "a break inside a list item",
+                "an unparsed tag the page prints",
+                "a type parameter mid-line",
+                "a fenced example",
+                "an indented example",
+                "a code span",
+                "a code span after a break",
+                "a rule of asterisks",
+                "a dash rule",
+                "a quoted heading inside",
+                "a heading inside a list item",
+                "a quoted example elsewhere",
+                "a long-s heading",
+                "a fold holding the section",
+                "a fold holding a quoted heading",
+                "an unclosed blockquote before",
+                "an unclosed list item before",
+                "an unclosed blockquote inside",
+                "a break inside a quoted heading",
+                "a sibling heading after a top-level section",
+                "a sibling heading after a nested section",
+                "a shallower heading after a quoted section",
+                "a shallower heading after a blockquote section",
+                "a shallower h1 after a quoted section",
+                "a raw pre holding the status",
+            },
+            "PAGE_READER_TABLE",
+        ).items():
             with self.subTest(shape=name), recorded_page():
                 result = pr_readiness.evaluate(pr(self.body(middle)), self.FILES)
                 self.assertEqual(result.ok, ok, (name, result.failures))
 
+    # intent: fix
+    def test_each_row_is_the_shape_its_name_claims(self) -> None:
+        """The pin the name guard cannot be: the SHAPE a row's name claims.
+
+        `all_of` asserts which names a table carries. A row given its
+        neighbour's value with its key untouched keeps the count and the
+        name, so the guard passes and the coverage leaves -- measured on this
+        table for `a break inside a list item`, round 4's `<br>` inside a
+        list item, which went silently because the sibling shape test pins
+        tokens over the JOINED corpus and another row still carries `<br>`
+        (#1771, round 13).
+
+        Every row of this table states a property, so every row has a claim
+        here; a row whose name is a bare label would be listed in
+        PAGE_READER_LABELS instead, and a name that claims something with no
+        claim written for it fails the completeness check below.
+        """
+        table = PAGE_READER_TABLE
+        claims, claims_name = PAGE_READER_CLAIMS, "PAGE_READER_CLAIMS"
+        labels = PAGE_READER_LABELS
+        self.assertEqual(
+            sorted(set(table) - set(claims) - labels),
+            [],
+            "a row's name claims a shape with nothing pinning it",
+        )
+        self.assertEqual(sorted(set(claims) - set(table)), [], "a claim for a row that is gone")
+        # The claims table is a fixture this test READS, so it is guarded the
+        # same way: its NAMES by the two assertions above, which bind it to a
+        # table whose names `all_of` pins, and the NON-VACUITY of each row's
+        # claim through the one function that asks it (#1771, rounds 15, 16).
+        for name, (contains, absent, order) in every_claim_says_something(
+            claims, claims_name, {row: shape[0] for row, shape in table.items()}
+        ).items():
+            with self.subTest(row=name):
+                text = table[name][0]
+                for needle in contains:
+                    self.assertIn(needle, text, f"{name}: the shape its name claims is gone")
+                for needle in absent:
+                    self.assertNotIn(needle, text, f"{name}: another row's shape is here")
+                for first, second in order:
+                    self.assertLess(
+                        text.index(first), text.index(second), f"{name}: the order its name claims"
+                    )
+
     def test_the_table_exercises_both_rules(self) -> None:
         # A table nobody checks the shape of grows lopsided. These are the
         # axes the four rounds actually moved along.
-        shapes = "\n".join(middle for _, middle, _, _ in PAGE_READER_TABLE)
+        shapes = "\n".join(
+            middle
+            for middle, _, _ in all_of(
+                PAGE_READER_TABLE,
+                {
+                    "a block tag after prose",
+                    "a pre after prose",
+                    "a break after prose",
+                    "a break inside a list item",
+                    "an unparsed tag the page prints",
+                    "a type parameter mid-line",
+                    "a fenced example",
+                    "an indented example",
+                    "a code span",
+                    "a code span after a break",
+                    "a rule of asterisks",
+                    "a dash rule",
+                    "a quoted heading inside",
+                    "a heading inside a list item",
+                    "a quoted example elsewhere",
+                    "a long-s heading",
+                    "a fold holding the section",
+                    "a fold holding a quoted heading",
+                    "an unclosed blockquote before",
+                    "an unclosed list item before",
+                    "an unclosed blockquote inside",
+                    "a break inside a quoted heading",
+                    "a sibling heading after a top-level section",
+                    "a sibling heading after a nested section",
+                    "a shallower heading after a quoted section",
+                    "a shallower heading after a blockquote section",
+                    "a shallower h1 after a quoted section",
+                    "a raw pre holding the status",
+                },
+                "PAGE_READER_TABLE",
+            ).values()
+        )
         for splitter in ("<br>", "<div>", "<pre>", "```", "`[blocked]`", "    - [blocked]"):
             self.assertIn(splitter, shapes)
         for bound in ("***", "---", "> ##", "<details>", "<blockquote>", "<ul><li>", "## Notes"):
@@ -2324,7 +3406,37 @@ class RecordedRendererResponseTests(unittest.TestCase):
                     pr_readiness.page_view(GOOD_BODY)
         self.assertIn(RECORD_COMMAND, str(raised.exception))
 
+    # The population these three tests quantify over, stated so an empty read
+    # is a failed read rather than a clean sweep, and a corpus read SHORT is
+    # a failed read too. Measured at `f341728e`: with the index patched to
+    # `{}` and a token present, two of the three passed and the third named
+    # recordings; with the fixture directory emptied as well, all three
+    # passed -- every one of them ITERATES the corpus, and iterating nothing
+    # scores nothing (#1771, round 18). The count moves when a recording is
+    # added, which is a line of this file somebody writes deliberately.
+    RECORDINGS = 73
+
+    def assertTheCorpusWasRead(self, index: dict) -> None:
+        """The corpus this test read is the corpus this file declares.
+
+        ONE line, not two. It was written as two -- non-empty, and the
+        declared count -- and both survived alone as mutants, because the
+        only population the seed drove was `{}` and either spelling catches
+        that one: `0 != 73` and `assertTrue({})` are the same sentence about
+        the same input. The count subsumes the emptiness (nothing that
+        equals 73 is empty), so the emptiness line went, and the seed below
+        drives the input that separates them -- an index SHORT of the
+        declared count, which only the count line reads (#1771, round 18).
+        """
+        self.assertEqual(
+            len(index),
+            self.RECORDINGS,
+            f"the corpus holds {len(index)} recordings and this file declares "
+            f"{self.RECORDINGS}; re-count and say so here",
+        )
+
     def test_every_recording_names_the_body_it_answers(self) -> None:
+        self.assertTheCorpusWasRead(rendered_index())
         for digest, text in rendered_index().items():
             with self.subTest(digest=digest[:12]):
                 self.assertEqual(hashlib.sha256(text.encode("utf-8")).hexdigest(), digest)
@@ -2332,13 +3444,73 @@ class RecordedRendererResponseTests(unittest.TestCase):
 
     def test_every_recorded_file_is_named_in_the_index(self) -> None:
         index = rendered_index()
+        self.assertTheCorpusWasRead(index)
         for path in sorted(RENDERED_FIXTURES.glob("*.html")):
             with self.subTest(name=path.name):
                 self.assertIn(path.stem, index)
 
+    # intent: fix
+    # marker: red at `f341728e`, its own base, behaviourally -- ported alone
+    # onto that tree's own file it fails, `72 != 2`: each corpus test there
+    # ITERATES, so with the index patched to `{}` and a token present two of
+    # the three score clean over nothing and the third fails once per file
+    # still on disk, naming a recording rather than the corpus. Empty the
+    # directory as well and all three sweep clean (3 run, 0 failures,
+    # measured), which is the one mechanism that bounded them and a
+    # different one from the count this asserts. The short population is red
+    # there for the same reason (#1771, round 18).
+    def test_a_corpus_that_is_not_the_declared_one_is_a_failed_read(self) -> None:
+        """A population a test quantifies over is stated, or the test passes over nothing.
+
+        Driven by patching the index reader and running the tests that read
+        it. TWO populations, because one of them measures nothing on its
+        own: an empty index, and an index SHORT of the declared count. The
+        empty one is caught by either half of a two-line floor, so with it
+        as the only seed both halves survived as mutants; the short one is
+        caught by the count alone, which is the line that says what the
+        corpus IS. Both fail now, naming the corpus and the count it
+        declares, where at the previous head each reader either scored clean
+        over nothing or named a recording.
+        """
+        module = sys.modules[__name__]
+        readers = [
+            f"{type(self).__name__}.test_every_recording_names_the_body_it_answers",
+            f"{type(self).__name__}.test_every_recorded_file_is_named_in_the_index",
+        ]
+        real = rendered_index()
+        short = dict(sorted(real.items())[:2])
+        for population, index in {
+            "an empty index": {},
+            f"an index of {len(short)} where {self.RECORDINGS} are declared": short,
+        }.items():
+            with self.subTest(population=population):
+                with mock.patch.object(module, "rendered_index", lambda index=index: index):
+                    suite = unittest.TestLoader().loadTestsFromNames(readers, module)
+                    outcome = unittest.TextTestRunner(
+                        stream=io.StringIO(), verbosity=0
+                    ).run(suite)
+                self.assertEqual(
+                    len(outcome.failures) + len(outcome.errors), len(readers), outcome
+                )
+                for _, message in outcome.failures:
+                    # What the floor SAYS, not what the comparison prints.
+                    # `assertEqual` writes `2 != 73` on its own, so a test
+                    # that asks the failure for the declared count is
+                    # answered by the scaffolding and reads nothing --
+                    # measured: with the floor's own sentence rewritten to
+                    # drop the count, asking for `73` still passed. The
+                    # sentence an author is handed names what was read and
+                    # what this file declares.
+                    self.assertIn(f"the corpus holds {len(index)} recordings", message)
+                    self.assertIn(f"declares {self.RECORDINGS}", message)
+        # And the corpus as it stands is read: the same tests over the real
+        # index pass, so what this seeds is the floor and not the tests.
+        self.assertEqual(len(real), self.RECORDINGS)
+
     def test_the_recordings_still_match_the_live_renderer(self) -> None:
         if not (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")):
             self.skipTest("no GH_TOKEN or GITHUB_TOKEN: the live renderer cannot be asked")
+        self.assertTheCorpusWasRead(rendered_index())
         for digest, text in rendered_index().items():
             with self.subTest(digest=digest[:12]):
                 self.assertEqual(
@@ -2524,7 +3696,20 @@ class ThisGateFindsASectionWherePageShowsOneTests(unittest.TestCase):
 
     def test_every_heading_the_page_shows_is_a_section_to_this_gate(self) -> None:
         owner = self.owner()
-        for name, heading in self.SHOWN_BUT_UNMATCHED.items():
+        for name, heading in all_of(
+            self.SHOWN_BUT_UNMATCHED,
+            {
+                "emphasis",
+                "underscore emphasis",
+                "indented three spaces",
+                "setext dashes",
+                "trailing spaces",
+                "trailing tab",
+                "closing hash run",
+                "tab separator",
+            },
+            "ThisGateFindsASectionWherePageShowsOneTests.SHOWN_BUT_UNMATCHED",
+        ).items():
             with self.subTest(shape=name):
                 body = f"{self.OPENING}{heading}\n\n{self.FIELDS}\n{self.EVIDENCE}"
                 self.assertTrue(owner.has_markdown_section(body, "Mergeability"))
@@ -2539,7 +3724,11 @@ class ThisGateFindsASectionWherePageShowsOneTests(unittest.TestCase):
 
     def test_a_heading_only_the_source_holds_is_no_section_to_either(self) -> None:
         owner = self.owner()
-        for name, heading in self.MATCHED_BUT_UNSHOWN.items():
+        for name, heading in all_of(
+            self.MATCHED_BUT_UNSHOWN,
+            {"in a fenced example", "in an indented code block"},
+            "ThisGateFindsASectionWherePageShowsOneTests.MATCHED_BUT_UNSHOWN",
+        ).items():
             with self.subTest(shape=name):
                 body = f"{self.OPENING}{heading}\n\n{self.FIELDS}\n{self.EVIDENCE}"
                 self.assertEqual(
@@ -2561,7 +3750,11 @@ class ThisGateFindsASectionWherePageShowsOneTests(unittest.TestCase):
 
     def test_a_tagged_heading_is_not_this_section_in_either_reader(self) -> None:
         owner = self.owner()
-        for name, heading in self.TAGGED.items():
+        for name, heading in all_of(
+            self.TAGGED,
+            {"del", "details", "br", "span", "trailing comment"},
+            "ThisGateFindsASectionWherePageShowsOneTests.TAGGED",
+        ).items():
             with self.subTest(shape=name):
                 body = f"{self.OPENING}{heading}\n\n{self.FIELDS}\n{self.EVIDENCE}"
                 self.assertFalse(owner.has_markdown_section(body, "Mergeability"))
@@ -2569,7 +3762,11 @@ class ThisGateFindsASectionWherePageShowsOneTests(unittest.TestCase):
 
     def test_a_heading_the_page_shows_as_something_else_is_not_this_section(self) -> None:
         owner = self.owner()
-        for name, heading in self.SHOWN_AS_SOMETHING_ELSE.items():
+        for name, heading in all_of(
+            self.SHOWN_AS_SOMETHING_ELSE,
+            {"code span", "link", "image"},
+            "ThisGateFindsASectionWherePageShowsOneTests.SHOWN_AS_SOMETHING_ELSE",
+        ).items():
             with self.subTest(shape=name):
                 body = f"{self.OPENING}{heading}\n\n{self.FIELDS}\n{self.EVIDENCE}"
                 self.assertFalse(owner.has_markdown_section(body, "Mergeability"))
@@ -2711,7 +3908,20 @@ class WhatTheParsedStartCostsTheEvidenceRefusalTests(unittest.TestCase):
         "- Residual risk or follow-up: none\n"
         "```\n"
     )
-    WIDENED_SPELLINGS = ("## **{h}**", "## _{h}_", "   ## {h}", "{h}\n---", "## {h}  ", "## {h}\t", "## {h} ##", "##\t{h}")
+    # The eight spellings of the heading the widened read reaches. Named
+    # rather than positional so the guard can say WHICH one went (#1771,
+    # round 11); the names are the ones the sibling class uses for the same
+    # eight shapes.
+    WIDENED_SPELLINGS = {
+        "emphasis": "## **{h}**",
+        "underscore emphasis": "## _{h}_",
+        "indented three spaces": "   ## {h}",
+        "setext dashes": "{h}\n---",
+        "trailing spaces": "## {h}  ",
+        "trailing tab": "## {h}\t",
+        "closing hash run": "## {h} ##",
+        "tab separator": "##\t{h}",
+    }
 
     def test_a_positive_field_read_still_credits_fenced_text(self) -> None:
         # `field_value` searches the section's raw text, so the page showing
@@ -2721,8 +3931,21 @@ class WhatTheParsedStartCostsTheEvidenceRefusalTests(unittest.TestCase):
         literal = f"{self.OPENING}## Mergeability\n\n{self.FENCED_FIELDS}\n{self.EVIDENCE}"
         self.assertEqual(pr_readiness.evaluate(pr(literal), self.FILES).failures, [])
         reached = [
-            shape
-            for shape in self.WIDENED_SPELLINGS
+            name
+            for name, shape in all_of(
+                self.WIDENED_SPELLINGS,
+                {
+                    "emphasis",
+                    "underscore emphasis",
+                    "indented three spaces",
+                    "setext dashes",
+                    "trailing spaces",
+                    "trailing tab",
+                    "closing hash run",
+                    "tab separator",
+                },
+                "WhatTheParsedStartCostsTheEvidenceRefusalTests.WIDENED_SPELLINGS",
+            ).items()
             if not pr_readiness.evaluate(
                 pr(f"{self.OPENING}{shape.format(h='Mergeability')}\n\n{self.FENCED_FIELDS}\n{self.EVIDENCE}"),
                 self.FILES,
@@ -2745,8 +3968,21 @@ class WhatTheParsedStartCostsTheEvidenceRefusalTests(unittest.TestCase):
         literal = f"{self.OPENING}{folded}## Mergeability\n\n{fields}\n{self.EVIDENCE}"
         self.assertEqual(pr_readiness.evaluate(pr(literal), self.FILES).failures, [])
         reached = [
-            shape
-            for shape in self.WIDENED_SPELLINGS
+            name
+            for name, shape in all_of(
+                self.WIDENED_SPELLINGS,
+                {
+                    "emphasis",
+                    "underscore emphasis",
+                    "indented three spaces",
+                    "setext dashes",
+                    "trailing spaces",
+                    "trailing tab",
+                    "closing hash run",
+                    "tab separator",
+                },
+                "WhatTheParsedStartCostsTheEvidenceRefusalTests.WIDENED_SPELLINGS",
+            ).items()
             if not pr_readiness.evaluate(
                 pr(f"{self.OPENING}{folded}{shape.format(h='Mergeability')}\n\n{fields}\n{self.EVIDENCE}"),
                 self.FILES,
@@ -2942,7 +4178,16 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
     }
 
     def test_a_heading_inside_an_html_block_is_refused_by_name(self) -> None:
-        for name, opener in self.SWALLOWED.items():
+        for name, opener in all_of(
+            self.SWALLOWED,
+            {
+                "a details closer with no blank line after it",
+                "an img tag",
+                "a div around the heading and the status",
+                "a comment a browser closes at --!>",
+            },
+            "AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests.SWALLOWED",
+        ).items():
             with self.subTest(shape=name):
                 body = self.body(f"{opener}\n\n{self.BLOCKED}\n\n")
                 # No candidate: the parse does not see a heading at all.
@@ -2973,8 +4218,364 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
         ),
     }
 
+    # The same shape, with the status wrapped the way a reader sees it inside
+    # a block that prints characters. In ordinary markdown a code span strips
+    # one space of padding, so `` ` [blocked] ` `` renders as `[blocked]` and
+    # the rendered view catches it; inside a raw block the page prints the
+    # backticks and the spaces, and this reader caught none of these three --
+    # so the gate PASSED a body showing a reader a blocked status (#1771).
+    PADDED_STATUSES = {
+        "a space inside the backticks": "- ` [blocked] ` waiting",
+        "double-backtick padding": "- `` [blocked] `` waiting",
+        "a punctuation gap after the token": "- **[blocked]:** waiting",
+    }
+
+    # intent: guard
+    def test_each_padded_row_is_the_spelling_its_name_says(self) -> None:
+        """What the name-set guard cannot see, pinned where the name is the claim.
+
+        `all_of` asserts the NAMES a table carries, so a row's value replaced
+        by another row's -- the double-backtick spelling swapped for the
+        single-backtick one, key untouched -- passes it, and the claim these
+        three names make is precisely about their spellings (#1771, round
+        12). Each name is checked against the shape it labels here; the
+        general hole stays open by decision, because a table whose names are
+        labels rather than claims has nothing for a guard to check them
+        against.
+        """
+        spellings = {
+            "a space inside the backticks": ("` [blocked] `", "`` "),
+            "double-backtick padding": ("`` [blocked] ``", None),
+            "a punctuation gap after the token": ("**[blocked]:**", None),
+        }
+        for name, (must_hold, must_not) in all_of(
+            spellings,
+            {
+                "a space inside the backticks",
+                "double-backtick padding",
+                "a punctuation gap after the token",
+            },
+            "ThePaddedStatusSpellings.spellings",
+        ).items():
+            with self.subTest(spelling=name):
+                line = self.PADDED_STATUSES[name]
+                self.assertIn(must_hold, line, f"{name}: not the shape its name says")
+                if must_not is not None:
+                    self.assertNotIn(must_not, line, f"{name}: another row's spelling")
+
+    def padded_body(self, line: str) -> str:
+        return self.body(f"<pre>\n## Evidence Status\n{line}\n</pre>\n\n")
+
+    # intent: fix
+    def test_a_padded_status_inside_a_raw_block_is_refused_by_name(self) -> None:
+        """Models the rule: what this gate's raw-block reader calls a status.
+
+        The half that asks reality is the sibling below, which reads the
+        recorded page for the same three bodies.
+        """
+        for name, line in all_of(
+            self.PADDED_STATUSES,
+            {
+                "a space inside the backticks",
+                "double-backtick padding",
+                "a punctuation gap after the token",
+            },
+            "PADDED_STATUSES",
+        ).items():
+            with self.subTest(spelling=name):
+                body = self.padded_body(line)
+                self.assertEqual(pr_readiness.status_heading_candidates(body), [])
+                failure = pr_readiness.unread_status_heading_failure(body)
+                self.assertIsNotNone(failure, name)
+                self.assertIn("inside a raw HTML block", failure)
+                self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok, name)
+
+    # intent: guard
+    def test_the_page_prints_every_one_of_those_spellings_to_a_reader(self) -> None:
+        """Asks reality: GitHub's own answer for the same three bodies.
+
+        A raw block prints its contents as characters, so the wrapper and its
+        padding reach the page -- which is why they are statuses here and not
+        in ordinary markdown.
+        """
+        for name, line in all_of(
+            self.PADDED_STATUSES,
+            {
+                "a space inside the backticks",
+                "double-backtick padding",
+                "a punctuation gap after the token",
+            },
+            "PADDED_STATUSES",
+        ).items():
+            with self.subTest(spelling=name), recorded_page():
+                html = pr_readiness.render_markdown(self.padded_body(line))
+            text = re.sub(r"<[^>]+>", "", html)
+            self.assertIn(line, text, f"{name}: the page did not print the line as written")
+
+    # The cross-product the round-1 fixtures could not build: `padded_body`
+    # hardcodes the swallowed `<pre>` and every `PADDED_STATUSES` entry
+    # carries a list marker, so wrapper x NO marker x raw block x a heading
+    # the page really shows was unreachable -- which is the shape the ordinary
+    # path accepted (#1771, round 2).
+    UNSWALLOWED = {
+        "a padded span with no marker": "` [blocked] ` waiting",
+        "double-backtick padding with no marker": "`` [blocked] `` waiting",
+        "a punctuation gap with no marker": "**[blocked]:** waiting",
+    }
+
+    def unswallowed_body(self, line: str) -> str:
+        """A raw block under a heading the page shows, with the status unmarked."""
+        return self.body(f"## Evidence Status\n\n<pre>\n{line}\n</pre>\n\n")
+
+    # intent: guard
+    def test_a_raw_block_under_a_real_heading_puts_its_characters_on_a_line(self) -> None:
+        """Models the criterion: a raw block's characters are lines a reader sees.
+
+        The kind of a line is a SOURCE now, not a reader — every printed line
+        goes through one pattern, whatever produced it (#1771, round 4). What
+        this still pins is that a raw block contributes its own lines at all:
+        an inline run contributes none for it, so a caller reading only parsed
+        text sees nothing here.
+
+        The sibling below asks the page whether it prints these characters.
+        """
+        for name, line in all_of(
+            self.UNSWALLOWED,
+            {
+                "a padded span with no marker",
+                "double-backtick padding with no marker",
+                "a punctuation gap with no marker",
+            },
+            "UNSWALLOWED",
+        ).items():
+            with self.subTest(spelling=name):
+                body = self.unswallowed_body(line)
+                lines = pr_readiness.rendered_status_lines(body)
+                self.assertIn(line, lines, name)
+                self.assertTrue(
+                    any(pr_readiness.PRINTED_PENDING_RE.match(one) for one in lines), name
+                )
+                self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok, name)
+
+    # intent: control
+    def test_an_unswallowed_raw_block_with_nothing_pending_is_silent(self) -> None:
+        # The control the swallowed shape has and this one did not: the same
+        # heading and the same raw block, holding a COMPLETE status. Nothing
+        # here is pending, so nothing is refused — which is what says the
+        # refusals above are about the status rather than about the block.
+        body = self.unswallowed_body("` [complete] ` done")
+        self.assertIn("` [complete] ` done", pr_readiness.rendered_status_lines(body))
+        result = pr_readiness.evaluate(pr(body), self.FILES)
+        self.assertTrue(result.ok, result.failures)
+
+    # intent: guard
+    def test_the_page_prints_those_unmarked_lines_too(self) -> None:
+        # Asks reality, from recordings taken with the token.
+        for name, line in all_of(
+            self.UNSWALLOWED,
+            {
+                "a padded span with no marker",
+                "double-backtick padding with no marker",
+                "a punctuation gap with no marker",
+            },
+            "UNSWALLOWED",
+        ).items():
+            with self.subTest(spelling=name), recorded_page():
+                html = pr_readiness.render_markdown(self.unswallowed_body(line))
+            self.assertIn(line, re.sub(r"<[^>]+>", "", html), name)
+
+    # intent: fix
+    def test_a_line_the_parser_left_as_text_takes_the_raw_reader(self) -> None:
+        """The kind assigned on the unparsed-tag path (#1771, round 3).
+
+        `<x:y>…</x:y>` is one run of prose to this parser, so the line reaches
+        the page with whatever markup it carries. Those characters are
+        pre-parse and take the raw-block reader; flagging them parsed left the
+        wrapper axis untested and the gate accepted
+        `<x:y>**[blocked] …</x:y>` under a real heading.
+
+        Worth two sentences for whoever tries this next. A LONE `*` is not a
+        counterexample: the post-parse reader reads a single `*` as a list
+        marker, so both readers answer the same on it and the mutant looks
+        dead. Neither is a backtick span — an unparsed TAG does not stop the
+        parser resolving inline markup around it, so `` `[blocked]` `` is
+        already `[blocked]` by the time the line is stripped out. What
+        survives is markup the parser could not PAIR, which is why `**` is
+        where the two readers part. The axis to vary is the wrapper, not the
+        effort.
+        """
+        for name, line in (
+            ("a double asterisk", "<x:y>**[blocked] the signing profile is missing</x:y>"),
+            ("a backtick span", "<x:y>`[blocked]` waiting</x:y>"),
+            ("a lone asterisk", "<x:y>*[blocked] waiting</x:y>"),
+        ):
+            with self.subTest(spelling=name):
+                body = self.body(f"## Evidence Status\n\n{line}\n\n")
+                lines = pr_readiness.rendered_status_lines(body)
+                self.assertTrue(
+                    any(pr_readiness.PRINTED_PENDING_RE.match(one) for one in lines),
+                    f"{name}: the line the tag left as text was not read",
+                )
+                self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok, name)
+
+    # intent: guard
+    def test_the_probes_raw_block_lines_reach_what_nothing_else_does(self) -> None:
+        """Survivor 2, resolved by construction rather than by deletion (#1771, round 3).
+
+        The pass could not separate this branch from the two readers above it
+        in three attempts, and the reason is that every body it tried was
+        caught earlier — by the swallowing block's own lines, or by the
+        written view, which takes both wrappers and needs a list marker.
+
+        The input that separates them is a SECOND raw block below the
+        swallowing one, holding an UNMARKED status: the first check finds
+        nothing in the swallowing block, the written view needs a marker the
+        line does not have, a raw block contributes no parsed lines at all,
+        and only the raw reader over the printed lines sees it. Measured at
+        each step below, so the branch is pinned by the case that needs it
+        rather than justified by a property somewhere else.
+        """
+        middle = (
+            "<pre>\n## Evidence Status\nnothing pending in here\n</pre>\n\n"
+            "<pre>\n` [blocked] ` waiting\n</pre>\n\n"
+        )
+        body = self.body(middle)
+        normalized = pr_readiness.LINE_ENDING_RE.sub("\n", body)
+        line = normalized[: normalized.index("## Evidence Status")].count("\n")
+        block = next(
+            token
+            for token in pr_readiness.MARKDOWN.parse(normalized)
+            if token.type == "html_block" and token.map and token.map[0] <= line < token.map[1]
+        )
+        # 1. the swallowing block holds no status of its own
+        self.assertFalse(
+            any(
+                pr_readiness.PRINTED_PENDING_RE.match(one)
+                for one in pr_readiness.html_block_text_lines(block.content)
+            )
+        )
+        below = "\n".join(normalized.split("\n")[(block.map or [0, 0])[1] :])
+        probe = f"## Evidence Status\n{below}"
+        written, _ = pr_readiness.split_fenced_blocks(
+            pr_readiness.extract_section(probe, "Evidence Status", strip=False)
+        )
+        # 2. the written view needs a marker this line does not have
+        self.assertIsNone(pr_readiness.PENDING_STATUS_RE.search(written))
+        lines = pr_readiness.rendered_status_lines(probe)
+        # 3. the line comes from the raw block and from nothing else: an
+        #    inline run contributes none of it, so a caller reading only
+        #    parsed text has nothing to match.
+        self.assertIn("` [blocked] ` waiting", lines)
+        self.assertEqual(
+            [one for one in lines if one.strip()],
+            ["` [blocked] ` waiting"],
+            "the raw block is the only source of this line",
+        )
+        # 4. and the gate refuses because the probe reads them
+        self.assertTrue(
+            any(pr_readiness.PRINTED_PENDING_RE.match(one) for one in lines)
+        )
+        self.assertTrue(pr_readiness._a_status_is_kept_out(normalized, block))
+        self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok)
+
+    # intent: fix
+    def test_the_two_readers_part_on_the_marker_and_on_nothing_else(self) -> None:
+        """The criterion, restated and pinned BOTH ways (#1771, round 4).
+
+        Round 2 pinned the wrapper axis as the thing that separates the
+        readers, and it does not: an escape and a character reference are
+        markup the parser RESOLVES TO a delimiter character, so a post-parse
+        line can carry one. The axis is the list marker, and what follows the
+        token decides nothing — a reader scanning the section sees the token
+        leading the line in every shape below.
+
+        Both directions: the written view must keep requiring a marker (or an
+        ordinary sentence mentioning a status becomes a refusal), and the
+        printed reader must keep not requiring one (or a `<pre>` line and a
+        bulleted table cell go unread).
+        """
+        marked, unmarked = "- [blocked] waiting", "[blocked] waiting"
+        wrapped, padded = "- `[blocked]` waiting", "- ` [blocked] ` waiting"
+        colon, emphasised = "- **[blocked]:** waiting", "- **[blocked]** waiting"
+        trailing, second_label = "- _[blocked]_x waiting", "- [blocked][missing] waiting"
+        for reader_name, reader, needs_marker in (
+            ("the written view", pr_readiness.PENDING_STATUS_RE, True),
+            ("the printed view", pr_readiness.PRINTED_PENDING_RE, False),
+        ):
+            with self.subTest(reader=reader_name):
+                read = reader.search if needs_marker else reader.match
+                for line in (marked, wrapped, padded, colon, emphasised, trailing, second_label):
+                    self.assertTrue(read(line), f"{reader_name}: {line}")
+                self.assertEqual(
+                    bool(read(unmarked)), not needs_marker, f"{reader_name}: the marker rule"
+                )
+        # And the direction a wider reader could break: a line that only
+        # MENTIONS a status is not one, at either reader.
+        for line in (
+            "- the lane is [blocked]x by nothing",
+            "- waiting on [blocked] elsewhere",
+            "- [complete] the item -- proof",
+            "- `[complete]` the item -- proof",
+        ):
+            with self.subTest(line=line):
+                self.assertIsNone(pr_readiness.PRINTED_PENDING_RE.match(line), line)
+                self.assertIsNone(
+                    pr_readiness.PENDING_STATUS_RE.search(f"## Evidence Status\n\n{line}\n"), line
+                )
+
+    # intent: fix
+    def test_a_wrapper_the_written_view_tolerates_is_tolerated_here(self) -> None:
+        # The rule this reader is written to, asserted rather than described:
+        # one spelling of the wrapper for all three readers, so a shape the
+        # written view takes cannot be one this reader misses.
+        table = all_of(
+            {**all_of(
+                self.PADDED_STATUSES,
+                {
+                    "a space inside the backticks",
+                    "double-backtick padding",
+                    "a punctuation gap after the token",
+                },
+                "PADDED_STATUSES",
+            ), "plain backticks": "- `[blocked]` waiting"},
+            {
+                "a space inside the backticks",
+                "double-backtick padding",
+                "a punctuation gap after the token",
+                "plain backticks",
+            },
+            "AWrapperTheWrittenViewTolerates.table",
+        )
+        for name, line in table.items():
+            with self.subTest(spelling=name):
+                self.assertTrue(pr_readiness.PRINTED_PENDING_RE.match(line), name)
+                self.assertTrue(
+                    pr_readiness.PENDING_STATUS_RE.search(f"## Evidence Status\n\n{line}\n"), name
+                )
+
+    # intent: fix
+    def test_a_line_that_names_no_status_is_still_not_one(self) -> None:
+        # The control, and the direction that matters: a wider wrapper must
+        # not make an ordinary line a status.
+        for line in (
+            "- [complete] the item -- proof",
+            "- `[complete]` the item -- proof",
+            "- the lane is [blocked]x by nothing",
+            "- ` [complete] ` done",
+        ):
+            with self.subTest(line=line):
+                self.assertIsNone(pr_readiness.PRINTED_PENDING_RE.match(line), line)
+
     def test_a_swallowed_heading_with_no_pending_status_under_it_is_silent(self) -> None:
-        for name, block in self.SWALLOWED_WITH_NOTHING_PENDING.items():
+        for name, block in all_of(
+            self.SWALLOWED_WITH_NOTHING_PENDING,
+            {
+                "a closed comment holding only the heading",
+                "a closed comment holding a complete item",
+                "a pre block holding a complete item",
+            },
+            "AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests.SWALLOWED_WITH_NOTHING_PENDING",
+        ).items():
             with self.subTest(shape=name):
                 body = self.body(f"{block}\n\n")
                 self.assertEqual(pr_readiness.status_heading_candidates(body), [])
@@ -2992,7 +4593,11 @@ class AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests(unittest.TestCase):
     }
 
     def test_a_heading_shaped_line_inside_the_block_does_not_hide_the_status_below_it(self) -> None:
-        for name, block in self.INNER_HEADING.items():
+        for name, block in all_of(
+            self.INNER_HEADING,
+            {"a pre block", "a closed comment"},
+            "AHeadingNoReaderTakesIsNamedRatherThanIgnoredTests.INNER_HEADING",
+        ).items():
             with self.subTest(shape=name):
                 body = self.body(f"{block}\n{self.BLOCKED}\n\n")
                 failure = pr_readiness.unread_status_heading_failure(body)
@@ -3117,58 +4722,161 @@ REAL_EMPHASISED = "## **Evidence Status**\n\n- [complete] swift test -- ok\n\n"
 REAL_SETEXT = "Evidence Status\n---------------\n\n- [complete] swift test -- ok\n\n"
 REAL_PLAIN = "## Evidence Status\n\n- [complete] swift test -- ok\n\n"
 
-SWALLOWED_HEADING_TABLE = (
+# What each row of `PAGE_READER_TABLE` CLAIMS, read off its own name, as
+# (must contain, must not contain, must appear in this order). A name that
+# states a property is a claim about the shape, and a guard over the names
+# alone cannot see that shape leave: a row given its neighbour's value with
+# its key untouched keeps the count, keeps the name, and drops the coverage
+# -- round 4's `<br>` inside a list item went that way silently, because the
+# table's other shape test pins tokens over the JOINED corpus and a token
+# another row still carries stays present (#1771, round 13).
+PAGE_READER_CLAIMS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[tuple[str, str], ...]]] = {
+    "a block tag after prose": (("Context <div>",), (), ()),
+    "a pre after prose": (("Context <pre>",), (), ()),
+    # The bare break: none of the other rows' markers, because six of them
+    # also carry `Context <br>` and a containment claim alone takes any of
+    # them as this row (#1771, round 15).
+    "a break after prose": (
+        ("Context <br>", "Status\n\nContext"),
+        ("- ", "`", "***", "\n---\n", "<blockquote>", "<ul><li>", "<details>", "> ## ", "## Notes"),
+        (),
+    ),
+    "a break inside a list item": (("- complete <br>",), (), ()),
+    "an unparsed tag the page prints": (("<x:y>",), (), ()),
+    "a type parameter mid-line": (("Vec<T>",), (), ()),
+    "a fenced example": (("```",), (), ()),
+    "an indented example": (("\n    - [blocked]",), ("```",), ()),
+    "a code span": (("`[blocked]`",), ("<br>",), ()),
+    "a code span after a break": (("<br>`[blocked]`",), (), ()),
+    "a rule of asterisks": (("***",), (), (("***", "[blocked]"),)),
+    "a dash rule": (("\n---\n",), (), (("---", "[blocked]"),)),
+    "a quoted heading inside": (
+        ("> ## Note\n\nContext",),
+        ("<details>", "<summary>"),
+        (("## Evidence Status", "> ## "),),
+    ),
+    "a heading inside a list item": (("- outer", "  - ## "), (), ()),
+    "a quoted example elsewhere": (("> ## Evidence Status",), (), (("> ## Evidence Status", "\n## Evidence Status"),)),
+    "a long-s heading": (("Statu\u017f",), (), ()),
+    "a fold holding the section": (("<details>",), (), (("<details>", "## Evidence Status"),)),
+    "a fold holding a quoted heading": (("<details>", "> ## "), (), (("## Evidence Status", "<details>"),)),
+    "an unclosed blockquote before": (
+        ("<blockquote>", "Status\n\nContext"),
+        ("</blockquote>", "## Notes"),
+        (("<blockquote>", "## Evidence Status"),),
+    ),
+    "an unclosed list item before": (("<ul><li>",), ("</li>",), (("<ul><li>", "## Evidence Status"),)),
+    "an unclosed blockquote inside": (("<blockquote>",), ("</blockquote>",), (("## Evidence Status", "<blockquote>"),)),
+    "a break inside a quoted heading": (("> ## Context<br>",), (), ()),
+    "a sibling heading after a top-level section": (("## Notes",), ("<blockquote>", "> ## "), (("## Evidence Status", "## Notes"),)),
+    "a sibling heading after a nested section": (
+        ("<blockquote>", "## Notes"),
+        ("</blockquote>",),
+        (("<blockquote>", "## Notes"),),
+    ),
+    "a shallower heading after a quoted section": (("> ## Evidence Status", "\n## Notes"), ("<blockquote>",), (("> ## Evidence Status", "## Notes"),)),
+    "a shallower heading after a blockquote section": (("<blockquote>", "</blockquote>", "## Notes"), (), (("</blockquote>", "## Notes"),)),
+    "a shallower h1 after a quoted section": (("> ## Evidence Status", "\n# Notes"), ("\n## Notes",), ()),
+    "a raw pre holding the status": (
+        ("<pre>\nnote",),
+        ("Context",),
+        (("## Evidence Status", "<pre>"),),
+    ),
+}
+# Every row of that table states a property, so none of them is a bare label.
+PAGE_READER_LABELS: frozenset[str] = frozenset()
+
+
+# The same per-row pins for the swallowed-heading table. Round 5's absent
+# list marker left this table the same way: the row named "...with no marker"
+# given its marker-bearing neighbour's value keeps the name and loses the
+# shape (#1771, round 13).
+SWALLOWED_CLAIMS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[tuple[str, str], ...]]] = {
+    "a details closer, status below": (("</details>\n## Evidence Status",), (), ()),
+    "an img tag, status below": (("<img ",), (), (("<img ", "## Evidence Status"),)),
+    "a div around heading and status": (("<div>\n## Evidence Status",), ("</div>",), ()),
+    "a comment a browser ends at --!>": (("--!>",), (), (("--!>", "## Evidence Status"),)),
+    "a closed comment, heading alone": (("<!--", "-->"), ("[blocked]", "[complete]", "[pending-ci]"), ()),
+    "a closed comment, a complete item": (("<!--", "-->", "- [complete]"), ("[blocked]",), ()),
+    "a pre block, a complete item": (("<pre>", "</pre>", "- [complete]"), ("**",), ()),
+    "a pre block, a wrapped complete item": (("<pre>", "- **[complete]**"), (), ()),
+    "a pre block holding a second heading": (("<pre>", "## Notes"), (), (("## Evidence Status", "## Notes"),)),
+    "a comment holding a second heading": (("<!--", "## Notes"), ("<pre>",), (("## Evidence Status", "## Notes"),)),
+    "a comment, a bold status": (("<!--", "- **[blocked]**"), ("<pre>",), ()),
+    "a comment, a backticked status": (("<!--", "- `[blocked]`"), ("<pre>",), ()),
+    "a pre block, a bold status": (("<pre>", "- **[blocked]**"), ("<!--",), ()),
+    "a pre block, a bold status with no marker": (("<pre>", "\n**[blocked]**"), ("- **[blocked]**",), ()),
+    "a pre block, a backticked status with no marker": (("<pre>", "\n`[blocked]`"), ("- `[blocked]`",), ()),
+    "a pre block, an underscored status": (("<pre>", "- _[blocked]_"), (), ()),
+    "a comment, a wrapped pending-ci": (("<!--", "**[pending-ci]**"), ("<pre>",), ()),
+    "a pre block, a backticked pending-ci with no marker": (("<pre>", "\n`[pending-ci]`"), ("- `[pending-ci]`",), ()),
+    "a comment, a plain status": (("<!--", "- [blocked] waiting"), ("**", "`"), ()),
+    "the blank line the message asks for": (("</details>\n\n## Evidence Status",), (), ()),
+    "a fenced example of the heading": (("```",), (), (("```", "## Evidence Status"),)),
+    "an indented example of the heading": (("    ## Evidence Status",), ("```",), ()),
+    # LF endings, which is what makes the CRLF row beside it a different
+    # shape rather than a donor for this one (#1771, round 15).
+    "swallowed blocked above an emphasised section": (
+        ("[blocked]", "## **Evidence Status**"),
+        ("\r\n",),
+        (("[blocked]", "## **Evidence Status**"),),
+    ),
+    "swallowed blocked above a setext section": (("[blocked]", "Evidence Status\n------"), (), ()),
+    "swallowed blocked above a plain section": (("[blocked]", "<div>", "\n## Evidence Status\n\n- [complete]"), ("**Evidence Status**",), ()),
+    "swallowed blocked above an emphasised section, CRLF": (("\r\n", "[blocked]", "## **Evidence Status**"), (), ()),
+    "swallowed complete above an emphasised section": (("- [complete] the UI lane", "## **Evidence Status**"), ("[blocked]",), ()),
+}
+# Every row of this table states a property too.
+SWALLOWED_LABELS: frozenset[str] = frozenset()
+
+
+SWALLOWED_HEADING_TABLE = {
     # Round 2: the heading is swallowed by an opener a line above it and the
     # status sits below the block in ordinary markdown.
-    ("a details closer, status below", f"</details>\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
-    ("an img tag, status below", f'<img src="https://example.invalid/a.png">\n## Evidence Status\n\n{BLOCKED_LINE}\n\n', True, INSIDE_A_BLOCK),
-    ("a div around heading and status", f"<div>\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
-    ("a comment a browser ends at --!>", f"<!-- note --!>\n\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
+    "a details closer, status below": (f"</details>\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
+    "an img tag, status below": (f'<img src="https://example.invalid/a.png">\n## Evidence Status\n\n{BLOCKED_LINE}\n\n', True, INSIDE_A_BLOCK),
+    "a div around heading and status": (f"<div>\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
+    "a comment a browser ends at --!>": (f"<!-- note --!>\n\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
     # Round 3: the block covers the heading and hides nothing. The section is
     # optional, so its absence is not a body to refuse.
-    ("a closed comment, heading alone", "<!--\n## Evidence Status\n-->\n\n", False, None),
-    ("a closed comment, a complete item", "<!--\n## Evidence Status\n- [complete] ran it -- 1992 tests passed\n-->\n\n", False, None),
-    ("a pre block, a complete item", "<pre>\n## Evidence Status\n- [complete] ran it -- 1992 tests passed\n</pre>\n\n", False, None),
-    ("a pre block, a wrapped complete item", "<pre>\n## Evidence Status\n- **[complete]** ran it\n</pre>\n\n", False, None),
+    "a closed comment, heading alone": ("<!--\n## Evidence Status\n-->\n\n", False, None),
+    "a closed comment, a complete item": ("<!--\n## Evidence Status\n- [complete] ran it -- 1992 tests passed\n-->\n\n", False, None),
+    "a pre block, a complete item": ("<pre>\n## Evidence Status\n- [complete] ran it -- 1992 tests passed\n</pre>\n\n", False, None),
+    "a pre block, a wrapped complete item": ("<pre>\n## Evidence Status\n- **[complete]** ran it\n</pre>\n\n", False, None),
     # Round 4: a heading-shaped line INSIDE the block, status below the block.
     # The block prints it as characters; a markdown parser reads it as a
     # heading and ended the synthetic section before the status.
-    ("a pre block holding a second heading", f"<pre>\n## Evidence Status\n## Notes\n</pre>\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
-    ("a comment holding a second heading", f"<!--\n## Evidence Status\n## Notes\n-->\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
+    "a pre block holding a second heading": (f"<pre>\n## Evidence Status\n## Notes\n</pre>\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
+    "a comment holding a second heading": (f"<!--\n## Evidence Status\n## Notes\n-->\n{BLOCKED_LINE}\n\n", True, INSIDE_A_BLOCK),
     # Round 5: the status inside the block wrapped in markup the block prints
     # as characters. The list marker is optional here, which is why neither
     # existing pattern covered the pair.
-    ("a comment, a bold status", "<!--\n## Evidence Status\n- **[blocked]** waiting\n-->\n\n", True, INSIDE_A_BLOCK),
-    ("a comment, a backticked status", "<!--\n## Evidence Status\n- `[blocked]` waiting\n-->\n\n", True, INSIDE_A_BLOCK),
-    ("a pre block, a bold status", "<pre>\n## Evidence Status\n- **[blocked]** waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
-    ("a pre block, a bold status with no marker", "<pre>\n## Evidence Status\n**[blocked]** waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
-    ("a pre block, a backticked status with no marker", "<pre>\n## Evidence Status\n`[blocked]` waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
-    ("a pre block, an underscored status", "<pre>\n## Evidence Status\n- _[blocked]_ waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
-    ("a comment, a wrapped pending-ci", "<!--\n## Evidence Status\n- **[pending-ci]** waiting\n-->\n\n", True, INSIDE_A_BLOCK),
-    ("a pre block, a backticked pending-ci with no marker", "<pre>\n## Evidence Status\n`[pending-ci]` waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
+    "a comment, a bold status": ("<!--\n## Evidence Status\n- **[blocked]** waiting\n-->\n\n", True, INSIDE_A_BLOCK),
+    "a comment, a backticked status": ("<!--\n## Evidence Status\n- `[blocked]` waiting\n-->\n\n", True, INSIDE_A_BLOCK),
+    "a pre block, a bold status": ("<pre>\n## Evidence Status\n- **[blocked]** waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
+    "a pre block, a bold status with no marker": ("<pre>\n## Evidence Status\n**[blocked]** waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
+    "a pre block, a backticked status with no marker": ("<pre>\n## Evidence Status\n`[blocked]` waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
+    "a pre block, an underscored status": ("<pre>\n## Evidence Status\n- _[blocked]_ waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
+    "a comment, a wrapped pending-ci": ("<!--\n## Evidence Status\n- **[pending-ci]** waiting\n-->\n\n", True, INSIDE_A_BLOCK),
+    "a pre block, a backticked pending-ci with no marker": ("<pre>\n## Evidence Status\n`[pending-ci]` waiting\n</pre>\n\n", True, INSIDE_A_BLOCK),
     # Controls the refusal must not cost.
-    ("a comment, a plain status", "<!--\n## Evidence Status\n- [blocked] waiting\n-->\n\n", True, INSIDE_A_BLOCK),
-    ("the blank line the message asks for", f"</details>\n\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, PENDING_TEXT),
-    ("a fenced example of the heading", "```markdown\n## Evidence Status\n\n- [blocked] an example\n```\n\n", False, None),
-    ("an indented example of the heading", "    ## Evidence Status\n\n    - [blocked] an example\n\n", False, None),
+    "a comment, a plain status": ("<!--\n## Evidence Status\n- [blocked] waiting\n-->\n\n", True, INSIDE_A_BLOCK),
+    "the blank line the message asks for": (f"</details>\n\n## Evidence Status\n\n{BLOCKED_LINE}\n\n", True, PENDING_TEXT),
+    "a fenced example of the heading": ("```markdown\n## Evidence Status\n\n- [blocked] an example\n```\n\n", False, None),
+    "an indented example of the heading": ("    ## Evidence Status\n\n    - [blocked] an example\n\n", False, None),
     # Round 6: a real section below the swallowed heading. The check was asked
     # only where the parse found NO candidate, so a real section written with
     # emphasis or over a setext underline left one candidate and the question
     # went unasked -- the whole class passed while the shape above it, alone
     # in the body, refused (#1767).
-    ("swallowed blocked above an emphasised section", SWALLOWED_BLOCKED + REAL_EMPHASISED, True, INSIDE_A_BLOCK),
-    ("swallowed blocked above a setext section", SWALLOWED_BLOCKED + REAL_SETEXT, True, INSIDE_A_BLOCK),
-    ("swallowed blocked above a plain section", SWALLOWED_BLOCKED + REAL_PLAIN, True, INSIDE_A_BLOCK),
-    (
-        "swallowed blocked above an emphasised section, CRLF",
-        (SWALLOWED_BLOCKED + REAL_EMPHASISED).replace("\n", "\r\n"),
-        True,
-        INSIDE_A_BLOCK,
-    ),
+    "swallowed blocked above an emphasised section": (SWALLOWED_BLOCKED + REAL_EMPHASISED, True, INSIDE_A_BLOCK),
+    "swallowed blocked above a setext section": (SWALLOWED_BLOCKED + REAL_SETEXT, True, INSIDE_A_BLOCK),
+    "swallowed blocked above a plain section": (SWALLOWED_BLOCKED + REAL_PLAIN, True, INSIDE_A_BLOCK),
+    "swallowed blocked above an emphasised section, CRLF": ((SWALLOWED_BLOCKED + REAL_EMPHASISED).replace("\n", "\r\n"), True, INSIDE_A_BLOCK),
     # The control the widening must not cost: nothing is being kept out, so
     # the block is an author's own markup and the body passes as it did.
-    ("swallowed complete above an emphasised section", SWALLOWED_COMPLETE + REAL_EMPHASISED, False, None),
-)
+    "swallowed complete above an emphasised section": (SWALLOWED_COMPLETE + REAL_EMPHASISED, False, None),
+}
 
 
 class TheSwallowedHeadingTableTests(unittest.TestCase):
@@ -3189,7 +4897,39 @@ class TheSwallowedHeadingTableTests(unittest.TestCase):
         return f"{self.OPENING}{self.MERGEABILITY}{middle}{self.EVIDENCE}"
 
     def test_every_probed_shape_gets_the_verdict_it_owes(self) -> None:
-        for name, block, refused, fragment in SWALLOWED_HEADING_TABLE:
+        for name, (block, refused, fragment) in all_of(
+            SWALLOWED_HEADING_TABLE,
+            {
+                "a details closer, status below",
+                "an img tag, status below",
+                "a div around heading and status",
+                "a comment a browser ends at --!>",
+                "a closed comment, heading alone",
+                "a closed comment, a complete item",
+                "a pre block, a complete item",
+                "a pre block, a wrapped complete item",
+                "a pre block holding a second heading",
+                "a comment holding a second heading",
+                "a comment, a bold status",
+                "a comment, a backticked status",
+                "a pre block, a bold status",
+                "a pre block, a bold status with no marker",
+                "a pre block, a backticked status with no marker",
+                "a pre block, an underscored status",
+                "a comment, a wrapped pending-ci",
+                "a pre block, a backticked pending-ci with no marker",
+                "a comment, a plain status",
+                "the blank line the message asks for",
+                "a fenced example of the heading",
+                "an indented example of the heading",
+                "swallowed blocked above an emphasised section",
+                "swallowed blocked above a setext section",
+                "swallowed blocked above a plain section",
+                "swallowed blocked above an emphasised section, CRLF",
+                "swallowed complete above an emphasised section",
+            },
+            "SWALLOWED_HEADING_TABLE",
+        ).items():
             with self.subTest(shape=name):
                 result = pr_readiness.evaluate(pr(self.body(block)), self.FILES)
                 self.assertEqual(result.ok, not refused, (name, result.failures))
@@ -3203,7 +4943,39 @@ class TheSwallowedHeadingTableTests(unittest.TestCase):
         # The message is the whole value of refusing rather than going quiet,
         # so the table checks that every swallowed-heading refusal still
         # carries both line numbers and the repair.
-        for name, block, refused, fragment in SWALLOWED_HEADING_TABLE:
+        for name, (block, refused, fragment) in all_of(
+            SWALLOWED_HEADING_TABLE,
+            {
+                "a details closer, status below",
+                "an img tag, status below",
+                "a div around heading and status",
+                "a comment a browser ends at --!>",
+                "a closed comment, heading alone",
+                "a closed comment, a complete item",
+                "a pre block, a complete item",
+                "a pre block, a wrapped complete item",
+                "a pre block holding a second heading",
+                "a comment holding a second heading",
+                "a comment, a bold status",
+                "a comment, a backticked status",
+                "a pre block, a bold status",
+                "a pre block, a bold status with no marker",
+                "a pre block, a backticked status with no marker",
+                "a pre block, an underscored status",
+                "a comment, a wrapped pending-ci",
+                "a pre block, a backticked pending-ci with no marker",
+                "a comment, a plain status",
+                "the blank line the message asks for",
+                "a fenced example of the heading",
+                "an indented example of the heading",
+                "swallowed blocked above an emphasised section",
+                "swallowed blocked above a setext section",
+                "swallowed blocked above a plain section",
+                "swallowed blocked above an emphasised section, CRLF",
+                "swallowed complete above an emphasised section",
+            },
+            "SWALLOWED_HEADING_TABLE",
+        ).items():
             if not refused or fragment != INSIDE_A_BLOCK:
                 continue
             with self.subTest(shape=name):
@@ -3255,10 +5027,92 @@ class TheSwallowedHeadingTableTests(unittest.TestCase):
         self.assertIsNone(pr_readiness.evidence_status_heading_failure(body))
         self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok)
 
+    # intent: fix
+    def test_each_row_is_the_shape_its_name_claims(self) -> None:
+        """The pin the name guard cannot be: the SHAPE a row's name claims.
+
+        `all_of` asserts which names THIS table carries. A row given its
+        neighbour's value with its key untouched keeps the count and the
+        name, so the guard passes and the coverage leaves -- measured here on
+        `a pre block, a bold status with no marker`, round 5's absent list
+        marker, which went silently because the sibling test pins tokens over
+        the JOINED corpus and the marker-bearing row beside it still carries
+        `**[blocked]**` (#1771, rounds 13 and 15). Round 13 gave this test
+        the page-reader table's docstring verbatim, citing a row that is not
+        in this table at all.
+
+        Every row of this table states a property, so every row has a claim;
+        a row whose name is a bare label would be listed in SWALLOWED_LABELS
+        instead. The claims are themselves a fixture this test reads, so
+        their names are bound to the table's by the two assertions below and
+        each claim is checked for asserting anything at all.
+        """
+        table = SWALLOWED_HEADING_TABLE
+        claims, claims_name = SWALLOWED_CLAIMS, "SWALLOWED_CLAIMS"
+        labels = SWALLOWED_LABELS
+        self.assertEqual(
+            sorted(set(table) - set(claims) - labels),
+            [],
+            "a row's name claims a shape with nothing pinning it",
+        )
+        self.assertEqual(sorted(set(claims) - set(table)), [], "a claim for a row that is gone")
+        # The claims table is a fixture this test READS, so it is guarded the
+        # same way: its NAMES by the two assertions above, which bind it to a
+        # table whose names `all_of` pins, and the NON-VACUITY of each row's
+        # claim through the one function that asks it (#1771, rounds 15, 16).
+        for name, (contains, absent, order) in every_claim_says_something(
+            claims, claims_name, {row: shape[0] for row, shape in table.items()}
+        ).items():
+            with self.subTest(row=name):
+                text = table[name][0]
+                for needle in contains:
+                    self.assertIn(needle, text, f"{name}: the shape its name claims is gone")
+                for needle in absent:
+                    self.assertNotIn(needle, text, f"{name}: another row's shape is here")
+                for first, second in order:
+                    self.assertLess(
+                        text.index(first), text.index(second), f"{name}: the order its name claims"
+                    )
+
     def test_the_table_covers_both_status_tokens_and_every_wrapper(self) -> None:
         # A table nobody checks the shape of grows lopsided. These are the
         # axes the four passes actually moved along.
-        rows = "\n".join(block for _, block, _, _ in SWALLOWED_HEADING_TABLE)
+        rows = "\n".join(
+            block
+            for block, _, _ in all_of(
+                SWALLOWED_HEADING_TABLE,
+                {
+                    "a details closer, status below",
+                    "an img tag, status below",
+                    "a div around heading and status",
+                    "a comment a browser ends at --!>",
+                    "a closed comment, heading alone",
+                    "a closed comment, a complete item",
+                    "a pre block, a complete item",
+                    "a pre block, a wrapped complete item",
+                    "a pre block holding a second heading",
+                    "a comment holding a second heading",
+                    "a comment, a bold status",
+                    "a comment, a backticked status",
+                    "a pre block, a bold status",
+                    "a pre block, a bold status with no marker",
+                    "a pre block, a backticked status with no marker",
+                    "a pre block, an underscored status",
+                    "a comment, a wrapped pending-ci",
+                    "a pre block, a backticked pending-ci with no marker",
+                    "a comment, a plain status",
+                    "the blank line the message asks for",
+                    "a fenced example of the heading",
+                    "an indented example of the heading",
+                    "swallowed blocked above an emphasised section",
+                    "swallowed blocked above a setext section",
+                    "swallowed blocked above a plain section",
+                    "swallowed blocked above an emphasised section, CRLF",
+                    "swallowed complete above an emphasised section",
+                },
+                "SWALLOWED_HEADING_TABLE",
+            ).values()
+        )
         for token in ("[blocked]", "[pending-ci]", "[complete]"):
             self.assertIn(token, rows)
         for wrapper in ("**[", "`[", "_["):
@@ -3298,22 +5152,23 @@ class HeadingIdentityFoldsCaseAndNotLettersTests(unittest.TestCase):
         REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "_helpers.py"
     )
 
-    # (left, right, one heading?) -- read off the rule rather than recalled,
-    # one member per branch of it.
-    PAIRS = (
-        ("Evidence Status", "Evidence Status", True),
-        ("Evidence Status", "EVIDENCE STATUS", True),
-        ("Evidence Status", "evidence status", True),
-        ("Evidence  Status", "Evidence Status", True),
-        ("Evidence\tStatus", "Evidence Status", True),
+    # name -> (left, right, one heading?) -- read off the rule rather than
+    # recalled, one member per branch of it. Named rather than positional so
+    # the guard below says WHICH pair went (#1771, round 11).
+    PAIRS = {
+        "identical": ("Evidence Status", "Evidence Status", True),
+        "upper case": ("Evidence Status", "EVIDENCE STATUS", True),
+        "lower case": ("Evidence Status", "evidence status", True),
+        "a double space": ("Evidence  Status", "Evidence Status", True),
+        "a tab separator": ("Evidence\tStatus", "Evidence Status", True),
         # Every one of these is a fold that changes letters, not case.
-        ("Evidence Statu\u017f", "Evidence Status", False),
-        ("Evidence Statu\uff33", "Evidence Status", False),
-        ("Stra\u00dfe", "STRASSE", False),
-        ("O\ufb01ce", "Ofice", False),
+        "a long s": ("Evidence Statu\u017f", "Evidence Status", False),
+        "a fullwidth S": ("Evidence Statu\uff33", "Evidence Status", False),
+        "an eszett against a double s": ("Stra\u00dfe", "STRASSE", False),
+        "an fi ligature": ("O\ufb01ce", "Ofice", False),
         # And the one the gate's old `(?i)` pattern matched and no parse did.
-        ("MERGEAB\u0130LITY", "Mergeability", False),
-    )
+        "a dotted capital I": ("MERGEAB\u0130LITY", "Mergeability", False),
+    }
 
     def owner(self):
         spec = importlib.util.spec_from_file_location("contributor_helpers", self.HELPERS_PATH)
@@ -3323,8 +5178,23 @@ class HeadingIdentityFoldsCaseAndNotLettersTests(unittest.TestCase):
         return module
 
     def test_the_fold_calls_two_texts_one_heading_only_when_a_reader_would(self) -> None:
-        for left, right, same in self.PAIRS:
-            with self.subTest(left=left, right=right):
+        for name, (left, right, same) in all_of(
+            self.PAIRS,
+            {
+                "identical",
+                "upper case",
+                "lower case",
+                "a double space",
+                "a tab separator",
+                "a long s",
+                "a fullwidth S",
+                "an eszett against a double s",
+                "an fi ligature",
+                "a dotted capital I",
+            },
+            "HeadingIdentityFoldsCaseAndNotLettersTests.PAIRS",
+        ).items():
+            with self.subTest(pair=name):
                 self.assertEqual(
                     pr_readiness.heading_identity(left) == pr_readiness.heading_identity(right),
                     same,
@@ -3334,7 +5204,22 @@ class HeadingIdentityFoldsCaseAndNotLettersTests(unittest.TestCase):
         # Written twice for the reason `MARKDOWN` is: this gate is a PEP 723
         # entry point with its own pin and no package for the skill to import.
         owner = self.owner()
-        for left, right, _ in self.PAIRS:
+        for name, (left, right, _) in all_of(
+            self.PAIRS,
+            {
+                "identical",
+                "upper case",
+                "lower case",
+                "a double space",
+                "a tab separator",
+                "a long s",
+                "a fullwidth S",
+                "an eszett against a double s",
+                "an fi ligature",
+                "a dotted capital I",
+            },
+            "HeadingIdentityFoldsCaseAndNotLettersTests.PAIRS",
+        ).items():
             for text in (left, right):
                 with self.subTest(text=text):
                     self.assertEqual(
@@ -3386,7 +5271,22 @@ class HeadingIdentityFoldsCaseAndNotLettersTests(unittest.TestCase):
         # pair above that `casefold()` called one heading.
         aliased = [
             (left, right)
-            for left, right, same in self.PAIRS
+            for left, right, same in all_of(
+                self.PAIRS,
+                {
+                    "identical",
+                    "upper case",
+                    "lower case",
+                    "a double space",
+                    "a tab separator",
+                    "a long s",
+                    "a fullwidth S",
+                    "an eszett against a double s",
+                    "an fi ligature",
+                    "a dotted capital I",
+                },
+                "HeadingIdentityFoldsCaseAndNotLettersTests.PAIRS",
+            ).values()
             if not same
             and " ".join(left.split()).casefold() == " ".join(right.split()).casefold()
         ]
@@ -3513,7 +5413,10 @@ class TheLongSHeadingIsNotThisSectionInEitherReaderTests(unittest.TestCase):
             ("the skill's rejected-heading read", owner.rejected_section_headings),
             ("the owner read's heading count", evidence._rendered_status_lines),
             ("this gate's section start", pr_readiness.section_heading_index),
-            ("this gate's rendered read", pr_readiness.rendered_status_lines),
+            # The function that READS the heading, which is where the identity
+            # call has to be: `rendered_status_lines` is a thin wrapper over
+            # it since the two kinds of line were split (#1771, round 2).
+            ("this gate's rendered read", pr_readiness._status_lines),
         ):
             with self.subTest(reader=label):
                 source = inspect.getsource(function)
@@ -3753,8 +5656,65 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         sections of one body -- an axis the first derivation missed because it
         generated only the two endings anyone types (#1734, round 2).
         """
-        for construct_name, construct in self.BOUNDARY_CONSTRUCTS.items():
-            for context_name, context in self.BOUNDARY_CONTEXTS.items():
+        for construct_name, construct in all_of(
+            self.BOUNDARY_CONSTRUCTS,
+            {
+                "atx h1",
+                "atx h2",
+                "atx h3",
+                "atx h1 indented one",
+                "atx h1 indented three",
+                "atx h1 indented four",
+                "atx h2 indented three",
+                "bare hash",
+                "bare double hash",
+                "hash tab",
+                "hash nonbreaking space",
+                "hash no space",
+                "atx h1 trailing spaces",
+                "atx h1 closed form",
+                "setext h1 three equals",
+                "setext h1 one equal",
+                "setext h1 trailing spaces",
+                "setext h1 indented three",
+                "setext h2 dashes",
+                "setext h2 five dashes",
+                "setext h2 indented",
+                "dash rule",
+                "dash rule four",
+                "dash rule spaced",
+                "dash rule trailing spaces",
+                "dash rule indented",
+                "asterisk rule",
+                "underscore rule",
+            },
+            "SectionBoundaryAgreementBetweenTheGateAndTheSkillTests.BOUNDARY_CONSTRUCTS",
+        ).items():
+            for context_name, context in all_of(
+                self.BOUNDARY_CONTEXTS,
+                {
+                    "bare",
+                    "in a closed backtick fence",
+                    "in a closed tilde fence",
+                    "in a closed fence indented three",
+                    "in a closed four backtick fence",
+                    "under a voided fence opener, above a real one",
+                    "under a runaway backtick fence",
+                    "under a runaway tilde fence",
+                    "under a runaway four backtick fence",
+                    "under a nested four then three fence",
+                    "under a runaway tilde fence with a backtick info",
+                    "after a closed comment",
+                    "under an unclosed comment",
+                    "in a list item",
+                    "in a block quote",
+                    "in an indented code block",
+                    "under a runaway fence nested in a list item",
+                    "under a runaway fence nested in a block quote",
+                    "under a fence opener indented four",
+                },
+                "SectionBoundaryAgreementBetweenTheGateAndTheSkillTests.BOUNDARY_CONTEXTS",
+            ).items():
                 for ending in ("\n", "\r\n", "\r"):
                     candidate = self.in_context(construct, context)
                     body = (self.STATUS + candidate + "\n" + self.CANDIDATE_TAIL).replace("\n", ending)
@@ -3770,7 +5730,20 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
 
     def test_both_files_bound_the_section_identically_on_every_boundary_kind(self) -> None:
         owner = self.owner_reader()
-        for name, body in self.FIXTURES.items():
+        for name, body in all_of(
+            self.FIXTURES,
+            {
+                "an h1 after the section",
+                "an h2 after the section",
+                "a dash rule after the section",
+                "a body title h1 above the section",
+                "an h3 inside the section",
+                "an h1 inside a closed fence",
+                "an h2 inside a closed fence",
+                "the heading itself written as an h1",
+            },
+            "SectionBoundaryAgreementBetweenTheGateAndTheSkillTests.FIXTURES",
+        ).items():
             with self.subTest(fixture=name):
                 self.assertEqual(
                     pr_readiness.extract_section(body, "Evidence Status"),
@@ -3883,11 +5856,62 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
         # a list item or a quote -- diverge on none. And one context splits,
         # which is the cell the old one-axis list could not express.
         owner = self.owner_reader()
-        measured: dict[str, set[bool]] = {name: set() for name in self.BOUNDARY_CONTEXTS}
+        measured: dict[str, set[bool]] = {
+            name: set()
+            for name in all_of(
+                self.BOUNDARY_CONTEXTS,
+                {
+                    "bare",
+                    "in a closed backtick fence",
+                    "in a closed tilde fence",
+                    "in a closed fence indented three",
+                    "in a closed four backtick fence",
+                    "under a voided fence opener, above a real one",
+                    "under a runaway backtick fence",
+                    "under a runaway tilde fence",
+                    "under a runaway four backtick fence",
+                    "under a nested four then three fence",
+                    "under a runaway tilde fence with a backtick info",
+                    "after a closed comment",
+                    "under an unclosed comment",
+                    "in a list item",
+                    "in a block quote",
+                    "in an indented code block",
+                    "under a runaway fence nested in a list item",
+                    "under a runaway fence nested in a block quote",
+                    "under a fence opener indented four",
+                },
+                "SectionBoundaryAgreementBetweenTheGateAndTheSkillTests.BOUNDARY_CONTEXTS",
+            )
+        }
         for _, context, _, body in self.candidate_bodies():
             gate = self._lf(pr_readiness.extract_section(body, "Evidence Status"))
             measured[context].add(gate != self._lf(owner.markdown_section(body, "Evidence Status")))
-        for context, verdict in self.CONTEXT_VERDICTS.items():
+        for context, verdict in all_of(
+            self.CONTEXT_VERDICTS,
+            {
+                "bare",
+                "in a closed backtick fence",
+                "in a closed tilde fence",
+                "in a closed fence indented three",
+                "in a closed four backtick fence",
+                "under a voided fence opener, above a real one",
+                "under a runaway backtick fence",
+                "under a runaway tilde fence",
+                "under a runaway four backtick fence",
+                "under a nested four then three fence",
+                "under a runaway tilde fence with a backtick info",
+                "after a closed comment",
+                "under an unclosed comment",
+                "in a list item",
+                "in a block quote",
+                "in an indented code block",
+                "under a runaway fence nested in a list item",
+                "under a runaway fence nested in a block quote",
+                "under a fence opener indented four",
+            },
+            "SectionBoundaryAgreementBetweenTheGateAndTheSkillTests.CONTEXT_VERDICTS",
+        ).items():
             with self.subTest(context=context):
                 expected = {
                     "agree": {False},
@@ -4221,7 +6245,11 @@ class TheSeederAndThisGateAskOneQuestionTests(unittest.TestCase):
         # What the two questions were for, now answered by one: the body is
         # returned unwritten because the section is there, and the gate reads
         # the author's own section rather than reporting it missing.
-        for name, heading in self.SHAPES.items():
+        for name, heading in all_of(
+            self.SHAPES,
+            {"emphasis", "indented three spaces", "setext", "trailing spaces"},
+            "TheSeederAndThisGateAskOneQuestionTests.SHAPES",
+        ).items():
             with self.subTest(shape=name):
                 body = self.BODY.format(heading=heading)
                 seeded = self.seeder().seed_mergeability_section(body, changed_files=self.FILES)
@@ -4244,7 +6272,11 @@ class TheSeederAndThisGateAskOneQuestionTests(unittest.TestCase):
         )
         # And the shapes the page shows: both readers find them, so neither
         # half of the old conjunction is left to be load-bearing.
-        for name, heading in self.SHAPES.items():
+        for name, heading in all_of(
+            self.SHAPES,
+            {"emphasis", "indented three spaces", "setext", "trailing spaces"},
+            "TheSeederAndThisGateAskOneQuestionTests.SHAPES",
+        ).items():
             with self.subTest(shape=name):
                 body = self.BODY.format(heading=heading)
                 self.assertTrue(reader.has_markdown_section(body, "Mergeability"))
@@ -4587,7 +6619,16 @@ class WhatTheGateSLongerReadingCostsTests(unittest.TestCase):
             "Non-happy paths considered",
             "Residual risk or follow-up",
         )
-        for field in required:
+        for field in all_of(
+            required,
+            {
+                "Surface",
+                "User-facing behavior changed",
+                "Non-happy paths considered",
+                "Residual risk or follow-up",
+            },
+            "TheMergeabilityFieldsAreAnswered.required",
+        ):
             with self.subTest(field=field):
                 self.assertIsNotNone(pr_readiness.field_value(gate, field))
                 self.assertIsNone(pr_readiness.field_value(skill, field))
@@ -4655,6 +6696,712 @@ class WhatTheGateSLongerReadingCostsTests(unittest.TestCase):
         self.assertEqual(dropped, [])
 
 
+# Measured, not assumed: the size of the leading run each supported
+# interpreter builds. 3.11 (UCD 14.0.0) builds 4,216; 3.12 (15.0.0) and 3.13
+# (15.1.0) both build 4,223. The suite is run under all three, but only one of
+# them at a time, so the other two sizes are literals here (#1771, round 9).
+RUN_UNDER_UCD_14 = 4216
+RUN_UNDER_UCD_15_0 = 4223
+
+
+class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
+    """A wrapper CAN reach a post-parse line, so the criterion was false (#1771, round 4).
+
+    An escape and a character reference are markup the parser RESOLVES TO a
+    delimiter character, not markup it could not pair. So `\\*\\*[blocked]\\*\\*`
+    and `&#42;&#42;[blocked]&#42;&#42;` both print `**[blocked]** waiting`,
+    and a reader that allowed no wrapper "because its input cannot contain
+    one" missed every shape below. Two more escape the old reader another way:
+    what FOLLOWS the token was load-bearing, so `_[blocked]_x` and
+    `[blocked][missing]` slipped past a pattern that demanded whitespace after
+    a run of punctuation.
+
+    Measured at `56ba54d6` through `evaluate`: all seven accepted, the plain
+    control refused. The shapes are stated with the line the page prints, and
+    the sibling class asks GitHub itself.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+    # Each shape: what the author typed, what the page prints, and whether the
+    # WRITTEN view can see it. Five of the seven it cannot — a backslash and
+    # an `&` are not wrapper characters, and resolving them is the parser's
+    # job — so for those the refusal carries the line the page shows, which is
+    # the only place an author can go and look.
+    SHAPES = {
+        "escaped asterisks": ("- \\*\\*[blocked]\\*\\* waiting", "**[blocked]** waiting", False),
+        "asterisk references": ("- &#42;&#42;[blocked]&#42;&#42; waiting", "**[blocked]** waiting", False),
+        "escaped backticks": ("- \\`[blocked]\\` waiting", "`[blocked]` waiting", False),
+        "backtick references": ("- &#96;[blocked]&#96; waiting", "`[blocked]` waiting", False),
+        "underscore references": ("- &#95;[blocked]&#95; waiting", "_[blocked]_ waiting", False),
+        "an intraword underscore": ("- _[blocked]_x waiting", "_[blocked]_x waiting", True),
+        "a second link label": ("- [blocked][missing] waiting", "[blocked][missing] waiting", True),
+    }
+
+    def body(self, line: str) -> str:
+        return GOOD_BODY + f"\n## Evidence Status\n\n{line}\n"
+
+    # intent: fix
+    def test_the_gate_refuses_every_shape_the_page_prints_a_status_on(self) -> None:
+        # The ACCEPTANCE, not a property of a regex: at `56ba54d6` each of
+        # these returns ok.
+        for name, (written, printed, seen) in all_of(
+            self.SHAPES,
+            {
+                "escaped asterisks",
+                "asterisk references",
+                "escaped backticks",
+                "backtick references",
+                "underscore references",
+                "an intraword underscore",
+                "a second link label",
+            },
+            "SHAPES",
+        ).items():
+            with self.subTest(shape=name):
+                result = pr_readiness.evaluate(pr(self.body(written)), self.FILES)
+                self.assertFalse(result.ok, f"{name}: the gate accepted a body showing a status")
+                self.assertIn(
+                    pr_readiness.PENDING_FAILURE if seen else pending(printed),
+                    result.failures,
+                    name,
+                )
+                self.assertEqual(
+                    bool(
+                        pr_readiness.PENDING_STATUS_RE.search(
+                            pr_readiness.extract_section(
+                                self.body(written), "Evidence Status", strip=False
+                            )
+                        )
+                    ),
+                    seen,
+                    f"{name}: what the written view can see",
+                )
+
+    # intent: fix
+    def test_the_models_own_resolved_text_is_what_sees_them(self) -> None:
+        # Tokenless, which is how the gate runs on a laptop: the parser
+        # resolves the escape and the reference, so the line the model holds
+        # is the line the page prints, delimiters and all.
+        for name, (written, printed, _) in all_of(
+            self.SHAPES,
+            {
+                "escaped asterisks",
+                "asterisk references",
+                "escaped backticks",
+                "backtick references",
+                "underscore references",
+                "an intraword underscore",
+                "a second link label",
+            },
+            "SHAPES",
+        ).items():
+            with self.subTest(shape=name):
+                lines = pr_readiness.rendered_status_lines(self.body(written))
+                self.assertIn(printed, lines, name)
+                self.assertTrue(
+                    any(pr_readiness.PRINTED_PENDING_RE.match(one) for one in lines), name
+                )
+
+    # intent: fix
+    def test_an_invisible_character_in_front_of_the_token_is_still_a_status(self) -> None:
+        """The eighth shape, found by attacking the criterion rather than reading it.
+
+        `&#8203;` and `&#173;` resolve to characters that take no width, so
+        the page shows `[blocked] waiting` and the model held a line starting
+        with something the leading run did not allow. A criterion that only
+        covered the seven shapes a review found would be a list wearing a
+        criterion's clothes, so the run is every delimiter character AND every
+        character that occupies no space (#1771, round 4).
+        """
+        for name, written in (
+            ("a zero-width space", "- &#8203;[blocked] waiting"),
+            ("a soft hyphen", "- &#173;[blocked] waiting"),
+            ("a zero-width no-break space", "- &#65279;[blocked] waiting"),
+            ("a non-breaking space", "- &#160;[blocked] waiting"),
+        ):
+            with self.subTest(shape=name):
+                self.assertFalse(
+                    pr_readiness.evaluate(pr(self.body(written)), self.FILES).ok, name
+                )
+
+    # intent: fix
+    def test_every_invisible_character_in_front_of_the_token_is_a_status(self) -> None:
+        """The ninth shape: what the zero-width space is an INSTANCE of (#1771, round 5).
+
+        Round 4 enumerated three invisible characters and called the criterion
+        settled. Four more went straight through the list — a word joiner, a
+        zero-width non-joiner, a zero-width joiner and a left-to-right mark —
+        each printing nothing in front of `[blocked] waiting`, on the page and
+        in this model both. A list of three is a list wearing a criterion's
+        clothes; the run is the CATEGORY now.
+        """
+        for name, written in (
+            ("a word joiner", "- &#8288;[blocked] waiting"),
+            ("a zero-width non-joiner", "- &zwnj;[blocked] waiting"),
+            ("a zero-width joiner", "- &#8205;[blocked] waiting"),
+            ("a left-to-right mark", "- &#8206;[blocked] waiting"),
+        ):
+            with self.subTest(shape=name):
+                self.assertFalse(
+                    pr_readiness.evaluate(pr(self.body(written)), self.FILES).ok, name
+                )
+
+    # intent: guard
+    def test_the_run_is_the_category_and_not_the_characters_someone_thought_of(self) -> None:
+        """Every code point Unicode calls a format character or a space separator.
+
+        The claim this round makes is about `Cf` and `Zs`, so it is asked of
+        all of them rather than of four more names: each one in front of the
+        token, through the gate, refused. A code point Unicode adds to either
+        category is covered by the same walk.
+        """
+        # The property is named HERE rather than read off the gate, so this
+        # walk is a claim about Unicode that the gate has to meet — at
+        # `b76017a6` it fails on the characters the enumeration missed rather
+        # than erroring on a name that branch does not have, and at
+        # `8fbf932a` on the 22 default-ignorable marks `Cf ∪ Zs` does not
+        # reach.
+        invisible = [
+            chr(code)
+            for code in range(0x110000)
+            if unicodedata.category(chr(code)) in ("Cf", "Zs")
+            or any(
+                first <= code <= last
+                for first, last in pr_readiness.DEFAULT_IGNORABLE_RANGES
+            )
+        ]
+        self.assertGreater(len(invisible), 100, "the walk found almost nothing")
+        # Every code point of the run through the gate would be 4,223 bodies;
+        # the walk drives the ones a reader could plausibly type (the BMP and
+        # the tag block's first row) and asserts the rest by membership.
+        drivable = [one for one in invisible if ord(one) <= 0xFFFF or 0xE0000 <= ord(one) <= 0xE007F]
+        self.assertGreater(len(drivable), 200, "the walk drove almost nothing")
+        unrefused = [
+            f"U+{ord(one):04X}"
+            for one in drivable
+            if pr_readiness.evaluate(pr(self.body(f"- {one}[blocked] waiting")), self.FILES).ok
+        ]
+        self.assertEqual(unrefused, [], "a character that shows nothing hid a status")
+        self.assertEqual(
+            sorted(set(invisible) - set(pr_readiness.INVISIBLE_LEADING)),
+            [],
+            "a code point of the property is missing from the gate's run",
+        )
+        # And the gate builds the same set from the same two categories, so
+        # the run is that rule rather than a copy of it kept in step by hand.
+        self.assertEqual(
+            sorted(invisible), sorted(pr_readiness.INVISIBLE_LEADING), "the gate's own set"
+        )
+
+    # intent: fix
+    def test_a_default_ignorable_mark_hides_nothing_either(self) -> None:
+        """The fourth shape, inside the class round 5 argued was safe to exclude.
+
+        Round 5 kept combining marks out of the run because "a mark renders as
+        a diacritic rather than as nothing". That is false for the
+        default-ignorable marks: U+034F, U+17B4-U+17B5, U+180B-U+180D and
+        U+FE00-U+FE0F are all `Mn`, all render as nothing, and all were
+        accepted at `8fbf932a` with the page printing `[blocked] waiting`
+        behind them. The run is the Default_Ignorable property now, so the
+        exclusion keeps only the marks that really do show something.
+        """
+        marks = {
+            f"U+{code:04X}": code
+            for code in (0x034F, 0x17B4, 0x17B5, *range(0x180B, 0x180E), *range(0xFE00, 0xFE10))
+        }
+        for mark, code in all_of(
+            marks,
+            {
+                "U+034F",
+                "U+17B4",
+                "U+17B5",
+                "U+180B",
+                "U+180C",
+                "U+180D",
+                "U+FE00",
+                "U+FE01",
+                "U+FE02",
+                "U+FE03",
+                "U+FE04",
+                "U+FE05",
+                "U+FE06",
+                "U+FE07",
+                "U+FE08",
+                "U+FE09",
+                "U+FE0A",
+                "U+FE0B",
+                "U+FE0C",
+                "U+FE0D",
+                "U+FE0E",
+                "U+FE0F",
+            },
+            "ACombiningMarkIsContent.marks",
+        ).items():
+            with self.subTest(mark=mark):
+                self.assertEqual(unicodedata.category(chr(code)), "Mn")
+                self.assertIn(chr(code), pr_readiness.INVISIBLE_LEADING)
+                self.assertFalse(
+                    pr_readiness.evaluate(
+                        pr(self.body(f"- &#{code};[blocked] waiting")), self.FILES
+                    ).ok,
+                    f"U+{code:04X} hid a status",
+                )
+
+    # intent: guard
+    def test_the_measured_facts_are_pinned_rather_than_recomputed(self) -> None:
+        """A test that rebuilds the set cannot see the interpreter change under it.
+
+        `requires-python = ">=3.11"` permits a range, and the range matters:
+        3.11 carries UCD 14.0.0 and 3.13 carries 15.1.0, which differ in this
+        very set. The size and the Unicode version are literals here, so a
+        Python upgrade that moves them fails with a message naming what to
+        re-derive rather than passing quietly under a different answer.
+        """
+        self.assertEqual(pr_readiness.MEASURED_UNIDATA_VERSION, "15.1.0")
+        self.assertEqual(pr_readiness.MEASURED_LEADING_RUN_SIZE, 4223)
+        if unicodedata.unidata_version == pr_readiness.MEASURED_UNIDATA_VERSION:
+            self.assertEqual(
+                len(pr_readiness.INVISIBLE_LEADING),
+                pr_readiness.MEASURED_LEADING_RUN_SIZE,
+                "the run's size moved under the Unicode data it was measured against: "
+                "re-derive the ranges and re-measure the pin",
+            )
+            self.assertIsNone(pr_readiness.unicode_data_notice())
+            return
+        # A different interpreter is not a defect and does not fail the suite.
+        # What it must not be is SILENT: the gate says so in its own output,
+        # naming both versions and what to re-derive. Measured: `uv run
+        # --script` resolves 3.13.13 / UCD 15.1.0 here, and the same file
+        # under 3.11 builds a 4,216-character run (#1771, round 6).
+        notice = pr_readiness.unicode_data_notice()
+        self.assertIsNotNone(notice, "the interpreter's Unicode data moved with nothing said")
+        self.assertIn(unicodedata.unidata_version, notice)
+        self.assertIn(pr_readiness.MEASURED_UNIDATA_VERSION, notice)
+        # Whether the SIZE moves with the version is a question for the
+        # measurement, not for an assumption: measured here, 3.11 (UCD 14.0.0)
+        # builds 4,216 and 3.12 (UCD 15.0.0) builds the same 4,223 as 3.13
+        # (15.1.0). The version is the thing that is loud; the size is what
+        # the pin above checks where it can.
+
+    # intent: fix
+    def test_the_gate_says_the_drift_wherever_it_is_run(self) -> None:
+        """The WIRING, felt wherever the suite runs (#1771, rounds 7, 8 and 9).
+
+        `evaluate` appends the drift notice to what it returns, and where the
+        versions match the notice never fires — so the hook could be deleted
+        with every test still green. The version is patched here instead of
+        hoped for.
+
+        ALL THREE cases patch it, including the control. Round 7 left the "no
+        drift" half reading the real interpreter, which is the same
+        dependence one layer down: the suite passed under 3.13 and failed
+        under 3.11 and 3.12, where the un-patched notice really is present
+        and the control asserted its absence. Nothing here reads
+        `unicodedata.unidata_version` as it comes.
+
+        BOTH DRAFT STATES, for the same reason one layer out (round 9). The
+        draft short-circuit returned before the hook, so the notice was
+        silent in the state a pull request spends most of its life in, and
+        this test's name promised a "wherever" its body did not check. The
+        draft half is what round 9 fixes and is red at `13d5160b`; the
+        non-draft half is the control, green before the fix and after it.
+        """
+        body = GOOD_BODY
+        advisory = "Draft PR: readiness gate is advisory"
+        for version, expected in (
+            (pr_readiness.DEFAULT_IGNORABLE_TRANSCRIBED_FROM, None),
+            ("14.0.0", "BEHIND"),
+            ("16.0.0", "AHEAD"),
+        ):
+            for draft in (False, True):
+                with self.subTest(running=version, draft=draft):
+                    with mock.patch.object(unicodedata, "unidata_version", version):
+                        result = pr_readiness.evaluate(pr(body, draft=draft), self.FILES)
+                        notice = pr_readiness.unicode_data_notice()
+                    said = " ".join(result.notices)
+                    self.assertTrue(result.ok, "a drift notice must not fail the body")
+                    # The draft advisory is still said: the fix moved the
+                    # interpreter notice above that return, it did not
+                    # remove the return.
+                    self.assertEqual(advisory in said, draft)
+                    if expected is None:
+                        self.assertIsNone(notice, "a matching version said something")
+                        self.assertNotIn("Unicode data", said)
+                        self.assertNotIn("BEHIND the gate's table", said)
+                        continue
+                    self.assertIsNotNone(notice)
+                    self.assertIn(expected, notice, "the notice does not name its direction")
+                    self.assertIn(notice, said, "the gate did not carry the drift into its output")
+
+    @staticmethod
+    @contextlib.contextmanager
+    def behind_at(version: str, size: int):
+        """One older interpreter, named and sized.
+
+        `unicode_data_notice` reads two things -- the version string and
+        `len(INVISIBLE_LEADING)` -- and under one interpreter only one pair
+        of them is real. The stand-in carries the size, which is all the
+        sentence reads of it; its membership is the running interpreter's and
+        is never asked about here.
+        """
+        run = pr_readiness.INVISIBLE_LEADING
+        run = run[:size] if size <= len(run) else run + "a" * (size - len(run))
+        assert len(run) == size
+        with mock.patch.object(unicodedata, "unidata_version", version):
+            with mock.patch.object(pr_readiness, "INVISIBLE_LEADING", run):
+                yield
+
+    # intent: fix
+    def test_an_older_interpreter_can_build_the_very_same_run(self) -> None:
+        """BEHIND by version, EQUAL by size -- and the sentence said SMALLER.
+
+        3.12 carries UCD 15.0.0 against the 15.1.0 the table was transcribed
+        from, so the version differs; the run it builds is 4,223 characters,
+        exactly the pin, because nothing in `Cf`, `Zs` or the transcribed
+        ranges moved between those two releases. The word was a constant in
+        the sentence and a constant in the test that read it, so both agreed
+        about something neither had measured (#1771, round 9).
+        """
+        with self.behind_at("15.0.0", RUN_UNDER_UCD_15_0):
+            notice = pr_readiness.unicode_data_notice()
+        self.assertIn("BEHIND the gate's table", notice)
+        self.assertIn("EQUAL to the one this gate was measured with", notice)
+        self.assertNotIn("SMALLER", notice)
+        self.assertNotIn("are not covered", notice)
+        # Both numbers, the run's and the pin's, so the reader can see they
+        # are the same rather than take the word for it.
+        self.assertIn(f"({RUN_UNDER_UCD_15_0})", notice)
+        self.assertIn(f"pinned at {pr_readiness.MEASURED_LEADING_RUN_SIZE}", notice)
+        self.assertEqual(RUN_UNDER_UCD_15_0, pr_readiness.MEASURED_LEADING_RUN_SIZE)
+
+    # intent: guard
+    def test_an_older_interpreter_that_really_is_smaller_still_says_so(self) -> None:
+        # The half that was already true in WORD: 3.11 (UCD 14.0.0) builds
+        # 4,216 against the pinned 4,223, so seven members this gate was
+        # measured to refuse behind are not covered. Not a control, though
+        # the direction has not changed -- the two numbers are new in the
+        # sentence, so this is red at `13d5160b` like the case beside it.
+        # The round's control is the sibling test below, which asks for what
+        # both heads already say.
+        with self.behind_at("14.0.0", RUN_UNDER_UCD_14):
+            notice = pr_readiness.unicode_data_notice()
+        self.assertIn("BEHIND the gate's table", notice)
+        self.assertIn(
+            f"SMALLER than the one this gate was measured with "
+            f"({RUN_UNDER_UCD_14} against {pr_readiness.MEASURED_LEADING_RUN_SIZE})",
+            notice,
+        )
+        self.assertIn("are not covered", notice)
+        self.assertLess(RUN_UNDER_UCD_14, pr_readiness.MEASURED_LEADING_RUN_SIZE)
+
+    # intent: guard
+    def test_a_smaller_version_with_a_larger_run_is_not_called_equal(self) -> None:
+        """The third case is kept rather than declared impossible.
+
+        An older UCD building a LARGER run would mean a member left `Cf` or
+        `Zs` between it and 15.1.0. Unicode's stability policies cover names
+        and decompositions, not General_Category, so "cannot happen" is a
+        claim this gate would be relying on without being able to check it.
+        The branch says what it sees and asks for a re-measure instead.
+        """
+        with self.behind_at("14.0.0", pr_readiness.MEASURED_LEADING_RUN_SIZE + 1):
+            notice = pr_readiness.unicode_data_notice()
+        self.assertIn("BEHIND the gate's table", notice)
+        self.assertIn("LARGER than the one this gate was measured with", notice)
+        self.assertIn("re-measure before trusting either number", notice)
+
+    # intent: control
+    def test_the_two_directions_ask_for_different_things(self) -> None:
+        # ROUND 9'S CONTROL: every assertion here is one both `13d5160b` and
+        # this head already satisfy, and no mutant in this round touches it.
+        # What the round changes is the direction WORD in the BEHIND half and
+        # where the notice is said; what it must not change is which of the
+        # two directions asks for a re-transcription.
+        #
+        # Backwards in round 6: under an OLDER interpreter the notice said to
+        # re-derive the table from older data, which is re-deriving a newer
+        # table from the thing it already leads. Each direction names what it
+        # actually wants.
+        with mock.patch.object(unicodedata, "unidata_version", "16.0.0"):
+            ahead = pr_readiness.unicode_data_notice()
+        # The run is sized as well as the version named: the BEHIND half's
+        # wording depends on BOTH, and reading the running interpreter's run
+        # for one of them is the dependence rounds 8 and 9 took out.
+        with self.behind_at("14.0.0", RUN_UNDER_UCD_14):
+            behind = pr_readiness.unicode_data_notice()
+        # AHEAD: the table is the stale half, and the cost is a code point
+        # it does not know about.
+        self.assertIn("Re-transcribe DEFAULT_IGNORABLE_RANGES", ahead)
+        self.assertIn("16.0.0", ahead)
+        self.assertIn("missing from the table", ahead)
+        # BEHIND: the table is fine and the INTERPRETER is the smaller half,
+        # so the run refuses fewer shapes than the gate was measured with.
+        # Round 6's sentence said "re-derive the table from 14.0.0", which is
+        # rebuilding a newer table out of older data.
+        self.assertNotIn("Re-transcribe DEFAULT_IGNORABLE_RANGES", behind)
+        self.assertIn("Nothing to re-transcribe", behind)
+        self.assertIn("are not covered", behind)
+        # And the ordering is numeric rather than lexical, so 9.0.0 is older
+        # than 15.1.0 rather than newer.
+        with mock.patch.object(unicodedata, "unidata_version", "9.0.0"):
+            self.assertIn("BEHIND", pr_readiness.unicode_data_notice())
+
+    # intent: guard
+    def test_a_newer_unicode_is_loud_rather_than_fatal(self) -> None:
+        # A newer -- or older -- interpreter is not a defect, so the drift
+        # notice says what to re-derive and the gate keeps running. Asserted
+        # against the running interpreter rather than against the one this was
+        # written on, because the whole point is that the suite is run under
+        # more than one (measured: 3.11 carries UCD 14.0.0 and this test file
+        # is run under it to check exactly that).
+        matching = unicodedata.unidata_version == pr_readiness.DEFAULT_IGNORABLE_TRANSCRIBED_FROM
+        self.assertEqual(pr_readiness.unicode_data_notice() is None, matching)
+        with mock.patch.object(pr_readiness, "DEFAULT_IGNORABLE_TRANSCRIBED_FROM", "0.0.0"):
+            notice = pr_readiness.unicode_data_notice()
+        self.assertIsNotNone(notice)
+        self.assertIn("0.0.0", notice)
+        self.assertIn(unicodedata.unidata_version, notice)
+        self.assertIn("DEFAULT_IGNORABLE_RANGES", notice)
+
+    # intent: guard
+    # marker: GREEN at `f341728e`, its own base, measured -- this round
+    # changes no production file, so nothing about the gate's behaviour can
+    # be red there: ported onto that tree with its recording copied in, this
+    # test passes. What it adds is the page plane (the base's version asserts
+    # `.ok` from the source model alone) and a criterion in the reader's
+    # terms rather than in the character's, which is a property the base
+    # already has and nothing read (#1771, round 18).
+    def test_a_combining_mark_leaves_the_token_where_a_reader_sees_it(self) -> None:
+        """The criterion, in the reader's terms, decided from the page.
+
+        The run this gate refuses on is the one a reader cannot see. A
+        combining mark is not in it -- and the ground for that is not what
+        the mark itself looks like, which is a question about the character.
+        It is what the page does with the line: recorded, GitHub prints the
+        mark glued to the bracket and the token stays on the page, so a
+        reader meets `[blocked] waiting` and the gate accepts.
+
+        Recorded like its neighbours rather than asserted from the source
+        model alone: the frontier shapes beside it record the page plane,
+        and a claim about what a reader sees that never asks the page is a
+        claim about a model of it.
+        """
+        self.assertNotIn("\u0308", pr_readiness.INVISIBLE_LEADING)
+        self.assertEqual(unicodedata.category("\u0308"), "Mn")
+        body = self.body("- &#776;[blocked] waiting")
+        with recorded_page():
+            page = pr_readiness.page_view(body)
+            verdict = pr_readiness.evaluate(pr(body), self.FILES)
+        self.assertIsNone(page.unverified, page.unverified)
+        self.assertTrue(page.lines, "the page shows no line for this body")
+        # What the READER sees: the token is on the page, mark and all.
+        self.assertIn("[blocked] waiting", page.lines[0], page.lines)
+        self.assertTrue(verdict.ok, "the gate refuses a status the page shows")
+
+    # intent: control
+    def test_code_is_where_the_two_views_differ_and_the_difference_is_stated(self) -> None:
+        # The asymmetry the criterion now names: a fenced status is accepted
+        # (a fence is code the page shows verbatim, #1727's decision, and the
+        # printed views get no inline content for it), an indented one is
+        # refused by the written view, and both are pinned so neither moves
+        # without someone deciding to move it.
+        for name, section, refused in (
+            ("fenced", "```\n- [blocked] waiting\n```", False),
+            ("fenced with a language", "```text\n- [blocked] waiting\n```", False),
+            ("indented four spaces", "    - [blocked] waiting", True),
+            ("plain", "- [blocked] waiting", True),
+        ):
+            with self.subTest(shape=name):
+                body = GOOD_BODY + f"\n## Evidence Status\n\n{section}\n"
+                result = pr_readiness.evaluate(pr(body), self.FILES)
+                self.assertEqual(not result.ok, refused, f"{name}: {result.failures}")
+
+    # intent: control
+    def test_a_tilde_stays_outside_the_run_because_a_struck_status_is_withdrawn(self) -> None:
+        # The boundary the widening above stops at, and it is a decision
+        # rather than an oversight: #1727 reads a struck-through status as
+        # withdrawn, so the tilde is not a wrapper character here. Adding it
+        # reddens `test_a_struck_status_is_not_the_status_wherever_it_sits`,
+        # measured. The cost is the line below, which the gate accepts.
+        self.assertTrue(
+            pr_readiness.evaluate(pr(self.body("- ~~[blocked] waiting~~")), self.FILES).ok
+        )
+
+    # intent: control
+    def test_a_body_whose_page_shows_no_status_is_still_accepted(self) -> None:
+        # The direction a wider reader could break: the same spellings around
+        # a COMPLETE token, and prose that mentions a blocked status, stay ok.
+        for name, line in (
+            ("escaped asterisks", "- \\*\\*[complete]\\*\\* swift test -- 1992 tests passed"),
+            ("a reference", "- &#96;[complete]&#96; swift test -- 1992 tests passed"),
+            ("prose about a status", "- swift test -- the lane is [blocked]x by nothing"),
+        ):
+            with self.subTest(shape=name):
+                self.assertTrue(pr_readiness.evaluate(pr(self.body(line)), self.FILES).ok, name)
+
+    # intent: control
+    def test_the_plain_control_is_refused_as_it_always_was(self) -> None:
+        result = pr_readiness.evaluate(pr(self.body("- [blocked] waiting")), self.FILES)
+        self.assertFalse(result.ok)
+
+
+class ThePagePlaneIsAskedAboutTheInvisibleClassTests(unittest.TestCase):
+    """What the page does with the class the run is built from (#1771, round 6).
+
+    Exactly one test in this file reached the live renderer before this one,
+    and it only checks that the recordings still match -- so every claim about
+    what GitHub does with an invisible character rested on a comment. These
+    are recordings: the 22 default-ignorable marks and the three shapes #1794
+    tracks, each asked of GitHub once and committed, after which the drift
+    test covers them.
+
+    What this plane asserts: that the page prints the status token with the
+    invisible character in front of it, so a reader sees `[blocked] waiting`.
+    What it cannot: how a particular browser or font renders a code point --
+    "shows nothing" is Unicode's claim about the property, not this suite's
+    about a screen.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+    # The 22 default-ignorable marks, keyed by the spelling a reader looks
+    # them up under: the members come from the ranges, the names are written
+    # out at the reader below, so a range that moves by one is loud rather
+    # than merely a different set (#1771, round 11).
+    MARKS = {
+        f"U+{code:04X}": code
+        for code in (0x034F, 0x17B4, 0x17B5, *range(0x180B, 0x180E), *range(0xFE00, 0xFE10))
+    }
+    # The frontier as it stands AFTER the property replaced the category: the
+    # Hangul filler is default-ignorable, so this round closed it and #1794
+    # narrows to the two below (#1771, round 6).
+    FRONTIER = {
+        "a Hangul filler (closed this round)": ("- &#12644;[blocked] waiting", True),
+        "a Braille blank (So, not default-ignorable)": ("- &#10240;[blocked] waiting", False),
+        "a combining mark inside the token": ("- [&#776;blocked] waiting", False),
+    }
+
+    def body(self, line: str) -> str:
+        return GOOD_BODY + f"\n## Evidence Status\n\n{line}\n"
+
+    # intent: guard
+    def test_the_page_prints_the_status_behind_every_one_of_the_marks(self) -> None:
+        # The count this claim was about is the set now: 22 names, each one
+        # the mark it is about.
+        # Each row is the mark its NAME says: a mapping whose keys are built
+        # from its values can still be edited apart, and the names guard
+        # cannot see that (#1771, round 15).
+        self.assertEqual(
+            [name for name, code in self.MARKS.items() if name != f"U+{code:04X}"],
+            [],
+            "a row's key is not the spelling of its own code point",
+        )
+        for mark, code in all_of(
+            self.MARKS,
+            {
+                "U+034F",
+                "U+17B4",
+                "U+17B5",
+                "U+180B",
+                "U+180C",
+                "U+180D",
+                "U+FE00",
+                "U+FE01",
+                "U+FE02",
+                "U+FE03",
+                "U+FE04",
+                "U+FE05",
+                "U+FE06",
+                "U+FE07",
+                "U+FE08",
+                "U+FE09",
+                "U+FE0A",
+                "U+FE0B",
+                "U+FE0C",
+                "U+FE0D",
+                "U+FE0E",
+                "U+FE0F",
+            },
+            "ThePagePlaneIsAskedAboutTheInvisibleClassTests.MARKS",
+        ).items():
+            with self.subTest(mark=mark), recorded_page():
+                page = pr_readiness.page_view(self.body(f"- &#{code};[blocked] waiting"))
+            self.assertTrue(page.lines, f"U+{code:04X}: the page showed no line at all")
+            self.assertTrue(
+                any("[blocked]" in line for line in page.lines),
+                f"U+{code:04X}: {page.lines}",
+            )
+            self.assertTrue(
+                any(pr_readiness.PRINTED_PENDING_RE.match(line) for line in page.lines),
+                f"U+{code:04X}: the gate's reader does not see what the page prints",
+            )
+
+    # intent: control
+    def test_the_page_prints_the_frontier_shapes_the_gate_still_accepts(self) -> None:
+        # #1794's three, recorded so the page-plane claim about them is a
+        # recording rather than a sentence: the page shows the token in each,
+        # and the gate accepts each — which is the frontier, stated.
+        for name, (line, refused) in all_of(
+            self.FRONTIER,
+            {
+                "a Hangul filler (closed this round)",
+                "a Braille blank (So, not default-ignorable)",
+                "a combining mark inside the token",
+            },
+            "FRONTIER",
+        ).items():
+            with self.subTest(shape=name):
+                body = self.body(line)
+                with recorded_page():
+                    page = pr_readiness.page_view(body)
+                self.assertTrue(
+                    any("blocked" in one for one in page.lines), f"{name}: {page.lines}"
+                )
+                with recorded_page():
+                    result = pr_readiness.evaluate(pr(body), self.FILES)
+                self.assertEqual(not result.ok, refused, f"{name}: {result.failures}")
+
+
+class ThePageShowsThoseDelimitersTooTests(unittest.TestCase):
+    """The third side of the hole: `page.lines` carries them too (#1771, round 4).
+
+    `page.lines` holds the element's text as GitHub renders it — delimiter
+    characters included, `**[blocked]** waiting` for a body that wrote
+    `\\*\\*[blocked]\\*\\*` — and the gate only ever asked it the reader that
+    allowed no wrapper. So the page could hand the gate a status and the gate
+    would accept, which is the same defect as #1771 one view over.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+
+    def body(self, line: str) -> str:
+        return GOOD_BODY + f"\n## Evidence Status\n\n{line}\n"
+
+    # intent: fix
+    def test_the_page_prints_the_delimiters_and_the_gate_reads_them(self) -> None:
+        shapes = APrintedLineCanCarryADelimiterCharacterTests.SHAPES
+        for name, (written, printed, _) in all_of(
+            shapes,
+            {
+                "escaped asterisks",
+                "asterisk references",
+                "escaped backticks",
+                "backtick references",
+                "underscore references",
+                "an intraword underscore",
+                "a second link label",
+            },
+            "SHAPES",
+        ).items():
+            with self.subTest(shape=name), recorded_page():
+                body = self.body(written)
+                page = pr_readiness.page_view(body)
+                self.assertIn(printed, page.lines, f"{name}: what the page put on the line")
+                self.assertTrue(
+                    any(pr_readiness.PRINTED_PENDING_RE.match(one) for one in page.lines), name
+                )
+                self.assertFalse(pr_readiness.evaluate(pr(body), self.FILES).ok, name)
+
+
 class ReadinessCommentTests(unittest.TestCase):
     def test_failure_comment_names_failures_and_pastes_template(self) -> None:
         body = GOOD_BODY.replace("- Residual risk or follow-up: none", "")
@@ -4698,7 +7445,15 @@ def preflight(body: str, *, files: list[str] | None = None, args: list[str] | No
             "--changed-files", str(files_path),
             *(args or []),
         ]
-        local_env = {k: v for k, v in os.environ.items() if k not in CI_ENV_KEYS}
+        local_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in all_of(
+                CI_ENV_KEYS,
+                {"GITHUB_ACTIONS", "GITHUB_STEP_SUMMARY", "READINESS_COMMENT_PATH"},
+                "CI_ENV_KEYS",
+            )
+        }
         stdout = io.StringIO()
         with mock.patch.dict(os.environ, local_env, clear=True):
             with contextlib.redirect_stdout(stdout):
@@ -4939,17 +7694,53 @@ class EvidenceDeliveryPreflightTests(unittest.TestCase):
         self.prepared.cleanup.assert_called_once_with()
 
     def test_delivery_flags_reject_ambiguous_or_invalid_invocations(self):
-        invalid = [
-            ["--check-evidence-delivery", "0"],
-            ["--check-evidence-delivery", "-1"],
-            ["--check-evidence-delivery", "42", "--body-file", "body.md"],
-            ["--check-evidence-delivery", "42", "--event=event.json"],
-            ["--check-evidence-delivery", "42", "--changed-files", "files.json"],
-            ["--check-evidence-delivery", "42", "--base", "other"],
-            ["--expected-head", self.HEAD],
-        ]
-        for argv in invalid:
-            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+        # Named rather than positional, so the guard can say WHICH invocation
+        # left the table (#1771, round 14).
+        invalid = {
+            "a pull request number of zero": ["--check-evidence-delivery", "0"],
+            "a negative number": ["--check-evidence-delivery", "-1"],
+            "a body file beside it": ["--check-evidence-delivery", "42", "--body-file", "body.md"],
+            "an event file beside it": ["--check-evidence-delivery", "42", "--event=event.json"],
+            "a changed-files list beside it": [
+                "--check-evidence-delivery", "42", "--changed-files", "files.json",
+            ],
+            "another base beside it": ["--check-evidence-delivery", "42", "--base", "other"],
+            "an expected head with no delivery check": ["--expected-head", self.HEAD],
+        }
+        # Each invocation is the one its name claims, so a row given another
+        # row's argv with its key kept is caught here rather than passing as
+        # a name the table still carries (#1771, round 15).
+        says = {
+            "a pull request number of zero": lambda a: a[1] == "0",
+            "a negative number": lambda a: a[1] == "-1",
+            "a body file beside it": lambda a: "--body-file" in a,
+            "an event file beside it": lambda a: any(one.startswith("--event") for one in a),
+            "a changed-files list beside it": lambda a: "--changed-files" in a,
+            "another base beside it": lambda a: "--base" in a,
+            "an expected head with no delivery check": lambda a: (
+                "--expected-head" in a and "--check-evidence-delivery" not in a
+            ),
+        }
+        self.assertEqual(sorted(says), sorted(invalid), "a named invocation with nothing saying what it is")
+        self.assertEqual(
+            [name for name, argv in invalid.items() if not says[name](argv)],
+            [],
+            "an invocation is not the shape its name claims",
+        )
+        for name, argv in all_of(
+            invalid,
+            {
+                "a pull request number of zero",
+                "a negative number",
+                "a body file beside it",
+                "an event file beside it",
+                "a changed-files list beside it",
+                "another base beside it",
+                "an expected head with no delivery check",
+            },
+            "TheDeliveryFlags.invalid",
+        ).items():
+            with self.subTest(invocation=name), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
                 pr_readiness.parse_args(argv)
             self.assertEqual(error.exception.code, 2)
 
