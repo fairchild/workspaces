@@ -10097,6 +10097,250 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
                 )
 
     # intent: fix
+    # marker: red at `24b68a42`, its own base, behaviourally: the sentence
+    # goes through the comment quoter there, which flattens backticks, so an
+    # author's ``- [blocked] deploy `prod` now -- author proof`` is handed
+    # back without its span markers -- a line that reads differently from the
+    # one they lost, which is what the pairing exists to prevent, one step
+    # downstream (#1778, round 25).
+    def test_the_sentence_hands_back_the_authors_own_bytes(self) -> None:
+        """A line somebody is asked to rewrite is quoted as they wrote it.
+
+        The span is sized past the longest backtick run in the line, so the
+        text cannot close the span it sits in, and padded where it starts or
+        ends with one -- the same technique the fenced excerpt uses. What
+        `comment_safe` does for safety stays: newlines and comment
+        delimiters still come out, because those are what let quoted text act
+        on the comment around it.
+
+        What this fixture holds fixed: one recorded entry and one author
+        line, with the backticks the only thing that varies between the
+        shapes.
+        """
+        evidence = self.evidence()
+        for shape, theirs in (
+            ("a code span in their line", "- [blocked] deploy `prod` now -- author proof"),
+            ("two runs of backticks", "- [blocked] deploy ``prod`` now -- ``mine``"),
+            ("a plain line, unchanged", "- [blocked] deploy prod now -- author proof"),
+        ):
+            with self.subTest(shape=shape):
+                entries = [
+                    {"index": 1, "item": self.ITEM, "status": "pending-ci",
+                     "detail": "queued on head abc", "kind": "ci", "check_name": "test"},
+                ]
+                source = self.body(entries).replace(
+                    "\n\n## Validation", f"\n{theirs}\n\n## Validation", 1
+                )
+                said: list[str] = []
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.evidence().update_evidence_entries(
+                        source, {1: {"status": "complete", "detail": "green on head abc"}},
+                        announcements=said,
+                    )
+                note = self.the_replacement_sentence(said)
+                self.assertIn(theirs, note, f"{shape}: the bytes came back changed")
+                # And the quoting still holds: the line sits inside a code
+                # span that its own backticks cannot close.
+                self.assertIn(evidence.quoted_verbatim(theirs, 200), note, shape)
+
+    # intent: fix
+    # marker: red at `24b68a42`, its own base, behaviourally: the pairing is
+    # `setdefault`-filled there, so the FIRST source line carrying a reading
+    # wins it for every later occurrence -- the escaped spelling named twice
+    # and the unescaped never, and the two swapped when the lines were
+    # swapped (#1778, round 25).
+    def test_two_lines_that_read_alike_are_each_named_in_their_own_bytes(self) -> None:
+        """The n-th reading takes the n-th source line that produced it.
+
+        Two distinct source lines can share one page reading: an escaped
+        `\\[r9]` beside an undefined `[r9]`, an entity beside the character it
+        decodes to, a trailing space. Which bytes an author is told to
+        rewrite cannot depend on which of them came first.
+
+        Driven in BOTH orders, because a first-wins map and a last-wins map
+        are the same defect facing opposite ways and a single order cannot
+        tell them apart.
+        """
+        pairs = {
+            "an escape and an undefined reference": (
+                "- [blocked] see \\[r9] -- author proof",
+                "- [blocked] see [r9] -- author proof",
+            ),
+            "an entity and the space it decodes to": (
+                "- [blocked] done&#x20;now -- author proof",
+                "- [blocked] done now -- author proof",
+            ),
+        }
+        # A trailing space was a third pair in the brief and is not one here:
+        # the walker stores each source line stripped, so a line and the same
+        # line with a trailing space are one member by the time the sentence
+        # is written -- and a reader sees them as one line too, a single
+        # trailing space being no hard break. Two of them would be, and a
+        # hard break is refused before it reaches this pairing. Recorded
+        # rather than driven as a distinction that is not one.
+        for shape, pair in pairs.items():
+            for order in ("as written", "reversed"):
+                with self.subTest(shape=shape, order=order):
+                    lines = list(pair) if order == "as written" else list(reversed(pair))
+                    entries = [
+                        {"index": 1, "item": self.ITEM, "status": "pending-ci",
+                         "detail": "queued on head abc", "kind": "ci", "check_name": "test"},
+                    ]
+                    source = self.body(entries).replace(
+                        "\n\n## Validation", "\n" + "\n".join(lines) + "\n\n## Validation", 1
+                    )
+                    said: list[str] = []
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        self.evidence().update_evidence_entries(
+                            source, {1: {"status": "complete", "detail": "green on head abc"}},
+                            announcements=said,
+                        )
+                    note = self.the_replacement_sentence(said)
+                    for line in lines:
+                        self.assertIn(
+                            line.strip(), note, f"{shape}/{order}: {line!r} is not named"
+                        )
+                    # Once each, not one of them twice: the count is what
+                    # separates a consumed pairing from a first-wins map.
+                    for line in lines:
+                        self.assertEqual(
+                            note.count(line.strip()),
+                            1,
+                            f"{shape}/{order}: {line!r} is named more than once",
+                        )
+
+    # intent: fix
+    # marker: red at `24b68a42`, its own base, behaviourally: `<br>` carries
+    # no newline and reads as inline HTML, so both arms of the refusal pass
+    # it -- a detail of `green<br>- [blocked] injected line -- stop` is
+    # written as one source line the page renders as two status lines, with
+    # nothing announced, and the section then fails the page reader
+    # (#1778, round 25).
+    def test_a_break_the_page_renders_from_html_is_refused_in_any_spelling(self) -> None:
+        """The question is what the page renders, so the spelling cannot matter.
+
+        `<br>`, `<br/>` and `<br />` are the three the report named; the
+        refusal asks the parse for an inline-HTML token that is a break tag,
+        so an uppercase one and one carrying an attribute answer the same
+        way. `&#10;` is the control: already refused by the page's own
+        reading, and still refused here.
+        """
+        for spelling in ("<br>", "<br/>", "<br />", "<BR>", '<br class="x">', "&#10;"):
+            with self.subTest(spelling=spelling):
+                entries = [
+                    {"index": 1, "item": self.ITEM, "status": "pending-ci",
+                     "detail": "queued on head abc", "kind": "ci", "check_name": "test"},
+                ]
+                source = self.body(entries)
+                detail = f"green{spelling}- [blocked] injected line -- stop"
+                said: list[str] = []
+                with contextlib.redirect_stderr(io.StringIO()):
+                    written = self.evidence().update_evidence_entries(
+                        source, {1: {"status": "complete", "detail": detail}},
+                        announcements=said,
+                    )
+                self.assertEqual(written, source, f"{spelling}: the body was rewritten")
+                self.assertEqual(len(said), 1, said)
+                self.assertIn("position 1", said[0])
+                lines, unreadable = self.evidence()._rendered_status_lines(written)
+                self.assertIsNone(unreadable, f"{spelling}: {unreadable}")
+                self.assertEqual(len(lines), 1, f"{spelling}: {lines}")
+
+    # intent: fix
+    # marker: red at `24b68a42`, its own base, behaviourally: the guard asks
+    # `"\n" in text` there and the walker that pairs readings back to source
+    # lines splits with `str.splitlines()`, which also breaks on five more
+    # code points -- all five are accepted and written, and the section they
+    # make is one line to one reader and two to the other
+    # (#1778, round 25).
+    def test_one_definition_of_where_a_line_ends_for_both_readers(self) -> None:
+        """A line ends where either reader in this file says it does.
+
+        The wider set wins: a text any reader here would see as two lines is
+        not one status line, so it is refused rather than written and
+        accounted for differently by the two.
+        """
+        evidence = self.evidence()
+        for name, separator in (
+            ("a vertical tab", "\v"),
+            ("a form feed", "\f"),
+            ("a file separator", "\x1c"),
+            ("a next line", "\x85"),
+            ("a line separator", "\u2028"),
+        ):
+            with self.subTest(separator=name):
+                item = f"deploy{separator}the lane"
+                entries = [{
+                    "index": 1, "item": item, "status": "pending-ci",
+                    "detail": "queued", "kind": "ci",
+                }]
+                self.assertTrue(
+                    evidence.spans_two_lines(item),
+                    f"{name}: the one definition does not see it",
+                )
+                self.assertTrue(
+                    evidence.unrenderable_entries(entries),
+                    f"{name}: an entry two readers count differently was accepted",
+                )
+        # The control: a text neither reader splits is one line to both.
+        self.assertFalse(evidence.spans_two_lines("deploy the lane"))
+        self.assertEqual(
+            evidence.unrenderable_entries(
+                [{"index": 1, "item": "deploy the lane", "status": "pending-ci",
+                  "detail": "queued", "kind": "ci"}]
+            ),
+            [],
+        )
+
+    # intent: fix
+    # marker: red at `24b68a42`, its own base, behaviourally: the union puts
+    # the record's own renderings into the ownership key, so an author's
+    # `- [blocked] deploy **the lane** -- author proof` beside a record
+    # rendering `deploy the lane` reads as ours and leaves the body with the
+    # emphasis and nothing said. Same at `a893b4f8`, so it is residue rather
+    # than a regression, and it is the case the line key was introduced to
+    # separate (#1778, round 25).
+    def test_a_line_the_page_reads_as_ours_is_named_when_it_does_not_look_like_ours(self) -> None:
+        """Ownership stays on the reading; the silence goes.
+
+        Two lines a reader cannot tell apart are one requirement, and the
+        record's is the one that stands -- that rule is why the emphasis line
+        is replaced rather than kept. What was wrong is that nothing said so.
+        A source line whose READING is ours and whose page APPEARANCE is not
+        is named where the entry's own line standing in its place is named.
+
+        The control is the marker: `*`, `+` and an ordered marker render to
+        the same thing a `-` does, so a line of ours written with another
+        marker is ours and is not named -- which is round 22's finding, kept.
+        """
+        for shape, theirs, named in (
+            ("emphasis the record does not carry",
+             "- [blocked] deploy **the lane** -- author proof", True),
+            ("a code span the record does not carry",
+             "- [blocked] deploy `the lane` -- author proof", True),
+            ("another list marker for our own line",
+             "* [blocked] deploy the lane -- author proof", False),
+        ):
+            with self.subTest(shape=shape):
+                entries = [{
+                    "index": 1, "item": "deploy the lane", "status": "pending-ci",
+                    "detail": "author proof", "kind": "ci",
+                }]
+                source = self.body(entries).replace(
+                    "\n\n## Validation", f"\n{theirs}\n\n## Validation", 1
+                )
+                said: list[str] = []
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.evidence().update_evidence_entries(
+                        source, {1: {"status": "blocked", "detail": "author proof"}},
+                        announcements=said,
+                    )
+                spoken = " ".join(said)
+                self.assertEqual(
+                    theirs in spoken, named, f"{shape}: {said}"
+                )
+
+    # intent: fix
     # marker: red at `a893b4f8`, its own base, behaviourally: both shapes are
     # WRITTEN there and then accounted for line by line -- the carry path
     # names the second physical line of the write's own item as an author's
@@ -10206,12 +10450,14 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
                     )
                     continue
                 note = self.the_replacement_sentence(said)
-                # Their own bytes AS THE QUOTING RULE ALLOWS: the sentence
-                # puts author-editable text inside a code span, so backticks
-                # come out (`comment_safe`) and a test that restated the
-                # flattening instead of asking for it would drift from it.
+                # Their own bytes, VERBATIM. Round 24 asserted them through
+                # the comment quoter, which flattens backticks out of the
+                # text -- so the sentence named a line that reads differently
+                # from the one that left, and an author who rewrote what they
+                # were shown would write a third line. The span is sized past
+                # the longest run in the text instead (#1778, round 25).
                 self.assertIn(
-                    self.evidence().comment_safe(theirs, 200),
+                    theirs,
                     note,
                     f"{shape}: the author's own bytes are not in it",
                 )
