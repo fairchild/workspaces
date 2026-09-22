@@ -39,6 +39,21 @@ ITEM = "`swift test` passes"
 DETAIL = "the lane has not run yet"
 RESOLVED_DETAIL = "214 tests passed"
 
+# The recorded item's own text, which the corpus varied over nothing until
+# #1751 round 3. Whose a status line is now depends on the ITEM matching, and
+# an item is matched through the page's reading of it, so an item carrying
+# markup the page resolves is the axis that question lives on: with only
+# `swift test` passes` in the corpus -- a code span, which the reading keeps
+# as written -- the fixed-point figure was measured over one item's markup and
+# could not see a write that stopped recognising its own line. The second item
+# carries the strongest form of the five that broke (bold, italic, underscore,
+# inline HTML, a backslash escape), plus an em-dash-free `--` nowhere, so the
+# only thing varying is the markup.
+ITEMS = {
+    "an item in a code span": ITEM,
+    "an item carrying resolved markup": "**Manual QA** on device",
+}
+
 # What sits under the status line. Each entry is a block the rewrite has to
 # carry to `## Evidence Notes`, or a hazard it has to decline -- the two
 # outcomes the count is about.
@@ -62,6 +77,38 @@ SECTION_TAILS = {
     # (codex, gpt-5.6-sol, xhigh). `author_lines` matches the entry SHAPE now,
     # and this body is what says so.
     "a note naming the item in prose": f"\nReviewer note: {ITEM} only on this head.\n",
+    # The author's own status bullet naming an item the body DOES record,
+    # with their own words for a detail. The writer replaces it -- the rule
+    # is that a status line for a recorded item is the machine's -- and until
+    # round 17 it went with no error, nothing on stderr and no notes entry,
+    # while this instrument exempted it by the same predicate and reported
+    # nothing. It is the author's bytes at this reader now, and the write
+    # announces the replacement and carries the text (#1751, round 17).
+    "a recorded item's bullet in the author's own words": (
+        f"\n- [complete] {ITEM} -- I ran it myself and it passed\n"
+    ),
+    # The author's own reading of a recorded item in a DIFFERENT shape from
+    # the row above: a `blocked` token where the record says otherwise, and a
+    # note of theirs above it rather than the status line. The corrected
+    # predicate and the row that exercises it arrived in one commit at round
+    # 17, so what the predicate reached beyond that row was unmeasured -- a
+    # detector and its case arriving together measure each other. This row is
+    # outside it and the predicate sees it: paired with the round-17 writer
+    # it reports the loss, and the published predicate reports nothing
+    # (#1751, round 18).
+    "a recorded item read as blocked beside a note of theirs": (
+        f"\nA note for the reviewer.\n\n- [blocked] {ITEM} -- the device is not on the bench\n"
+    ),
+    # The author's OWN status bullet, naming an item the body records nowhere.
+    # The writer took it as its own and replaced it while this instrument read
+    # it as the author's, which is two answers about one line -- and on this
+    # body the answer that won deleted it and said nothing (#1751). It is the
+    # author's now at both readers, and this body is what says so on a real
+    # write rather than in a docstring.
+    "an unrecorded status bullet of the author's": (
+        "\nA note for the reviewer.\n"
+        "- [blocked] release approval -- the signing profile is missing\n"
+    ),
 }
 
 # What the author wrote after the section. The successor decides where the
@@ -103,14 +150,20 @@ evidence = load("evidence", SKILL_SCRIPTS / "evidence.py")
 MARKDOWN_LINE_ENDING_RE = helpers.MARKDOWN_LINE_ENDING_RE
 
 
-def body(tail: str, successor: str, ending: str) -> str:
-    """One PR body: the metadata the writer reads, the section, the tail under it, and the author's next block."""
+def body(tail: str, successor: str, ending: str, item: str = ITEM) -> str:
+    """One PR body: the metadata the writer reads, the section, the tail under it, and the author's next block.
+
+    `item` is the recorded item, which the corpus varies since #1751 round 3:
+    the rule that decides whose a status line is matches the item, so an item
+    whose markup the page resolves is a body this instrument has to be able to
+    write twice without gaining a copy.
+    """
     meta = {
         "entries": [
-            {"index": 1, "item": ITEM, "status": "pending-ci", "detail": DETAIL, "kind": "test"}
+            {"index": 1, "item": item, "status": "pending-ci", "detail": DETAIL, "kind": "test"}
         ]
     }
-    section = f"- [pending-ci] {ITEM} -- {DETAIL}\n" + tail
+    section = f"- [pending-ci] {item} -- {DETAIL}\n" + tail
     text = (
         "<!-- evidence-status:v1\n"
         + json.dumps(meta)
@@ -122,21 +175,11 @@ def body(tail: str, successor: str, ending: str) -> str:
     return text.replace("\n", ending)
 
 
+# The shape a reader reads as an entry, which is the shape #1734 lost. The
+# filter below does not match on it -- whose line this is, shape included, is
+# `evidence.is_recorded_status_line` and nowhere else (#1751) -- and the
+# fixtures name it to say which shape they are built out of.
 ENTRY_LINE_RE = re.compile(r"^\s*- \[(?:complete|blocked|pending-ci)\] .+ -- .+$")
-
-
-def _entry_line_for(item: str) -> re.Pattern[str]:
-    """The line the write renders for one recorded item, as a pattern.
-
-    Built from the item rather than read out of the line. Reading it out took
-    the text up to the FIRST ` -- `, so a recorded item that itself holds one
-    -- `build -- release` -- was cut to `build`, which no metadata records; the
-    write's own entry then read as the author's, and an ordinary write reported
-    the entry it had just rewritten as a silent loss (#1738, round 3).
-    """
-    return re.compile(
-        rf"^\s*- \[(?:complete|blocked|pending-ci)\] {re.escape(item)} -- .+$"
-    )
 
 
 def _recorded_items(text: str) -> set[str]:
@@ -162,33 +205,48 @@ def _recorded_items(text: str) -> set[str]:
     }
 
 
-def _entry_line_numbers(lines: list[str], text: str, recorded: set[str]) -> set[int]:
+def _entry_line_numbers(lines: list[str], text: str, source: str) -> set[int]:
     """Which lines are the status entries this write owns.
 
-    Three conditions, and each one answers a way the filter was wrong.
+    TWO conditions, and both are about this instrument's independence from
+    the write rather than about what a line looks like.
 
-    It is entry-SHAPED, rather than carrying the item's text anywhere: a line
-    naming the item in prose is the author's sentence about it.
-
-    It names an item the metadata RECORDS -- matched whole, escaped, rather
-    than read out of the line up to the first ` -- `, which cut a recorded
-    `build -- release` down to `build` and handed the write's own entry back as
-    the author's (#1738, round 3). So the author's own `- [blocked] release
-    approval -- the signing profile is missing` is never the machine's,
-    wherever it sits and however the section is read.
+    The line's bytes are identical to one the write rendered, asked of the
+    same multiset the write builds from the same two inputs -- the entries
+    this run renders and the entries the body records -- so a rendered line
+    owns ONE body line and a second copy of those bytes stays the author's.
 
     And it sits INSIDE the section, so an author's copy of a recorded item
     under their own `## Validation` stays theirs.
+
+    What is NOT asked here any more is the writer's own ownership rule: that
+    a status-shaped line naming a recorded item is the machine's. This
+    instrument exists to measure the answer to that rule, and it asked the
+    rule until round 17 -- so an author's own
+    `- [complete] <recorded item> -- <their words>` was replaced by the write
+    and exempted here, `lines_lost` returned `[]` for it, and a clean sweep
+    said nothing about the rule at all. An instrument that shares the
+    predicate under test cannot measure it (#1751, round 17). The history of
+    the shape conditions that went with it is in this file's own log: the
+    disagreement they were built to close was between a raw-line reading here
+    and a parsed reading in the write (#1751, rounds 1 and 2).
 
     A body with no metadata has no entries the write owns, and a body with no
     readable section has none either: both are the conservative answer, which
     is that every line is the author's.
 
-    `recorded` is read from the body BEFORE its metadata comment is stripped,
-    and `text` is the body after -- the comment is not the author's and does
-    not take part in the comparison, but it is where the entries are written
-    down.
+    `source` is the body BEFORE its metadata comment is stripped and `text` is
+    the body after -- the comment is not the author's and does not take part in
+    the comparison, but it is where the entries are written down, so both the
+    items this write records and the lines it last rendered are read from
+    `source` HERE rather than at each call site. Reading the cap's lines from
+    `text` instead handed the one function an empty cap on every body, so the
+    write took its own unreadable line by byte identity while this instrument
+    called the same line the author's and lost -- finding 2's mechanism, one
+    file over, and the corpus cannot show it because every generated body's
+    lines parse (#1751, round 8).
     """
+    recorded = _recorded_items(source)
     if not recorded:
         return set()
     bounds = helpers._section_bounds(text, "Evidence Status")
@@ -198,12 +256,45 @@ def _entry_line_numbers(lines: list[str], text: str, recorded: set[str]) -> set[
     for line in lines:
         starts.append(offset)
         offset += len(line) + 1
-    patterns = [_entry_line_for(item) for item in recorded]
+    # One owner for this body, the same multiset the write builds: a rendered
+    # line owns ONE body line, so two identical copies are one line of the
+    # machine's and one of the author's at both readers (#1751, round 9).
+    # The write's own construction, from literally the same two inputs: the
+    # entries this write produces and the entries the body records. Built from
+    # (source, source) it differed from the write's first argument on every
+    # changed verdict, so an author's line byte-equal to the line the write
+    # was about to render was the machine's to the write -- replaced -- and
+    # the author's here, reported lost. Loud rather than blind, and a false
+    # positive in the figure this instrument exists to quote (#1751,
+    # round 12).
+    recorded_entries = evidence.evidence_entries_of(source)
+    updated_entries, _ = evidence.entries_with_updates(recorded_entries, UPDATES)
+    owned = evidence.owned_lines(updated_entries, recorded_entries)
+    # BYTE IDENTITY, and nothing else. Asking the writer's own ownership rule
+    # -- a status-shaped line naming a recorded item is the machine's, which
+    # `whose_status_line` answers -- asked the predicate this instrument
+    # exists to check the answer to: an author's own
+    # `- [complete] <recorded item> -- <their words>` was replaced by the
+    # write and exempted here, so `lines_lost` returned `[]` for it and a
+    # clean sweep said nothing about that rule at all. An instrument that
+    # shares the predicate under test cannot measure it (#1751, round 17).
+    #
+    # The SECTION condition stays: it is about where this write writes, not
+    # about whose a line is, and without it an author's copy of the machine's
+    # line under their own `## Validation` would be exempted too.
+    #
+    # Every copy of those bytes inside the section, not one per claim. The
+    # write deduplicates its own output there -- a second byte-identical copy
+    # is dropped in silence, which is the deliberate control this instrument
+    # must not read as the author's text going. The cost is stated rather than
+    # hidden: a write that deleted a second copy of its own line WRONGLY would
+    # not show up in this number either. That shape is pinned by the suite
+    # (#1751, round 9) rather than by the sweep, and it is a limitation of the
+    # figure the way per-body attribution is (#1751, round 17).
     return {
         index
         for index, start in enumerate(starts)
-        if bounds[1] <= start < bounds[2]
-        and any(pattern.match(lines[index]) for pattern in patterns)
+        if bounds[1] <= start < bounds[2] and owned.claim(lines[index])
     }
 
 
@@ -217,16 +308,20 @@ def author_lines(text: str) -> list[str]:
     those lines (codex, gpt-5.6-sol, xhigh). Source lines see every one of
     them, and a fence marker and an indent besides.
 
-    Two things come out, and both are this write's to change. The metadata
-    comment is re-rendered on every write. And the status entries -- matched on
-    the SHAPE a reader reads as an entry rather than on the item's text,
-    because a line naming the item in prose is the author's, and matched only
-    where the write owns them, which is inside the section and nowhere else.
+    Two things come out, and both are this write's own. The metadata comment
+    is re-rendered on every write. And a line inside the section whose bytes
+    are BYTE-IDENTICAL to one this write rendered: there is nothing of
+    anybody else's in it, and one claim is spent per line, so a second copy
+    of the same bytes stays the author's.
+
+    What no longer comes out is a line matched on the entry SHAPE and the
+    item's text -- the writer's own ownership rule, which this instrument
+    asked until round 17 and therefore could not measure.
     """
     source = MARKDOWN_LINE_ENDING_RE.sub("\n", text)
     normalized = evidence._strip_evidence_metadata(source)
     lines = normalized.split("\n")
-    owned = _entry_line_numbers(lines, normalized, _recorded_items(source))
+    owned = _entry_line_numbers(lines, normalized, source)
     return [
         line
         for index, line in enumerate(lines)
@@ -258,7 +353,7 @@ def author_seams(text: str) -> list[tuple[str, str]]:
     source = MARKDOWN_LINE_ENDING_RE.sub("\n", text)
     normalized = evidence._strip_evidence_metadata(source)
     lines = normalized.split("\n")
-    owned = _entry_line_numbers(lines, normalized, _recorded_items(source))
+    owned = _entry_line_numbers(lines, normalized, source)
     seams, previous = [], None
     for index, line in enumerate(lines):
         if not line.strip() or index in owned:
@@ -353,6 +448,13 @@ class Outcome:
         return self.took and not self.announced
 
 
+# The one update every body in this corpus is written with, named so the
+# instrument can apply it to a body's entries the way the write does and
+# build its owner from the SAME two inputs the write builds from -- this run's
+# updated entries and the body's recorded ones (#1751, round 12).
+UPDATES: dict[int, dict[str, object]] = {1: {"status": "complete", "detail": RESOLVED_DETAIL}}
+
+
 def write_once(text: str) -> tuple[str, bool, tuple[str, ...]]:
     """The body after one rewrite, whether the writer declined it, and what it said.
 
@@ -363,7 +465,7 @@ def write_once(text: str) -> tuple[str, bool, tuple[str, ...]]:
     spoke = io.StringIO()
     with contextlib.redirect_stderr(spoke):
         written = evidence.update_evidence_entries(
-            text, {1: {"status": "complete", "detail": RESOLVED_DETAIL}}
+            text, UPDATES
         )
     said = tuple(line for line in spoke.getvalue().splitlines() if line.strip())
     refused = any("refusing to rewrite" in line for line in said)
@@ -373,22 +475,25 @@ def write_once(text: str) -> tuple[str, bool, tuple[str, ...]]:
 def sweep() -> list[Outcome]:
     """Every generated body, written twice, with what the write cost it."""
     outcomes = []
-    for tail_name, tail in SECTION_TAILS.items():
-        for successor_name, successor in SUCCESSORS.items():
-            for ending_name, ending in LINE_ENDINGS.items():
-                source = body(tail, successor, ending)
-                written, refused, said = write_once(source)
-                again, _, _ = write_once(written)
-                outcomes.append(
-                    Outcome(
-                        label=f"{tail_name} / {successor_name} / {ending_name}",
-                        refused=refused,
-                        lost=tuple(lines_lost(source, written)),
-                        closed=tuple(seams_closed(source, written)),
-                        announced=tuple(line for line in said if "not carried" in line),
-                        fixed_point=again == written,
+    for item_name, item in ITEMS.items():
+        for tail_name, tail in SECTION_TAILS.items():
+            for successor_name, successor in SUCCESSORS.items():
+                for ending_name, ending in LINE_ENDINGS.items():
+                    source = body(tail, successor, ending, item)
+                    written, refused, said = write_once(source)
+                    again, _, _ = write_once(written)
+                    outcomes.append(
+                        Outcome(
+                            label=(
+                                f"{item_name} / {tail_name} / {successor_name} / {ending_name}"
+                            ),
+                            refused=refused,
+                            lost=tuple(lines_lost(source, written)),
+                            closed=tuple(seams_closed(source, written)),
+                            announced=tuple(line for line in said if "not carried" in line),
+                            fixed_point=again == written,
+                        )
                     )
-                )
     return outcomes
 
 
