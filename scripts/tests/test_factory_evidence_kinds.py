@@ -8804,12 +8804,26 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 claim, opening, "the write's own sentence reads as somebody's attestation"
             )
 
-        # The fence, over a line that carries a three-backtick run.
-        theirs = "- [complete] run ```a``` -- mine"
-        excerpt = evidence._superseded_carry(theirs)
-        tokens = [token for token in helpers.MARKDOWN.parse(excerpt) if token.type == "fence"]
-        self.assertEqual(len(tokens), 1, excerpt)
-        self.assertIn(theirs, tokens[0].content, excerpt)
+        # The fence, over the lines that test it. MEASURED, and not what the
+        # report that prompted this said: a three-backtick run MID-LINE does
+        # not close a three-backtick fence -- only a line that is nothing but
+        # backticks does, and a status-shaped line always carries a bullet
+        # and a token, so the write's own path cannot produce one. The
+        # property belongs to the carrier rather than to the path, so it is
+        # driven at the carrier with the line that would close it
+        # (#1751, round 19).
+        for shape, theirs in (
+            ("a three-backtick run mid-line", "- [complete] run ```a``` -- mine"),
+            ("a line that is nothing but a fence", "```"),
+            ("a longer run than the fence would be", "``````"),
+        ):
+            with self.subTest(line=shape):
+                excerpt = evidence._superseded_carry(theirs)
+                tokens = [
+                    token for token in helpers.MARKDOWN.parse(excerpt) if token.type == "fence"
+                ]
+                self.assertEqual(len(tokens), 1, excerpt)
+                self.assertIn(theirs, tokens[0].content, excerpt)
         # The page's own reading: nothing in that block is a list item, so no
         # reader meets a second status line for the requirement.
         kinds = {token.type for token in helpers.MARKDOWN.parse(excerpt)}
