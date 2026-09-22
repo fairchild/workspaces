@@ -10843,6 +10843,69 @@ class EveryInsertTakesTheWritesAnswerTests(unittest.TestCase):
         for heading in ("Evidence Status", "Evidence Notes"):
             self.assertIn(f"`## {heading}`", comment)
 
+    # intent: fix
+    # marker: red at `ad8b6416`, its own base, behaviourally: the answer about
+    # the status heading clears EVERY unverified note there, so the note about
+    # the `## Evidence Notes` insert goes with it and the author reads nothing
+    # about the section that actually went unchecked (#1773, round 19).
+    def test_an_answer_about_one_heading_retracts_only_that_headings_note(self) -> None:
+        """A question that was never asked cannot answer for the section it never looked at.
+
+        Two renders on one write, measured on this fixture: the first is the
+        `## Evidence Notes` insert's placement question, the second is the
+        last question -- `_placement_a_reader_cannot_see` over the body being
+        returned, which reads the STATUS heading alone. So a run where the
+        notes render fails and the status one answers is a run with one
+        section unchecked, and the retraction cleared the note saying so.
+
+        Both directions are driven, on the same fixture, by which renders
+        the page refuses: with the last question answered the notes note
+        stands alone, and with both refused each section has its own note.
+        The retraction itself is still live -- it is the status insert's own
+        note that a later answer clears, which the round-3 seam tests and
+        the write sweep's retry corpus measure.
+        """
+        evidence = sys.modules["evidence"]
+        body = (
+            "## Summary\n\n- one change\n\n"
+            "## Evidence Status\n\n- [pending-ci] item -- waiting\n\n"
+            "a note the author wrote under the heading\n\n"
+            "<details>\n<summary>log</summary>\n\na fold nobody closed\n"
+        )
+
+        def page(refusing: set[int]):
+            asked = {"calls": 0}
+
+            def render(text: str) -> str:
+                asked["calls"] += 1
+                if asked["calls"] in refusing:
+                    raise helpers.RendererUnavailable(
+                        "the renderer answered HTTP 503", cause="server error"
+                    )
+                return "<p>ok</p>"
+
+            return render
+
+        for refusing, expected in (
+            ({1}, ["Evidence Notes"]),
+            ({1, 2}, ["Evidence Notes", "Evidence Status"]),
+        ):
+            with self.subTest(refused=sorted(refusing)):
+                with (
+                    mock.patch.object(helpers, "render_markdown", side_effect=page(refusing)),
+                    mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
+                    contextlib.redirect_stderr(io.StringIO()),
+                ):
+                    write = evidence.write_evidence_status_section(
+                        body, ["- [complete] item -- proof"]
+                    )
+                standing = [
+                    str(evidence.unverified_heading(note))
+                    for note in write.announcements
+                    if evidence.is_unverified_announcement(note)
+                ]
+                self.assertEqual(sorted(standing), expected, write.announcements)
+
     # intent: guard
     # marker: red at `0b66add5`, its round's base, by API alone and it cannot be otherwise --
     # the seam it pins is one that round ADDS, so there is no property to hold there and no
