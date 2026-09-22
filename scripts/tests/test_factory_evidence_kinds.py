@@ -10165,7 +10165,7 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
         Two questions were one key: "is this line about a requirement the
         record holds" and "is this a line this write wrote". A record of one
         `pending-ci` entry beside the author's own
-        `- [blocked] run \`swift test\` -- author proof` answers YES to the
+        ``- [blocked] run `swift test` -- author proof`` answers YES to the
         first and NO to the second, and the item key gave the write the
         author's line.
 
