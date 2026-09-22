@@ -476,6 +476,27 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
         of it -- paths relative to `scripts/tests`, nested ones included --
         and `outside` puts the branch's only change outside that directory,
         which is what a later pull request touching `.agents/**` looks like.
+        `renames` runs `git mv` on the work branch before its writes, so a
+        seed can produce a real `R` entry rather than a hand-written one.
+
+        VARIED across the seeds, because a dimension no seed moves is a
+        constant a mutant can hide in: the number of touched test files (1,
+        2, 3), the offender's position among them (first, middle, last), what
+        git did to the file (added, modified, renamed with an edit, renamed
+        with nothing added, renamed heavily enough to arrive as add-plus-
+        delete, copied), the path's shape (nested, and a basename that is not
+        `test_*`), and what the base holds at the offender's path (nothing, a
+        marked definition of the same dotted path, two of them).
+
+        HELD FIXED, named here rather than left implicit: one commit on each
+        side of the base (no history to walk), one class holding one test
+        method per planted file (so nesting depth is 1 and the walk's deeper
+        shapes are unit cases over source strings instead), `fix` as the
+        marker kind whenever a planted test carries one, the offender kind
+        UNMARKED (multi-marked and unknown-kind offenders travel the same
+        code path from `markers_in` onward and are driven there), ASCII paths
+        with no symlinks or submodules, and this file living on `main` so the
+        census's own tests are outside every seed's population.
         """
         upstream = root / "upstream"
         tests = upstream / "scripts" / "tests"
