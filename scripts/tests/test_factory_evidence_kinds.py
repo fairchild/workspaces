@@ -8689,8 +8689,10 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         )
 
     # intent: control
-    # marker: green at `61c1e37a`, its own base, and on `016d94ba`: a bullet
-    # for an item nothing records was always the author's (#1751, round 17).
+    # marker: green at `61c1e37a`, its own base -- the branch made it so --
+    # and behaviourally red on `016d94ba`, where a bullet for an item nothing
+    # records was replaced in silence, which is this branch's first defect
+    # (#1751, round 17).
     def test_a_bullet_for_an_item_this_body_does_not_record_still_survives(self) -> None:
         # The other side of the rule, unchanged: the write owns no line for
         # an item it does not record, so the bullet moves to the notes as
@@ -8704,10 +8706,12 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
     # Guards: a stale reading of a recorded item stays the machine's -- the SECTION
     # half is green on main; what the write says about replacing it is round 17's.
     # intent: fix
-    # marker: `control` until round 17, when the behaviour it pins moved: the
-    # section half is still green at `016d94ba`, and the two assertions this
-    # round adds -- the text carried and the replacement announced -- are
-    # behaviourally red there (#1751, round 17).
+    # marker: `control` until round 17, when the behaviour it pins moved.
+    # Its own base is now `61c1e37a`, the head this round started from, and
+    # it is behaviourally red there -- `FAILED (failures=1)` -- because the
+    # two assertions this round adds (the text carried, the replacement
+    # announced) are this round's. Red on `016d94ba` the same way. The
+    # section half it kept is green at both (#1751, round 17).
     def test_a_status_line_naming_a_recorded_item_is_still_the_machines(self) -> None:
         # The other direction of the same rule, and the half that keeps the
         # section readable: a stale reading of an item the write records is
@@ -8843,10 +8847,11 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
     # Guards: the writer reads the wrapped spellings as the page does -- true on main,
     # said out loud here so the reader this arc unified cannot quietly narrow.
     # intent: fix
-    # marker: `control` until round 17: the write still reads every wrapped
-    # spelling as the machine's and rewrites the section, which is green at
-    # `e6934e95`; the carried text and the sentence about it are red there
-    # (#1751, round 17).
+    # marker: `control` until round 17. Its own base is now `61c1e37a`, and
+    # all six spellings are behaviourally red there -- `FAILED (failures=6)`
+    # -- because the carried text and the sentence about it are this round's.
+    # Red the same way on `016d94ba`. The half it kept -- every wrapped
+    # spelling read as the machine's -- is green at both (#1751, round 17).
     def test_a_wrapped_line_naming_a_recorded_item_is_the_machines(self) -> None:
         # The writer's half of the pair, pinned: it read the page all along,
         # and this says so rather than leaving it to the docstring. Round 17
