@@ -4222,8 +4222,8 @@ def _render_structured_entries(
         # The two sections this write can put a line in: the one it rewrites
         # and the one a carry moves text to. Not the whole body -- an echo of
         # the lost line inside a fenced example somewhere else subtracted it
-        # and nothing was named, which is the silence `_still_written`'s own
-        # docstring refuses sixty lines above (#1778, round 22).
+        # and nothing was named -- the same silence the backstop round 23
+        # deleted used to produce one shape over (#1778, rounds 22 and 23).
         after_source = {
             line.strip()
             for heading in (EVIDENCE_STATUS_HEADING, EVIDENCE_NOTES_HEADING)
