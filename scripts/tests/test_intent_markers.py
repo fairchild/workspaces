@@ -33,6 +33,7 @@ defect hides.
 from __future__ import annotations
 
 import ast
+import contextlib
 import os
 import re
 import io
@@ -41,6 +42,7 @@ import sys
 import tempfile
 import tokenize
 import unittest
+from unittest import mock
 from pathlib import Path
 from typing import NamedTuple
 
@@ -493,8 +495,15 @@ def commit_named_by(argument: str, root: Path = REPO_ROOT) -> str | None:
     `--` separator, so `--census --output=<path>` reached git as an OPTION.
     git created and truncated that file, printed nothing, and the census
     reported `0 test file(s) touched`, `no tests added` and exited 0 -- a
-    green census over a diff that never happened (#1773, round 20). This
-    layer is the one that catches the next argument somebody adds.
+    green census over a diff that never happened (#1773, round 20).
+
+    Measured, no argument reaches this layer that the next one would accept:
+    `git rev-parse --verify` refuses every dash-led argument this git knows,
+    so dropping this layer leaves the suite green unless the test asks WHICH
+    layer answered. It is kept as the pin for the next argument somebody
+    adds -- an option git would accept as a rev, or a git that reads its
+    arguments differently -- and the seed below separates the layers by
+    their reasons and by whether any git command ran at all.
 
     Then `git rev-parse --verify <argument>^{commit}`, so the thing named is
     a commit rather than a tree, a blob or a tag pointing at one, and the
@@ -1363,6 +1372,42 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
         the option would have written is asserted absent, because "it exited
         non-zero" and "it did not write anything" are different claims.
         """
+        # WHICH LAYER answered, and whether git ran at all. Dropping the
+        # first layer left every test green, because the second refuses a
+        # dash-led argument too and an end-to-end assertion cannot tell them
+        # apart -- a layer nothing distinguishes is a layer nothing pins
+        # (#1773, round 20).
+        calls: list[list[str]] = []
+        # The real one, held before the patch: a recorder that calls the name
+        # it replaced calls itself.
+        runs = subprocess.run
+
+        def recorded(command, *arguments, **named):
+            calls.append(list(command))
+            return runs(command, *arguments, **named)
+
+        for shape, argument, says, ran in (
+            ("an option", "--output=x", "an argument beginning with", False),
+            ("a ref that resolves to nothing", "notarev", "could not resolve", True),
+            ("a tree rather than a commit", "HEAD^{tree}", "could not resolve", True),
+        ):
+            with self.subTest(layer=shape):
+                calls.clear()
+                spoke = io.StringIO()
+                with (
+                    mock.patch.object(subprocess, "run", side_effect=recorded),
+                    contextlib.redirect_stderr(spoke),
+                ):
+                    self.assertIsNone(commit_named_by(argument))
+                self.assertIn(says, spoke.getvalue(), f"{shape}: {spoke.getvalue()}")
+                self.assertEqual(
+                    bool(calls),
+                    ran,
+                    f"{shape}: {'no git command ran' if ran else 'a git command ran'}",
+                )
+        # And the commit that is one resolves, through the same function.
+        self.assertIsNotNone(commit_named_by("HEAD"))
+
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             upstream = self.upstream_with_a_branch(root, work={"test_new.py": self.planted(True, 1)})
