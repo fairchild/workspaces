@@ -10274,13 +10274,15 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
                     "index": 1, "item": item, "status": "pending-ci",
                     "detail": "queued", "kind": "ci",
                 }]
-                self.assertTrue(
-                    evidence.spans_two_lines(item),
-                    f"{name}: the one definition does not see it",
-                )
+                # The BEHAVIOUR first, so this is red at a base that has
+                # none of this round's names for the reason it is about.
                 self.assertTrue(
                     evidence.unrenderable_entries(entries),
                     f"{name}: an entry two readers count differently was accepted",
+                )
+                self.assertTrue(
+                    evidence.spans_two_lines(item),
+                    f"{name}: the one definition does not see it",
                 )
         # The control: a text neither reader splits is one line to both.
         self.assertFalse(evidence.spans_two_lines("deploy the lane"))
