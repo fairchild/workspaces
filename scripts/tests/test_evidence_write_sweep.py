@@ -566,8 +566,11 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         )
 
     # intent: fix
-    # marker: behaviourally red at `e6934e95`, its own base
-    # (`AssertionError`).
+    # marker: red at `e6934e95` when round 6 wrote it, and rewritten in round
+    # 17, which makes `61c1e37a` its own base now: behaviourally red there in
+    # all six rows, `FAILED (failures=6)`, because what it pins -- the bytes
+    # carried below the section and the sentence about them -- is this
+    # round's (#1751, round 17).
     def test_a_status_line_however_it_is_written_keeps_its_bytes_on_the_page(self) -> None:
         """Every one of these lines is somebody's own bytes, and the page keeps every one.
 

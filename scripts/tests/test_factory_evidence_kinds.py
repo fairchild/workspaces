@@ -8707,8 +8707,8 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
     # half is green on main; what the write says about replacing it is round 17's.
     # intent: fix
     # marker: `control` until round 17, when the behaviour it pins moved.
-    # Its own base is now `61c1e37a`, the head this round started from, and
-    # it is behaviourally red there -- `FAILED (failures=1)` -- because the
+    # Behaviourally red at `61c1e37a`, its own base now -- the head this
+    # round started from -- `FAILED (failures=1)`, because the
     # two assertions this round adds (the text carried, the replacement
     # announced) are this round's. Red on `016d94ba` the same way. The
     # section half it kept is green at both (#1751, round 17).
@@ -8847,9 +8847,9 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
     # Guards: the writer reads the wrapped spellings as the page does -- true on main,
     # said out loud here so the reader this arc unified cannot quietly narrow.
     # intent: fix
-    # marker: `control` until round 17. Its own base is now `61c1e37a`, and
-    # all six spellings are behaviourally red there -- `FAILED (failures=6)`
-    # -- because the carried text and the sentence about it are this round's.
+    # marker: `control` until round 17. Behaviourally red at `61c1e37a`, its
+    # own base now, in all six spellings -- `FAILED (failures=6)` --
+    # because the carried text and the sentence about it are this round's.
     # Red the same way on `016d94ba`. The half it kept -- every wrapped
     # spelling read as the machine's -- is green at both (#1751, round 17).
     def test_a_wrapped_line_naming_a_recorded_item_is_the_machines(self) -> None:
@@ -10398,10 +10398,13 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                 self.assertEqual(seen, [expected] * 3)
 
     # intent: guard
-    # marker: the procedure's measurement puts this in the behavioural bucket -- at its own
-    # base the assertion fails -- but what it asserts is a SIGNATURE, not behaviour, so it is
-    # a guard by nature: it pins the shape of the call rather than what the call does. Named
-    # here rather than smoothed, because the bucket and the kind disagree (#1751, round 15).
+    # marker: red at `7808a051`, its own base (`AssertionError: () is not
+    # <class 'inspect._empty'>`), which puts it in the behavioural bucket --
+    # but what it asserts is a SIGNATURE, not behaviour, so it is a guard by
+    # nature: it pins the shape of the call rather than what the call does.
+    # Named here rather than smoothed, because the bucket and the kind
+    # disagree (#1751, round 15). The sha is here because a marker that names
+    # its base in prose alone is one a reader cannot check (round 17).
     def test_the_writer_takes_both_ends_of_the_body_with_no_default(self) -> None:
         """Required where callers actually reach, not only where the owner is built.
 
