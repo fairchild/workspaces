@@ -3069,8 +3069,52 @@ class TheVerifierSaysWhatItCouldNotCarryTests(unittest.TestCase):
         self.assertIn('"legacy"', written["body"], "the bare value was not preserved")
         self.assertIn(f"- [complete] {CI_ITEM}", written["body"])
         self.assertEqual(len(posted), 1, f"nothing was said: {posted}")
-        self.assertIn("position 2", posted[0][0])
-        self.assertIn("bare value", posted[0][0])
+        # Two facts about one body, each chosen by what it says rather than by
+        # where it sits in the list: the bare value is preserved, and the line
+        # it stood for was replaced. The second used to travel as a clause on
+        # the first, which is why it reached an author only when the record
+        # happened to hold a scalar (#1778, round 24).
+        notes = posted[0]
+        scalar = [note for note in notes if "bare value" in note]
+        replaced = [note for note in notes if "replaced this line" in note]
+        self.assertEqual(len(scalar), 1, notes)
+        self.assertEqual(len(replaced), 1, notes)
+        self.assertIn("position 2", scalar[0])
+        self.assertIn("`- [pending-ci] the line the scalar stood for -- waiting`", replaced[0])
+
+    # intent: fix
+    # marker: red at `a893b4f8`, its own base, behaviourally: the write's
+    # refusal asks the item alone there, so a detail carrying a break is not
+    # an unrenderable entry and this predicate answers True over a record the
+    # write would refuse. Red at `614eb162` and at `016d94ba` the same way
+    # (#1778, round 24).
+    def test_a_detail_that_renders_as_two_lines_keeps_the_label(self) -> None:
+        """Round 23's rule reading round 24's refusal: what the write refuses, the label keeps.
+
+        What this fixture holds fixed: one complete entry whose detail
+        carries the break and one untouched sibling, so the record is exactly
+        the shape a lane run produces after a flip; no bare value, so the
+        non-object arm is not what answers; and the same break spellings the
+        write's own test drives, so the two ask one question.
+        """
+        for shape, detail in (
+            ("a bare newline", "author proof\n- [blocked] injected -- stop"),
+            ("the &#10; entity", "author proof&#10;- [blocked] injected -- stop"),
+            ("two trailing spaces", "author proof  \ninjected"),
+        ):
+            with self.subTest(shape=shape):
+                entries = [
+                    {**ci_entry(status="complete", verified_head_sha=HEAD), "detail": detail},
+                    ci_entry(index=2, status="pending-ci"),
+                ]
+                self.assertTrue(
+                    verify_evidence.unrenderable_entries(entries),
+                    f"{shape}: the write does not refuse this record, so the case is not built",
+                )
+                self.assertFalse(
+                    verify.should_clear_blocked_label(entries, HEAD),
+                    f"{shape}: the label cleared over a record the write refuses",
+                )
 
     # intent: guard
     def test_the_note_is_composed_from_the_body_the_decision_is_about(self) -> None:

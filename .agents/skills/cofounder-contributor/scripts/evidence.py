@@ -3715,8 +3715,55 @@ def entry_as_rendered(entry: object) -> tuple[dict[str, object] | None, str | No
     # write rendered it and then named the entry's OWN first physical line as
     # taken, because the source line it walks carries only that much
     # (#1778, round 23).
-    if (broken := _unreadable_inline(MARKDOWN.parseInline(item)[0].children if MARKDOWN.parseInline(item) else None)) is not None and "line break" in broken:
-        return None, broken
+    # ASKED OF BOTH HALVES, because the line is `- [status] item -- detail`
+    # and the question is about the LINE. Round 23 asked the item alone: a
+    # detail of `author proof` + newline + `- [blocked] injected line -- stop`
+    # was accepted, the write emitted three source lines for a two-entry
+    # record, the page read three status lines, one of them recording nothing,
+    # and the label cleared. The guard's key and the rendered line's shape
+    # were chosen separately and nowhere was it written that they had to
+    # agree -- the third time on this branch (#1778, round 24).
+    #
+    # No third question about the composed line: a break needs a newline or an
+    # entity that decodes to one, both fields are asked about both, and
+    # joining two texts that carry neither cannot produce one.
+    for carries, text in (("item", item), ("detail", detail)):
+        # TWO READERS, TWO KEYS, and this is where they meet -- said once,
+        # because it is the third time on this branch that a guard and the
+        # readers it protects were keyed separately and nowhere was it
+        # written that they had to agree.
+        #
+        # The RAW bytes decide whether every source-line walker in this file
+        # sees two lines. A code span holding a newline and a split HTML tag
+        # render as ONE line on the page and are two lines in the body, so
+        # the write accepted them and then accounted for them line by line:
+        # the carry path named the second physical line of its own item as an
+        # author's continuation "not carried", and `taken` named the first,
+        # `- [pending-ci] verify <b`, as what the write took. Both sentences
+        # were about lines the write itself had just written.
+        #
+        # The PAGE's reading decides whether a READER sees two lines, which
+        # is a different set: an `&#10;` entity is one source line and two
+        # rendered ones, and nothing in the source says so.
+        #
+        # Either way the entry cannot be rendered as the one line it claims,
+        # so it joins the family the record already has rather than being
+        # written and then argued about (#1778, rounds 23 and 24).
+        # The page's question first, so a shape both answers keeps the reason
+        # round 23 published for it -- an author reading "renders as a line
+        # break" about a bare newline is reading the consequence, and the
+        # source-line reason below is for the shapes the page says nothing
+        # about.
+        parsed = MARKDOWN.parseInline(text)
+        reason = _unreadable_inline(parsed[0].children if parsed else None)
+        broken = reason if reason is not None and "line break" in reason else None
+        if broken is None and "\n" in text:
+            broken = f"an {carries} whose text spans two source lines"
+        if broken is not None:
+            return None, broken if carries == "item" else broken.replace(
+                "an item", "a detail", 1
+            ).replace("an item's", "a detail's", 1)
+
     # An item that renders to NOTHING on the page is an item no reader can
     # see and no reader can own a line by: `&nbsp;`, `&#32;` and `&#x20;` are
     # bytes in the record and blank on the page. The write used to render a
@@ -3901,19 +3948,15 @@ def scalar_record_positions(entries: object) -> list[int]:
     ]
 
 
-def scalar_record_announcement(entries: object, replaced: list[str] | None = None) -> str | None:
+def scalar_record_announcement(entries: object) -> str | None:
     """The sentence a record carrying a bare value earns, or None.
 
-    `replaced` is what the write took: the status-shaped lines under the
-    heading before it, minus the lines it rendered back. That is a
-    MEASUREMENT of the section rather than an ownership rule -- which line
-    belongs to which entry is #1779's question, and this branch merges first
-    -- and it is what the author needs: round 14 said a line only the bare
-    value stood for is "replaced like any other, which is what it does on
-    main too", and on the shape this branch's re-verify change reaches, main
-    makes no write at all. A line leaving the body under a sentence that says
-    main does the same is a line leaving with nothing true said about it
-    (#1778, round 15).
+    The bare value alone. What the write REPLACED is a different fact about
+    the same body and it has its own sentence below: carried here as a clause,
+    it reached the author only when the record happened to hold a scalar --
+    so the line round 22 found was named on a record with a legacy value
+    beside it and deleted in silence on the same record without one. One
+    sentence per fact, each with its own condition (#1778, round 24).
     """
     if not (positions := scalar_record_positions(entries)):
         return None
@@ -3925,24 +3968,90 @@ def scalar_record_announcement(entries: object, replaced: list[str] | None = Non
         f"nothing renders a status line for {'them' if plural else 'it'}, so the list holds "
         "the entries that do render and no line was written back for "
         f"{'those values' if plural else 'that value'}."
-    ) + _replaced_lines_clause(replaced or [])
+    )
 
 
-def _replaced_lines_clause(replaced: list[str]) -> str:
+# How the sentence about replaced lines opens, named so the predicate below
+# reads exactly what this writes.
+REPLACED_LINES_OPENING = f"`## {EVIDENCE_STATUS_HEADING}` was rewritten from the record."
+
+
+def replaced_lines_announcement(
+    replaced: list[str], restated: list[str] | None = None
+) -> str | None:
+    """The sentence naming the status lines this write took, or None if it took none.
+
+    `replaced` is a MEASUREMENT of the section rather than an ownership rule
+    -- the status-shaped lines the page read under the heading before this
+    write, minus the ones it rendered back; which line belongs to which entry
+    is #1779's question and that branch's answer. What the author needs is
+    the text and where to put it back, and they need it whatever else the
+    record happens to carry: this sentence used to travel as a clause on the
+    scalar announcement, whose condition is a bare value in the record, so
+    round 22's escaped-bracket line was named on a record with a legacy
+    scalar and lost in silence on the same record without one -- a fixture
+    from the round that found a bug carrying that round's incidental
+    properties into every later measurement of it (#1778, round 24).
+
+    The text is NAMED and not carried. Carrying a status-shaped line means
+    deciding whose it is, which is the ownership rule #1779 is for; the rule
+    here is that nothing leaves the body without a sentence saying it left
+    and how to put it back.
+    """
+    if not replaced and not (restated or []):
+        return None
+    return REPLACED_LINES_OPENING + _replaced_lines_clause(replaced, restated)
+
+
+def says_lines_were_replaced(note: str) -> bool:
+    """Whether this sentence is the one about the lines this write took.
+
+    A surface with a list of announcements has to tell them apart by what
+    they say rather than by the order they were said in: the scalar record's
+    sentence travels beside this one now, and every reader keyed on the
+    first element of that list was keyed on an order (#1778, round 24).
+    """
+    return REPLACED_LINES_OPENING in note
+
+
+def _replaced_lines_clause(replaced: list[str], restated: list[str] | None = None) -> str:
     """Each line this write took out, named verbatim, or nothing when it took none.
+
+    Two clauses, because a line that leaves leaves in one of two ways and the
+    author can act on only one of them. A line about a requirement this
+    record does not hold is gone with nothing in its place, and rewriting it
+    below the status section keeps it. A line about a requirement the record
+    DOES hold has the entry's own line standing where it stood: their reading
+    of it is gone, and what to fix is the record rather than the body. Said
+    as one sentence and not two, because it is one write and one loss
+    (#1778, round 24).
 
     Through `quoted_for_comment`, because the author's own text is going into
     a comment and that is the RENDER half of the one quoting rule.
     """
-    if not replaced:
+    restated = restated or []
+    if not replaced and not restated:
         return ""
-    quoted = ", ".join(quoted_for_comment(line, 200) for line in replaced)
-    return (
-        f" This write replaced {'these lines' if len(replaced) != 1 else 'this line'} with "
-        f"nothing: {quoted}. Rewriting "
-        f"{'them' if len(replaced) != 1 else 'it'} below the status section keeps "
-        f"{'them' if len(replaced) != 1 else 'it'} in the body the next run writes."
-    )
+    clause = ""
+    if replaced:
+        quoted = ", ".join(quoted_for_comment(line, 200) for line in replaced)
+        clause += (
+            f" This write replaced {'these lines' if len(replaced) != 1 else 'this line'} with "
+            f"nothing: {quoted}. Rewriting "
+            f"{'them' if len(replaced) != 1 else 'it'} below the status section keeps "
+            f"{'them' if len(replaced) != 1 else 'it'} in the body the next run writes."
+        )
+    if restated:
+        quoted = ", ".join(quoted_for_comment(line, 200) for line in restated)
+        clause += (
+            f" {'These lines' if len(restated) != 1 else 'This line'} read a requirement this "
+            f"record holds, so the entry's own line stands where "
+            f"{'they' if len(restated) != 1 else 'it'} stood and "
+            f"{'their' if len(restated) != 1 else 'its'} reading of it is gone: {quoted}. If "
+            f"{'those readings were' if len(restated) != 1 else 'that reading was'} right, the "
+            "record is what to fix."
+        )
+    return clause
 
 
 def unrenderable_record_refusal(entries: object) -> str | None:
@@ -4008,6 +4117,18 @@ def _render_structured_entries(
         f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
         for entry in sorted(rendered_entries, key=lambda entry: int(entry["index"]))
     ]
+    # What the record said before this write applied its updates, rendered by
+    # the same composition: the line the LAST run wrote is the machine's, and
+    # this is the only place that knows it (#1778, round 24).
+    recorded_lines = []
+    found = _extract_evidence_metadata(body)
+    if isinstance(found, dict) and isinstance(found.get("entries"), list):
+        for raw_entry in found["entries"]:
+            recorded, _ = entry_as_rendered(raw_entry)
+            if recorded is not None:
+                recorded_lines.append(
+                    f"- [{recorded['status']}] {recorded['item']} -- {recorded['detail']}"
+                )
     carried_lines: list[str] = []
     if rendered_entries:
         write = write_evidence_status_section(
@@ -4115,6 +4236,18 @@ def _render_structured_entries(
         ).strip()
 
     items = {_as_the_page_reads(str(entry["item"]).strip()) for entry in rendered_entries}
+    # The lines THIS WRITE renders and the lines the RECORD AS FOUND renders,
+    # as the page reads them -- the same reader `before` and `after` come
+    # through. Both ends, because a line the last run wrote for an entry this
+    # run updates is the machine's and reads as neither the new line nor the
+    # item alone: keyed on the item, the author's own differing reading of
+    # the same requirement was swallowed with it (finding 3); keyed on this
+    # write's lines only, the last run's own line is named as the author's.
+    # One entry owns one line at each end of the body.
+    rendered_readings = {
+        _as_the_page_reads(without_its_list_marker(line).strip())
+        for line in rendered_lines + recorded_lines
+    }
 
     def _names_one_of(line: str, known: set[str], *, raw_source: bool = False) -> bool:
         """Whether this line is a status line for one of `known`.
@@ -4152,7 +4285,19 @@ def _render_structured_entries(
                 return True
         return False
 
+    # THE LINE, not the item. `_names_one_of(line, items)` answered "is this
+    # line about a requirement the record holds", which is a different
+    # question from "is this a line this write wrote": an author's own
+    # `- [blocked] run \`swift test\` -- author proof` beside a record that
+    # renders `- [complete] run \`swift test\` -- machine proof` answered YES
+    # to the item question and was dropped as rewritten, with the status
+    # token and the detail -- both theirs -- gone and nothing said. Which
+    # key serves which reader is stated at `entry_as_rendered`
+    # (#1778, round 24).
     def _rewritten(line: str) -> bool:
+        return line.strip() in rendered_readings
+
+    def _about_a_recorded_item(line: str) -> bool:
         return _names_one_of(line, items)
 
     # The same question asked of the author's RAW bytes, for the one path
@@ -4251,7 +4396,43 @@ def _render_structured_entries(
         log(unread)
         if announcements is not None:
             announcements.append(unread)
-    if (scalars := scalar_record_announcement(updated_entries, replaced)) is not None:
+    # The pairing itself is stated at `entry_as_rendered`, where the page's
+    # key and the source's key meet; this is one instance of it. The
+    # measurement above is keyed on the PAGE's reading of a line, because
+    # that is the only key under which "before" and "after" are comparable.
+    # A sentence to the author has to be keyed on their own BYTES: the page's
+    # reading of `- [complete] verify \[r1] -- green` is
+    # `[complete] verify [r1] -- green`, and an author told to rewrite that
+    # would write a different line. So the pairing is explicit -- each
+    # reading back to the source line that produced it, by reading the source
+    # lines through the same reader -- and where no source line reads as the
+    # replaced reading, the reading is named and said to be a reading
+    # (#1778, round 24).
+    as_written: dict[str, str] = {}
+    for line in markdown_section(body, EVIDENCE_STATUS_HEADING).splitlines():
+        if line.strip():
+            as_written.setdefault(
+                _as_the_page_reads(without_its_list_marker(line).strip()), line.strip()
+            )
+    # What the write took, named whatever else the record holds. A line the
+    # carry path has already spoken about is not named twice -- the same
+    # filter the `taken` path applies, for the same reason.
+    def _the_authors_bytes(lines: list[str]) -> list[str]:
+        return [
+            as_written.get(line, line)
+            for line in lines
+            if line.strip() not in already_spoken_for
+            and as_written.get(line, line).strip() not in already_spoken_for
+        ]
+
+    if (took := replaced_lines_announcement(
+        _the_authors_bytes([line for line in replaced if not _about_a_recorded_item(line)]),
+        _the_authors_bytes([line for line in replaced if _about_a_recorded_item(line)]),
+    )) is not None:
+        log(took)
+        if announcements is not None:
+            announcements.append(took)
+    if (scalars := scalar_record_announcement(updated_entries)) is not None:
         log(scalars)
         if announcements is not None:
             announcements.append(scalars)
