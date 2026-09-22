@@ -2497,8 +2497,21 @@ def write_evidence_status_section(
             # be reached about a body it was then reached about is a sentence
             # they cannot act on (#1773, round 3). This is the LAST question,
             # and it is about the body being returned.
+            #
+            # Only the notes this answer IS about. `_placement_a_reader_cannot_see`
+            # asks about the status heading alone, and clearing every
+            # unverified note on its answer retracted the one raised about
+            # the `## Evidence Notes` insert -- a question that was never
+            # asked answering for a section it never looked at, so a run
+            # whose notes render failed and whose status render succeeded
+            # returned a body with the notes placement unchecked and nothing
+            # said (#1773, round 19). The note carries its heading for
+            # exactly this, and `unverified_heading` reads it back.
             announcements[:] = [
-                note for note in announcements if not is_unverified_announcement(note)
+                note
+                for note in announcements
+                if not is_unverified_announcement(note)
+                or unverified_heading(note) != EVIDENCE_STATUS_HEADING
             ]
         if answer.refusal:
             return _stood_down(source, answer.refusal, announcements)

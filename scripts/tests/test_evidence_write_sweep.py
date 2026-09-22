@@ -18,6 +18,7 @@ Safe to run with no network, no secrets, no GitHub and no UI.
 from __future__ import annotations
 
 import contextlib
+import io
 import importlib.util
 import json
 import sys
@@ -636,6 +637,15 @@ class TheInstrumentAsksAValueRatherThanAPhraseTests(unittest.TestCase):
         says 0 bodies went unasked and the old grep says 24. The grep is the
         one that is wrong, and the public path is where you can see it
         (#1773, round 13).
+
+        Round 19 makes the retraction name its section, and this shape is
+        where that shows: the render that failed was the `## Evidence Notes`
+        insert's, and the render that answered was the status placement's.
+        Retracting every unverified note on that answer told an author the
+        page had been reached about a section nothing asked about again. So
+        the by-value reading is 24 here now, and what it counts is the notes
+        placement -- the status one is still retracted, which is what the
+        round-13 property above was about (#1773, round 19).
         """
         def flaky():
             state = {"calls": 0}
@@ -650,11 +660,24 @@ class TheInstrumentAsksAValueRatherThanAPhraseTests(unittest.TestCase):
 
             return render
 
+        evidence = sys.modules["evidence"]
         by_value = by_grep = bodies = 0
+        standing: dict[str, int] = {}
         for tail in sweep_script.SECTION_TAILS.values():
             for successor in sweep_script.SUCCESSORS.values():
                 for ending in sweep_script.LINE_ENDINGS.values():
                     source = sweep_script.body(tail, successor, ending)
+                    announced: list[str] = []
+                    with (
+                        mock.patch.object(helpers, "render_markdown", side_effect=flaky()),
+                        mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
+                        contextlib.redirect_stderr(io.StringIO()),
+                    ):
+                        evidence.update_evidence_entries(
+                            source,
+                            {1: {"status": "complete", "detail": sweep_script.RESOLVED_DETAIL}},
+                            announcements=announced,
+                        )
                     with (
                         mock.patch.object(helpers, "render_markdown", side_effect=flaky()),
                         mock.patch.dict(helpers._RENDERED_PAGES, {}, clear=True),
@@ -663,8 +686,17 @@ class TheInstrumentAsksAValueRatherThanAPhraseTests(unittest.TestCase):
                     bodies += 1
                     by_value += bool(unasked)
                     by_grep += any("the page could not be asked" in line for line in said)
+                    for note in announced:
+                        if helpers.is_unverified_announcement(note):
+                            heading = str(helpers.unverified_heading(note))
+                            standing[heading] = standing.get(heading, 0) + 1
         self.assertEqual(bodies, 168)
-        self.assertEqual(by_value, 0, "a page that answered on the retry was counted as unasked")
+        # WHICH section is left unchecked, not how many notes survive: the
+        # notes insert's render is the one that failed here and nothing
+        # asked about it again, so its note stands; the status placement
+        # answered on the retry and its note is retracted.
+        self.assertEqual(standing, {"Evidence Notes": 24}, standing)
+        self.assertEqual(by_value, 24, "the notes placement went unchecked and nothing says so")
         self.assertEqual(
             by_grep, 24, "the step log no longer carries the first failure; the case is not built"
         )
