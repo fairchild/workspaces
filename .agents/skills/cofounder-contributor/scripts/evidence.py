@@ -2998,6 +2998,13 @@ def _replaced_note(line: str, number: int, item: str) -> str:
     )
 
 
+# How the carried excerpt opens, named rather than spelled twice: the counting
+# pass below reads the same function's output over a body whose text is the
+# writer's own, and the sentence this write SYNTHESISES there is not something
+# that body lost.
+SUPERSEDED_CARRY_OPENING = "previously in the status list, replaced by the entry the record holds:"
+
+
 def _superseded_carry(line: str) -> str:
     """The author's replaced status line, carried as a fenced excerpt under a sentence saying so.
 
@@ -3020,10 +3027,7 @@ def _superseded_carry(line: str) -> str:
     """
     longest = max((len(run) for run in re.findall(r"`+", line)), default=0)
     fence = "`" * max(3, longest + 1)
-    return (
-        "previously in the status list, replaced by the entry the record holds:"
-        f"\n\n{fence}\n{line}\n{fence}"
-    )
+    return f"{SUPERSEDED_CARRY_OPENING}\n\n{fence}\n{line}\n{fence}"
 
 
 def says_text_was_replaced(note: str) -> bool:
@@ -3453,17 +3457,21 @@ def write_evidence_status_section(
             block
             for section in sections
             for block in _section_notes(section, recorded, section, owned)[0]
+            if not block.startswith(SUPERSEDED_CARRY_OPENING)
         ] + [kept_text for text in standing if (kept_text := _without_edge_blank_lines(text))]
-        if ungathered:
-            # Said to the run and NOT to the author: text the author never
-            # wrote is not a loss of theirs, and a sentence about the model's
-            # own draft in the comment a person reads is noise in the one
-            # channel this branch keeps clearing.
+        # Said to the run and NOT to the author: text the author never wrote
+        # is not a loss of theirs, and a sentence about the model's own draft
+        # in the comment a person reads is noise in the one channel this
+        # branch keeps clearing. One sentence per block, NAMING the line it
+        # starts on, because a count is not something anybody can check: a
+        # sentence that says "2 block(s)" leaves the reader of a log with no
+        # way to tell which two, and left the whole branch unpinned -- the
+        # sentence was the one thing here no test read (#1751, round 18).
+        for block in ungathered:
             log(
-                f"{len(ungathered)} block(s) under `## {EVIDENCE_STATUS_HEADING}` or "
-                f"`## {EVIDENCE_NOTES_HEADING}` in the body being written were not carried: "
+                f"not carried from the body being written: {code_span(block.splitlines()[0])} -- "
                 f"`## {EVIDENCE_NOTES_HEADING}` is written from the body a person can edit, "
-                "which this body is not"
+                "and this text is not from it"
             )
     # Appended to what that section already held rather than replacing it.
     blocks = [kept_text for text in kept if (kept_text := _without_edge_blank_lines(text))] + notes

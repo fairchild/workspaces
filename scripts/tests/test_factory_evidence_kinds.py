@@ -9170,6 +9170,60 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
                 )
 
     # intent: fix
+    # marker: red at `fa8a2010`, its own base, behaviourally: the draft's own
+    # blocks are CARRIED there, so there is nothing for the run to be told and
+    # nothing is said. Red on `016d94ba` the same way. The sentence it pins was
+    # the one thing this round wrote that no test read -- found by a mutant
+    # that dropped it and left every suite green (#1751, round 18).
+    def test_the_run_is_told_which_of_the_drafts_blocks_it_did_not_carry(self) -> None:
+        """Text the write leaves behind is said somewhere, and for generated text that is the log.
+
+        The author's own losses go to the author, in the comment the turn
+        posts. The draft's do not: a sentence about the model's own text in
+        that comment is noise in the channel this branch keeps clearing. So
+        they are said to the run, one per block, NAMING the line each block
+        opens on -- a count nobody can check is what let this go unpinned.
+        """
+        spoken = "not carried from the body being written"
+        shapes = [
+            ("a status bullet for an item the record does not hold",
+             self.draft(self.FORGED_UNRECORDED + "\n"), self.FORGED_UNRECORDED),
+            ("prose under the status heading",
+             self.draft("\n" + self.FORGED_PROSE + "\n"), self.FORGED_PROSE),
+            ("a notes section of the draft's own",
+             self.draft(notes=self.FORGED_NOTE), self.FORGED_NOTE),
+        ]
+        for name, draft, text in shapes:
+            with self.subTest(shape=name):
+                said = io.StringIO()
+                with contextlib.redirect_stderr(said):
+                    run_contributor.render_execution_summary_body(
+                        draft,
+                        requested_evidence=[self.ITEM],
+                        evidence_complete=None,
+                        evidence_blocked=None,
+                        evidence_pending_ci=[f"1 -- {self.DETAIL}"],
+                        published_body=self.published(),
+                    )
+                sentences = [line for line in said.getvalue().splitlines() if spoken in line]
+                self.assertEqual(len(sentences), 1, said.getvalue())
+                self.assertIn(text, sentences[0], "the sentence does not name what it left")
+        # The control: a draft with nothing of its own under either heading
+        # says nothing, so the sentence is about what happened rather than
+        # about the path having run.
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            run_contributor.render_execution_summary_body(
+                self.draft(),
+                requested_evidence=[self.ITEM],
+                evidence_complete=None,
+                evidence_blocked=None,
+                evidence_pending_ci=[f"1 -- {self.DETAIL}"],
+                published_body=self.published(),
+            )
+        self.assertNotIn(spoken, said.getvalue())
+
+    # intent: fix
     # marker: red at `fa8a2010` and at `016d94ba`, its own base and the merge
     # base, behaviourally: both sources of the notes content read the body
     # being rewritten there, so the walk finds `body` where it requires the
