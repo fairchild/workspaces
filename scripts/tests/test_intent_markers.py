@@ -339,32 +339,10 @@ def source_at_base(base: str, relative: str | None, root: Path = REPO_ROOT) -> s
 
 
 class Asked(NamedTuple):
-    """What the census asks about in one file, and which paths it asks wholesale."""
+    """What the census asks about in one file, and which of it is there for a changed marker."""
 
     keys: set[tuple[str, int]]
-    repeated: set[str]
-
-
-def repeated_at_either_end(*readings: dict[tuple[str, int], list[str]]) -> set[str]:
-    """Every dotted path that ANY of these readings defines more than once.
-
-    Both ends, because the ordinal is positional at both. Read from HEAD
-    alone, a base defining `A.test_same` twice against a HEAD defining it
-    once kept the key the round before stopped trusting: the subtraction
-    matched the surviving definition against the base's FIRST, found a
-    marker, and an unmarked replacement of two marked definitions gave
-    `counted=0` and no offender (#1773, round 20).
-
-    More than one, not exactly two: a path with three definitions is
-    repeated by the same argument, and `== 2` is a coarser key wearing this
-    one's name.
-    """
-    return {
-        dotted
-        for reading in readings
-        for dotted, _ in reading
-        if sum(1 for other, _ in reading if other == dotted) > 1
-    }
+    changed: set[tuple[str, int]]
 
 
 def new_tests(path: Path, base: str, touched: Touched, root: Path = REPO_ROOT) -> Asked:
@@ -378,30 +356,26 @@ def new_tests(path: Path, base: str, touched: Touched, root: Path = REPO_ROOT) -
     there (#1773, round 20). A relabelled marker is in the population for
     the same reason and passes the same way any correct marker does.
 
-    And EVERY definition at a dotted path that either end defines more than
-    once is in, whatever the base held: the occurrence beside the path is a
+    That second rule is what the walk needs for a REPEATED dotted path, and
+    it replaced a rule of its own. The occurrence beside the path is a
     positional ordinal, so it names a different definition at the base than
     at HEAD -- insert an unmarked definition ABOVE a marked one and
     occurrence 0 is the new unmarked test while occurrence 1 carries the
-    base's marker, so the subtraction checks the wrong definition and passes
-    the added one (#1773, round 19).
-
-    Not keyed on the COUNT growing, either: a definition removed and another
-    added at one path leaves the count where it was and the same hole opens.
-    The walk cannot say WHICH definition of a repeated path is new, so it
-    stops trying and asks all of them.
+    base's marker. Round 19 answered that by asking every definition at a
+    path HEAD repeats, and round 20 widened it to either end; the marker
+    comparison above subsumes both, because a definition whose ordinal now
+    names different text declares something different at that ordinal, and
+    a path whose every ordinal declares what it declared before has nothing
+    new to report. Measured: with the repetition term removed, both of
+    round 19's seeds and both of round 20's stay red at their bases and
+    green here, and the two mutants that survived this round's first push
+    were mutants OF that term -- a term the tests could no longer reach
+    (#1773, round 20).
     """
     at_base = markers_in(source_at_base(base, touched.at_base, root))
     here = markers_in(path.read_text(encoding="utf-8"))
-    repeated = repeated_at_either_end(here, at_base)
-    return Asked(
-        {
-            key
-            for key in here
-            if key[0] in repeated or key not in at_base or here[key] != at_base[key]
-        },
-        repeated,
-    )
+    changed = {key for key in here if key in at_base and here[key] != at_base[key]}
+    return Asked({key for key in here if key not in at_base} | changed, changed)
 
 
 class Census(NamedTuple):
@@ -431,15 +405,15 @@ def census(base: str, root: Path = REPO_ROOT) -> Census:
         path = root / "scripts" / "tests" / touched.relative
         found = markers_in(path.read_text(encoding="utf-8"))
         asked = new_tests(path, base, touched, root)
-        repeated = asked.repeated
         for key in sorted(asked.keys):
             marks = found[key]
             counted += 1
             named = f"{touched.relative}::{names_one(key)}"
-            if key[0] in repeated:
-                # Why this one is here even if the base held a definition of
-                # that name: the walk cannot say which of them is new.
-                named += " (this path has repeated definitions, so all of them are checked)"
+            if key in asked.changed:
+                # Why this one is here when the base held a test at that key:
+                # what it declares is not what it declared, which is a change
+                # this change is answerable for.
+                named += " (its marker changed since the base)"
             if not marks:
                 offenders["unmarked"].append(named)
             elif len(marks) > 1:
@@ -1030,8 +1004,10 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
                 sandbox = self.clone_with_the_base(root, upstream)
                 reported = self.census_in(sandbox, ci=True)
             self.assertIn("FAILED", reported, reported)
-            self.assertIn("test_renamed_pair.py::A.test_same", reported)
-            self.assertIn("repeated definitions", reported)
+            # Named as the second definition, which is the part the ordinal
+            # used to lose: the file moved AND the path is defined twice at
+            # the new end, and the offender is the one the base never held.
+            self.assertIn("test_renamed_pair.py::A.test_same (definition 2)", reported)
         with self.subTest(shape="a copy arrives as an added file"):
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -1083,7 +1059,7 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
                     reported = self.census_in(sandbox, ci=True)
                 if offends:
                     self.assertIn("FAILED", reported, reported)
-                    self.assertIn("repeated definitions", reported)
+                    self.assertIn("marker changed since the base", reported)
                 else:
                     self.assertIn("OK", reported, reported)
 
