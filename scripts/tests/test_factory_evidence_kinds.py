@@ -10034,12 +10034,19 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
                 source, {1: {"status": "complete", "detail": "green"}}, announcements=said
             )
         self.assertNotIn("verify \\[r1]", written, "the case is not built: the line is still there")
-        self.assertIn("- [complete] verify \\[r1] -- green", self.the_replacement_sentence(said))
-        # And the scalar's own sentence beside it, once, about the value
-        # rather than about the line.
-        scalar = [note for note in said if "bare value" in note]
-        self.assertEqual(len(scalar), 1, said)
-        self.assertNotIn("replaced this line", scalar[0])
+        # Selected by the words rather than through this round's own
+        # predicate, so the control is green at the base it names: at
+        # `a893b4f8` the same input says this through the scalar's sentence,
+        # which is exactly what made the loss above invisible.
+        named = [note for note in said if "replaced this line" in note]
+        self.assertEqual(len(named), 1, said)
+        # That the line is NAMED is all this control claims: at `a893b4f8`
+        # the same body says it through the sentence the bare value earns,
+        # and in the author's own bytes is the sibling above's claim, which
+        # is this round's.
+        self.assertIn("verify", named[0])
+        # And the bare value's own sentence is there, once.
+        self.assertEqual(len([note for note in said if "bare value" in note]), 1, said)
 
     # intent: fix
     # marker: red at `614eb162`, its own base, behaviourally: the write
