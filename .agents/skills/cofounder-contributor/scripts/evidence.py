@@ -706,6 +706,20 @@ def _unreadable_inline(children: list[Token] | None) -> str | None:
     return None
 
 
+# What the section's reader takes as a list marker, written once: an indent it
+# does not read as code, then a bullet or an ordered marker, then the space
+# after it. `lstrip("-*+")` was a character SET standing in for that
+# definition, and the reader accepts `1.`, `1)` and `10.` which the set does
+# not -- so an author's `1. [pending-ci] <recorded item> -- waiting` was named
+# as taken while this write rendered it back (#1778, round 23).
+LIST_MARKER_RE = re.compile(r"^ {0,3}(?:[-*+]|[0-9]{1,9}[.)])[ \t]+")
+
+
+def without_its_list_marker(line: str) -> str:
+    """A source line with the list marker the page reader would take off it, taken off."""
+    return LIST_MARKER_RE.sub("", line, count=1)
+
+
 def _rendered_inline(text: str) -> str:
     """Markdown text, such as a requested item or a recorded detail, read as a status line is."""
     tokens = MARKDOWN.parseInline(text)
@@ -1180,12 +1194,8 @@ def _structured_evidence_entries(
         if not isinstance(raw_entry, dict):
             invalid_lines.append(f"entry {position} is not an object")
             continue
-        try:
-            index = int(raw_entry["index"])
-        except (KeyError, TypeError, ValueError, OverflowError):
-        # OverflowError too: `1e9999` in the PR-editable metadata parses as
-        # infinity, and `int()` of that raises a class the other two do not
-        # cover.
+        index = usable_entry_index(raw_entry)
+        if index is None:
             invalid_lines.append(f"entry {position} is missing a valid integer index")
             continue
         if index < 1 or index > len(requested_evidence):
@@ -2149,6 +2159,9 @@ def _owner_written_entries(
 # for the same reason: what is carried is what the body states the end of.
 EVIDENCE_STATUS_HEADING = "Evidence Status"
 EVIDENCE_NOTES_HEADING = "Evidence Notes"
+# The one spelling of "this text left the section", so a reader and a second
+# sentence about the same loss ask the same question (#1778, round 21).
+UNCARRIED_ANNOUNCEMENT_PREFIX = "not carried to "
 
 
 def _is_status_list_item(tokens: list[Token], index: int) -> bool:
@@ -2260,9 +2273,19 @@ def _uncarried_note(detail: str, line: int, went: str = "") -> str:
     """
     quoted = f", starting {code_span(went)}" if went.strip() else ""
     return (
-        f"not carried to `## {EVIDENCE_NOTES_HEADING}`: {detail} at line {line} "
+        f"{UNCARRIED_ANNOUNCEMENT_PREFIX}`## {EVIDENCE_NOTES_HEADING}`: {detail} at line {line} "
         f"of the `{EVIDENCE_STATUS_HEADING}` section{quoted}"
     )
+
+
+def says_text_was_not_carried(note: str) -> bool:
+    """Whether this announcement already tells the author text left the section.
+
+    One predicate beside the one composer, so a second sentence about the
+    same loss can ask rather than grep -- the shape that put two spellings of
+    one rule in this module three times over (#1778, round 21).
+    """
+    return note.startswith(UNCARRIED_ANNOUNCEMENT_PREFIX)
 
 
 def _section_notes(section: str) -> tuple[list[str], list[str]]:
@@ -2323,8 +2346,14 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
     # sentence into a section of its own would be alteration, not carriage --
     # but the loss is still a loss, and it is said.
     losses: list[tuple[int, str]] = []
+    # The source lines this section could not keep, beside the sentences about
+    # them. A second sentence about a loss has to ask "was THIS line already
+    # spoken about?" -- asking "did anything get spoken about?" skipped every
+    # other loss in the same write (#1778, round 22).
+    uncarried: list[str] = []
     for start, stop in machine:
         if stop - start > 1:
+            uncarried.extend(lines[start + 1 : stop])
             losses.append(
                 (
                     start,
@@ -2357,6 +2386,7 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
         # off its last, which are a line break on the page.
         block = "\n".join(lines[start:stop])
         if (reason := unmovable_block(block)) is not None:
+            uncarried.extend(lines[start:stop])
             # Said, because a loss nobody can see is the failure this file
             # keeps paying for. The line is the one inside this section, which
             # is the only frame this function has.
@@ -2370,7 +2400,7 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
     announcements = [note for _, note in sorted(losses)]
     for announcement in announcements:
         log(announcement)
-    return carried, announcements
+    return carried, announcements, uncarried
 
 
 def _placement_a_reader_cannot_see(written: str) -> str | None:
@@ -2416,6 +2446,10 @@ class SectionWrite(NamedTuple):
     body: str
     refusal: str | None
     announcements: list[str]
+    # The source lines this write could not keep and has already spoken
+    # about, so a later sentence about what left can ask per LINE rather than
+    # per write (#1778, round 22). Empty on a stand-down: nothing left.
+    spoken_for: list[str] = []
 
 
 # How a stand-down announces itself, named rather than spelled twice: the
@@ -2483,10 +2517,12 @@ def write_evidence_status_section(
         return _stood_down(source, refusal)
     notes: list[str] = []
     announcements: list[str] = []
+    spoken_for: list[str] = []
     for section in sections:
-        carried, said = _section_notes(section)
+        carried, said, uncarried = _section_notes(section)
         notes.extend(carried)
         announcements.extend(said)
+        spoken_for.extend(uncarried)
     # The notes section comes out before the status section goes in, so that
     # neither is standing when the other is placed and both land by the same
     # rule. Placing the status around a notes section still in the body put
@@ -2502,7 +2538,7 @@ def write_evidence_status_section(
         unseen = _placement_a_reader_cannot_see(candidate)
         if unseen:
             return _stood_down(source, unseen)
-        return SectionWrite(candidate, None, announcements)
+        return SectionWrite(candidate, None, announcements, spoken_for)
 
     # The note about a heading this reader declined is NOT said here. It was,
     # and it had to be said before the write to see the author's heading alone
@@ -2557,6 +2593,26 @@ def render_execution_summary_body(
     if not _explicit_evidence_contract(requested_evidence):
         return summary_body, []
 
+    # The published record, held to the same rule the lane's write is held to:
+    # nothing the author wrote leaves the body without a line saying it left.
+    # This path rebuilds the record from the turn's own inputs, so an entry it
+    # cannot render was simply not carried forward -- the record came back
+    # clean, the author's status line for that entry was gone from the page,
+    # and `errors`, `announcements` and stderr were all empty. The recovery
+    # from a stand-down was itself an instance of the loss the stand-down
+    # exists to prevent (#1778, round 12). The turn stops instead, the way it
+    # stops on a contract whose items it cannot tell apart, and the body
+    # stands whole.
+    published_record = _extract_evidence_metadata(published_body)
+    published_entries = (
+        published_record.get("entries") if isinstance(published_record, dict) else None
+    )
+    if (refusal := unrenderable_record_refusal(published_entries)) is not None:
+        log(refusal)
+        if announcements is not None:
+            announcements.append(refusal)
+        return summary_body, [refusal]
+
     used_indexes: set[int] = set()
     complete_entries, errors = parse_structured_evidence_updates(
         evidence_complete,
@@ -2585,8 +2641,9 @@ def render_execution_summary_body(
         return summary_body, errors
 
     evidence_map = {
-        int(entry["index"]): entry
+        index: entry
         for entry in complete_entries + blocked_entries + pending_ci_entries
+        if (index := usable_entry_index(entry)) is not None
     }
     evidence_map.update(
         _owner_written_entries(published_body, requested_evidence, mark_carried=True)
@@ -2597,13 +2654,13 @@ def render_execution_summary_body(
     ]
     structured_entries = [
         {
-            "index": entry["index"],
+            "index": index,
             "item": entry["item"],
             "status": entry["status"],
             "detail": entry["detail"],
             "kind": _evidence_item_kind(str(entry["item"])),
         }
-        for _, entry in sorted(evidence_map.items())
+        for index, entry in sorted(evidence_map.items())
     ]
 
     stripped_body = _strip_evidence_metadata(summary_body)
@@ -3611,6 +3668,490 @@ def _encodable(text: str) -> str:
     return text.encode("utf-8", "replace").decode("utf-8")
 
 
+RENDERABLE_STATUSES = ("complete", "blocked", "pending-ci")
+
+
+def entry_as_rendered(entry: object) -> tuple[dict[str, object] | None, str | None]:
+    """What the renderer makes of one entry, and -- when it makes nothing -- why.
+
+    One function, two answers, because they are one rule: a second reader of
+    "does this entry render" written beside the renderer would answer a
+    different question the first time either changed, which is the defect
+    this pull request keeps closing. The renderer takes the dict; the guard
+    below takes the reason and says it to the author.
+
+    The reason is written for a person editing metadata by hand, because that
+    is who can fix it: it names the value it found, so `"2"` reads back as a
+    string rather than as the number the author meant.
+    """
+    if not isinstance(entry, dict):
+        # A scalar in the entries list is NOT an unrenderable entry: it is a
+        # value the record carries that no renderer ever made a line for.
+        # `unrenderable_entries` answers about entries that stand for a line;
+        # `scalar_record_positions` answers about these (#1778, round 14).
+        return None, None
+    claimed = entry.get("index")
+    index = usable_entry_index(entry)
+    if index is None:
+        if _claimed_index(entry) is None:
+            return None, quoted_sentence(
+                "index {value}, which is not an integer",
+                value=quoted_for_comment(json.dumps(claimed), 80),
+            )
+        return None, quoted_sentence(
+            "index {value}, which numbers no line",
+            value=quoted_for_comment(str(claimed), 80),
+        )
+    item = _encodable(str(entry.get("item", "")).strip())
+    status = str(entry.get("status", "")).strip()
+    detail = _encodable(str(entry.get("detail", "")).strip())
+    if not item:
+        return None, "no item text"
+    # One status line is ONE line. An item carrying a break -- a bare newline,
+    # a hard break, or the `&#10;` / `&#xa;` entity that decodes to one --
+    # renders as two lines in a PR body, so the write cannot render it as the
+    # line it is about to claim. It joins the family the record already has
+    # rather than being written and then argued about: at `614eb162` the
+    # write rendered it and then named the entry's OWN first physical line as
+    # taken, because the source line it walks carries only that much
+    # (#1778, round 23).
+    # ASKED OF BOTH HALVES, because the line is `- [status] item -- detail`
+    # and the question is about the LINE. Round 23 asked the item alone: a
+    # detail of `author proof` + newline + `- [blocked] injected line -- stop`
+    # was accepted, the write emitted three source lines for a two-entry
+    # record, the page read three status lines, one of them recording nothing,
+    # and the label cleared. The guard's key and the rendered line's shape
+    # were chosen separately and nowhere was it written that they had to
+    # agree -- the third time on this branch (#1778, round 24).
+    #
+    # No third question about the composed line: a break needs a newline or an
+    # entity that decodes to one, both fields are asked about both, and
+    # joining two texts that carry neither cannot produce one.
+    for carries, text in (("item", item), ("detail", detail)):
+        # TWO READERS, TWO KEYS, and this is where they meet -- said once,
+        # because it is the third time on this branch that a guard and the
+        # readers it protects were keyed separately and nowhere was it
+        # written that they had to agree.
+        #
+        # The RAW bytes decide whether every source-line walker in this file
+        # sees two lines, by ONE definition of what a line ends on
+        # (`spans_two_lines`) -- the guard and the walker that pairs readings
+        # back to source lines used two until round 25, and `str.splitlines()`
+        # breaks on five code points `"\n" in text` does not. A code span
+        # holding a newline and a split HTML tag render as ONE line on the
+        # page and are two lines in the body, so the write accepted them and
+        # then accounted for them line by line:
+        # the carry path named the second physical line of its own item as an
+        # author's continuation "not carried", and `taken` named the first,
+        # `- [pending-ci] verify <b`, as what the write took. Both sentences
+        # were about lines the write itself had just written.
+        #
+        # The PAGE's reading decides whether a READER sees two lines, which
+        # is a different set: an `&#10;` entity is one source line and two
+        # rendered ones, and nothing in the source says so.
+        #
+        # Either way the entry cannot be rendered as the one line it claims,
+        # so it joins the family the record already has rather than being
+        # written and then argued about (#1778, rounds 23 and 24).
+        # The page's question first, so a shape both answers keeps the reason
+        # round 23 published for it -- an author reading "renders as a line
+        # break" about a bare newline is reading the consequence, and the
+        # source-line reason below is for the shapes the page says nothing
+        # about.
+        parsed = MARKDOWN.parseInline(text)
+        reason = _unreadable_inline(parsed[0].children if parsed else None)
+        broken = reason if reason is not None and "line break" in reason else None
+        if broken is None and spans_two_lines(text):
+            broken = f"an {carries} whose text spans two source lines"
+        # And the break the page renders from HTML, which carries no newline
+        # and reads as inline HTML rather than as a break: `<br>`, `<br/>`,
+        # `<br />` and every other spelling of that tag passed both arms, so
+        # a detail of `green<br>- [blocked] injected line -- stop` was written
+        # as ONE source line the page renders as two status lines, with
+        # nothing announced -- and the section it leaves then fails the page
+        # reader outright (#1778, round 25). Asked of the RENDERING, so the
+        # spelling does not matter.
+        if broken is None and any(
+            child.type == "html_inline" and BREAK_TAG_RE.search(child.content)
+            for child in ((parsed[0].children if parsed else None) or [])
+        ):
+            broken = f"an {carries} whose text renders a line break as inline HTML"
+        if broken is not None:
+            return None, broken if carries == "item" else broken.replace(
+                "an item", "a detail", 1
+            ).replace("an item's", "a detail's", 1)
+
+    # An item that renders to NOTHING on the page is an item no reader can
+    # see and no reader can own a line by: `&nbsp;`, `&#32;` and `&#x20;` are
+    # bytes in the record and blank on the page. The write used to render a
+    # line for one and then name that very line "replaced with nothing",
+    # because the rewritten-ness question skips an empty item -- a false
+    # accusation about a line sitting in the section. Refused rather than
+    # compared on its raw text: a refusal says what happened and names the
+    # position, and a quiet raw comparison would leave the author with a
+    # status line nobody can read and nothing said about it (#1778, round 22).
+    if not _rendered_inline(item).strip():
+        # The item itself is quoted by the caller that names the position, so
+        # the reason says what is wrong with it and not the bytes again.
+        return None, "an item that renders to nothing on the page"
+    if status not in RENDERABLE_STATUSES:
+        return None, quoted_sentence(
+            "status {value}, which is not " + ", ".join(RENDERABLE_STATUSES),
+            value=quoted_for_comment(json.dumps(status), 80),
+        )
+    if not detail:
+        return None, "no detail"
+    return {"index": index, "item": item, "status": status, "detail": detail}, None
+
+
+COMMENT_QUOTE_LIMIT = 160
+
+
+def comment_safe(text: str, limit: int = COMMENT_QUOTE_LIMIT) -> str:
+    """PR-editable text, flattened and bounded, for use inside a code span.
+
+    Backticks and newlines come out, so a quoted string cannot break out of
+    the span or the line it sits on, and HTML comment delimiters come out to a
+    fixed point -- one pass left `<<!--!--` behind as `<!--`.
+
+    Why any of it: `item`, `index`, `detail` and the rest come from the
+    metadata block, which is as editable as the pull request description. An
+    item of `a\n\n<!-- @name` opens an HTML comment on a line of its own
+    inside a comment the OWNER is meant to trust, hiding the recovery
+    instruction under it and the line the dedup guard keys on -- measured
+    against GitHub's renderer, which shows neither (#1778, round 12). An index
+    of `1\n<!--` did the same through two paths in the review-response lane
+    that never touched its quoting (#1778, round 6); that hazard's account was
+    deleted with the function it sat on and is restored here, where both
+    lanes read it.
+
+    Rendering is `quoted_for_comment`'s job; this is about what the string may
+    contain at all.
+    """
+    flattened = " ".join(text.replace("`", "").split())
+    while "<!--" in flattened or "-->" in flattened:
+        flattened = flattened.replace("<!--", "").replace("-->", "")
+    if len(flattened) <= limit:
+        return flattened
+    return flattened[: limit - 1].rstrip() + "\u2026"
+
+
+class Quoted(str):
+    """Text that has been through `quoted_for_comment` and nothing else.
+
+    The structural half of the injection rule, and it is a TYPE rather than a
+    list because the list was the thing that was wrong: round 12 routed the
+    field it was told about (`item`) and left `index` and `status` half-done,
+    and a test that walks an enumeration agrees with whatever the enumeration
+    says -- the next field somebody adds is not in it (#1778, round 13).
+
+    `quoted_sentence` accepts only these, so an unquoted field cannot reach a
+    comment: a new field interpolated raw is a `TypeError` at the call site
+    rather than a finding six weeks later. A `str` subclass rather than a
+    dataclass because these sentences are built by f-string in half a dozen
+    places and a wrapper that is not a string would rewrite all of them --
+    the type is the gate, the string is the convenience.
+    """
+
+    __slots__ = ()
+
+
+def quoted_sentence(template: str, **values: object) -> str:
+    """One sentence, with every PR-editable value in it already quoted.
+
+    The composer that takes a mapping and applies the rule to EVERY value it
+    is given: forgetting a field is a loud failure here rather than a quiet
+    escape in a posted comment.
+    """
+    for name, value in values.items():
+        if not isinstance(value, Quoted):
+            raise TypeError(
+                f"{name} reaches a comment unquoted: pass quoted_for_comment({name!r}) "
+                "rather than the raw value"
+            )
+    return template.format(**values)
+
+
+def as_code_span(text: str) -> str:
+    """Text already flattened by `comment_safe`, wrapped so none of it can act.
+
+    Separate from the flattening because a caller that trims the text first --
+    the review-response lane cuts an item at a clause boundary so a reader can
+    recognise the line -- wraps what it trimmed rather than re-flattening it.
+    Flattening twice eats the space `comment_safe` leaves where it removed an
+    HTML comment marker, which is a visible difference in a posted comment.
+    """
+    return f"`{text}`" if text else ""
+
+
+# WHAT A LINE ENDS ON, in one place, because two definitions of it were
+# exactly what this round found in code this branch added: the refusal asked
+# `"\n" in text` and the walker six hundred lines below split with
+# `str.splitlines()`, which also breaks on `\v`, `\f`, `\x1c`, `\x1d`, `\x1e`,
+# `\x85`, U+2028 and U+2029. A body that is one line to one reader and two to
+# the other is the shape every finding on this pull request is an instance of
+# (#1778, round 25).
+#
+# The WIDER set wins for both: a text that any reader here would see as two
+# lines is not one status line, and refusing it is the answer that cannot
+# leave a section reading differently to the two of them.
+LINE_BOUNDARIES = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+
+# The tag a page renders as a line break, in any spelling it can be written
+# with: `<br>`, `<br/>`, `<br />`, `<BR>`, and one carrying attributes.
+BREAK_TAG_RE = re.compile(r"<\s*br\b[^>]*>", re.IGNORECASE)
+
+
+def spans_two_lines(text: str) -> bool:
+    """Whether any reader in this file would see more than one line here."""
+    return any(boundary in text for boundary in LINE_BOUNDARIES)
+
+
+def split_source_lines(text: str) -> list[str]:
+    """The source lines of this text, by the same definition `spans_two_lines` uses."""
+    return text.splitlines()
+
+
+def quoted_verbatim(text: str, limit: int = COMMENT_QUOTE_LIMIT) -> str:
+    """PR-editable text in a code span that keeps its BYTES, including its backticks.
+
+    `quoted_for_comment` flattens backticks out of the text, which is right
+    for a field a reader only has to recognise and wrong for a line an author
+    is being asked to rewrite: their ``- [blocked] deploy `prod` now -- author
+    proof`` came back without the span markers, so the line they were shown is
+    not the line they lost -- the failure the reading-to-source pairing was
+    added to prevent, arriving one step later (#1778, round 25).
+
+    So the span is sized past the longest backtick run in the text, the way
+    the fenced excerpt next door sizes its fence, and padded where the text
+    starts or ends with one, which is what CommonMark requires for a span to
+    hold them. Everything else `comment_safe` does stays: the newlines and
+    the comment delimiters still come out, because those are what let quoted
+    text act on the comment around it.
+    """
+    flattened = " ".join(text.split())
+    while "<!--" in flattened or "-->" in flattened:
+        flattened = flattened.replace("<!--", "").replace("-->", "")
+    if len(flattened) > limit:
+        flattened = flattened[: limit - 1].rstrip() + "\u2026"
+    if not flattened:
+        return Quoted("")
+    longest = max((len(run) for run in re.findall(r"`+", flattened)), default=0)
+    ticks = "`" * (longest + 1)
+    pad = " " if flattened.startswith("`") or flattened.endswith("`") else ""
+    return Quoted(f"{ticks}{pad}{flattened}{pad}{ticks}")
+
+
+def quoted_for_comment(text: str, limit: int = COMMENT_QUOTE_LIMIT) -> str:
+    """PR-editable text, rendered so none of it can act.
+
+    A code span, not an escape list. Escaping `<` stopped the HTML-comment
+    class and left every markdown construct alive: a link, an image, an
+    autolink, a nested list marker, a mention. Inside a span all of them are
+    characters, and `comment_safe` has already taken the backticks out, so
+    nothing in the text can close the span it sits in.
+
+    ONE function for every PR-editable field that reaches a comment. The
+    review-response lane had this rule and the writer's announcements did not,
+    so the same hazard was live one field over from a lane that had closed it
+    (#1778, round 12).
+    """
+    return Quoted(as_code_span(comment_safe(text, limit)))
+
+
+def unrenderable_entries(entries: object) -> list[str]:
+    """Every recorded entry the renderer cannot render, named where the author can find it.
+
+    By POSITION in the record rather than by index, because the index is the
+    thing that may be unreadable.
+
+    OBJECT entries only. An entry with an item stands for a line the author
+    can see, so a write that cannot render it cannot account for that line and
+    stands down whole (#1778, rounds 11-13). A SCALAR in the entries list
+    stands for no line any renderer produced: refusing a whole record for one
+    completes nothing, protects nothing, and breaks a contract main keeps --
+    the legacy scalar is preserved and the renderable entries are written.
+    Those are named by `scalar_record_positions` and announced rather than
+    refused (#1778, round 14).
+    """
+    named: list[str] = []
+    for position, entry in enumerate(entries if isinstance(entries, list) else [], start=1):
+        rendered, reason = entry_as_rendered(entry)
+        if rendered is not None or reason is None:
+            continue
+        item = str(entry.get("item", "")).strip() if isinstance(entry, dict) else ""
+        quoted = quoted_for_comment(item)
+        named.append(
+            f"the entry at position {position}" + (f" ({quoted})" if quoted else "") + f" has {reason}"
+        )
+    return named
+
+
+def colliding_record_refusal(entries: object) -> str | None:
+    """The sentence a record with two entries at one index earns, or None.
+
+    Composed here for the same reason the unrenderable one is: the write and
+    the lane both refuse such a record, and the lane could only say so
+    through the write -- which it never reaches, because a colliding record
+    produces no updates. So the collision was the one refusal with no path to
+    the author at all, where the malformed case had gained one a round
+    earlier: the same defect, one branch over (#1778, round 13).
+    """
+    if not (shared := colliding_indexes(entries)):
+        return None
+    return STOOD_DOWN_ANNOUNCEMENT_PREFIX + (
+        "evidence entries share index(es) "
+        f"{', '.join(str(index) for index in shared)}, so an update aimed at one would "
+        "land on every entry carrying it; leaving the contract for the author"
+    )
+
+
+def scalar_record_positions(entries: object) -> list[int]:
+    """Where the record carries a bare value instead of an entry.
+
+    Named, not refused, and not deleted: the value is preserved in the
+    metadata byte for byte, the renderable entries are written, and any line
+    under the heading that no renderable entry owns is carried to
+    `## Evidence Notes` by the write's own carry path. What the author gets is
+    a sentence naming the position, which is the only handle a scalar has
+    (#1778, round 14).
+    """
+    return [
+        position
+        for position, entry in enumerate(entries if isinstance(entries, list) else [], start=1)
+        if not isinstance(entry, dict)
+    ]
+
+
+def scalar_record_announcement(entries: object) -> str | None:
+    """The sentence a record carrying a bare value earns, or None.
+
+    The bare value alone. What the write REPLACED is a different fact about
+    the same body and it has its own sentence below: carried here as a clause,
+    it reached the author only when the record happened to hold a scalar --
+    so the line round 22 found was named on a record with a legacy value
+    beside it and deleted in silence on the same record without one. One
+    sentence per fact, each with its own condition (#1778, round 24).
+    """
+    if not (positions := scalar_record_positions(entries)):
+        return None
+    places = ", ".join(str(position) for position in positions)
+    plural = len(positions) != 1
+    return (
+        f"`## {EVIDENCE_STATUS_HEADING}` was written with the record's bare value"
+        f"{'s' if plural else ''} at position {places} preserved exactly as recorded: "
+        f"nothing renders a status line for {'them' if plural else 'it'}, so the list holds "
+        "the entries that do render and no line was written back for "
+        f"{'those values' if plural else 'that value'}."
+    )
+
+
+# How the sentence about replaced lines opens, named so the predicate below
+# reads exactly what this writes.
+REPLACED_LINES_OPENING = f"`## {EVIDENCE_STATUS_HEADING}` was rewritten from the record."
+
+
+def replaced_lines_announcement(
+    replaced: list[str], restated: list[str] | None = None
+) -> str | None:
+    """The sentence naming the status lines this write took, or None if it took none.
+
+    `replaced` is a MEASUREMENT of the section rather than an ownership rule
+    -- the status-shaped lines the page read under the heading before this
+    write, minus the ones it rendered back; which line belongs to which entry
+    is #1779's question and that branch's answer. What the author needs is
+    the text and where to put it back, and they need it whatever else the
+    record happens to carry: this sentence used to travel as a clause on the
+    scalar announcement, whose condition is a bare value in the record, so
+    round 22's escaped-bracket line was named on a record with a legacy
+    scalar and lost in silence on the same record without one -- a fixture
+    from the round that found a bug carrying that round's incidental
+    properties into every later measurement of it (#1778, round 24).
+
+    The text is NAMED and not carried. Carrying a status-shaped line means
+    deciding whose it is, which is the ownership rule #1779 is for; the rule
+    here is that nothing leaves the body without a sentence saying it left
+    and how to put it back.
+    """
+    if not replaced and not (restated or []):
+        return None
+    return REPLACED_LINES_OPENING + _replaced_lines_clause(replaced, restated)
+
+
+def says_lines_were_replaced(note: str) -> bool:
+    """Whether this sentence is the one about the lines this write took.
+
+    A surface with a list of announcements has to tell them apart by what
+    they say rather than by the order they were said in: the scalar record's
+    sentence travels beside this one now, and every reader keyed on the
+    first element of that list was keyed on an order (#1778, round 24).
+    """
+    return REPLACED_LINES_OPENING in note
+
+
+def _replaced_lines_clause(replaced: list[str], restated: list[str] | None = None) -> str:
+    """Each line this write took out, named verbatim, or nothing when it took none.
+
+    Two clauses, because a line that leaves leaves in one of two ways and the
+    author can act on only one of them. A line about a requirement this
+    record does not hold is gone with nothing in its place, and rewriting it
+    below the status section keeps it. A line about a requirement the record
+    DOES hold has the entry's own line standing where it stood: their reading
+    of it is gone, and what to fix is the record rather than the body. Said
+    as one sentence and not two, because it is one write and one loss
+    (#1778, round 24).
+
+    Through `quoted_verbatim`, because what these sentences hand back is a
+    line the author is being asked to rewrite: the comment quoter flattens
+    backticks, and a line quoted without its span markers is not the line
+    that left (#1778, round 25).
+    """
+    restated = restated or []
+    if not replaced and not restated:
+        return ""
+    clause = ""
+    if replaced:
+        quoted = ", ".join(quoted_verbatim(line, 200) for line in replaced)
+        clause += (
+            f" This write replaced {'these lines' if len(replaced) != 1 else 'this line'} with "
+            f"nothing: {quoted}. Rewriting "
+            f"{'them' if len(replaced) != 1 else 'it'} below the status section keeps "
+            f"{'them' if len(replaced) != 1 else 'it'} in the body the next run writes."
+        )
+    if restated:
+        quoted = ", ".join(quoted_verbatim(line, 200) for line in restated)
+        clause += (
+            f" {'These lines' if len(restated) != 1 else 'This line'} read a requirement this "
+            f"record holds, so the entry's own line stands where "
+            f"{'they' if len(restated) != 1 else 'it'} stood and "
+            f"{'their' if len(restated) != 1 else 'its'} reading of it is gone: {quoted}. If "
+            f"{'those readings were' if len(restated) != 1 else 'that reading was'} right, the "
+            "record is what to fix."
+        )
+    return clause
+
+
+def unrenderable_record_refusal(entries: object) -> str | None:
+    """The sentence a record this code cannot render earns, or None.
+
+    Composed here rather than at the writer, because two readers need it and
+    the second had no way to reach it: the verifier lane takes this path only
+    when the run has something else to write, so a body whose ONLY `ci` entry
+    is malformed produced no updates, no comment and a silently kept label --
+    which is the most likely shape of a malformed record (#1778, round 12).
+    One composition, so the sentence the lane posts and the sentence the write
+    logs cannot drift apart.
+    """
+    named = unrenderable_entries(entries)
+    if not named:
+        return None
+    return STOOD_DOWN_ANNOUNCEMENT_PREFIX + (
+        "; ".join(named)
+        + ", so this write cannot render it and will not delete the line it stands for; "
+        "fix the metadata"
+    )
+
+
 def _render_structured_entries(
     body: str, updated_entries: list[object], announcements: list[str] | None = None
 ) -> str:
@@ -3620,38 +4161,61 @@ def _render_structured_entries(
     body and nothing else, so every sentence the write owes the author had
     nowhere to go (#1740). A caller that passes a list gets them and posts
     them; a caller that does not is unchanged.
+
+    The rule this write is held to: nothing the author wrote leaves the body
+    without a line saying it left. So a record holding an entry this code
+    cannot render is not rewritten at all -- round 8 moved the renderer onto
+    `usable_entry_index` so that an entry nothing can act on is not acted on,
+    and an entry recorded at index `"2"` then had its status line deleted with
+    its metadata intact, nothing in `## Evidence Notes` and nothing announced
+    (#1778, round 11). An entry this code cannot key is not "not an entry": it
+    is a record the author wrote that this code cannot act on, and the honest
+    answers are to stand down whole or to keep the line and say so. This
+    stands down, the way a colliding index does, so record and page stay as
+    the author left them and the sentence names the entry.
     """
+    # The REFUSAL decides first. Said in the other order, a record holding
+    # both a bare value and an unkeyable entry told the author two things
+    # that disagree: "was written with the record's bare value preserved"
+    # and then "was left as written" -- for a write that did not happen
+    # (#1778, round 15). The scalar sentence belongs to the path that writes.
+    if (refusal := unrenderable_record_refusal(updated_entries)) is not None:
+        log(refusal)
+        if announcements is not None:
+            announcements.append(refusal)
+        return body
     rendered_entries: list[dict[str, object]] = []
     for entry in updated_entries:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            index = int(entry["index"])
-        except (KeyError, TypeError, ValueError, OverflowError):
-            continue
-        item = _encodable(str(entry.get("item", "")).strip())
-        status = str(entry.get("status", "")).strip()
-        detail = _encodable(str(entry.get("detail", "")).strip())
-        if index < 1 or not item or status not in {"complete", "blocked", "pending-ci"} or not detail:
-            continue
-        rendered_entries.append(
-            {
-                "index": index,
-                "item": item,
-                "status": status,
-                "detail": detail,
-            }
-        )
+        rendered, _ = entry_as_rendered(entry)
+        if rendered is not None:
+            rendered_entries.append(rendered)
 
+    rendered_lines = [
+        f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
+        for entry in sorted(rendered_entries, key=lambda entry: int(entry["index"]))
+    ]
+    # What the record said before this write applied its updates, rendered by
+    # the same composition: the line the LAST run wrote is the machine's, and
+    # this is the only place that knows it (#1778, round 24).
+    recorded_lines = []
+    found = _extract_evidence_metadata(body)
+    if isinstance(found, dict) and isinstance(found.get("entries"), list):
+        for raw_entry in found["entries"]:
+            recorded, _ = entry_as_rendered(raw_entry)
+            if recorded is not None:
+                recorded_lines.append(
+                    f"- [{recorded['status']}] {recorded['item']} -- {recorded['detail']}"
+                )
+    carried_lines: list[str] = []
     if rendered_entries:
         write = write_evidence_status_section(
-            _strip_evidence_metadata(body),
-            [
-                f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
-                for entry in sorted(rendered_entries, key=lambda entry: int(entry["index"]))
-            ],
+            _strip_evidence_metadata(body), rendered_lines
         )
         reconciled, refusal = write.body, write.refusal
+        # Held here as well as handed on, so the second sentence about a loss
+        # can ask whether the first was already said even when the caller
+        # keeps no list (#1778, round 21).
+        carried_lines = list(write.spoken_for)
         if announcements is not None:
             announcements.extend(write.announcements)
         if refusal is not None:
@@ -3663,6 +4227,345 @@ def _render_structured_entries(
             return body
     else:
         reconciled = body
+    # What this write TOOK, measured across it rather than predicted before
+    # it: the section's status lines as the page reads them, before and
+    # after. Reading both sides through one reader is the whole of it -- a
+    # comparison between the page's reading and the write's own bytes counts
+    # every line as replaced, including the ones it rendered back unchanged
+    # (#1778, round 15).
+    before, unreadable_before = _rendered_status_lines(body)
+    after, _ = _rendered_status_lines(reconciled)
+    # A line whose ITEM is one the write rendered was REWRITTEN, not replaced:
+    # the completion that updates a detail -- appending the run link -- makes
+    # the entry's own line differ before and after, and naming it "replaced
+    # with nothing" told the author to write their completed status line back
+    # below the section (#1778, round 16). The item is read with this
+    # module's own parser, bound to the items the write rendered, which is a
+    # reading of the line rather than an ownership rule; ownership is #1779's.
+    #
+    # The AFTER page can be unreadable, and only the BEFORE half is in the
+    # fail-closed condition below. Both halves of that were once said the
+    # other way round: round 16 called an unreadable after page unreachable
+    # on six shapes of the SECTION, none of which varied the DETAIL this
+    # write renders. A detail carrying inline HTML, a line break or an HTML
+    # comment makes the write succeed and leaves a section the reader
+    # refuses -- measured on this branch and on `main`, so the writer hazard
+    # is pre-existing (#1799). When that happens `after` is empty by the
+    # reader's contract, so every before-line this write did not render back
+    # is named, which is the right answer: the write rewrites the section
+    # wholesale, and those lines really did leave the body. Putting
+    # `unreadable_after` in the condition beside `unreadable_before` would
+    # make exactly that write say nothing while the author's line left --
+    # measured, not reasoned -- so it is out, and
+    # `test_a_write_whose_own_detail_hides_the_section_still_names_what_left`
+    # holds it out.
+    # Decided from what this write KNOWS it rendered, not by reading the line
+    # back. `split_evidence_status_line` refuses any line past
+    # `EVIDENCE_STATUS_LINE_LIMIT`, so a rendered-back line longer than that
+    # answered "not rewritten" and was named "replaced with nothing" while it
+    # sat in the written body -- telling the author to write back a line they
+    # already have, which duplicates it on the next run (#1778, round 18).
+    # The status token still comes from this module's own prefix reader,
+    # which has no length limit; the ITEM is matched against the items the
+    # write rendered rather than found by splitting on the first ` -- `, so
+    # an item that CONTAINS the separator matches its own line instead of
+    # splitting at the wrong boundary -- round 16's defect in another shape.
+    # `.strip()` here is redundant and stays as the reader's contract rather
+    # than as a step: the only producer of `rendered_entries` is
+    # `entry_as_rendered` a few lines above, which strips the item as it
+    # builds the line the write emits, so this set is already stripped. Its
+    # mutant is EQUIVALENT by that construction rather than by a sample
+    # (#1778, round 18).
+    # The document context the LINE is read in, and no more: parsing the body
+    # once fills this with its link reference definitions, which is what an
+    # item's `[the run][r1]` resolves against on the page. Narrower than that
+    # and the item is read in a document that has no definitions while the
+    # line is read in one that has them; wider -- re-reading the body per item
+    # -- would let a paragraph edited elsewhere change an item's rendering
+    # (#1778, round 21).
+    reading_context: dict[str, object] = {}
+    MARKDOWN.parse(body, reading_context)
+
+    def _as_the_page_reads(text: str) -> str:
+        """This module's own reading of an ITEM, the one `before` came through.
+
+        `before` holds what the page reader made of each line -- inline
+        markdown resolved -- and the items and lines this write knows about
+        are RAW. Comparing the two is the round-17 defect in a second shape:
+        an item carrying `*…*` or `**…**` never matched its own line, so the
+        author was told a line was replaced with nothing while the write put
+        it in the body (#1778, round 20).
+
+        INLINE, in the body's context. Round 20 read the item as a standalone
+        DOCUMENT, which is a different reader: a document parse gives the
+        block phase a chance at the text, so an item the author wrote as
+        `1. verify the lane` lost its `1. ` to a list marker while the line
+        holding it kept it as text -- and the write then named its own
+        rendered-back line as replaced with nothing. An item is inline
+        content of a line, never a block of its own, so it is read with the
+        inline parser, which has no block phase to eat a marker, in the
+        context the line's own reading has (#1778, round 21).
+        """
+        return " ".join(
+            inline_text(token.children).strip()
+            for token in MARKDOWN.parseInline(text, reading_context)
+            if token.type == "inline"
+        ).strip()
+
+    items = {_as_the_page_reads(str(entry["item"]).strip()) for entry in rendered_entries}
+    # The lines THIS WRITE renders and the lines the RECORD AS FOUND renders,
+    # as the page reads them -- the same reader `before` and `after` come
+    # through. Both ends, because a line the last run wrote for an entry this
+    # run updates is the machine's and reads as neither the new line nor the
+    # item alone: keyed on the item, the author's own differing reading of
+    # the same requirement was swallowed with it (finding 3); keyed on this
+    # write's lines only, the last run's own line is named as the author's.
+    # One entry owns one line at each end of the body.
+    rendered_readings = {
+        _as_the_page_reads(without_its_list_marker(line).strip())
+        for line in rendered_lines + recorded_lines
+    }
+
+    def _names_one_of(line: str, known: set[str], *, raw_source: bool = False) -> bool:
+        """Whether this line is a status line for one of `known`.
+
+        `raw_source` says which side the line came from, and the list marker
+        is the difference: a SOURCE line carries one and the page's reading
+        of a line does not, because the reader took it off. Stripping `-*+`
+        from a page reading let an author's line whose RENDERED text opens
+        with a marker and a status token -- `- -- [pending-ci] verify the
+        lane -- mine` reads as `-- [pending-ci] verify the lane -- mine` --
+        match as a line this write rendered, so it left the section and
+        nothing named it (#1778, round 22).
+        """
+        text = line.strip()
+        if raw_source:
+            text = without_its_list_marker(line).strip()
+        prefix = EVIDENCE_STATUS_PREFIX_RE.match(f"- {text}")
+        if not prefix:
+            return False
+        rest = prefix.group("rest").strip()
+        for item in known:
+            if not item or not rest.startswith(item):
+                continue
+            tail = rest[len(item) :]
+            if tail == "":
+                return True
+            # The separator contract itself (:55) rather than a re-derivation
+            # of it: the boundary is a separator with whitespace on BOTH
+            # sides, so the item has to end where the separator's whitespace
+            # begins. `.lstrip()` here discarded exactly that whitespace, and
+            # `run tests-ios` then read as a line rendered for `run tests` --
+            # the author's line left the body in silence (#1778, round 20).
+            separator = EVIDENCE_SEPARATOR_RE.search(tail)
+            if separator is not None and not tail[: separator.start()].strip():
+                return True
+        return False
+
+    # THE LINE, not the item. `_names_one_of(line, items)` answered "is this
+    # line about a requirement the record holds", which is a different
+    # question from "is this a line this write wrote": an author's own
+    # `- [blocked] run \`swift test\` -- author proof` beside a record that
+    # renders `- [complete] run \`swift test\` -- machine proof` answered YES
+    # to the item question and was dropped as rewritten, with the status
+    # token and the detail -- both theirs -- gone and nothing said. Which
+    # key serves which reader is stated at `entry_as_rendered`
+    # (#1778, round 24).
+    def _rewritten(line: str) -> bool:
+        return line.strip() in rendered_readings
+
+    def _about_a_recorded_item(line: str) -> bool:
+        return _names_one_of(line, items)
+
+    # The same question asked of the author's RAW bytes, for the one path
+    # where the page's reading does not exist: the reader refused the
+    # section, so both sides of that comparison are the body as written
+    # (#1778, round 21).
+    raw_items = {str(entry["item"]).strip() for entry in rendered_entries}
+
+    # The backstop that read a second rendering of this write's own lines is
+    # GONE, and so is the rendering. It was kept through rounds 18 to 22 on
+    # an argument that it could not fire, which was false -- an item of
+    # `verify [r1]` with the definition in the body and an author's escaped
+    # `verify \\[r1]` beside it reached it, and it silenced that loss, because
+    # the document it read from carried none of the body's definitions and
+    # flattened two different lines into one reading. Reading it in the
+    # body's context closes that, and then nothing reaches the term at all:
+    # not the four suites, not the 27 item shapes the pass drove, not the
+    # class this branch measures. A term no input reaches is an unread line
+    # rather than defence in depth, and the rewritten-ness question above --
+    # which asks the ITEMS this write rendered, in the body's own context --
+    # is the claim that was doing the work (#1778, round 23).
+
+    # The BEFORE half is redundant TODAY and kept deliberately: this reader
+    # answers an unreadable section with no lines at all, so the list would
+    # be empty anyway (its mutant is equivalent, measured). It stays because
+    # the redundancy is the reader's contract rather than this function's,
+    # and a reader that later returns partial lines with a reason would
+    # otherwise start naming lines it could not read. The contract is pinned
+    # by `test_an_unreadable_section_answers_with_no_lines`. The AFTER half
+    # is a different question and is answered above: it is absent because
+    # adding it changes an answer, not because it could not fire.
+    replaced = (
+        []
+        if unreadable_before is not None
+        else [
+            line
+            for line in before
+            if line not in after and not _rewritten(line)
+        ]
+    )
+    # An empty `replaced` because nothing was replaced and an empty one
+    # because the page could not be READ are not the same result, and until
+    # round 21 they were the same object. This is the one shape where the
+    # BEFORE half of the fail-closed condition decides anything: the reader
+    # refuses the section (an item carrying inline HTML, say), so `before` is
+    # empty and nothing is named -- while the write goes ahead and rewrites
+    # the section, so any line it held that this write did not render back
+    # has left. The loss is main's too; the SILENCE was this branch's, and
+    # the criterion is that nothing leaves without a line saying it left. The
+    # page is not read around the refusal -- that is the second renderer
+    # round 17 closed -- the refusal itself is what the sentence carries
+    # (#1778, round 21).
+    already_spoken_for = {line.strip() for line in carried_lines}
+    # What LEFT, measured on the author's own bytes rather than on a reading
+    # of the page: the page reader has refused, and reconstructing its view
+    # around the refusal is the second renderer round 17 closed. The section's
+    # source lines before the write, minus the ones still there after it,
+    # minus the lines this write rendered, is what the author no longer has --
+    # and it is the form they need to put a line back.
+    taken = []
+    if unreadable_before is not None:
+        # A term for "this write rendered it" is NOT here: every line the
+        # write renders is in the section it writes, so the set below already
+        # holds it. It was here, and its mutant survived -- an unreachable
+        # term is an unread line rather than defence in depth, and the
+        # measurement is what said so (#1778, round 22).
+        # The two sections this write can put a line in: the one it rewrites
+        # and the one a carry moves text to. Not the whole body -- an echo of
+        # the lost line inside a fenced example somewhere else subtracted it
+        # and nothing was named -- the same silence the backstop round 23
+        # deleted used to produce one shape over (#1778, rounds 22 and 23).
+        after_source = {
+            line.strip()
+            for heading in (EVIDENCE_STATUS_HEADING, EVIDENCE_NOTES_HEADING)
+            for line in markdown_section(reconciled, heading).splitlines()
+        }
+        taken = [
+            line.strip()
+            for line in markdown_section(body, EVIDENCE_STATUS_HEADING).splitlines()
+            if line.strip()
+            and line.strip() not in after_source
+            and not _names_one_of(line, raw_items, raw_source=True)
+            # A line the carry path has already spoken about is not named
+            # twice; every other loss in the same write still is.
+            and line.strip() not in already_spoken_for
+        ]
+    if taken:
+        unread = quoted_sentence(
+            "The `## Evidence Status` section could not be read before this write "
+            "({reason}), so what it took is named from the body's own text rather than "
+            "from the page: {taken}. Rewriting those below the status section keeps them "
+            "in the body the next run writes.",
+            reason=quoted_for_comment(unreadable_before),
+            taken=quoted_for_comment(", ".join(taken)),
+        )
+        log(unread)
+        if announcements is not None:
+            announcements.append(unread)
+    # The pairing itself is stated at `entry_as_rendered`, where the page's
+    # key and the source's key meet; this is one instance of it. The
+    # measurement above is keyed on the PAGE's reading of a line, because
+    # that is the only key under which "before" and "after" are comparable.
+    # A sentence to the author has to be keyed on their own BYTES: the page's
+    # reading of `- [complete] verify \[r1] -- green` is
+    # `[complete] verify [r1] -- green`, and an author told to rewrite that
+    # would write a different line. So the pairing is explicit -- each
+    # reading back to the source line that produced it, by reading the source
+    # lines through the same reader -- and where no source line reads as the
+    # replaced reading, the reading is named and said to be a reading
+    # (#1778, round 24).
+    # BY OCCURRENCE, not by document order. Two source lines can share one
+    # page reading -- an escaped `\[r9]` above an undefined `[r9]`, `&amp;`
+    # above `&`, a trailing space -- and a first-wins map then names the
+    # first spelling for every later occurrence: measured, the escaped one
+    # twice and the unescaped one never, and the two swapped when the lines
+    # were swapped, so which bytes an author was told to rewrite was decided
+    # by which line came first. Last-wins is the same defect facing the other
+    # way, and no test told them apart (#1778, round 25).
+    #
+    # So the readings are consumed: the n-th replaced reading takes the n-th
+    # source line that produced it, which is the (value, occurrence) key this
+    # arc already uses for entries and their rendered lines.
+    as_written: dict[str, list[str]] = {}
+    for line in split_source_lines(markdown_section(body, EVIDENCE_STATUS_HEADING)):
+        if line.strip():
+            as_written.setdefault(
+                _as_the_page_reads(without_its_list_marker(line).strip()), []
+            ).append(line.strip())
+    # What the write took, named whatever else the record holds. A line the
+    # carry path has already spoken about is not named twice -- the same
+    # filter the `taken` path applies, for the same reason.
+    def _the_authors_bytes(lines: list[str]) -> list[str]:
+        """Each reading's own source line, one per occurrence, in the order they were read."""
+        left = {reading: list(written) for reading, written in as_written.items()}
+        named: list[str] = []
+        for line in lines:
+            queue = left.get(line) or []
+            bytes_of_it = queue.pop(0) if queue else line
+            if (
+                line.strip() in already_spoken_for
+                or bytes_of_it.strip() in already_spoken_for
+            ):
+                continue
+            named.append(bytes_of_it)
+        return named
+
+    # THE COLLAPSES THE PAGE PERFORMS. Ownership is decided on the page's
+    # reading -- two lines a reader cannot tell apart are one requirement,
+    # and the record's is the one that stands -- but the AUTHOR's bytes are
+    # not the page's reading of them: `- [blocked] deploy **the lane** --
+    # author proof` reads exactly as the record's own rendering of
+    # `deploy the lane`, so the line was taken as this write's own and left
+    # the body with nothing said, emphasis and all. The rule stays and the
+    # silence goes: a source line whose reading is ours and whose bytes are
+    # not is named where the entry's own line standing in its place is named
+    # (#1778, round 25).
+    def _as_the_page_shows(line: str) -> str:
+        """What a reader SEES of this line, markup and all, with its marker off.
+
+        Not the flattened reading: ownership is decided on that, and the
+        flattening is where the collapse happens -- `deploy **the lane**` and
+        `deploy the lane` read alike to it and do not look alike on the page.
+        A list marker is the reader's and never part of what it shows, so
+        `*`, `+` and an ordered marker all render to the same thing and are
+        not differences to name (#1778, rounds 22 and 25).
+        """
+        return MARKDOWN.renderInline(without_its_list_marker(line).strip(), reading_context)
+
+    ours = {line.strip() for line in rendered_lines + recorded_lines}
+    shown_by_us = {_as_the_page_shows(line) for line in ours}
+    collapsed = [
+        line
+        for line in split_source_lines(markdown_section(body, EVIDENCE_STATUS_HEADING))
+        if line.strip()
+        and line.strip() not in ours
+        and _as_the_page_reads(without_its_list_marker(line).strip()) in rendered_readings
+        and _as_the_page_shows(line) not in shown_by_us
+        and line.strip() not in already_spoken_for
+    ]
+    if (took := replaced_lines_announcement(
+        _the_authors_bytes([line for line in replaced if not _about_a_recorded_item(line)]),
+        _the_authors_bytes([line for line in replaced if _about_a_recorded_item(line)])
+        + collapsed,
+    )) is not None:
+        log(took)
+        if announcements is not None:
+            announcements.append(took)
+    if (scalars := scalar_record_announcement(updated_entries)) is not None:
+        log(scalars)
+        if announcements is not None:
+            announcements.append(scalars)
     reconciled = _insert_evidence_metadata(
         reconciled,
         {
@@ -3672,6 +4575,102 @@ def _render_structured_entries(
     if body.endswith("\n"):
         reconciled += "\n"
     return reconciled
+
+
+def _claimed_index(entry: object) -> int | None:
+    """The index this entry CLAIMS, whatever anything can do with it.
+
+    Private, and it lives beside the readers that may ask it -- three of them,
+    named in `test_every_function_that_can_reach_the_identity_rule_is_named_here`,
+    none of which acts on the answer. It answers an
+    identity question -- are these two entries at one index? -- and an acting
+    site that asks it instead of `usable_entry_index` acts on an index nothing
+    renders: the apply loop did, and flipped an `{"index": 0}` entry's hidden
+    metadata to complete while the line a reader sees stayed `[pending-ci]`,
+    with nothing announced (#1778, round 8). A name an acting site can reach
+    by habit is a rule waiting to be applied in the wrong place, so reaching
+    it now means reaching past an underscore into this module.
+
+    Only an `int`, and `bool` is not one. JSON numbers arrive as `int` or
+    `float`, and a float is not an index -- `1.9` is not entry 1, and `True`
+    is not entry 1 either, though Python will tell you both are if asked with
+    `int()`.
+    """
+    if not isinstance(entry, dict):
+        return None
+    index = entry.get("index")
+    if isinstance(index, bool) or not isinstance(index, int):
+        return None
+    return index
+
+
+def usable_entry_index(entry: object) -> int | None:
+    """The index this entry claims, when it is one anything can act on.
+
+    Two rules, kept apart on purpose, because they answer different questions
+    and were three rules answering them inconsistently (#1778, round 7).
+
+    `_claimed_index` answers what index an entry CLAIMS. That is an identity, so
+    it takes any integer: two entries claiming index 0 are two entries at one
+    index, the write fans an update across both of them, and the collision
+    guard has to see that.
+
+    This one answers whether anything can act on the claim. An index numbers a
+    line in a rendered list and the first line is 1, so 0 and negatives name
+    no line: the write renders none, the review-response lane names none to
+    the author, and the verifier looks up no check for one. Before this the
+    verifier returned an index-0 entry to look up while that lane ignored it,
+    which is one contract read two ways.
+
+    The third rule is about an index and a CONTRACT rather than about an index
+    -- it must fall within the requested items -- and it stays where the
+    contract is in hand, named separately.
+    """
+    index = _claimed_index(entry)
+    return index if index is not None and index >= 1 else None
+
+
+def entries_by_index(entries: object) -> dict[int, list[dict[str, object]]]:
+    """Every entry whose index is an INTEGER, grouped by the index it claims.
+
+    "Every entry a reader can take" was too wide by exactly the rule this
+    function applies: an entry at `"1"`, `true` or `1.0` is dropped here,
+    because the identity rule answers None for it (#1778, round 12). All
+    KINDS, which is the part that matters for a collision -- what is ambiguous
+    is which entry a verdict belongs to, and the kinds change nothing about
+    that.
+    """
+    grouped: dict[int, list[dict[str, object]]] = {}
+    for entry in entries if isinstance(entries, list) else []:
+        index = _claimed_index(entry)
+        if index is not None:
+            grouped.setdefault(index, []).append(entry)  # type: ignore[arg-type]
+    return grouped
+
+
+def colliding_indexes(entries: object) -> list[int]:
+    """Indexes more than one entry claims, of ANY kind.
+
+    An entry's index is its identity to everything downstream: the updates
+    map is keyed by it, and the write below applies `updates[index]` to every
+    entry carrying it. A second entry at one index means one verdict lands on
+    both lines, and which one it belongs to is decided by the order the
+    entries happen to be written in -- which is not a fact about the evidence.
+
+    ANY kind, not `ci` alone. Scoping it to `ci` was this guard's own defect
+    in the verifier: a mixed-kind index passed it, and one green run
+    manufactured a completion on a line no check covers. The kinds change
+    nothing about the ambiguity -- what is ambiguous is which entry the
+    verdict belongs to (#1778, round 3).
+
+    So neither verdict is acted on. The same answer `_indistinguishable`
+    gives two requested items that read alike: two answers nothing can choose
+    between are reported as malformed rather than resolved, where the author
+    can still fix it.
+    """
+    return sorted(
+        index for index, at in entries_by_index(entries).items() if len(at) > 1
+    )
 
 
 def update_evidence_entries(
@@ -3686,9 +4685,31 @@ def update_evidence_entries(
     use this to flip entries without hand-editing markdown. Fail-closed:
     bodies without valid structured metadata, unknown indexes, and invalid
     statuses are left unchanged.
+
+    And a colliding index is left unchanged, HERE, because this is the
+    function that fans an update out. It applies `updates[index]` to every
+    entry carrying that index, so a body where two entries share one takes
+    one check's verdict on both lines -- and the callers that knew this had
+    to refuse every such body on every read they made. Three of them kept
+    that property by hand: one missed a collision arriving on a retry read at
+    an index the run held no update for (#1778, round 5), and one let a green
+    `Web CI` run rewrite a `pending-ci` `diff` entry sharing an index (#1784).
+    A safety property stated over an open set of callers is one this codebase
+    cannot keep true, so it moves to the one place that can hold it. The
+    callers' own guards stay where they are: they stop the WORK (check-run
+    reads) and name the condition where an author can act on it, which a
+    refusal here cannot do.
+
+    The stand-down shape every caller already handles: the body comes back
+    byte-identical and the reason goes to `announcements`.
     """
     metadata = _extract_evidence_metadata(body)
     if not isinstance(metadata, dict) or not isinstance(metadata.get("entries"), list):
+        return body
+    if (refusal := colliding_record_refusal(metadata["entries"])) is not None:
+        log(refusal)
+        if announcements is not None:
+            announcements.append(refusal)
         return body
     updated_entries: list[object] = []
     changed = False
@@ -3697,9 +4718,11 @@ def update_evidence_entries(
             updated_entries.append(raw_entry)
             continue
         entry = dict(raw_entry)
-        try:
-            index = int(entry["index"])
-        except (KeyError, TypeError, ValueError, OverflowError):
+        # The USABLE rule, because this acts: an index nothing renders is a
+        # line no reader sees, and flipping its metadata leaves the record
+        # saying one thing and the page another (#1778, round 8).
+        index = usable_entry_index(entry)
+        if index is None:
             updated_entries.append(entry)
             continue
         update = updates.get(index)

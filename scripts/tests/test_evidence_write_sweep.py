@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -43,9 +44,16 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
     is the property that was missing.
     """
 
-    BODIES = 168
-    REFUSALS = 22
-    ANNOUNCED_LOSSES = 2
+    BODIES = 1344
+    REFUSALS = 1052
+    # The refusals split by what was wrong: a record this write cannot render
+    # every entry of, or a hazard in the page it cannot move. 44 rather than
+    # round 10's 22 because each hazard body is now generated twice -- once
+    # with one entry and once with a second entry at a usable index.
+    MALFORMED_RECORD_REFUSALS = 672
+    COLLIDING_RECORD_REFUSALS = 336
+    HAZARD_REFUSALS = 44
+    ANNOUNCED_LOSSES = 4
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -102,16 +110,81 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
             self.summary["bodies"],
             len(sweep_script.SECTION_TAILS)
             * len(sweep_script.SUCCESSORS)
-            * len(sweep_script.LINE_ENDINGS),
+            * len(sweep_script.LINE_ENDINGS)
+            * len(sweep_script.SECOND_ENTRY_INDEXES),
         )
         self.assertEqual(self.summary["refusals"], self.REFUSALS)
+        # Split, because a body citing "716 refusals" would be citing the
+        # corpus's own malformed records rather than the hazards the figure
+        # is about.
+        self.assertEqual(
+            self.summary["refusals_of_a_malformed_record"], self.MALFORMED_RECORD_REFUSALS
+        )
+        self.assertEqual(
+            self.summary["refusals_of_a_colliding_record"], self.COLLIDING_RECORD_REFUSALS
+        )
+        self.assertEqual(
+            self.summary["refusals_of_a_hazard_in_the_page"], self.HAZARD_REFUSALS
+        )
+
+    # intent: fix
+    def test_a_refusal_is_detected_by_value_rather_than_by_its_wording(self) -> None:
+        """The instrument read a sentence, and the writer stopped printing it (#1778, round 7).
+
+        `refused` grepped stderr for "refusing to rewrite". The collision
+        stand-down does not print that, so a body the write refused came back
+        byte-identical with `refused=False` and `silent=False` -- rewording a
+        refusal blinded the instrument to it. The flag comes from the
+        predicate the writer exposes now, so what a refusal SAYS stops being
+        load-bearing.
+        """
+        evidence = sys.modules["evidence"]
+        colliding = sweep_script.body(
+            sweep_script.SECTION_TAILS["nothing else"]
+            if "nothing else" in sweep_script.SECTION_TAILS
+            else next(iter(sweep_script.SECTION_TAILS.values())),
+            next(iter(sweep_script.SUCCESSORS.values())),
+            "\n",
+        )
+        entry = json.dumps(
+            {
+                "entries": [
+                    {"index": 1, "item": sweep_script.ITEM, "status": "pending-ci",
+                     "detail": sweep_script.DETAIL, "kind": "test"},
+                    {"index": 1, "item": "a second requirement", "status": "pending-ci",
+                     "detail": "waiting", "kind": "test"},
+                ]
+            }
+        )
+        colliding = re.sub(
+            r"<!-- evidence-status:v1\n.*?\n-->",
+            f"<!-- evidence-status:v1\n{entry}\n-->",
+            colliding,
+            count=1,
+            flags=re.S,
+        )
+        written, refused, said = sweep_script.write_once(colliding)
+        self.assertEqual(written, colliding, "the writer did not stand down on a collision")
+        self.assertTrue(refused, f"a refusal the writer does not word that way went uncounted")
+        # And the wording is not what carries it: the predicate is.
+        self.assertTrue(
+            any(
+                evidence.is_stood_down_announcement(one)
+                for one in [evidence.STOOD_DOWN_ANNOUNCEMENT_PREFIX + "anything at all"]
+            )
+        )
 
     def test_the_refusals_are_the_two_hazards_and_not_a_shape_that_should_write(self) -> None:
         # A refusal count is only a cost if it is the cost of the hazards. Both
         # hazards are a block the parser cannot end; the exception is the one
         # the writer documents -- a runaway fence with no heading below it is a
         # cut to the end of the body that the page agrees with, so it writes.
-        refused = {outcome.label.split(" / ")[0] for outcome in self.outcomes if outcome.refused}
+        refused = {
+            outcome.label.split(" / ")[0]
+            for outcome in self.outcomes
+            if outcome.refused
+            and not (outcome.record_is_malformed or outcome.record_collides)
+        }
         self.assertEqual(refused, {"a fence that never closes", "a comment that never closes"})
         wrote = {
             outcome.label
@@ -121,8 +194,10 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         self.assertEqual(
             wrote,
             {
-                "a fence that never closes / nothing below / lf",
-                "a fence that never closes / nothing below / crlf",
+                "a fence that never closes / nothing below / lf / one entry",
+                "a fence that never closes / nothing below / crlf / one entry",
+                "a fence that never closes / nothing below / lf / a second entry at 2",
+                "a fence that never closes / nothing below / crlf / a second entry at 2",
             },
         )
         # And the great majority of the corpus is written rather than declined,
@@ -142,6 +217,8 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
             return sweep_script.Outcome(
                 label="probe",
                 refused=False,
+                record_is_malformed=False,
+                record_collides=False,
                 lost=lost,
                 closed=closed,
                 announced=announced,
@@ -445,6 +522,89 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         written, _, _ = sweep_script.write_once(prose)
         self.assertNotEqual(written, prose)
         self.assertEqual(sweep_script.lines_lost(prose, written), [])
+
+    # intent: guard
+    def test_no_body_whose_record_this_write_cannot_render_is_rewritten(self) -> None:
+        """The shape no generated body could carry until this round (#1778, round 11).
+
+        Every body in this corpus held exactly one entry at index 1, so the
+        silent-loss number read 0 for a shape the corpus could not produce --
+        the fifth detector in this arc blinded by its own inputs. The axis
+        generates a second entry at an index the write cannot key, and the
+        property is the one round 11 put in the writer: such a body is stood
+        down whole, so nothing of the author's leaves it.
+        """
+        malformed = [outcome for outcome in self.outcomes if outcome.record_is_malformed]
+        self.assertEqual(len(malformed), self.MALFORMED_RECORD_REFUSALS)
+        self.assertEqual(self.summary["malformed_records_written_anyway"], 0)
+        self.assertEqual([one.label for one in malformed if not one.refused], [])
+        self.assertEqual([one.label for one in malformed if one.lost], [])
+
+    # intent: guard
+    def test_the_axis_leaves_the_bodies_it_was_added_beside_unchanged(self) -> None:
+        # The first value is no second entry at all, so every figure this
+        # corpus reported before the axis is still measured over the same
+        # bytes -- which is what makes the two comparable.
+        self.assertIs(
+            next(iter(sweep_script.SECOND_ENTRY_INDEXES.values())), sweep_script.NO_SECOND_ENTRY
+        )
+        tail = sweep_script.SECTION_TAILS["a plain note"]
+        successor = sweep_script.SUCCESSORS["one h2 below"]
+        self.assertEqual(
+            sweep_script.body(tail, successor, "\n"),
+            sweep_script.body(tail, successor, "\n", sweep_script.NO_SECOND_ENTRY),
+        )
+        self.assertEqual(len(sweep_script.SECOND_ENTRY_INDEXES), 8)
+
+    # intent: guard
+    def test_every_colliding_record_in_the_corpus_is_refused(self) -> None:
+        """The diff's largest safety property, measured at last (#1778, round 12).
+
+        A body whose metadata gives two entries one index is not rewritten at
+        all, because `updates[index]` fans across both. No generated body
+        could carry that shape -- every record gave its entries distinct
+        indexes -- so 0 of 1,008 bodies reached the refusal and the figures
+        this instrument produces said nothing about it.
+        """
+        colliding = [outcome for outcome in self.outcomes if outcome.record_collides]
+        self.assertEqual(len(colliding), self.COLLIDING_RECORD_REFUSALS)
+        self.assertEqual(self.summary["colliding_records_written_anyway"], 0)
+        self.assertEqual([one.label for one in colliding if not one.refused], [])
+        self.assertEqual([one.label for one in colliding if one.lost], [])
+        # Both shapes of the axis, because a reader might expect the writer to
+        # answer them differently: two entries at one index naming different
+        # items, and two naming the same one.
+        shapes = {one.label.split(" / ")[-1] for one in colliding}
+        self.assertEqual(
+            shapes, {"a second entry at 1", "a second entry at 1 with the same item"}
+        )
+
+    # intent: guard
+    def test_a_bool_index_is_malformed_rather_than_colliding(self) -> None:
+        # `True == 1` in Python, and `True` is not an index to this codebase.
+        # Without the bool check the two counts overlap by 168 bodies.
+        self.assertFalse(sweep_script._record_collides(True))
+        self.assertTrue(sweep_script._record_is_malformed(True))
+        self.assertTrue(sweep_script._record_collides(1))
+        self.assertFalse(sweep_script._record_is_malformed(1))
+
+    # intent: guard
+    def test_a_line_the_write_cannot_render_is_the_authors_to_this_instrument(self) -> None:
+        # The half of the axis that makes the number move: an entry the
+        # renderer will not render owns no line, so its status line is the
+        # author's here. Claiming it for the write is what made the deletion
+        # invisible to this instrument.
+        tail = sweep_script.SECTION_TAILS["a plain note"]
+        successor = sweep_script.SUCCESSORS["one h2 below"]
+        unkeyable = sweep_script.body(tail, successor, "\n", "2")
+        self.assertNotIn(sweep_script.SECOND_ITEM, sweep_script._recorded_items(unkeyable))
+        self.assertIn(sweep_script.ITEM, sweep_script._recorded_items(unkeyable))
+        line = f"- [pending-ci] {sweep_script.SECOND_ITEM} -- {sweep_script.SECOND_DETAIL}"
+        self.assertIn(line, sweep_script.author_lines(unkeyable))
+        # And where the record CAN be rendered, the same line is the write's.
+        keyable = sweep_script.body(tail, successor, "\n", 2)
+        self.assertNotIn(line, sweep_script.author_lines(keyable))
+
 
 
 if __name__ == "__main__":

@@ -32,6 +32,17 @@ from evidence import (  # noqa: E402
     _evidence_item_kind,
     _extract_evidence_metadata,
     check_runs_for,
+    # What an index is, and when two entries claim one, is ONE function in the
+    # module that fans an update across a collision -- called here rather than
+    # copied. Two definitions that agree is the shape this whole strand is
+    # named for, and round 5 left one across the module boundary (#1778,
+    # round 6).
+    colliding_indexes,
+    entries_by_index,
+    usable_entry_index,
+    colliding_record_refusal,
+    unrenderable_entries,
+    unrenderable_record_refusal,
     update_evidence_entries,
 )
 from execution import APP_BOT_GIT_IDENTITIES, post_uncarried_notes  # noqa: E402
@@ -122,7 +133,32 @@ def ci_entries_needing_verification(
     entries: list[object],
     head_sha: str,
 ) -> list[tuple[int, str]]:
-    """(index, check name) for `ci` entries pending or stale against head."""
+    """(index, check name) for every `ci` entry this lane can look up.
+
+    Every one of them, whatever status it records and whatever head it claims
+    to be bound to. It used to skip an entry already `complete` and bound to
+    the current head, on the reading that such an entry had been verified
+    already -- but what had been verified was whatever wrote it, and the
+    thing that writes a pull request description is anyone with write access.
+    A `{"status": "complete", "verified_head_sha": "<head>"}` typed into the
+    block was never looked at again, and with `should_clear_blocked_label`
+    reading the entries as recorded, the next run of this lane cleared the
+    label it had applied itself without reading a single check run (#1778).
+
+    So a completion is a claim this lane re-checks, on every run, against the
+    live check runs on the head. The decision on the issue was re-verify
+    rather than sign: one login covers many actors here, so a signature would
+    prove what the block's existence already proves.
+
+    `head_sha` is no longer read here and stays in the signature: it is what
+    the entries are verified AGAINST, the caller passes it to
+    `entry_update_for_check_run`, and a function that takes the head is the
+    one a reader expects to be answering a question about the head.
+
+    An entry with no extractable check name is still not this lane's business,
+    which is the fail-closed rule #1120 set: a guessed check name verifies
+    nothing and a wrong one fails an honest body.
+    """
     needed: list[tuple[int, str]] = []
     for entry in entries:
         if not isinstance(entry, dict):
@@ -133,16 +169,13 @@ def ci_entries_needing_verification(
         check_name = _ci_check_name(item)
         if check_name is None:
             continue
-        try:
-            index = int(entry["index"])
-        # OverflowError too: `1e9999` in the PR-editable metadata parses as
-        # infinity, and `int()` of that raises a class the others do not cover.
-        except (KeyError, TypeError, ValueError, OverflowError):
+        # Usable, not merely claimed: an index nothing renders is a line no
+        # reader sees, so looking a check up for it spends a call on nothing
+        # and hands the clear a verdict about no line (#1778, round 7).
+        index = usable_entry_index(entry)
+        if index is None:
             continue
-        status = str(entry.get("status", "")).strip()
-        recorded_sha = str(entry.get("verified_head_sha", "")).strip()
-        if status == "pending-ci" or (status == "complete" and recorded_sha != head_sha):
-            needed.append((index, check_name))
+        needed.append((index, check_name))
     return needed
 
 
@@ -201,9 +234,48 @@ def entry_update_for_check_run(
     }
 
 
-def should_clear_blocked_label(entries: list[object] | None, head_sha: str) -> bool:
-    """Provably-safe auto-clear: every entry complete, every ci entry bound
-    to the current head. Anything unexpected keeps the label."""
+def verdict_is_definite(runs: list[dict[str, object]] | None) -> bool:
+    """Whether this lookup SAYS something about the check, rather than failing to.
+
+    Definite: an answered query that came back empty, which says the check
+    does not exist on this head, and a lookup in which every run has finished
+    -- whatever they concluded. Indefinite: a lookup that failed outright
+    (`None`), and one holding a run that has not finished, which is a check
+    mid-re-run.
+
+    EVERY run, not the latest completed one. Asking for any completed run made
+    this true for an older completed run sitting beside a newer `in_progress`
+    one, so a recorded completion could be rewritten from a verdict the newer
+    run is in the middle of replacing. The caller queries with
+    `filter=latest`, which returns at most one run per app per check name, so
+    that shape needs two apps publishing one name -- probably unreachable
+    here, and unverified against the live API either way. A function whose
+    correctness rests on what a query the caller happens to make returns is
+    one that breaks when the caller changes; this one needs no precondition,
+    and it needs no rule for which of two runs is newer (#1778, round 11).
+
+    The difference decides whether a recorded completion may be rewritten.
+    Demoting one on an indefinite answer wrote `pending-ci` into the body, and
+    the NEXT run then read a completion where the one before had read none and
+    spent a slot of the review budget on the transition -- which is exactly
+    what the recorded reading exists to avoid, and which main did not do
+    (#1778, round 2). Indefinite therefore fails toward the record standing.
+    """
+    if runs is None:
+        return False
+    return all(str(run.get("status", "")) == "completed" for run in runs)
+
+
+def _recorded_contract_is_complete(entries: list[object] | None, head_sha: str) -> bool:
+    """Whether the body ALREADY read as complete, taking the entries at their word.
+
+    The reading `should_clear_blocked_label` used to have, kept for the one
+    question where taking the record at its word is safe: whether this run
+    changed anything. A forged body reads as complete here and the only thing
+    that follows is that no review is requested, which costs a forger nothing
+    and an honest author nothing either. Clearing a label is the question
+    where it is not safe, and that one asks what this run verified (#1778).
+    """
     if not entries:
         return False
     for entry in entries:
@@ -216,6 +288,102 @@ def should_clear_blocked_label(entries: list[object] | None, head_sha: str) -> b
             _evidence_item_kind(item) == "ci"
             and str(entry.get("verified_head_sha", "")).strip() != head_sha
         ):
+            return False
+    return True
+
+
+def should_clear_blocked_label(
+    entries: list[object] | None,
+    head_sha: str,
+    *,
+    verified: dict[int, dict[str, object]] | None = None,
+) -> bool:
+    """Provably-safe auto-clear: every entry complete, every ci entry verified BY THIS RUN.
+
+    `verified` is what this run's own check-run reads concluded, keyed by
+    entry index. A `ci` entry counts as complete only when it is in there
+    complete and bound to this head -- not because the recorded entry says
+    so, which is the half of #1778 that let a body clear its own label. With
+    no `verified` in hand no `ci` entry can count, so a caller that forgot to
+    pass it keeps the label rather than clearing it.
+
+    What it quantifies over is the DESCRIPTION'S metadata, not the issue's
+    contract: the contract's own name appears in this lane only in this
+    sentence, and no code here reads it. So "every
+    entry complete" means every entry the pull request body still records, and
+    a requirement deleted from that block is not a requirement this gate can
+    see -- deleting a `pending-ci` entry clears the label, and it does the same
+    on main. Reading the contract here would need the issue the body closes and
+    a rule for a body that records nothing the issue asks for, which is a
+    larger change than re-checking a completion; it is #1783's family and the
+    residual names it.
+
+    What this does NOT close either, and it is worth saying where the function
+    is rather than only in a pull request: a non-`ci` completion -- a test, a
+    screenshot, the kinds the macOS lane resolves -- is counted as the entry
+    records it, because this lane has no way to verify one. A completion of
+    those written by hand still counts toward the clear. That is a provenance
+    question about the lane that writes them, and the guide's section on what
+    the metadata comment guarantees names it (#1712).
+
+    Anything unexpected keeps the label.
+    """
+    if not entries:
+        return False
+    # Before anything about kinds. The guard widened to any kind in round 3
+    # and this did not widen with it: the loop below skips a non-`ci` entry
+    # before it ever reads an index, so two complete non-`ci` entries at one
+    # index answered "every entry complete" and took the label off a contract
+    # whose entries no reader can tell apart -- one definition of an index,
+    # two definitions of which entries COUNT (#1778, round 5). A colliding
+    # index is the same unanswerable question here as it is at the write, so
+    # it gets the same answer: the label stays and the author is left the
+    # contract.
+    if colliding_indexes(entries):
+        return False
+    # And an entry no write can render is the same unanswerable question one
+    # field over. The writer stands the whole record down for one of them --
+    # an index that numbers no line, a status outside the vocabulary, an
+    # empty item, an item that renders to nothing or runs onto a second line
+    # -- so the section on the page is not what the record says, and clearing
+    # the gate on a record the write refused opens it over a body nobody
+    # rewrote. Measured at `614eb162`: the refusal stood and this still
+    # answered True (#1778, round 23).
+    if unrenderable_entries(entries):
+        return False
+    confirmed = verified or {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return False
+        if str(entry.get("status", "")).strip() != "complete":
+            return False
+        # EVERY entry the clear counts, not only the `ci` ones. An entry whose
+        # index nothing can act on renders no line, so counting it toward a
+        # clear counts a requirement with nothing on the page for it: a
+        # complete `diff` entry at `true`, `1.0`, `"1"`, `0`, `-1` or `null`
+        # took the label off on its own. The int-only rule went in for the
+        # acting path and stopped at the kind check here (#1778, round 10).
+        index = usable_entry_index(entry)
+        if index is None:
+            return False
+        item = str(entry.get("item", "")).strip()
+        if _evidence_item_kind(item) != "ci":
+            continue
+        update = confirmed.get(index)
+        if not isinstance(update, dict):
+            return False
+        # The verdict has to belong to the check THIS entry names. Looked up
+        # by index alone, a decoy entry reusing an index and naming any green
+        # check cleared the label on a red required one -- no race and no
+        # forged status needed, just two entries at one index with the green
+        # one written last (#1778, round 2). The write path already makes this
+        # comparison (`_updates_targeting_unchanged_entries`); the clear made
+        # none.
+        if str(update.get("check_name", "")).strip() != (_ci_check_name(item) or ""):
+            return False
+        if str(update.get("status", "")).strip() != "complete":
+            return False
+        if str(update.get("verified_head_sha", "")).strip() != head_sha:
             return False
     return True
 
@@ -268,17 +436,14 @@ def _updates_targeting_unchanged_entries(
     entries = evidence_entries(body)
     if entries is None:
         return {}
-    current_check_names: dict[int, str | None] = {}
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            index = int(entry["index"])
-        # OverflowError too: `1e9999` in the PR-editable metadata parses as
-        # infinity, and `int()` of that raises a class the others do not cover.
-        except (KeyError, TypeError, ValueError, OverflowError):
-            continue
-        current_check_names[index] = _ci_check_name(str(entry.get("item", "")).strip())
+    # The same grouping the guard uses, so the two cannot disagree about what
+    # an index is. An index more than one entry claims has no single check
+    # name and keeps none: its updates are dropped here as well as refused
+    # there (#1778, round 3).
+    current_check_names: dict[int, str | None] = {
+        index: (_ci_check_name(str(at[0].get("item", "")).strip()) if len(at) == 1 else None)
+        for index, at in entries_by_index(entries).items()
+    }
     return {
         index: update
         for index, update in updates.items()
@@ -317,16 +482,72 @@ def _apply_ci_updates(
     a note, and that note is posted only while the head it names is still the
     head: when it has moved the note goes unsaid, and the next event says it
     against the head it belongs to.
+
+    Three guards, one condition, and they are not depth: each covers a case
+    the others cannot reach. The guard BEFORE the loop is what stops the
+    check-run reads, which no narrowing can. The narrowing
+    (`_updates_targeting_unchanged_entries`) refuses a collision arriving on
+    the retry read at an index this run holds an update for, because it hands
+    a colliding index no check name and drops the update. The guard INSIDE
+    the loop covers what the narrowing structurally cannot see: a collision at
+    an index this run holds NO update for. The narrowing only drops updates it
+    holds, so on `{1: ci pending-ci, 2: diff complete}` with a twin injected
+    at index 2, it has nothing to drop, the run writes and the label comes
+    off with the collision intact. Round 4 measured this guard redundant and
+    deleted it, and the measurement was of the suite rather than of the code:
+    a surviving mutant means the code is redundant OR the suite cannot reach
+    the case it covers, and only the second was true -- the fixture built
+    collisions on the update's own index and nowhere else (#1778, round 5).
     """
     for attempt in range(1, MAX_WRITE_ATTEMPTS + 1):
-        safe_updates = _updates_targeting_unchanged_entries(body, updates)
-        if not safe_updates:
-            return body
-        uncarried: list[str] = []
-        new_body = update_evidence_entries(body, safe_updates, announcements=uncarried)
+        # The live PR first, before anything in this loop can return. Every
+        # return here hands the caller a body it decides `blocked:evidence`
+        # on, so a return that happens before the read decides on the copy
+        # this run started from -- and an owner who retargets the one `ci`
+        # entry mid-run then has the label cleared after two reads, zero
+        # check-run verifications and zero writes. Round 7 moved the
+        # extraction above two of the returns; this is the read itself, above
+        # all of them (#1778, round 8).
         current = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
         current_head = current.get("head") if isinstance(current, dict) else None
         current_sha = str(current_head.get("sha", "")) if isinstance(current_head, dict) else ""
+        # `None` where the read told us nothing, "" where the PR's description
+        # is genuinely empty (#1778, round 7).
+        current_body = str(current.get("body") or "") if isinstance(current, dict) else None
+        live = body if current_body is None else current_body
+        if current_sha != head_sha:
+            # Directly after the read and above every return, because a moved
+            # head is not a decision to hand anyone: this run's conclusions
+            # are about a commit the pull request has left, and `None` is how
+            # this function says "take no decision". Below the two returns
+            # that hand back the live body it was reachable -- read, the owner
+            # retargets the entry, retry, the owner pushes, and the attempt
+            # that drops every update returned a body for the caller to clear
+            # the label on at a head nothing here verified (#1778, round 8).
+            log(f"PR #{pr_number} advanced during verification; taking no decision")
+            return None
+        # Re-run on every body this loop is about to write, not once before
+        # it. The retry re-reads a body an owner may have edited in between,
+        # and a collision arriving there at an index this run holds no update
+        # for reaches neither the pre-write guard (it had its turn) nor the
+        # narrowing (it has no update to drop) -- so the run wrote the body
+        # and cleared the label with the collision standing (#1778, rounds 3
+        # and 5).
+        if (shared := colliding_indexes(evidence_entries(body))):
+            log(
+                f"PR #{pr_number}: evidence entries share index(es) "
+                f"{', '.join(str(index) for index in shared)}; leaving the contract for the author"
+            )
+            return live
+        safe_updates = _updates_targeting_unchanged_entries(body, updates)
+        if not safe_updates:
+            # Nothing this run concluded still applies to the body in hand --
+            # an owner retargeted the entry, or removed it. The label is
+            # decided on what the pull request holds NOW, not on the copy this
+            # run read first (#1778, round 8).
+            return live
+        uncarried: list[str] = []
+        new_body = update_evidence_entries(body, safe_updates, announcements=uncarried)
         if new_body == body:
             # Same reason as the review-time completion: the write stands down
             # whole on a block whose closer never came, which returns the body
@@ -336,15 +557,24 @@ def _apply_ci_updates(
             # (#1740, round 3). Read the live PR before saying so, the way the
             # writing path below does: a push in between would file the note
             # under a head the author has already left (#1740, round 4).
-            if current_sha == head_sha:
-                post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
-            else:
-                log(f"PR #{pr_number} advanced during verification; leaving the stand-down unsaid")
-            return body
-        if current_sha != head_sha:
-            log(f"PR #{pr_number} advanced during verification; skipping write")
-            return None
-        current_body = str(current.get("body") or "") if isinstance(current, dict) else ""
+            #
+            # And composed from THAT read rather than from the copy this
+            # attempt started with. `uncarried` was built over `body`, so an
+            # author who repaired the record between the two reads was told
+            # to fix what they had just fixed -- the round-9 rule (every
+            # return hands back what the pull request holds now) one step
+            # further: what is SAID is about the same body (#1778, round 13).
+            said = uncarried
+            if live != body:
+                fresh: list[str] = []
+                update_evidence_entries(live, safe_updates, announcements=fresh)
+                said = fresh
+            post_uncarried_notes(pr_number, None, said, head_sha, env)
+            # The live body, so the label is decided on what the PR holds now
+            # rather than on the copy this run started from. A read that told
+            # us nothing leaves the body we have, which is the answer we had
+            # anyway; an empty one is an answer.
+            return live
         if current_body != body:
             log(
                 f"PR #{pr_number} body changed during verification "
@@ -438,13 +668,31 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
     if entries is None:
         return
 
-    was_complete = should_clear_blocked_label(entries, head_sha)
-    needed = ci_entries_needing_verification(entries, head_sha)
-    if needed:
-        updates: dict[int, dict[str, object]] = {}
-        for index, check_name in needed:
+    updates: dict[int, dict[str, object]] = {}
+    verified: dict[int, dict[str, object]] = {}
+    # ONE path for every refusal this lane makes over the record it read, so a
+    # refusal added later cannot arrive with no way to say itself. Round 12
+    # gave the malformed record a comment and left the colliding one logging
+    # into a step log nobody reads (#1778, round 13).
+    record_refusal = colliding_record_refusal(entries) or unrenderable_record_refusal(entries)
+    if colliding_indexes(entries):
+        # Two entries at one index are two answers to one requirement, and
+        # which of them a verdict belongs to is decided by the order they
+        # happen to be written in. Neither is acted on: nothing is verified,
+        # nothing is written, and the label stays (#1778, round 2).
+        log(f"PR #{pr_number}: {record_refusal}")
+    else:
+        recorded_status = {
+            index: (
+                str(at[0].get("status", "")).strip(),
+                str(at[0].get("verified_head_sha", "")).strip(),
+            )
+            for index, at in entries_by_index(entries).items()
+            if len(at) == 1
+        }
+        for index, check_name in ci_entries_needing_verification(entries, head_sha):
             runs = check_runs_for(check_name, head_sha, env)
-            updates[index] = entry_update_for_check_run(
+            update = entry_update_for_check_run(
                 check_name,
                 head_sha,
                 latest_completed_run(runs),
@@ -453,12 +701,48 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
                 # back empty does.
                 check_known=runs is None or bool(runs),
             )
-        updated_body = _apply_ci_updates(pr_number, head_sha, body, updates, env)
-        if updated_body is None:
-            return
-        body = updated_body
+            if verdict_is_definite(runs):
+                updates[index] = update
+                verified[index] = update
+                continue
+            # An indefinite answer says nothing about the check, so it cannot
+            # unsay a completion. The entry keeps what it records and is not
+            # rewritten; it is absent from `verified`, so the label stays.
+            status, recorded_sha = recorded_status.get(index, ("", ""))
+            if not (status == "complete" and recorded_sha == head_sha):
+                updates[index] = update
+        if updates:
+            updated_body = _apply_ci_updates(pr_number, head_sha, body, updates, env)
+            if updated_body is None:
+                return
+            body = updated_body
+            # The same narrowing the write makes: an update whose target index
+            # no longer names the check it was computed for did not land, so
+            # it may not count toward the clear either (#1778, round 2).
+            verified = {
+                index: update
+                for index, update in _updates_targeting_unchanged_entries(body, verified).items()
+            }
 
-    now_complete = should_clear_blocked_label(evidence_entries(body), head_sha)
+    if not updates and record_refusal is not None:
+        # Said whether or not the run had other work, for either refusal: the
+        # write is the only thing that announces one, and a record this lane
+        # refuses produces no write at all. `post_uncarried_notes` keeps it to
+        # one comment per head (#1778, rounds 12 and 13).
+        log(record_refusal)
+        post_uncarried_notes(pr_number, None, [record_refusal], head_sha, env)
+
+    # The transition question, and it takes the RECORDED reading on purpose.
+    # It asks whether the body already looked complete before this run, and
+    # its only consequence is whether a review is requested -- so reading the
+    # entries as recorded can suppress a request and can never clear a label.
+    # Reading it the verified way instead would make every check suite on a
+    # finished pull request a fresh transition and spend a slot of the review
+    # budget on each (#1778).
+    was_complete = _recorded_contract_is_complete(entries, head_sha)
+    now_complete = should_clear_blocked_label(
+        evidence_entries(body), head_sha, verified=verified
+    )
     label_names = {
         str(label.get("name", ""))
         for label in pr.get("labels", [])
