@@ -428,9 +428,13 @@ class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
 
     # intent: fix
     # marker: red at `f341728e`, its own base, behaviourally: the predicate
-    # there is a property of the NEEDLE, so every shape above is accepted --
-    # measured, `(("## Evidence Status",), (), ())` passes and the row it
-    # names can then be given its neighbour's value with the suite green
+    # there is a property of the NEEDLE, so every shape above is accepted.
+    # Measured by asking that base's own two-argument guard for each of the
+    # four, one at a time: all four ACCEPTED, so the assertion this test
+    # makes fails there four times. (Ported verbatim it stops earlier, on
+    # the helper names this round adds -- `planted`, `planted_texts` and the
+    # guard's third parameter -- which is why the behaviour is measured
+    # through the base's own signature rather than read off that error.)
     # (#1771, round 18).
     def test_a_claim_that_could_not_fail_on_a_sibling_is_named(self) -> None:
         """Vacuity is a property of the needle AGAINST THE POPULATION.
@@ -465,11 +469,14 @@ class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
                     any(row in named for row in self.WHOLE), f"{shape}: no sibling named"
                 )
 
-    # intent: fix
-    # marker: red at `f341728e`, its own base, behaviourally -- the predicate
-    # there accepts the vacuous claim outright, so there is no existential
-    # form to reject either; this is the seed that keeps the weaker form out
-    # (#1771, round 18).
+    # intent: guard
+    # marker: at `f341728e`, its own base, this is red ONLY on names this
+    # round adds: ported alone it errors on `planted_texts`, `holds_of` and
+    # `tells_its_row_from_every_other`, and the quantifier it compares has no
+    # counterpart there at all (that base's predicate reads one needle, so
+    # neither form of the sibling test exists to be told apart). What it
+    # pins is this round's strength: the mutant universal -> existential is
+    # red under it here (#1771, round 18).
     def test_the_existential_form_is_not_the_one_this_guard_uses(self) -> None:
         """"Fails on at least one sibling" is population-relative in form and needle-relative in effect.
 
@@ -505,11 +512,16 @@ class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
             every_claim_says_something(claims, "seed", texts)
 
     # intent: guard
-    # marker: green at `f341728e`, its own base, over the tables as they were
-    # there for 23 of the 28 rows -- and red for the other five, which is why
-    # five claims moved this round. It is the property the guard asserts,
-    # stated over the real population so the tables themselves are measured
-    # rather than the seeds (#1771, round 18).
+    # marker: red at `f341728e` on `tells_its_row_from_every_other`, a name
+    # this round adds; the property underneath was measured there by running
+    # the same predicate over that base's own tables -- 5 of 28
+    # `PAGE_READER_CLAIMS` rows hold of a sibling (`a break after prose` of
+    # `a sibling heading after a top-level section`, `a quoted heading
+    # inside` of two, `an unclosed blockquote before` of `a sibling heading
+    # after a nested section`, that row of `a shallower heading after a
+    # blockquote section`, and `a raw pre holding the status` of `a pre after
+    # prose`) and 0 of 27 `SWALLOWED_CLAIMS` rows do. Those five claims moved
+    # this round; the rest of the tables did not (#1771, round 18).
     def test_no_real_claim_holds_of_a_sibling_row(self) -> None:
         """A row given its neighbour's value is caught by its own claim.
 
@@ -541,13 +553,15 @@ class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
                         f"{claims_name}: {name} cannot be told from its siblings",
                     )
 
-    # intent: fix
-    # marker: red at `f341728e`, its own base, behaviourally: each mutant
-    # below runs green over the whole suite there -- `len(value) != 3`
-    # weakened to `< 3`, the non-empty check dropped from the table
-    # enumerator, and the reader prefix narrowed to `test_`. Every one is a
-    # seed gap: a control that plants what must be ACCEPTED without one that
-    # plants what must be REJECTED (#1771, round 18).
+    # intent: guard
+    # marker: GREEN at `f341728e`, its own base, measured -- ported alone
+    # onto that tree's own file it passes (`Ran 1 test` / `OK`), because the
+    # enumerators there already refuse these shapes. Nothing read that, which
+    # is the seed gap it closes: a control that plants what must be ACCEPTED
+    # without one that plants what must be REJECTED, and the mutants that
+    # walked through it -- `len(value) != 3` weakened to `< 3`, the non-empty
+    # check dropped from the table enumerator -- are red under it here
+    # (#1771, round 18).
     def test_the_shapes_the_enumerators_must_refuse(self) -> None:
         """What is not a claim, not a claims table, and not a reader.
 
@@ -652,6 +666,17 @@ class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
         # names written for this loop would be the shape this round removes
         # one level up.
 
+    # intent: control
+    # marker: GREEN at `f341728e`, its own base, measured -- ported alone it
+    # passes, and nothing about it can be red anywhere: it asserts only that
+    # the table it reads is non-empty. It is here to BE FOUND. Its name lacks
+    # the underscore because `test` is the prefix unittest collects on, so a
+    # scan narrowed to `test_` would miss a reader the loader runs; the
+    # assertion that it is found is in the recorder test below, and that
+    # narrowing is red under the pair (#1771, round 18).
+    def testthiscensusreaderreadsaclaimstable(self) -> None:
+        self.assertTrue(PAGE_READER_CLAIMS, "the table this reader names is empty")
+
     def readers_of(self, tables: set[str]) -> list[str]:
         """The qualnames of the tests whose own source names a claims table.
 
@@ -687,7 +712,10 @@ class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
     # intent: fix
     # marker: red at `8d7bf4c1`, its own base, behaviourally -- the count
     # there passes with one table out of the funnel and the other calling
-    # twice, and names no table at all (#1771, round 17).
+    # twice, and names no table at all (#1771, round 17). Round 18 adds one
+    # assertion inside it, about the prefix the scan agrees with the loader
+    # on: that clause is GREEN at `f341728e` (the scan there already reads
+    # `test`), and it is what makes the narrowing to `test_` red.
     def test_every_claims_table_this_module_binds_is_read_through_it(self) -> None:
         """The population, read by kind, against the tables that actually came through.
 
@@ -707,6 +735,15 @@ class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
         tables = claims_tables(vars(module))
         self.assertTrue(tables, "no claims table was found; the enumerator reads nothing")
         readers = self.readers_of(tables)
+        # The scan's prefix is the LOADER's. A reader named without the
+        # underscore is a test unittest collects, so a scan that misses it
+        # reads fewer tests than the lane runs -- which is the disagreement
+        # this file exists to close (#1771, round 18).
+        self.assertIn(
+            f"{type(self).__name__}.testthiscensusreaderreadsaclaimstable",
+            readers,
+            "the reader scan misses a test the loader collects",
+        )
         original = every_claim_says_something
         asked: list[str] = []
 
@@ -3402,11 +3439,14 @@ class RecordedRendererResponseTests(unittest.TestCase):
                 self.assertIn(path.stem, index)
 
     # intent: fix
-    # marker: red at `f341728e`, its own base, behaviourally: with the index
-    # patched to `{}` and a token present, all three corpus tests pass there
-    # -- each one ITERATES the corpus, and iterating nothing scores nothing.
-    # The property was bounded only by the fixture directory moving aside,
-    # which is a different mechanism (#1771, round 18).
+    # marker: red at `f341728e`, its own base, behaviourally -- ported alone
+    # onto that tree's own file it fails, `72 != 2`: each corpus test there
+    # ITERATES, so with the index patched to `{}` and a token present two of
+    # the three score clean over nothing and the third fails once per file
+    # still on disk, naming a recording rather than the corpus. Empty the
+    # directory as well and all three sweep clean (3 run, 0 failures,
+    # measured), which is the one mechanism that bounded them and a
+    # different one from the count this asserts (#1771, round 18).
     def test_an_empty_corpus_is_a_failed_read_rather_than_a_clean_sweep(self) -> None:
         """A population a test quantifies over is stated, or the test passes over nothing.
 
@@ -7086,12 +7126,14 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
         self.assertIn(unicodedata.unidata_version, notice)
         self.assertIn("DEFAULT_IGNORABLE_RANGES", notice)
 
-    # intent: fix
-    # marker: red at `f341728e`, its own base, on the page plane this round
-    # adds to it: the test there asserts `.ok` from the source model alone
-    # and rests it on "a mark renders as a diacritic rather than as nothing",
-    # which decides whether the CHARACTER is invisible where the gate's
-    # criterion is whether the READER sees the token (#1771, round 18).
+    # intent: guard
+    # marker: GREEN at `f341728e`, its own base, measured -- this round
+    # changes no production file, so nothing about the gate's behaviour can
+    # be red there: ported onto that tree with its recording copied in, this
+    # test passes. What it adds is the page plane (the base's version asserts
+    # `.ok` from the source model alone) and a criterion in the reader's
+    # terms rather than in the character's, which is a property the base
+    # already has and nothing read (#1771, round 18).
     def test_a_combining_mark_leaves_the_token_where_a_reader_sees_it(self) -> None:
         """The criterion, in the reader's terms, decided from the page.
 
