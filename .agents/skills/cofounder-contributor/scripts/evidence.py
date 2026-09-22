@@ -3474,7 +3474,63 @@ def write_evidence_status_section(
                 "and this text is not from it"
             )
     # Appended to what that section already held rather than replacing it.
-    blocks = [kept_text for text in kept if (kept_text := _without_edge_blank_lines(text))] + notes
+    standing_blocks = [
+        kept_text for text in kept if (kept_text := _without_edge_blank_lines(text))
+    ]
+    # ONCE, however many times a write runs over the same body. A carried
+    # excerpt is deterministic -- the same replaced line makes the same block
+    # -- so an excerpt already standing under the heading is one this write
+    # has already carried, and carrying it again grows a page a person reads
+    # by one block per turn. Measured over five chained turns with no record
+    # comment in the carried body: 1, 2, 3, 4, 5 excerpts and 130 to 622
+    # characters, where the same chain with the record present is a fixed
+    # point at one (#1751, round 19).
+    #
+    # Only the excerpts this write makes. Two identical paragraphs of
+    # somebody's own are two things they wrote, and this is not the place to
+    # decide that one of them is a repeat.
+    already_carried = {
+        block for block in standing_blocks if block.startswith(SUPERSEDED_CARRY_OPENING)
+    }
+    # ONE EXCERPT PER RECORDED ITEM, which is the bound. Byte identity is not
+    # enough: with no record comment in the body this write carries from,
+    # nothing says which status lines an earlier run rendered, so each turn's
+    # own line reads as somebody's and is carried -- and because the detail
+    # moves from turn to turn, no two of those excerpts are equal. Measured
+    # over five chained turns with the record stripped: 1, 2, 3, 4, 5
+    # excerpts and 130 to 622 characters, on a page a person reads, where the
+    # same chain with the record present is a fixed point at one
+    # (#1751, round 19).
+    #
+    # The FIRST excerpt for an item stays and later ones are not carried: the
+    # first is the reading furthest from this write's own, and keeping the
+    # latest would let a chain of machine lines walk over what somebody
+    # actually wrote. What is not carried is said, so nothing leaves without
+    # a word.
+    def _excerpt_item(block: str) -> str | None:
+        rows = block.splitlines()
+        if not block.startswith(SUPERSEDED_CARRY_OPENING) or len(rows) < 3:
+            return None
+        return whose_status_line(rows[-2], recorded, rows[-2], NOTHING_OWNED).item
+
+    standing_items = {item for block in already_carried if (item := _excerpt_item(block))}
+    carried_notes: list[str] = []
+    for note in notes:
+        item = _excerpt_item(note)
+        if note in already_carried or (item is not None and item in standing_items):
+            held = (
+                f"`## {EVIDENCE_NOTES_HEADING}` already holds an excerpt for "
+                f"{code_span(str(item)) if item else 'this line'}, so a later reading of it "
+                f"was replaced and not carried a second time: {code_span(note.splitlines()[-2])}"
+            )
+            log(held)
+            announcements.append(held)
+            continue
+        if item is not None:
+            standing_items.add(item)
+        carried_notes.append(note)
+    blocks = standing_blocks + carried_notes
+
 
     def placed(candidate: str) -> SectionWrite:
         """The rewritten body, or the source standing whole and why."""
@@ -3530,7 +3586,7 @@ def render_execution_summary_body(
     evidence_complete: object,
     evidence_blocked: object,
     evidence_pending_ci: object,
-    published_body: str = "",
+    published_body: str,
     announcements: list[str] | None = None,
 ) -> tuple[str, list[str]]:
     if not _explicit_evidence_contract(requested_evidence):

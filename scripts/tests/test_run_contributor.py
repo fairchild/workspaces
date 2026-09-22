@@ -721,7 +721,7 @@ class RunContributorEvidenceTests(unittest.TestCase):
         rendered, errors = run_contributor.build_execution_summary_body(
             {
                 "body": "## Summary\nVisual change\n\n## Validation\n- downstream evidence",
-            },
+            }, published_body="",
             requested_evidence=["screenshot of the main window"],
             visual_evidence_available=False,
         )
@@ -1109,7 +1109,7 @@ class MetadataBodyIsAlwaysReRenderedTests(unittest.TestCase):
     ) -> str:
         body, errors = run_contributor.render_execution_summary_body(
             "## Summary\n- Reordered the sidebar rows\n\n"
-            "## Validation\n- blocked on evidence: waiting on the owner\n",
+            "## Validation\n- blocked on evidence: waiting on the owner\n", published_body="",
             requested_evidence=requested,
             evidence_complete=complete,
             evidence_blocked=blocked,
@@ -1519,7 +1519,7 @@ class EvidenceValidationTests(unittest.TestCase):
         requested = ["`swift test --filter Foo`", "screenshot of main window"]
         summary_body = "## Summary\nSome PR description\n\n## Validation\n- looks good\n"
         rendered, render_errors = run_contributor.render_execution_summary_body(
-            summary_body,
+            summary_body, published_body="",
             requested_evidence=requested,
             evidence_complete=["1 -- all tests pass"],
             evidence_blocked=None,
@@ -1848,7 +1848,7 @@ class MergeabilitySeedTests(unittest.TestCase):
         rendered, errors = run_contributor.build_execution_summary_body(
             {
                 "body": self.SUMMARY_BODY,
-            },
+            }, published_body="",
             requested_evidence=["swift test --filter WorkspaceServiceTests"],
         )
         self.assertEqual(errors, [])
@@ -2751,7 +2751,7 @@ class RevisionTurnTests(unittest.TestCase):
 
     def _rendered_pr_body(self, data: dict[str, object]) -> str:
         execution = sys.modules["execution"]
-        summary, _ = execution.build_execution_summary_body(data, requested_evidence=[])
+        summary, _ = execution.build_execution_summary_body(data, published_body="", requested_evidence=[])
         seeded = execution.seed_mergeability_section(summary, changed_files=[])
         return execution.compose_pr_body(42, self.PERSONA, seeded)
 

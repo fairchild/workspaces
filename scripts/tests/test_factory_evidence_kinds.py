@@ -298,7 +298,7 @@ class EvidenceSynthesisTests(unittest.TestCase):
 
     def test_rendered_contract_stays_fail_closed_and_carries_kinds(self) -> None:
         rendered, errors = run_contributor.build_execution_summary_body(
-            {"body": "## Summary\n- change\n\n## Validation\n- notes"},
+            {"body": "## Summary\n- change\n\n## Validation\n- notes"}, published_body="",
             requested_evidence=[CI_ITEM, DIFF_ITEM],
         )
 
@@ -320,7 +320,7 @@ class UpdateEvidenceEntriesTests(unittest.TestCase):
 
     def rendered_body(self) -> str:
         rendered, errors = run_contributor.build_execution_summary_body(
-            {"body": "## Summary\n- change\n\n## Validation\n- notes"},
+            {"body": "## Summary\n- change\n\n## Validation\n- notes"}, published_body="",
             requested_evidence=[CI_ITEM, DIFF_ITEM],
         )
         assert not errors
@@ -376,7 +376,7 @@ class MacOSLaneCoexistenceTests(unittest.TestCase):
 
     def test_reconcile_resolves_macos_kinds_and_leaves_event_completed_kinds(self) -> None:
         rendered, errors = run_contributor.build_execution_summary_body(
-            {"body": "## Summary\n- change\n\n## Validation\n- notes"},
+            {"body": "## Summary\n- change\n\n## Validation\n- notes"}, published_body="",
             requested_evidence=["swift test", CI_ITEM],
         )
         self.assertEqual(errors, [])
@@ -3103,7 +3103,7 @@ class OwnerKindHandEditTests(unittest.TestCase):
 
     def render(self, model_body: str) -> str:
         rendered, errors = run_contributor.render_execution_summary_body(
-            model_body,
+            model_body, published_body="",
             requested_evidence=[self.OWNER_ITEM],
             evidence_complete=None,
             evidence_blocked=[f"1 -- {self.MACHINE_DETAIL}"],
@@ -4291,7 +4291,7 @@ class LaneWrittenMetadataMatchesTheFactoryShapeTests(unittest.TestCase):
 
     def factory_body(self) -> str:
         rendered, errors = run_contributor.render_execution_summary_body(
-            "## Summary\n- Reordered the sidebar rows\n\n## Validation\n- blocked on evidence: waiting on CI\n",
+            "## Summary\n- Reordered the sidebar rows\n\n## Validation\n- blocked on evidence: waiting on CI\n", published_body="",
             requested_evidence=self.REQUESTED,
             evidence_complete=[],
             evidence_blocked=[],
@@ -4737,7 +4737,7 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
             + "\n\n## Validation\n- local unit tests passed\n"
         )
         written, errors = run_contributor.render_execution_summary_body(
-            model_body,
+            model_body, published_body="",
             requested_evidence=[self.ITEM],
             evidence_complete=["1 -- 10 passed"],
             evidence_blocked=None,
@@ -4879,7 +4879,7 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
         # it stands cannot travel there at all, so this body is written --
         # correctly, above the author's h1 -- rather than stood down.
         written, errors = run_contributor.render_execution_summary_body(
-            self.HIDDEN_PLACEMENT_BODY,
+            self.HIDDEN_PLACEMENT_BODY, published_body="",
             requested_evidence=["`swift test` passes"],
             evidence_complete=["1 -- 214 tests passed"],
             evidence_blocked=None,
@@ -4896,7 +4896,7 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
         # status would be in the source, absent from the page, and still
         # carried to every gate by the metadata comment.
         written, errors = run_contributor.render_execution_summary_body(
-            self.NO_SECTION_PLACEMENT_BODY,
+            self.NO_SECTION_PLACEMENT_BODY, published_body="",
             requested_evidence=["`swift test` passes"],
             evidence_complete=["1 -- 214 tests passed"],
             evidence_blocked=None,
@@ -4947,7 +4947,7 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
         # the placement does.
         evidence = self.evidence()
         written, errors = run_contributor.render_execution_summary_body(
-            self.HIDDEN_PLACEMENT_BODY + "</pre>\n\n## Validation\n\n- ran it\n",
+            self.HIDDEN_PLACEMENT_BODY + "</pre>\n\n## Validation\n\n- ran it\n", published_body="",
             requested_evidence=["`swift test` passes"],
             evidence_complete=["1 -- 214 tests passed"],
             evidence_blocked=None,
@@ -4961,7 +4961,7 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
             "## Summary\n\n- did the thing\n\n"
             "## Evidence Status\n\n- [pending-ci] `swift test` passes -- waiting\n\n"
             "# Release blockers\n\n- [blocked] the signing profile is missing\n\n"
-            "## Validation\n\n- ran it\n",
+            "## Validation\n\n- ran it\n", published_body="",
             requested_evidence=["`swift test` passes"],
             evidence_complete=["1 -- 214 tests passed"],
             evidence_blocked=None,
@@ -5679,7 +5679,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
             "## Validation\n\n- ok\n"
         )
         rendered, errors = run_contributor.render_execution_summary_body(
-            body,
+            body, published_body="",
             requested_evidence=[self.ITEM_FOR_WRITE],
             evidence_complete=["1 -- checked: the fixture survived"],
             evidence_blocked=None,
@@ -5699,7 +5699,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         # The control: the same call on an ordinary body still writes.
         ordinary = "## Summary\n\nwhat.\n\n## Validation\n\n- ok\n"
         written, ok_errors = run_contributor.render_execution_summary_body(
-            ordinary,
+            ordinary, published_body="",
             requested_evidence=[self.ITEM_FOR_WRITE],
             evidence_complete=["1 -- checked: the fixture survived"],
             evidence_blocked=None,
@@ -6378,7 +6378,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
         for name, (heading, _) in self.SHAPES.items():
             with self.subTest(shape=name):
                 rendered, errors = run_contributor.render_execution_summary_body(
-                    self.body(heading),
+                    self.body(heading), published_body="",
                     requested_evidence=[self.ITEM],
                     evidence_complete=["1 -- 214 tests passed"],
                     evidence_blocked=None,
@@ -6395,7 +6395,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
         for name, (heading, _) in self.SHAPES.items():
             with self.subTest(shape=name):
                 rendered, _ = run_contributor.render_execution_summary_body(
-                    self.body(heading),
+                    self.body(heading), published_body="",
                     requested_evidence=[self.ITEM],
                     evidence_complete=["1 -- 214 tests passed"],
                     evidence_blocked=None,
@@ -7066,7 +7066,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertEqual(resolved, body)
         self.assertIn("refusing to rewrite the `Evidence Status` section", spoke.getvalue())
         rendered, errors = run_contributor.render_execution_summary_body(
-            body,
+            body, published_body="",
             requested_evidence=[self.ITEM],
             evidence_complete=["1 -- 214 tests passed"],
             evidence_blocked=None,
@@ -7237,7 +7237,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
             "- [pending-ci] proof -- waiting\n\n## Validation"
         )
         rendered, errors = run_contributor.render_execution_summary_body(
-            pending,
+            pending, published_body="",
             requested_evidence=["proof"],
             evidence_complete=None,
             evidence_blocked=None,
@@ -8767,6 +8767,167 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             self.flat(lane).split("## Evidence Notes\n", 1)[1].rstrip("\n"),
         )
 
+    # intent: guard
+    # marker: green at `993dc95e`, its own base: the sentence, the fence
+    # width and the line the log names are all right there. What was missing
+    # is anything reading them -- three mutants on this excerpt were green
+    # across all 685 tests, and one of them publishes a body that credits a
+    # person with the machine's framing (#1751, round 19).
+    def test_the_carried_excerpt_says_what_it_is_and_holds_what_it_quotes(self) -> None:
+        """The excerpt is where the attribution claim lives, so its surfaces are pinned here.
+
+        Three of them, each with its own mutant. The opening sentence is
+        this write's own words about its own act, so it says what the write
+        did and never that a person checked anything -- a body that reads
+        `verified by the person who edited this pull request:` over text the
+        machine moved is a forgery with a machine's byline.
+
+        The fence is longer than the longest backtick run in the line it
+        quotes, so a line carrying three backticks cannot close it from the
+        inside; with an equal fence the remainder renders outside the code
+        block and the quoted bullet comes back as a live status line.
+
+        And the sentence about a block the write did not carry names the
+        line that block OPENS on, which a single-line fixture cannot tell
+        from the line it ends on.
+        """
+        evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
+        # The sentence, by its own constant and by what it must not say.
+        self.assertEqual(
+            evidence.SUPERSEDED_CARRY_OPENING,
+            "previously in the status list, replaced by the entry the record holds:",
+        )
+        opening = evidence.SUPERSEDED_CARRY_OPENING.lower()
+        for claim in ("verified", "attested", "approved", "checked by", "signed"):
+            self.assertNotIn(
+                claim, opening, "the write's own sentence reads as somebody's attestation"
+            )
+
+        # The fence, over a line that carries a three-backtick run.
+        theirs = "- [complete] run ```a``` -- mine"
+        excerpt = evidence._superseded_carry(theirs)
+        tokens = [token for token in helpers.MARKDOWN.parse(excerpt) if token.type == "fence"]
+        self.assertEqual(len(tokens), 1, excerpt)
+        self.assertIn(theirs, tokens[0].content, excerpt)
+        # The page's own reading: nothing in that block is a list item, so no
+        # reader meets a second status line for the requirement.
+        kinds = {token.type for token in helpers.MARKDOWN.parse(excerpt)}
+        self.assertNotIn("bullet_list_open", kinds, excerpt)
+
+    # intent: guard
+    # marker: green at `993dc95e`, its own base: the log names the line each
+    # block opens on there. Every fixture that reads it is a single-line
+    # block, so `splitlines()[0]` and `[-1]` are the same string and the
+    # mutant that swaps them is green (#1751, round 19).
+    def test_the_sentence_about_an_uncarried_block_names_the_line_it_opens_on(self) -> None:
+        """A multi-line block, so the first line and the last are different strings."""
+        evidence = self.evidence()
+        item = "run the QA filter"
+        opening = "the model's own paragraph about the lane"
+        closing = "and a second line under it that is not the first"
+        draft = (
+            "## Summary\n\n- did the thing\n\n"
+            f"## Evidence Status\n\n- [pending-ci] {item} -- waiting\n\n"
+            f"{opening}\n{closing}\n\n"
+            "## Validation\n- ran it\n"
+        )
+        published = (
+            "## Summary\n\n- published\n\n"
+            f"## Evidence Status\n\n- [pending-ci] {item} -- waiting on CI\n\n"
+            "## Validation\n- ran it\n"
+        )
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            run_contributor.render_execution_summary_body(
+                draft,
+                requested_evidence=[item],
+                evidence_complete=None,
+                evidence_blocked=None,
+                evidence_pending_ci=["1 -- 214 tests passed"],
+                published_body=published,
+            )
+        sentences = [
+            line for line in said.getvalue().splitlines()
+            if "not carried from the body being written" in line
+        ]
+        self.assertEqual(len(sentences), 1, said.getvalue())
+        self.assertIn(opening, sentences[0], "the sentence does not name the line it opens on")
+        self.assertNotIn(closing, sentences[0], "the sentence names the line it ends on")
+
+    # intent: fix
+    # marker: red at `993dc95e`, its own base, behaviourally: with no record
+    # comment in the body it carries from, the same author line is carried
+    # again on every turn -- 1, 2, 3, 4, 5 excerpts and 130 to 622 characters
+    # over five chained turns, on a page a person reads. Red on `016d94ba`
+    # for the opposite reason: nothing is carried there at all
+    # (#1751, round 19).
+    def test_five_chained_turns_carry_one_excerpt_and_stop(self) -> None:
+        """The carry is idempotent whatever the record holds, and the bound is per ITEM.
+
+        Each turn publishes what the last one wrote, so the body a turn
+        carries from is its own previous output. With the record comment
+        present the machine's own line is claimed by the record and never
+        looks like somebody's; with it absent nothing says which status line
+        an earlier run rendered, every turn's line reads as theirs, and --
+        because the detail moves from turn to turn -- no two excerpts are
+        equal, so byte identity alone cannot stop it.
+
+        One excerpt per recorded item is what stops it. The first reading
+        stays, later ones are announced and not carried, and the section is
+        a fixed point from the second turn on.
+
+        What this fixture holds fixed: one requested item, one author line,
+        and the same draft every turn -- so what varies between the two runs
+        is the record comment and nothing else.
+        """
+        evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
+        item = "run the QA filter"
+        theirs = f"- [complete] {item} -- I ran it by hand"
+        draft = (
+            "## Summary\n\n- did the thing\n\n"
+            f"## Evidence Status\n\n- [pending-ci] {item} -- waiting\n\n"
+            "## Validation\n- ran it\n"
+        )
+        published = (
+            "## Summary\n\n- published\n\n"
+            f"## Evidence Status\n\n{theirs}\n\n"
+            "## Validation\n- ran it\n"
+        )
+
+        def chain(keep_the_record: bool) -> list[tuple[int, int]]:
+            carried = published
+            seen: list[tuple[int, int]] = []
+            for number in range(1, 6):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    written, errors = run_contributor.render_execution_summary_body(
+                        draft,
+                        requested_evidence=[item],
+                        evidence_complete=None,
+                        evidence_blocked=None,
+                        evidence_pending_ci=[f"1 -- run {number}"],
+                        published_body=carried,
+                    )
+                self.assertEqual(errors, [], f"turn {number}")
+                notes = helpers.markdown_section(written, "Evidence Notes")
+                seen.append((notes.count("previously in the status list"), len(notes)))
+                carried = written if keep_the_record else re.sub(
+                    r"<!-- evidence-status:v1.*?-->\n*", "", written, flags=re.S
+                )
+            return seen
+
+        with_record = chain(True)
+        without_record = chain(False)
+        # A fixed point either way: one excerpt, one size, from the first
+        # turn to the fifth.
+        self.assertEqual(len(set(with_record)), 1, with_record)
+        self.assertEqual(len(set(without_record)), 1, without_record)
+        self.assertEqual(with_record[0][0], 1, with_record)
+        self.assertEqual(without_record[0][0], 1, without_record)
+        # And their line is what the one excerpt holds.
+        self.assertEqual(with_record[-1], without_record[-1], "the record changed what is carried")
+
     # intent: fix
     # marker: red at `fa8a2010`, its own base, behaviourally -- the replaced
     # text is carried there as the `- [complete] …` bullet it was, so after
@@ -8829,8 +8990,19 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             written,
         )
         notes = helpers.markdown_section(written, "Evidence Notes")
-        for their_line in theirs:
-            self.assertIn(their_line, notes, "an older reading of theirs is not in the notes")
+        # ONE excerpt per recorded item, which is the bound round 19 put on
+        # this: the first reading stays, later ones are announced and not
+        # carried. Carrying one per EDIT grew the section by a block a turn
+        # on a body with no record comment, where each turn's own line reads
+        # as somebody's (#1751, round 19).
+        self.assertIn(theirs[0], notes, "the first reading of theirs is not in the notes")
+        self.assertNotIn(theirs[1], notes, "a second excerpt for one item was carried")
+        self.assertEqual(
+            notes.count("previously in the status list"), 1, notes
+        )
+        held = [note for note in said if "already holds an excerpt" in note]
+        self.assertEqual(len(held), 1, said)
+        self.assertIn(theirs[1], held[0], "the reading that was not carried is not named")
         # The page's own reading: nothing under the notes heading is a list,
         # so no reader meets a second status bullet for one requirement.
         kinds = {token.type for token in helpers.MARKDOWN.parse(notes)}
@@ -9223,100 +9395,329 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
             )
         self.assertNotIn(spoken, said.getvalue())
 
+    # intent: guard
+    # marker: green at `993dc95e`, its own base -- there is one writer there
+    # and one here; what this adds is an instrument that COUNTS them. The
+    # walk beside it recognises a shape, and a walk that recognises can only
+    # ever find what it knows: a source routed through a one-line helper
+    # passed it and all 685 tests at that head (#1751, round 19).
+    def test_one_site_in_the_whole_tree_writes_under_the_notes_heading(self) -> None:
+        """A census of writers, over every `.py` in the tree, keyed on the site.
+
+        It counts rather than recognises. Every call anywhere in the
+        repository that hands the notes heading -- as the constant, or as
+        its own text -- to anything that is not a KNOWN READER is a site
+        that may write that section, and there is exactly one. A second
+        helper, a fourth module, or a writer nobody thought of moves the
+        count and fails here with its file and line; the walk below cannot
+        do that, because it is keyed on shapes this round knows.
+
+        The readers are named rather than inferred, and naming them is the
+        cost: a reader added to that list is a line of this test, which is
+        the trade for a census that does not have to understand the call.
+        """
+        evidence = self.evidence()
+        readers = {
+            "markdown_section",
+            "removed_section_texts",
+            "strip_markdown_section",
+            "_section_bounds",
+            "rendered_section_lines",
+            "section_heading_index",
+        }
+        heading = evidence.EVIDENCE_NOTES_HEADING
+        sites: list[tuple[str, int, str]] = []
+        files = 0
+        for path in sorted(REPO_ROOT.rglob("*.py")):
+            if any(
+                part in {".git", ".venv", "node_modules", "build", ".pyc", "tests"}
+                for part in path.parts
+            ):
+                # A test file cannot write a pull request body -- it drives
+                # something that does -- and its fixtures spell the heading
+                # constantly. The population is every `.py` the runtime can
+                # reach; a writer added under a test directory is outside it,
+                # and that is stated rather than silently excluded.
+                continue
+            files += 1
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except (SyntaxError, UnicodeDecodeError):
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                called = (
+                    node.func.id if isinstance(node.func, ast.Name)
+                    else node.func.attr if isinstance(node.func, ast.Attribute)
+                    else ""
+                )
+                if called in readers:
+                    continue
+                for argument in list(node.args) + [keyword.value for keyword in node.keywords]:
+                    named = (
+                        isinstance(argument, ast.Name)
+                        and argument.id == "EVIDENCE_NOTES_HEADING"
+                    )
+                    spelled = (
+                        isinstance(argument, ast.Constant)
+                        and isinstance(argument.value, str)
+                        and heading in argument.value
+                    )
+                    if named or spelled:
+                        sites.append((
+                            str(path.relative_to(REPO_ROOT)),
+                            node.lineno,
+                            "the constant" if named else "its own text",
+                        ))
+                        break
+        # The population's own size, asserted so a walk that silently reads
+        # nothing cannot pass: 95 runtime `.py` files at this head, of 152 in
+        # the tree, the rest being tests.
+        self.assertGreater(files, 90, "the census read almost nothing; check the walk")
+        self.assertEqual(
+            len(sites),
+            1,
+            f"{len(sites)} sites in the tree hand the notes heading to something that is "
+            f"not a known reader: {sites}",
+        )
+        self.assertEqual(sites[0][0], ".agents/skills/cofounder-contributor/scripts/evidence.py")
+        self.assertEqual(sites[0][2], "the constant")
+
     # intent: fix
     # marker: red at `fa8a2010` and at `016d94ba`, its own base and the merge
     # base, behaviourally: both sources of the notes content read the body
     # being rewritten there, so the walk finds `body` where it requires the
     # carried body (#1751, round 18).
-    def test_every_source_of_the_notes_section_reads_the_carried_body(self) -> None:
-        """The enumeration, walked rather than listed, so a path added later is named.
+    def notes_sources(self, source: str) -> list[tuple[str, int]]:
+        """Every read that feeds a write of `## Evidence Notes` in this module.
 
-        One write puts text under `## Evidence Notes`. This reads the module,
-        finds that call, follows every name its content is built from back to
-        the reads that produce it, and requires each of those reads to take
-        the CARRIED body. A future source that reads the body being rewritten
-        -- the shape every one of the four forged paths had -- fails here with
-        its own line number, which is what the per-shape pins above cannot do.
+        The walk PINS SHAPES; it does not establish the fact. What it reads:
+        a call to a section inserter whose heading argument is the notes
+        heading BY VALUE -- the constant resolved from this module's own
+        assignment, or the text spelled out -- then every name the written
+        content is built from, back through assignments, tuple unpacking,
+        `append`/`extend` and loop targets, and through ONE hop into a
+        module-level helper that takes such a name as its argument. A source
+        routed through a second helper, built in a fourth module, or handed a
+        heading assembled at runtime is outside it; those are the unchecked
+        members, and the census above is the instrument that counts them
+        instead of recognising them (#1751, round 19).
         """
-        source = SCRIPT_PATH.with_name("evidence.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
+        heading = self.evidence().EVIDENCE_NOTES_HEADING
+        constants = {
+            target.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Constant)
+            and node.value.value == heading
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
         readers = {"removed_section_texts", "markdown_section", "strip_markdown_section"}
         inserters = {"insert_markdown_section", "inserted_markdown_section"}
+        helpers_by_name = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
 
         def named(node) -> set[str]:
             return {found.id for found in ast.walk(node) if isinstance(found, ast.Name)}
 
-        writes = [
-            (function, call)
-            for function in ast.walk(tree)
-            if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
-            for call in ast.walk(function)
-            if isinstance(call, ast.Call)
-            and isinstance(call.func, ast.Name)
-            and call.func.id in inserters
-            and len(call.args) > 2
-            and "EVIDENCE_NOTES_HEADING" in named(call.args[1])
-        ]
-        self.assertEqual(
-            [function.name for function, _ in writes],
-            ["write_evidence_status_section"],
-            "another function writes that section now, and nothing here asks whose text it uses",
-        )
+        def is_the_heading(node) -> bool:
+            if isinstance(node, ast.Name):
+                return node.id in constants
+            return isinstance(node, ast.Constant) and node.value == heading
+
         found: list[tuple[str, int]] = []
-        for function, call in writes:
-            parameters = {
-                argument.arg for argument in function.args.args + function.args.kwonlyargs
-            }
-            reached, frontier = set(), named(call.args[2])
-            while frontier:
-                name = frontier.pop()
-                if name in reached or name in parameters:
-                    reached.add(name)
+        for function in ast.walk(tree):
+            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for call in ast.walk(function):
+                if not (
+                    isinstance(call, ast.Call)
+                    and (
+                        (isinstance(call.func, ast.Name) and call.func.id in inserters)
+                        or (isinstance(call.func, ast.Attribute) and call.func.attr in inserters)
+                    )
+                    and len(call.args) > 2
+                    and is_the_heading(call.args[1])
+                ):
                     continue
-                reached.add(name)
-                for node in ast.walk(function):
-                    sources = []
-                    if isinstance(node, ast.Assign):
-                        for target in node.targets:
-                            if isinstance(target, ast.Name) and target.id == name:
-                                sources.append(node.value)
-                            if isinstance(target, ast.Tuple) and any(
-                                isinstance(element, ast.Name) and element.id == name
-                                for element in target.elts
-                            ):
-                                sources.append(node.value)
-                    if isinstance(node, ast.AnnAssign) and node.value is not None and (
-                        isinstance(node.target, ast.Name) and node.target.id == name
-                    ):
-                        sources.append(node.value)
-                    if (
-                        isinstance(node, ast.Call)
-                        and isinstance(node.func, ast.Attribute)
-                        and isinstance(node.func.value, ast.Name)
-                        and node.func.value.id == name
-                        and node.func.attr in {"append", "extend"}
-                    ):
-                        sources.extend(node.args)
-                    if isinstance(node, ast.For) and isinstance(node.target, ast.Name) and (
-                        node.target.id == name
-                    ):
-                        sources.append(node.iter)
-                    for reads in sources:
-                        frontier |= named(reads) - reached
-                        for inner in ast.walk(reads):
-                            if (
-                                isinstance(inner, ast.Call)
-                                and isinstance(inner.func, ast.Name)
-                                and inner.func.id in readers
-                                and inner.args
-                            ):
-                                found.append((ast.unparse(inner.args[0]), inner.lineno))
-        self.assertTrue(found, "no read feeds the notes section; the walk found nothing to check")
-        self.assertEqual(
-            sorted({argument for argument, _ in found}),
-            ["notes_from"],
-            f"a source of `## Evidence Notes` reads a body other than the carried one: {found}",
+                parameters = {
+                    argument.arg
+                    for argument in function.args.args + function.args.kwonlyargs
+                }
+                reached, frontier = set(), named(call.args[2])
+                while frontier:
+                    name = frontier.pop()
+                    if name in reached:
+                        continue
+                    reached.add(name)
+                    if name in parameters:
+                        continue
+                    for node in ast.walk(function):
+                        sources = []
+                        if isinstance(node, ast.Assign):
+                            for target in node.targets:
+                                if isinstance(target, ast.Name) and target.id == name:
+                                    sources.append(node.value)
+                                if isinstance(target, ast.Tuple) and any(
+                                    isinstance(element, ast.Name) and element.id == name
+                                    for element in target.elts
+                                ):
+                                    sources.append(node.value)
+                        if (
+                            isinstance(node, ast.AnnAssign)
+                            and node.value is not None
+                            and isinstance(node.target, ast.Name)
+                            and node.target.id == name
+                        ):
+                            sources.append(node.value)
+                        if (
+                            isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Attribute)
+                            and isinstance(node.func.value, ast.Name)
+                            and node.func.value.id == name
+                            and node.func.attr in {"append", "extend"}
+                        ):
+                            sources.extend(node.args)
+                        if (
+                            isinstance(node, ast.For)
+                            and isinstance(node.target, ast.Name)
+                            and node.target.id == name
+                        ):
+                            sources.append(node.iter)
+                        for reads in sources:
+                            frontier |= named(reads) - reached
+                            for inner in ast.walk(reads):
+                                if not isinstance(inner, ast.Call) or not inner.args:
+                                    continue
+                                callee = (
+                                    inner.func.id if isinstance(inner.func, ast.Name) else ""
+                                )
+                                if callee in readers:
+                                    found.append((ast.unparse(inner.args[0]), inner.lineno))
+                                elif callee in helpers_by_name:
+                                    # ONE HOP: a helper that takes one of this
+                                    # function's names and reads a section
+                                    # inside it is this site's read, named at
+                                    # the helper's own line.
+                                    helper = helpers_by_name[callee]
+                                    handed = [ast.unparse(one) for one in inner.args]
+                                    for inside in ast.walk(helper):
+                                        if (
+                                            isinstance(inside, ast.Call)
+                                            and isinstance(inside.func, ast.Name)
+                                            and inside.func.id in readers
+                                            and inside.args
+                                        ):
+                                            read = ast.unparse(inside.args[0])
+                                            position = [
+                                                argument.arg
+                                                for argument in helper.args.args
+                                            ]
+                                            if read in position and position.index(read) < len(handed):
+                                                read = handed[position.index(read)]
+                                            found.append((read, inside.lineno))
+        return found
+
+    # intent: fix
+    # marker: red at `993dc95e`, its own base, behaviourally: the walk there
+    # reads one module, resolves names only inside one function and stops at
+    # its parameters, so a read routed through a one-line module-level helper
+    # is invisible -- the doctored source below passes it. Red at `fa8a2010`
+    # and `016d94ba` for the round-18 reason as well: both sources read the
+    # body being rewritten there (#1751, round 19).
+    def test_every_source_of_the_notes_section_reads_the_carried_body(self) -> None:
+        """The shapes this walk pins, over the three modules the turn path runs.
+
+        The FACT -- that one site in the tree writes that section, fed by two
+        reads of one parameter -- is established by the census above, which
+        counts. This pins the shapes: in every module the turn path runs,
+        each read feeding a notes write takes the CARRIED body, including a
+        read one hop inside a module-level helper.
+
+        The doctored source is the seed: the same module with a new read of
+        the body being rewritten, routed through a helper exactly as a future
+        change would write it. Without the hop it passes, which is what it
+        did at the previous head.
+        """
+        modules = ("evidence.py", "run-contributor.py", "execution.py")
+        for name in modules:
+            with self.subTest(module=name):
+                source = SCRIPT_PATH.with_name(name).read_text(encoding="utf-8")
+                for argument, line in self.notes_sources(source):
+                    self.assertEqual(
+                        argument,
+                        "notes_from",
+                        f"{name}:{line} feeds `## Evidence Notes` from a body "
+                        "other than the carried one",
+                    )
+        written = SCRIPT_PATH.with_name("evidence.py").read_text(encoding="utf-8")
+        self.assertTrue(self.notes_sources(written), "the walk found no source at all")
+        # The seed: a helper-routed read of the body being rewritten.
+        doctored = written.replace(
+            "def write_evidence_status_section(",
+            "def _sneaked_in(text):\n"
+            "    return removed_section_texts(text, EVIDENCE_NOTES_HEADING)\n\n\n"
+            "def write_evidence_status_section(",
+            1,
+        ).replace(
+            "    blocks = standing_blocks + carried_notes",
+            "    blocks = standing_blocks + carried_notes + list(_sneaked_in(body)[0])",
+            1,
         )
+        self.assertNotEqual(doctored, written, "the seed did not apply")
+        self.assertIn(
+            "body",
+            [argument for argument, _ in self.notes_sources(doctored)],
+            "a read routed through a helper is invisible to this walk",
+        )
+
+    # intent: guard
+    # marker: green at `993dc95e` for the parameter it asks about being one
+    # this round changes -- there is nothing to be red about there. What it
+    # pins is the shape the round before removed one level down:
+    # `published_body` defaulted to `""` at the renderer and at the builder
+    # above it, so a caller that said nothing handed the required parameter
+    # an empty string, which cannot be told from a person who wrote nothing
+    # (#1751, round 19).
+    def test_neither_writer_of_a_turn_body_defaults_the_published_body(self) -> None:
+        evidence = self.evidence()
+        execution = sys.modules["execution"]
+        with self.assertRaises(TypeError) as refused:
+            evidence.render_execution_summary_body(
+                self.draft(),
+                requested_evidence=[self.ITEM],
+                evidence_complete=None,
+                evidence_blocked=None,
+                evidence_pending_ci=None,
+            )
+        self.assertIn("published_body", str(refused.exception))
+        with self.assertRaises(TypeError) as refused:
+            execution.build_execution_summary_body({}, requested_evidence=[self.ITEM])
+        self.assertIn("published_body", str(refused.exception))
+        # And every production call site answers it, rather than the two this
+        # round happens to have been looking at.
+        for name in ("evidence.py", "execution.py"):
+            source = SCRIPT_PATH.with_name(name).read_text(encoding="utf-8")
+            calls = [
+                node for node in ast.walk(ast.parse(source))
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in {
+                    "render_execution_summary_body", "build_execution_summary_body"
+                }
+            ]
+            for call in calls:
+                self.assertIn(
+                    "published_body",
+                    [keyword.arg for keyword in call.keywords],
+                    f"{name}:{call.lineno} does not say which published body it has",
+                )
 
     # intent: fix
     # marker: red at `fa8a2010`, its own base, behaviourally -- `TypeError
@@ -9638,7 +10039,7 @@ class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
         run_contributor = sys.modules["run_contributor_evidence_kinds"]
         with contextlib.redirect_stderr(io.StringIO()):
             written, errors = run_contributor.render_execution_summary_body(
-                self.body(),
+                self.body(), published_body="",
                 requested_evidence=[self.BOLD, self.PLAIN],
                 evidence_complete=["1 -- 214 passed"],
                 evidence_blocked=None,
