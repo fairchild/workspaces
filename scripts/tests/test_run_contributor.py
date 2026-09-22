@@ -3337,19 +3337,37 @@ class RevisionTurnTests(unittest.TestCase):
     )
     UNCARRIED_HEADLINE = "was not carried"
 
+    # The draft the model writes this turn, with nothing of anybody's under
+    # the heading: the continued status line belongs to the PUBLISHED body,
+    # because `## Evidence Notes` is written from the body a person can edit
+    # and a sentence about the model's own draft is not a loss of theirs
+    # (#1751, round 18).
+    DRAFT_BODY = (
+        "## Summary\n- Rewrote the sheet's status mapping\n\n"
+        "## Evidence Status\n\n"
+        "- [complete] `swift test` passes -- Test run with 1992 tests passed\n\n"
+        "## Validation\n- `swift test --filter SheetTests`\n"
+    )
+
     def _route_with_a_continued_status(self, *, own_pr: bool = True, **kwargs):
-        """One turn over a body whose status line the author continued."""
+        """One turn whose PUBLISHED body carries a status line its author continued."""
         state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
         if not own_pr:
             # The turn that OPENS the pull request: no PR to advance, and the
-            # lane that runs it does not require one.
+            # lane that runs it does not require one. There is no published
+            # body either, so the loss has to be planted where the create
+            # path reads one -- the body it is handed for the write.
             state["own_pr"] = None
             kwargs["require_existing_pr"] = False
+        else:
+            state["own_pr"] = {**state["own_pr"], "body": self.CONTINUED_STATUS_BODY}
         with mock.patch.object(self, "_state", return_value=state):
             return self._route(
                 dirty=True,
-                live_body="stale body",
-                data=self._data(self.CONTINUED_STATUS_BODY),
+                live_body=self.CONTINUED_STATUS_BODY,
+                data=self._data(
+                    self.CONTINUED_STATUS_BODY if not own_pr else self.DRAFT_BODY
+                ),
                 revision=False,
                 **kwargs,
             )
@@ -3380,12 +3398,34 @@ class RevisionTurnTests(unittest.TestCase):
         self.assertTrue(edited and posted, commands)
         self.assertLess(edited[0], posted[-1])
 
+    # An item whose rendered line the write's own reader cannot read back:
+    # past `EVIDENCE_STATUS_LINE_LIMIT`, so the line is written and the next
+    # run will not recognise it. This is the announcement the create path has
+    # to forward, and it is the one that does not depend on whose body the
+    # text came from -- there is no published body on a first push, so nothing
+    # of anybody's can be lost from one, and round 18 makes the draft's own
+    # text the writer's rather than an author's (#1751).
+    UNREADABLE_ITEM = "the QA filter " + "x" * 4_000
+
     def test_the_turn_that_opens_a_pull_request_says_it_too(self) -> None:
         # The create path is a second call site, and a fix applied to one of
-        # them is the shape this pins against.
-        exit_code, commands, comments, _ = self._route_with_a_continued_status(own_pr=False)
+        # them is the shape this pins against. What it says here is about a
+        # line the write rendered rather than about text it could not carry;
+        # the claim under test is that this call site forwards what the write
+        # said at all, and posts it after the body it is about.
+        state = {**self._state(), "requested_evidence": [self.UNREADABLE_ITEM]}
+        state["own_pr"] = None
+        with mock.patch.object(self, "_state", return_value=state):
+            exit_code, commands, comments, _ = self._route(
+                dirty=True,
+                live_body="stale body",
+                data=self._data(self.DRAFT_BODY),
+                revision=False,
+                require_existing_pr=False,
+            )
         self.assertEqual(exit_code, 0)
-        self.assertEqual(len(self.uncarried(comments)), 1, comments)
+        said = [comment for comment in comments if "not readable back" in comment]
+        self.assertEqual(len(said), 1, comments)
         created = [
             index for index, command in enumerate(commands) if command[:3] == ["gh", "pr", "create"]
         ]
@@ -3397,13 +3437,16 @@ class RevisionTurnTests(unittest.TestCase):
 
     def test_a_revision_turn_with_no_diff_says_it_as_well(self) -> None:
         # This path publishes a body without committing one, so it owes the
-        # same report as the paths that push.
+        # same report as the paths that push. The loss is in the published
+        # body, which is where a person's continued sentence can be
+        # (#1751, round 18).
         state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        state["own_pr"] = {**state["own_pr"], "body": self.CONTINUED_STATUS_BODY}
         with mock.patch.object(self, "_state", return_value=state):
             exit_code, _, comments, outputs = self._route(
                 dirty=False,
-                live_body="stale body",
-                data=self._data(self.CONTINUED_STATUS_BODY),
+                live_body=self.CONTINUED_STATUS_BODY,
+                data=self._data(self.DRAFT_BODY),
             )
         self.assertEqual(exit_code, 0)
         self.assertEqual(outputs.get("revision_outcome"), "body-only")

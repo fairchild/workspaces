@@ -2758,13 +2758,31 @@ def owned_lines(entries: object, previous_entries: object) -> RenderedLines:
 NOTHING_OWNED = RenderedLines(())
 
 
-def is_machine_status_line(
+class WhoseLine(NamedTuple):
+    """Whose a status line under the heading is, and by WHICH claim.
+
+    Two claims decide it and they are not the same answer. Byte identity is
+    the write's own output coming back: nothing of the author's is in it.
+    The item-keyed claim is about a line the author may have written
+    themselves -- their own words for a requirement this body records -- and
+    replacing THOSE bytes is a thing to say out loud (#1751, round 17).
+
+    `item` is the recorded item the second claim matched, so the sentence
+    about a replacement can name what replaced it.
+    """
+
+    machine: bool
+    by_bytes: bool
+    item: str | None
+
+
+def whose_status_line(
     line: str,
     recorded_items: Iterable[str],
     context: str = "",
     rendered: RenderedLines = NOTHING_OWNED,
-) -> bool:
-    """Whether this line under the heading is the machine's. ONE function, both readers.
+) -> WhoseLine:
+    """Whose this line under the heading is, and by which claim. ONE function, both readers.
 
     `line` is the author's own bytes. Two claims, in order:
 
@@ -2792,35 +2810,12 @@ def is_machine_status_line(
     The write used to ask `is_recorded_status_line` through a reading it made
     itself and the sweep asked it with no cap at all, so the cap was the
     write's alone and the two answered differently on the first shape tried.
+
+    It answers with the CLAIM as well as the verdict, and that is the whole
+    of it now: a boolean wrapper stood here until round 18, keeping a second
+    name for this answer after the last caller of it went, and a name with no
+    caller is an argument nobody can check (#1751, round 18).
     """
-    return whose_status_line(line, recorded_items, context, rendered).machine
-
-
-class WhoseLine(NamedTuple):
-    """Whose a status line under the heading is, and by WHICH claim.
-
-    Two claims decide it and they are not the same answer. Byte identity is
-    the write's own output coming back: nothing of the author's is in it.
-    The item-keyed claim is about a line the author may have written
-    themselves -- their own words for a requirement this body records -- and
-    replacing THOSE bytes is a thing to say out loud (#1751, round 17).
-
-    `item` is the recorded item the second claim matched, so the sentence
-    about a replacement can name what replaced it.
-    """
-
-    machine: bool
-    by_bytes: bool
-    item: str | None
-
-
-def whose_status_line(
-    line: str,
-    recorded_items: Iterable[str],
-    context: str = "",
-    rendered: RenderedLines = NOTHING_OWNED,
-) -> WhoseLine:
-    """`is_machine_status_line`'s answer with the claim that produced it."""
     if rendered.claim(line):
         return WhoseLine(True, True, None)
     reading = status_line_as_page_reads_it(line, context)
@@ -3003,6 +2998,34 @@ def _replaced_note(line: str, number: int, item: str) -> str:
     )
 
 
+def _superseded_carry(line: str) -> str:
+    """The author's replaced status line, carried as a fenced excerpt under a sentence saying so.
+
+    Carried as the BULLET it was, the page showed two statuses for one
+    requirement: after the machine's verdict flipped, `- [blocked] <item>`
+    under `## Evidence Status` and the author's `- [complete] <item>` directly
+    below it under `## Evidence Notes`, with nothing marking the second
+    superseded and no date on either -- one such bullet per author edit. The
+    round that started replacing the line did it because two answers for one
+    requirement leave a reader choosing between them, and carrying the answer
+    as an answer moved that choice one heading down (#1751, round 18).
+
+    Fenced rather than reworded, so the line stays a LINE: the page shows it
+    as the characters somebody typed rather than as a status this body
+    claims, and its bytes are still in the body as their own line -- which is
+    what the write sweep counts, and a carrier that wrapped the text into a
+    sentence would read there as the line going. The fence is longer than the
+    longest backtick run in the text, so a line carrying backticks closes the
+    fence nobody opened for it.
+    """
+    longest = max((len(run) for run in re.findall(r"`+", line)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return (
+        "previously in the status list, replaced by the entry the record holds:"
+        f"\n\n{fence}\n{line}\n{fence}"
+    )
+
+
 def says_text_was_replaced(note: str) -> bool:
     """Whether this announcement already tells the author a line of theirs was replaced."""
     return note.startswith(REPLACED_ANNOUNCEMENT_PREFIX)
@@ -3042,7 +3065,6 @@ def _section_notes(
     recorded_items: Iterable[str],
     context: str = "",
     rendered: RenderedLines = NOTHING_OWNED,
-    a_person_may_have_written_this: bool = True,
 ) -> tuple[list[str], list[str]]:
     """The blocks of one Evidence Status section that are not the machine's status lines, and what went.
 
@@ -3115,15 +3137,21 @@ def _section_notes(
     # rule -- and the text moves to `## Evidence Notes` with a sentence saying
     # so, which is what "nothing leaves without a word" has to mean for a line
     # the machine owns (#1751, round 17).
-    # Only where somebody may have written it. The factory turn rewrites the
-    # MODEL's own draft, where every line is generated text: carrying a status
-    # line out of it re-publishes a sentence nobody wrote, and a forged
-    # `- [complete] <recorded item> -- trust me` would come back as a note
-    # under a body whose metadata says otherwise. The lane rewrites the body
-    # GitHub holds, which a person can edit, and that is the body this is
-    # about (#1751, round 17).
-    for start, item, theirs in replaced if a_person_may_have_written_this else []:
-        spans.append((start, start + 1))
+    # Whose sentence this is was decided before this function ran: the caller
+    # reads the blocks of the body a person can edit, and nothing else is ever
+    # read for notes. Round 17 asked the question here instead, with a flag
+    # saying whether the caller's body might be somebody's -- which covered
+    # the item-claimed lines below and left every other block of the same
+    # section carrying, so a forged status bullet for an item the metadata
+    # records nowhere reached `## Evidence Notes` from the model's own draft
+    # (#1751, round 18).
+    superseded: list[tuple[int, str]] = []
+    for start, item, theirs in replaced:
+        # The RAW line, not a stripped reading of it: a leading indent and a
+        # trailing space are the author's bytes, and a carrier that trims
+        # them alters the text it claims to keep -- which the write sweep
+        # reads as the line going, four of its axis values over.
+        superseded.append((start, _superseded_carry(lines[start])))
         if theirs:
             losses.append((start, _replaced_note(lines[start].strip(), start + 1, item)))
     for start, stop in machine:
@@ -3146,7 +3174,9 @@ def _section_notes(
         for line in range(line_count)
         if line not in covered and lines[line].strip()
     )
-    carried: list[str] = []
+    # The author's replaced lines travel as prose beside the blocks that
+    # travel as bytes, in the order the section had them.
+    blocks: list[tuple[int, str]] = list(superseded)
     for start, stop in sorted(spans):
         while start < stop and not lines[start].strip():
             start += 1
@@ -3165,15 +3195,20 @@ def _section_notes(
             # is the only frame this function has.
             losses.append((start, _uncarried_note(reason, start + 1, lines[start])))
             continue
-        carried.append(block)
-    # Said last and all at once, in the order of the section rather than in the
-    # order the two passes above happen to find them: the author reads this as
-    # a list about their own text, and a list that jumps around the section is
-    # harder to act on than one that does not.
-    announcements = [note for _, note in sorted(losses)]
-    for announcement in announcements:
-        log(announcement)
-    return carried, announcements
+        blocks.append((start, block))
+    carried = [text for _, text in sorted(blocks, key=lambda pair: pair[0])]
+    # Returned in the order of the section rather than in the order the two
+    # passes above happen to find them: the author reads this as a list about
+    # their own text, and a list that jumps around the section is harder to
+    # act on than one that does not.
+    #
+    # Returned and NOT logged. Who hears a sentence depends on whose body it
+    # is about, and this function is handed a section rather than a body -- so
+    # the caller, which knows, does the saying. It reads one body for the
+    # notes and another to count what it is not carrying, and a reader that
+    # logged would say "this line moves to `## Evidence Notes`" about the
+    # second one, where nothing moves (#1751, round 18).
+    return carried, [note for _, note in sorted(losses)]
 
 
 def _placement_a_reader_cannot_see(written: str) -> str | None:
@@ -3252,7 +3287,7 @@ def write_evidence_status_section(
     status_lines: Iterable[str],
     *,
     recorded_items: Iterable[str],
-    a_person_may_have_written_this: bool = True,
+    notes_from: str,
     entries: object,
     previous_entries: object,
 ) -> SectionWrite:
@@ -3373,21 +3408,63 @@ def write_evidence_status_section(
     sections, refusal = removed_section_texts(body, EVIDENCE_STATUS_HEADING)
     if refusal is not None:
         return _stood_down(source, refusal)
+    # The body this write REWRITES and the body it may CARRY FROM are two
+    # parameters, and `notes_from` is the second one. Everything that lands
+    # under `## Evidence Notes` is read from it and from nowhere else -- the
+    # section's provenance, rather than a question asked per block about what
+    # a block looks like.
+    theirs, theirs_refusal = removed_section_texts(notes_from, EVIDENCE_STATUS_HEADING)
+    if theirs_refusal is not None:
+        return _stood_down(source, theirs_refusal)
     notes: list[str] = []
     announcements: list[str] = list(orphaned)
-    for section in sections:
-        carried, said = _section_notes(
-            section, recorded, section, owned, a_person_may_have_written_this
-        )
+    for section in theirs:
+        carried, said = _section_notes(section, recorded, section, owned)
         notes.extend(carried)
+        # Logged here, because here is where the body these sentences are
+        # about is known to be one a person may have written.
+        for sentence in said:
+            log(sentence)
         announcements.extend(said)
     # The notes section comes out before the status section goes in, so that
     # neither is standing when the other is placed and both land by the same
     # rule. Placing the status around a notes section still in the body put
     # the two in one order on the first write and the other on the second.
-    kept, notes_refusal = removed_section_texts(body, EVIDENCE_NOTES_HEADING)
+    kept, notes_refusal = removed_section_texts(notes_from, EVIDENCE_NOTES_HEADING)
     if notes_refusal is not None:
         return _stood_down(source, notes_refusal)
+    # The rewritten body's OWN notes section goes whether or not the carried
+    # body has one: leaving it would put text this write did not read beside
+    # text it did, under one heading, which is the shape the provenance rule
+    # exists to refuse. Where the two bodies are one object this is the same
+    # section and the same answer as before.
+    standing, standing_refusal = removed_section_texts(body, EVIDENCE_NOTES_HEADING)
+    if standing_refusal is not None:
+        return _stood_down(source, standing_refusal)
+    if notes_from != body:
+        # What an earlier head would have carried OUT of the body being
+        # written, counted by the same reading that produces the notes rather
+        # than described: the status section's own blocks, plus whatever
+        # already stood under the notes heading. The machine's status lines
+        # are not among them -- replacing those is the write's job, not a
+        # loss. Read once, over this body's own sections, so each body's
+        # sentences are said once.
+        ungathered = [
+            block
+            for section in sections
+            for block in _section_notes(section, recorded, section, owned)[0]
+        ] + [kept_text for text in standing if (kept_text := _without_edge_blank_lines(text))]
+        if ungathered:
+            # Said to the run and NOT to the author: text the author never
+            # wrote is not a loss of theirs, and a sentence about the model's
+            # own draft in the comment a person reads is noise in the one
+            # channel this branch keeps clearing.
+            log(
+                f"{len(ungathered)} block(s) under `## {EVIDENCE_STATUS_HEADING}` or "
+                f"`## {EVIDENCE_NOTES_HEADING}` in the body being written were not carried: "
+                f"`## {EVIDENCE_NOTES_HEADING}` is written from the body a person can edit, "
+                "which this body is not"
+            )
     # Appended to what that section already held rather than replacing it.
     blocks = [kept_text for text in kept if (kept_text := _without_edge_blank_lines(text))] + notes
 
@@ -3406,7 +3483,7 @@ def write_evidence_status_section(
     # writer runs more than once in a turn. It belongs to whatever reports the
     # turn, composed from the body the write returned (#1730, round 2).
     written = insert_markdown_section(
-        strip_markdown_section(body, EVIDENCE_NOTES_HEADING) if kept else body,
+        strip_markdown_section(body, EVIDENCE_NOTES_HEADING) if standing else body,
         EVIDENCE_STATUS_HEADING,
         "\n".join(rendered),
         before_heading="Validation",
@@ -3530,10 +3607,19 @@ def render_execution_summary_body(
         stripped_body,
         evidence_lines,
         recorded_items=[str(entry["item"]) for _, entry in sorted(evidence_map.items())],
-        # The MODEL's own draft: every line in it is generated text, so a
-        # status line replaced here is the writer regenerating its own
-        # section and there is nobody's sentence to carry (#1751, round 17).
-        a_person_may_have_written_this=False,
+        # `## Evidence Notes` is written from the PUBLISHED body and never
+        # from the draft. `summary_body` is the model's text for this turn --
+        # every line in it is generated -- so carrying a block out of it
+        # publishes a sentence nobody wrote, and a forged
+        # `- [complete] <item the metadata records nowhere> -- trust me`
+        # planted there came back as a note under a body whose record says
+        # otherwise. Round 17 asked that question with a flag, which covered
+        # the item-claimed lines and left three other paths open; the body a
+        # person can edit is the one this reads, so the trusted thing and the
+        # used thing are one object (#1751, round 18). The metadata comment
+        # goes first, for the same reason the lane strips it: it is the
+        # record, not a note.
+        notes_from=_strip_evidence_metadata(published_body),
         # From the body this was HANDED, before its metadata was stripped --
         # the same source the lane path passes. Reconstructing it inside the
         # write instead read `source`, which by then carries THIS run's
@@ -4566,13 +4652,19 @@ def _render_structured_entries(
     rendered_entries = renderable_entries(updated_entries)
 
     if rendered_entries:
+        # The body GitHub holds, which a person can edit: this path rewrites
+        # the published body itself, so the body it carries notes from is the
+        # same object it rewrites, named once and passed twice so the call
+        # says whose text it may carry.
+        rewritten = _strip_evidence_metadata(body)
         write = write_evidence_status_section(
-            _strip_evidence_metadata(body),
+            rewritten,
             # One composer, not a copy of its f-string with a drift test in
             # front of it: `rendered_entry_lines` is what says what a rendered
             # line IS, and both renderers call it (#1751, round 11).
             rendered_entry_lines(sorted(rendered_entries, key=lambda entry: int(entry["index"]))),
             recorded_items=[str(entry["item"]) for entry in rendered_entries],
+            notes_from=rewritten,
             # The metadata is stripped before the write, so the lines the LAST
             # run rendered have to travel separately or the cap loses them --
             # which is how a changing `pending-ci` detail brought the uncapped
