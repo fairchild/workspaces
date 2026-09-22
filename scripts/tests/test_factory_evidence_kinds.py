@@ -9677,14 +9677,12 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
             "a read routed through a helper is invisible to this walk",
         )
 
-    # intent: guard
-    # marker: green at `993dc95e` for the parameter it asks about being one
-    # this round changes -- there is nothing to be red about there. What it
-    # pins is the shape the round before removed one level down:
-    # `published_body` defaulted to `""` at the renderer and at the builder
-    # above it, so a caller that said nothing handed the required parameter
-    # an empty string, which cannot be told from a person who wrote nothing
-    # (#1751, round 19).
+    # intent: fix
+    # marker: red at `993dc95e`, its own base, behaviourally -- `TypeError
+    # not raised`: `published_body` defaults to `""` there at the renderer
+    # and at the builder above it, so a caller that says nothing hands the
+    # required parameter an empty string, which cannot be told from a person
+    # who wrote nothing. Red on `016d94ba` the same way (#1751, round 19).
     def test_neither_writer_of_a_turn_body_defaults_the_published_body(self) -> None:
         evidence = self.evidence()
         execution = sys.modules["execution"]
