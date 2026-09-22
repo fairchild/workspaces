@@ -87,6 +87,18 @@ SECTION_TAILS = {
     "a recorded item's bullet in the author's own words": (
         f"\n- [complete] {ITEM} -- I ran it myself and it passed\n"
     ),
+    # The author's own reading of a recorded item in a DIFFERENT shape from
+    # the row above: a `blocked` token where the record says otherwise, and a
+    # note of theirs above it rather than the status line. The corrected
+    # predicate and the row that exercises it arrived in one commit at round
+    # 17, so what the predicate reached beyond that row was unmeasured -- a
+    # detector and its case arriving together measure each other. This row is
+    # outside it and the predicate sees it: paired with the round-17 writer
+    # it reports the loss, and the published predicate reports nothing
+    # (#1751, round 18).
+    "a recorded item read as blocked beside a note of theirs": (
+        f"\nA note for the reviewer.\n\n- [blocked] {ITEM} -- the device is not on the bench\n"
+    ),
     # The author's OWN status bullet, naming an item the body records nowhere.
     # The writer took it as its own and replaced it while this instrument read
     # it as the author's, which is two answers about one line -- and on this
@@ -196,29 +208,28 @@ def _recorded_items(text: str) -> set[str]:
 def _entry_line_numbers(lines: list[str], text: str, source: str) -> set[int]:
     """Which lines are the status entries this write owns.
 
-    Three conditions, and each one answers a way the filter was wrong.
+    TWO conditions, and both are about this instrument's independence from
+    the write rather than about what a line looks like.
 
-    It is entry-SHAPED, rather than carrying the item's text anywhere: a line
-    naming the item in prose is the author's sentence about it.
-
-    It names an item the metadata RECORDS -- asked of `evidence`, which is the
-    same function the write asks (`is_recorded_status_line`), and asked of the
-    page's reading of the line, which is where the write asks it from. A
-    status-shaped line inside the section that names no recorded item is the
-    author's, wherever it sits, and the write moves it to `## Evidence Notes`
-    like any other block. Answering it here in a pattern of this file's own was
-    two definitions of one rule, and on the author's own `- [blocked] release
-    approval -- the signing profile is missing` written under the heading they
-    disagreed: the write replaced it and this instrument called the
-    replacement a silent loss (#1751). Asking the one rule with the raw line
-    while the write asked it with the parser's reading was the same
-    disagreement one markup form over -- a bold status token, an emphasised
-    item, an ordered or `*` marker -- so the reading comes from `evidence` too
-    (#1751, round 2). What a loss REPORTS is still the author's own bytes:
-    this decides ownership, not what a line looks like when it goes.
+    The line's bytes are identical to one the write rendered, asked of the
+    same multiset the write builds from the same two inputs -- the entries
+    this run renders and the entries the body records -- so a rendered line
+    owns ONE body line and a second copy of those bytes stays the author's.
 
     And it sits INSIDE the section, so an author's copy of a recorded item
     under their own `## Validation` stays theirs.
+
+    What is NOT asked here any more is the writer's own ownership rule: that
+    a status-shaped line naming a recorded item is the machine's. This
+    instrument exists to measure the answer to that rule, and it asked the
+    rule until round 17 -- so an author's own
+    `- [complete] <recorded item> -- <their words>` was replaced by the write
+    and exempted here, `lines_lost` returned `[]` for it, and a clean sweep
+    said nothing about the rule at all. An instrument that shares the
+    predicate under test cannot measure it (#1751, round 17). The history of
+    the shape conditions that went with it is in this file's own log: the
+    disagreement they were built to close was between a raw-line reading here
+    and a parsed reading in the write (#1751, rounds 1 and 2).
 
     A body with no metadata has no entries the write owns, and a body with no
     readable section has none either: both are the conservative answer, which
@@ -245,13 +256,6 @@ def _entry_line_numbers(lines: list[str], text: str, source: str) -> set[int]:
     for line in lines:
         starts.append(offset)
         offset += len(line) + 1
-    # The SAME function the write asks, with the same four inputs: the line,
-    # the items, the section the line is read in, and the lines the write
-    # owns. Asking `is_recorded_status_line` alone left this instrument with
-    # no cap at all, so the write took a differently-spelled author line and
-    # this called the same line lost -- the disagreement the branch exists to
-    # close, reopened by the cap that closed part of it (#1751, round 6).
-    section = helpers.markdown_section(text, "Evidence Status")
     # One owner for this body, the same multiset the write builds: a rendered
     # line owns ONE body line, so two identical copies are one line of the
     # machine's and one of the author's at both readers (#1751, round 9).
@@ -266,10 +270,10 @@ def _entry_line_numbers(lines: list[str], text: str, source: str) -> set[int]:
     recorded_entries = evidence.evidence_entries_of(source)
     updated_entries, _ = evidence.entries_with_updates(recorded_entries, UPDATES)
     owned = evidence.owned_lines(updated_entries, recorded_entries)
-    # BYTE IDENTITY, and nothing else. Asking `is_machine_status_line` asked
-    # the writer's own ownership rule -- a status-shaped line naming a
-    # recorded item is the machine's -- which is the predicate this
-    # instrument exists to check the answer to: an author's own
+    # BYTE IDENTITY, and nothing else. Asking the writer's own ownership rule
+    # -- a status-shaped line naming a recorded item is the machine's, which
+    # `whose_status_line` answers -- asked the predicate this instrument
+    # exists to check the answer to: an author's own
     # `- [complete] <recorded item> -- <their words>` was replaced by the
     # write and exempted here, so `lines_lost` returned `[]` for it and a
     # clean sweep said nothing about that rule at all. An instrument that

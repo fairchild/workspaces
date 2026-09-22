@@ -50,7 +50,7 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
     # every tail/successor/ending combination for each recorded item, because
     # whose a status line is now depends on the ITEM matching and an item
     # whose markup the page resolves is the case the figure could not see.
-    BODIES = 384
+    BODIES = 408
     REFUSALS = 44
     ANNOUNCED_LOSSES = 4
 
