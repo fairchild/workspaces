@@ -2699,6 +2699,12 @@ class RenderedLines:
         self._remaining: list[tuple[object, str]] = list(
             dict.fromkeys((key, str(line)) for key, line in claims)
         )
+        # The bytes this write rendered, kept whole: `claim` spends a claim
+        # and a second copy of one of these lines then falls through to the
+        # item-keyed rule. Whether that copy is the machine's SECOND line and
+        # whether it carries any of the author's words are different
+        # questions, and only the first is about claims (#1751, round 17).
+        self._rendered: set[str] = {line for _, line in self._remaining}
 
     def claim(self, line: str) -> bool:
         """Whether one of the claims still unspent is for this line, byte for byte."""
@@ -2707,6 +2713,10 @@ class RenderedLines:
                 del self._remaining[position]
                 return True
         return False
+
+    def is_one_of_its_own(self, line: str) -> bool:
+        """Whether these bytes are a line this write rendered, spent claim or not."""
+        return line in self._rendered
 
     def __bool__(self) -> bool:
         return bool(self._remaining)
@@ -2783,11 +2793,49 @@ def is_machine_status_line(
     itself and the sweep asked it with no cap at all, so the cap was the
     write's alone and the two answered differently on the first shape tried.
     """
+    return whose_status_line(line, recorded_items, context, rendered).machine
+
+
+class WhoseLine(NamedTuple):
+    """Whose a status line under the heading is, and by WHICH claim.
+
+    Two claims decide it and they are not the same answer. Byte identity is
+    the write's own output coming back: nothing of the author's is in it.
+    The item-keyed claim is about a line the author may have written
+    themselves -- their own words for a requirement this body records -- and
+    replacing THOSE bytes is a thing to say out loud (#1751, round 17).
+
+    `item` is the recorded item the second claim matched, so the sentence
+    about a replacement can name what replaced it.
+    """
+
+    machine: bool
+    by_bytes: bool
+    item: str | None
+
+
+def whose_status_line(
+    line: str,
+    recorded_items: Iterable[str],
+    context: str = "",
+    rendered: RenderedLines = NOTHING_OWNED,
+) -> WhoseLine:
+    """`is_machine_status_line`'s answer with the claim that produced it."""
     if rendered.claim(line):
-        return True
-    return is_recorded_status_line(
-        status_line_as_page_reads_it(line, context), recorded_items, context
+        return WhoseLine(True, True, None)
+    reading = status_line_as_page_reads_it(line, context)
+    key = recorded_item_key(reading, recorded_items, context)
+    if key is None:
+        return WhoseLine(False, False, None)
+    named = next(
+        (
+            item
+            for item in recorded_items
+            if _normalize_evidence_key(item_as_page_reads_it(str(item), context)) == key
+        ),
+        None,
     )
+    return WhoseLine(True, False, None if named is None else str(named))
 
 
 def _is_status_list_item(
@@ -2812,15 +2860,27 @@ def _is_status_list_item(
     `**[complete]**` are one shape. Everything else under the heading -- a
     `- [x]` box, a bullet naming no status -- is the author's and moves.
     """
+    return _status_item_claim(tokens, index, recorded_items, context, rendered, lines).machine
+
+
+def _status_item_claim(
+    tokens: list[Token],
+    index: int,
+    recorded_items: Iterable[str],
+    context: str = "",
+    rendered: RenderedLines = NOTHING_OWNED,
+    lines: list[str] | None = None,
+) -> WhoseLine:
+    """`_is_status_list_item`'s answer with the claim that produced it."""
     reading = _status_item_reading(tokens, index)
     if reading is None:
-        return False
+        return WhoseLine(False, False, None)
     # The author's own bytes, so the one function below compares like with
     # like. Read off the paragraph the item opens with, which is the line the
     # status was written on.
     span = tokens[index + 1].map
     raw = lines[span[0]] if lines is not None and span and span[0] < len(lines) else reading
-    return is_machine_status_line(raw, recorded_items, context, rendered)
+    return whose_status_line(raw, recorded_items, context, rendered)
 
 
 def _without_edge_blank_lines(text: str) -> str:
@@ -2848,11 +2908,17 @@ def _list_item_spans(
     context: str = "",
     rendered: RenderedLines = NOTHING_OWNED,
     lines: list[str] | None = None,
+    replaced: list[tuple[int, str, bool]] | None = None,
 ) -> int:
     """Sort the items of the list opening at `start` into the machine's and the author's; return the index past it.
 
     An item is taken as the lines it was written on, nested blocks included,
     so a bullet carrying an indented excerpt moves whole.
+
+    `replaced` collects the machine lines whose claim was the ITEM rather
+    than the write's own bytes: the rewrite replaces them either way, and
+    those are the ones whose text somebody may have written themselves
+    (#1751, round 17).
     """
     close, level = tokens[start].type.replace("_open", "_close"), tokens[start].level
     index = start + 1
@@ -2862,7 +2928,8 @@ def _list_item_spans(
             index += 1
             continue
         if token.map is not None:
-            if _is_status_list_item(tokens, index, recorded_items, context, rendered, lines):
+            claim = _status_item_claim(tokens, index, recorded_items, context, rendered, lines)
+            if claim.machine:
                 # The line the status is written on is the machine's; the rest
                 # of the item is one block of the author's, not a run of loose
                 # lines. A pasted log indented under a status bullet belongs to
@@ -2872,6 +2939,23 @@ def _list_item_spans(
                 # than carried, which is worse than text deleted.
                 first = tokens[index + 1].map or token.map
                 machine.append((first[0], first[1]))
+                # A line the ITEM claimed rather than the write's own bytes
+                # is carried either way -- a second copy of the machine's
+                # line has a spent claim and falls through to here, and
+                # round 9 is why it is the author's: one rendered line owns
+                # ONE body line. What differs is whether anything is SAID.
+                # Bytes the write rendered carry nothing of anybody else's,
+                # so they move in silence (round 16's control); bytes that
+                # differ are somebody's own words and the replacement is
+                # announced (#1751, round 17).
+                if not claim.by_bytes and replaced is not None and lines is not None:
+                    replaced.append(
+                        (
+                            first[0],
+                            claim.item or "",
+                            not rendered.is_one_of_its_own(lines[first[0]]),
+                        )
+                    )
                 if first[1] < token.map[1]:
                     notes.append((first[1], token.map[1]))
             else:
@@ -2888,6 +2972,40 @@ def _list_item_spans(
                 depth -= 1
             index += 1
     return index + 1
+
+
+# The one spelling of "this write replaced text somebody wrote", so a reader
+# and a second sentence about the same replacement ask the same question
+# (#1751, round 17).
+REPLACED_ANNOUNCEMENT_PREFIX = "replaced in `## Evidence Status`: "
+
+
+def _replaced_note(line: str, number: int, item: str) -> str:
+    """The one sentence about a status bullet of the author's this write replaced.
+
+    The rule it announces is not changing: a status line naming an item the
+    body RECORDS is the machine's, and a rewrite rewrites it -- two answers
+    for one requirement would leave a reader choosing between them. What
+    changes is that replacing bytes that DIFFER from the ones this write
+    renders is said out loud and the author's text is carried to
+    `## Evidence Notes`, the way any other line of theirs is. Measured at
+    `61c1e37a`: their own `- [complete] <recorded item> -- <their words>`
+    left the body with no error, nothing on stderr and no notes entry, while
+    the same bullet for an unrecorded item survived (#1751, round 17).
+
+    A byte-identical copy of the machine's own line says nothing: there is
+    nothing of theirs in it, which is round 16's control.
+    """
+    return (
+        f"{REPLACED_ANNOUNCEMENT_PREFIX}{code_span(line)} at line {number} names "
+        f"{code_span(item)}, which this body records, so this write replaced it with the "
+        "entry's own line; your text is in `## Evidence Notes`"
+    )
+
+
+def says_text_was_replaced(note: str) -> bool:
+    """Whether this announcement already tells the author a line of theirs was replaced."""
+    return note.startswith(REPLACED_ANNOUNCEMENT_PREFIX)
 
 
 def _uncarried_note(detail: str, line: int, went: str = "") -> str:
@@ -2924,6 +3042,7 @@ def _section_notes(
     recorded_items: Iterable[str],
     context: str = "",
     rendered: RenderedLines = NOTHING_OWNED,
+    a_person_may_have_written_this: bool = True,
 ) -> tuple[list[str], list[str]]:
     """The blocks of one Evidence Status section that are not the machine's status lines, and what went.
 
@@ -2970,6 +3089,7 @@ def _section_notes(
     tokens = MARKDOWN.parse("\n".join(lines))
     machine: list[tuple[int, int]] = []
     spans: list[tuple[int, int]] = []
+    replaced: list[tuple[int, str, bool]] = []
     index = 0
     while index < len(tokens):
         token = tokens[index]
@@ -2978,7 +3098,8 @@ def _section_notes(
             continue
         if token.type in {"bullet_list_open", "ordered_list_open"}:
             index = _list_item_spans(
-                tokens, index, machine, spans, recorded_items, context, rendered, lines
+                tokens, index, machine, spans, recorded_items, context, rendered, lines,
+                replaced,
             )
             continue
         spans.append((token.map[0], token.map[1]))
@@ -2989,6 +3110,22 @@ def _section_notes(
     # sentence into a section of its own would be alteration, not carriage --
     # but the loss is still a loss, and it is said.
     losses: list[tuple[int, str]] = []
+    # A status line the ITEM claimed rather than the write's own bytes carries
+    # somebody's words. The entry's line still replaces it -- the rule is the
+    # rule -- and the text moves to `## Evidence Notes` with a sentence saying
+    # so, which is what "nothing leaves without a word" has to mean for a line
+    # the machine owns (#1751, round 17).
+    # Only where somebody may have written it. The factory turn rewrites the
+    # MODEL's own draft, where every line is generated text: carrying a status
+    # line out of it re-publishes a sentence nobody wrote, and a forged
+    # `- [complete] <recorded item> -- trust me` would come back as a note
+    # under a body whose metadata says otherwise. The lane rewrites the body
+    # GitHub holds, which a person can edit, and that is the body this is
+    # about (#1751, round 17).
+    for start, item, theirs in replaced if a_person_may_have_written_this else []:
+        spans.append((start, start + 1))
+        if theirs:
+            losses.append((start, _replaced_note(lines[start].strip(), start + 1, item)))
     for start, stop in machine:
         if stop - start > 1:
             losses.append(
@@ -3115,6 +3252,7 @@ def write_evidence_status_section(
     status_lines: Iterable[str],
     *,
     recorded_items: Iterable[str],
+    a_person_may_have_written_this: bool = True,
     entries: object,
     previous_entries: object,
 ) -> SectionWrite:
@@ -3238,7 +3376,9 @@ def write_evidence_status_section(
     notes: list[str] = []
     announcements: list[str] = list(orphaned)
     for section in sections:
-        carried, said = _section_notes(section, recorded, section, owned)
+        carried, said = _section_notes(
+            section, recorded, section, owned, a_person_may_have_written_this
+        )
         notes.extend(carried)
         announcements.extend(said)
     # The notes section comes out before the status section goes in, so that
@@ -3390,6 +3530,10 @@ def render_execution_summary_body(
         stripped_body,
         evidence_lines,
         recorded_items=[str(entry["item"]) for _, entry in sorted(evidence_map.items())],
+        # The MODEL's own draft: every line in it is generated text, so a
+        # status line replaced here is the writer regenerating its own
+        # section and there is nobody's sentence to carry (#1751, round 17).
+        a_person_may_have_written_this=False,
         # From the body this was HANDED, before its metadata was stripped --
         # the same source the lane path passes. Reconstructing it inside the
         # write instead read `source`, which by then carries THIS run's

@@ -6082,7 +6082,9 @@ class ALongSHeadingIsAnotherHeadingTests(unittest.TestCase):
         )
         self.assertIn(self.LONG_S, write.body, write.refusal)
         self.assertIn("- [complete] the printer's item -- not this section", write.body)
-        self.assertNotIn(self.AUTHORS_LINE, write.body)
+        self.assertNotIn(
+            self.AUTHORS_LINE, self.helpers().markdown_section(write.body, "Evidence Status")
+        )
         self.assertEqual(write.body.count("## Evidence Status"), 1)
 
     def test_the_owner_read_sees_one_section_and_does_not_refuse_for_two(self) -> None:
@@ -6170,7 +6172,10 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         written, _, _ = self.evidence().write_evidence_status_section(
             body, self.ENTRIES, entries=entries_for(self.ENTRIES), previous_entries=entries_for(self.ENTRIES), recorded_items=[self.ITEM]
         )
-        self.assertNotIn(self.AUTHORS_LINE, written)
+        # Out of the SECTION, which is what "still rewritten" means. Their
+        # bytes are below it now rather than gone (#1751, round 17).
+        self.assertNotIn(self.AUTHORS_LINE, self.helpers().markdown_section(written, "Evidence Status"))
+        self.assertIn(self.AUTHORS_LINE, self.helpers().markdown_section(written, "Evidence Notes"))
 
     def test_emphasis_is_markdown_rather_than_a_tag_and_stays_this_section(self) -> None:
         # The line this rule does not cross. `**Evidence Status**` is bold on
@@ -6184,7 +6189,10 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         written, _, _ = self.evidence().write_evidence_status_section(
             body, self.ENTRIES, entries=entries_for(self.ENTRIES), previous_entries=entries_for(self.ENTRIES), recorded_items=[self.ITEM]
         )
-        self.assertNotIn(self.AUTHORS_LINE, written)
+        # Out of the SECTION, which is what "still rewritten" means. Their
+        # bytes are below it now rather than gone (#1751, round 17).
+        self.assertNotIn(self.AUTHORS_LINE, self.helpers().markdown_section(written, "Evidence Status"))
+        self.assertIn(self.AUTHORS_LINE, self.helpers().markdown_section(written, "Evidence Notes"))
 
     def test_the_internal_read_says_why_rather_than_saying_nothing_is_there(self) -> None:
         # Named for what it checks. This is `_rendered_markdown_entries`, an
@@ -8199,8 +8207,14 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
             with self.subTest(shape=shape):
                 result, _ = self.write(tail)
                 self.assertIsNone(result.refusal)
-                self.assertEqual(len(result.announcements), 1, result.announcements)
-                announcement = result.announcements[0]
+                # The loss this shape is about comes back in the result. A
+                # write may say more than one thing about one body -- it also
+                # says when it replaced somebody's status line -- so this
+                # asks WHICH sentence came back rather than how many
+                # (#1751, round 17).
+                carried = [note for note in result.announcements if "not carried" in note]
+                self.assertEqual(len(carried), 1, result.announcements)
+                announcement = carried[0]
                 self.assertIn(phrase, announcement)
                 # The line the author has to look at, which is the only part of
                 # this a person can act on.
@@ -8398,11 +8412,14 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
         # losses read as two (#1740, round 3).
         first, _ = self.write(f"{self.STATUS}\n  the first sentence I wrote under it")
         second, _ = self.write(f"{self.STATUS}\n  a different sentence, same line")
-        self.assertEqual(len(first.announcements), 1, first.announcements)
-        self.assertEqual(len(second.announcements), 1, second.announcements)
-        self.assertNotEqual(first.announcements[0], second.announcements[0])
-        prior = self.posted([], list(first.announcements))
-        self.assertEqual(len(self.posted(prior, list(second.announcements))), 1)
+        uncarried = [
+            [note for note in result.announcements if "not carried" in note]
+            for result in (first, second)
+        ]
+        self.assertEqual([len(notes) for notes in uncarried], [1, 1], uncarried)
+        self.assertNotEqual(uncarried[0][0], uncarried[1][0])
+        prior = self.posted([], uncarried[0])
+        self.assertEqual(len(self.posted(prior, uncarried[1])), 1)
 
     def test_the_note_quotes_the_line_that_went(self) -> None:
         # What makes the two distinguishable is also what makes the note
@@ -8417,7 +8434,11 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
         # ``` inside ` ` was five backticks in a row and the page showed the
         # marker as text rather than as code (#1740, round 3).
         result, _ = self.write(self.LOSSES["an unclosed fence"][0])
-        note = result.announcements[0]
+        # The note about the text that could not be CARRIED, which is what
+        # this quoting rule is about. A write may also say it replaced a
+        # status line of somebody's, and that sentence quotes a different
+        # thing (#1751, round 17).
+        note = next(note for note in result.announcements if "not carried" in note)
         # Five backticks in a row is the bug's signature: a three-backtick
         # marker wrapped in one backtick each side.
         self.assertNotIn("`````", note)
@@ -8614,23 +8635,97 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 self.assertIn(self.THEIRS, self.flat(twice))
                 self.assertEqual(said, [])
 
-    # Guards: a stale reading of a recorded item stays the machine's -- green on main,
-    # and the half of the rule this round's readers must not break.
-    # intent: control
-    # marker: green at `016d94ba`, its own base.
-    def test_a_status_line_naming_a_recorded_item_is_still_the_machines(self) -> None:
-        # The other direction of the same rule, and the half that keeps the
-        # section readable: a stale reading of an item the write records is
-        # replaced by the entry in hand rather than carried into the notes,
-        # where it would show a reader two answers for one requirement.
-        stale = f"- [blocked] {self.ITEM} -- an older reading of the same item"
-        written, said = self.written(self.body(tail=f"{self.NOTE}\n{stale}\n"))
-        self.assertNotIn("an older reading of the same item", written)
+    # intent: fix
+    # marker: behaviourally red at `61c1e37a`, its own base -- the bullet
+    # leaves the body there with no error, nothing on stderr and no notes
+    # entry (`AssertionError`).
+    def test_a_bullet_of_theirs_for_a_recorded_item_is_replaced_out_loud(self) -> None:
+        """Their own words for a requirement this body records, and where they go.
+
+        The rule does not move: a status line naming a recorded item is the
+        machine's, and the rewrite renders the entry's line in its place --
+        two answers for one requirement under the heading would leave a
+        reader choosing between them. What moves is what happens to the bytes
+        it replaces. They are not this write's output: somebody typed them,
+        and at `61c1e37a` they left the body with no error, nothing on
+        stderr and no `## Evidence Notes` entry, while the same bullet for an
+        item the body does NOT record survived into the notes. The
+        instrument built to catch silent losses could not see it either,
+        because it asked the writer's own ownership predicate.
+
+        So the replacement is announced and the text is carried, the way any
+        other line of theirs is. The cost is named rather than hidden: the
+        page does then show their older sentence below the section.
+        """
+        theirs = f"- [complete] {self.ITEM} -- I ran it myself and it passed"
+        written, said = self.written(self.body(tail=f"{self.NOTE}\n{theirs}\n"))
+        helpers = sys.modules["_helpers"]
+        # The section says what was recorded.
         self.assertEqual(
             self.section_of(written), f"- [complete] {self.ITEM} -- {self.RESOLVED}"
         )
+        # Their bytes are on the page, below it.
+        self.assertIn(theirs, helpers.markdown_section(written, "Evidence Notes"))
+        # And one sentence says what happened, naming the line, its position
+        # and the item the entry records.
+        replaced = [note for note in said if "replaced in" in note]
+        self.assertEqual(len(replaced), 1, said)
+        self.assertIn(helpers.code_span(theirs), replaced[0])
+        self.assertRegex(replaced[0], r"at line \d+")
+        self.assertIn(helpers.code_span(self.ITEM), replaced[0])
+
+    # intent: control
+    # marker: green at `61c1e37a`, its own base: a copy of the machine's own
+    # bytes says nothing there and says nothing here (#1751, round 17).
+    def test_a_byte_identical_copy_of_the_machines_line_is_still_silent(self) -> None:
+        # Round 16's control, which this round must not move: there is
+        # nothing of anybody else's in those bytes, so the page keeps the
+        # line and no sentence is spent on it.
+        copy = f"- [pending-ci] {self.ITEM} -- {self.DETAIL}"
+        written, said = self.written(self.body(tail=f"{self.NOTE}\n{copy}\n"))
+        self.assertEqual([note for note in said if "replaced in" in note], [], said)
+        self.assertEqual(
+            self.section_of(written), f"- [complete] {self.ITEM} -- {self.RESOLVED}"
+        )
+
+    # intent: control
+    # marker: green at `61c1e37a`, its own base, and on `016d94ba`: a bullet
+    # for an item nothing records was always the author's (#1751, round 17).
+    def test_a_bullet_for_an_item_this_body_does_not_record_still_survives(self) -> None:
+        # The other side of the rule, unchanged: the write owns no line for
+        # an item it does not record, so the bullet moves to the notes as
+        # any block of theirs does -- and nothing is announced, because
+        # nothing was replaced.
+        written, said = self.written(self.body(tail=f"{self.NOTE}\n{self.THEIRS}\n"))
+        helpers = sys.modules["_helpers"]
+        self.assertIn(self.THEIRS, helpers.markdown_section(written, "Evidence Notes"))
+        self.assertEqual([note for note in said if "replaced in" in note], [], said)
+
+    # Guards: a stale reading of a recorded item stays the machine's -- the SECTION
+    # half is green on main; what the write says about replacing it is round 17's.
+    # intent: fix
+    # marker: `control` until round 17, when the behaviour it pins moved: the
+    # section half is still green at `016d94ba`, and the two assertions this
+    # round adds -- the text carried and the replacement announced -- are
+    # behaviourally red there (#1751, round 17).
+    def test_a_status_line_naming_a_recorded_item_is_still_the_machines(self) -> None:
+        # The other direction of the same rule, and the half that keeps the
+        # section readable: a stale reading of an item the write records is
+        # replaced by the entry in hand. What changed in round 17 is what
+        # happens to the bytes: they are not the write's own, so they are
+        # carried below the section and the replacement is said out loud.
+        # The cost is named rather than hidden -- a reader does see the older
+        # reading under `## Evidence Notes` -- and it is the price of "nothing
+        # leaves without a word" over a line the machine owns.
+        stale = f"- [blocked] {self.ITEM} -- an older reading of the same item"
+        written, said = self.written(self.body(tail=f"{self.NOTE}\n{stale}\n"))
+        self.assertEqual(
+            self.section_of(written), f"- [complete] {self.ITEM} -- {self.RESOLVED}"
+        )
+        self.assertNotIn("an older reading of the same item", self.section_of(written))
+        self.assertIn("an older reading of the same item", self.flat(written))
+        self.assertEqual(len([note for note in said if "replaced in" in note]), 1, said)
         self.assertIn(f"## Evidence Notes\n{self.NOTE}", self.flat(written))
-        self.assertEqual(said, [])
 
     # intent: fix
     # marker: behaviourally red at `016d94ba`, its own base
@@ -8747,21 +8842,35 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
 
     # Guards: the writer reads the wrapped spellings as the page does -- true on main,
     # said out loud here so the reader this arc unified cannot quietly narrow.
-    # intent: control
-    # marker: green at `e6934e95`, its own base.
+    # intent: fix
+    # marker: `control` until round 17: the write still reads every wrapped
+    # spelling as the machine's and rewrites the section, which is green at
+    # `e6934e95`; the carried text and the sentence about it are red there
+    # (#1751, round 17).
     def test_a_wrapped_line_naming_a_recorded_item_is_the_machines(self) -> None:
         # The writer's half of the pair, pinned: it read the page all along,
-        # and this says so rather than leaving it to the docstring.
+        # and this says so rather than leaving it to the docstring. Round 17
+        # adds what it does with the bytes it replaces.
         for name, template in self.WRAPPED.items():
             with self.subTest(form=name):
                 line = template.format(item=self.ITEM, detail=self.DETAIL)
                 written, said = self.written(self.body(tail=f"{self.NOTE}\n{line}\n"))
-                self.assertNotIn(line, written)
                 self.assertEqual(
                     self.section_of(written), f"- [complete] {self.ITEM} -- {self.RESOLVED}"
                 )
+                self.assertNotIn(line, self.section_of(written))
+                self.assertIn(line, self.flat(written))
                 self.assertIn(f"## Evidence Notes\n{self.NOTE}", self.flat(written))
-                self.assertEqual(said, [])
+                # The plain form is byte-identical to the line the last run
+                # rendered, so its claim is spent on the body's own copy and
+                # this one moves in silence: nothing of anybody else's is in
+                # those bytes. Every other spelling is somebody's own, and
+                # the replacement is said (#1751, rounds 9, 16 and 17).
+                self.assertEqual(
+                    len([note for note in said if "replaced in" in note]),
+                    0 if name == "plain" else 1,
+                    f"{name}: {said}",
+                )
 
     # intent: guard
     # marker: green at `e6934e95`, its own base.
@@ -8802,7 +8911,12 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             self.section_of(write.body),
             f"- [complete] {self.ITEM} -- {self.RESOLVED}\n- [complete] {second} -- ran",
         )
-        self.assertNotIn("## Evidence Notes", write.body)
+        # This body records no metadata, so the write holds no claim on the
+        # two lines already under the heading: they are somebody's bytes, and
+        # round 17 keeps them below the section rather than dropping them.
+        notes = sys.modules["_helpers"].markdown_section(write.body, "Evidence Notes")
+        self.assertIn(f"- [pending-ci] {self.ITEM} -- {self.DETAIL}", notes)
+        self.assertIn(f"- [pending-ci] {second} -- waiting", notes)
 
     # intent: guard
     # marker: red at `016d94ba`, its own round's base, by API alone and it cannot be otherwise --
@@ -8826,9 +8940,19 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 entries=entries_for(["- [complete] build -- release -- 214 tests passed"]), previous_entries=entries_for(["- [complete] build -- release -- 214 tests passed"]), recorded_items=["build -- release"],
             )
         self.assertIsNone(write.refusal)
-        self.assertNotIn("- [pending-ci] build -- release -- waiting", write.body)
-        self.assertIn(f"## Evidence Notes\n{self.THEIRS}", write.body)
-        self.assertEqual(write.announcements, [])
+        # Replaced in the section -- which is what "the writer is told which
+        # items it records" pins -- and carried below it, with one sentence
+        # about the replacement (#1751, round 17).
+        self.assertNotIn(
+            "- [pending-ci] build -- release -- waiting",
+            sys.modules["_helpers"].markdown_section(write.body, "Evidence Status"),
+        )
+        self.assertIn("- [pending-ci] build -- release -- waiting", write.body)
+        self.assertIn(self.THEIRS, write.body)
+        self.assertEqual(
+            len([note for note in write.announcements if "replaced in" in note]), 1,
+            write.announcements,
+        )
 
 class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
     """One function asked in two parse contexts (#1751, round 4).
@@ -8911,10 +9035,13 @@ class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
             body = write.body
         self.assertEqual(body.count("- [complete]"), 1)
         # The definition is a note and moves like any other block; what must
-        # not be there is a copy of the status line.
+        # not be there is a copy of the line THIS WRITE RENDERED. The body's
+        # own earlier `[pending-ci]` line has no claim here -- this fixture
+        # records no metadata -- so round 17 carries it once, and three
+        # writes leave it at once: the fixed point is what this pins.
         notes = sys.modules["_helpers"].markdown_section(body, "Evidence Notes")
         self.assertNotIn("[complete]", notes)
-        self.assertNotIn("[pending-ci]", notes)
+        self.assertEqual(notes.count("[pending-ci]"), 1, notes)
 
     # intent: guard
     # marker: green at `3ac9675e`, its own base.

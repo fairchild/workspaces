@@ -956,7 +956,16 @@ class LaneProvenanceOnHandWrittenBodiesTests(unittest.TestCase):
         self.assertEqual(
             recorded[self.TEST]["detail"], f"`{self.TEST}` succeeded on self-hosted macOS CI"
         )
-        self.assertNotIn("ran it on my laptop", twice)
+        # The lane's verdict is what the SECTION says; their own sentence is
+        # not deleted for it. Round 17 keeps their bytes below the section
+        # with a line saying the entry replaced them, so what this pins is
+        # that their text is no longer a status line rather than that it is
+        # gone (#1751, round 17).
+        helpers = sys.modules["_helpers"]
+        self.assertNotIn(
+            "ran it on my laptop", helpers.markdown_section(twice, "Evidence Status")
+        )
+        self.assertIn("ran it on my laptop", helpers.markdown_section(twice, "Evidence Notes"))
         self.assertEqual(self.reconcile(twice, [self.BUILD, self.TEST]), twice)
 
     def test_an_owner_item_keeps_being_read_from_its_line(self) -> None:
@@ -1197,8 +1206,17 @@ class MetadataBodyIsAlwaysReRenderedTests(unittest.TestCase):
 
         reconciled = self.reconcile(edited, requested)
 
+        helpers = sys.modules["_helpers"]
         self.assertIn(f"- [complete] {self.BUILD} -- ", reconciled)
-        self.assertNotIn(f"- [blocked] {self.BUILD}", reconciled)
+        # Restored in the SECTION, and their edit kept below it: the section
+        # says what was recorded, and the hand edit is not deleted to make
+        # that true (#1751, round 17).
+        self.assertNotIn(
+            f"- [blocked] {self.BUILD}", helpers.markdown_section(reconciled, "Evidence Status")
+        )
+        self.assertIn(
+            f"- [blocked] {self.BUILD}", helpers.markdown_section(reconciled, "Evidence Notes")
+        )
 
     def test_a_deleted_section_is_still_repaired(self) -> None:
         requested = [self.BUILD]

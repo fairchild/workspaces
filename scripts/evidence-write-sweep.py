@@ -77,6 +77,16 @@ SECTION_TAILS = {
     # (codex, gpt-5.6-sol, xhigh). `author_lines` matches the entry SHAPE now,
     # and this body is what says so.
     "a note naming the item in prose": f"\nReviewer note: {ITEM} only on this head.\n",
+    # The author's own status bullet naming an item the body DOES record,
+    # with their own words for a detail. The writer replaces it -- the rule
+    # is that a status line for a recorded item is the machine's -- and until
+    # round 17 it went with no error, nothing on stderr and no notes entry,
+    # while this instrument exempted it by the same predicate and reported
+    # nothing. It is the author's bytes at this reader now, and the write
+    # announces the replacement and carries the text (#1751, round 17).
+    "a recorded item's bullet in the author's own words": (
+        f"\n- [complete] {ITEM} -- I ran it myself and it passed\n"
+    ),
     # The author's OWN status bullet, naming an item the body records nowhere.
     # The writer took it as its own and replaced it while this instrument read
     # it as the author's, which is two answers about one line -- and on this
@@ -256,11 +266,31 @@ def _entry_line_numbers(lines: list[str], text: str, source: str) -> set[int]:
     recorded_entries = evidence.evidence_entries_of(source)
     updated_entries, _ = evidence.entries_with_updates(recorded_entries, UPDATES)
     owned = evidence.owned_lines(updated_entries, recorded_entries)
+    # BYTE IDENTITY, and nothing else. Asking `is_machine_status_line` asked
+    # the writer's own ownership rule -- a status-shaped line naming a
+    # recorded item is the machine's -- which is the predicate this
+    # instrument exists to check the answer to: an author's own
+    # `- [complete] <recorded item> -- <their words>` was replaced by the
+    # write and exempted here, so `lines_lost` returned `[]` for it and a
+    # clean sweep said nothing about that rule at all. An instrument that
+    # shares the predicate under test cannot measure it (#1751, round 17).
+    #
+    # The SECTION condition stays: it is about where this write writes, not
+    # about whose a line is, and without it an author's copy of the machine's
+    # line under their own `## Validation` would be exempted too.
+    #
+    # Every copy of those bytes inside the section, not one per claim. The
+    # write deduplicates its own output there -- a second byte-identical copy
+    # is dropped in silence, which is the deliberate control this instrument
+    # must not read as the author's text going. The cost is stated rather than
+    # hidden: a write that deleted a second copy of its own line WRONGLY would
+    # not show up in this number either. That shape is pinned by the suite
+    # (#1751, round 9) rather than by the sweep, and it is a limitation of the
+    # figure the way per-body attribution is (#1751, round 17).
     return {
         index
         for index, start in enumerate(starts)
-        if bounds[1] <= start < bounds[2]
-        and evidence.is_machine_status_line(lines[index], recorded, section, owned)
+        if bounds[1] <= start < bounds[2] and owned.claim(lines[index])
     }
 
 
@@ -274,11 +304,15 @@ def author_lines(text: str) -> list[str]:
     those lines (codex, gpt-5.6-sol, xhigh). Source lines see every one of
     them, and a fence marker and an indent besides.
 
-    Two things come out, and both are this write's to change. The metadata
-    comment is re-rendered on every write. And the status entries -- matched on
-    the SHAPE a reader reads as an entry rather than on the item's text,
-    because a line naming the item in prose is the author's, and matched only
-    where the write owns them, which is inside the section and nowhere else.
+    Two things come out, and both are this write's own. The metadata comment
+    is re-rendered on every write. And a line inside the section whose bytes
+    are BYTE-IDENTICAL to one this write rendered: there is nothing of
+    anybody else's in it, and one claim is spent per line, so a second copy
+    of the same bytes stays the author's.
+
+    What no longer comes out is a line matched on the entry SHAPE and the
+    item's text -- the writer's own ownership rule, which this instrument
+    asked until round 17 and therefore could not measure.
     """
     source = MARKDOWN_LINE_ENDING_RE.sub("\n", text)
     normalized = evidence._strip_evidence_metadata(source)

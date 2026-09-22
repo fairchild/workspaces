@@ -50,7 +50,7 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
     # every tail/successor/ending combination for each recorded item, because
     # whose a status line is now depends on the ITEM matching and an item
     # whose markup the page resolves is the case the figure could not see.
-    BODIES = 360
+    BODIES = 384
     REFUSALS = 44
     ANNOUNCED_LOSSES = 4
 
@@ -534,7 +534,10 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
     # and moves to `## Evidence Notes`; either way the page keeps the line, so
     # no row loses one (#1751, round 2).
     WRAPPED_FORMS = {
-        "plain": ("- [pending-ci] {item} -- {detail}", "replaced"),
+        # Byte-identical to the line this write renders: the write's own
+        # output, deduplicated in silence, and exempt at the instrument.
+        # Nothing of anybody else's is in it (#1751, rounds 16 and 17).
+        "plain": ("- [pending-ci] {item} -- {detail}", "the write's own bytes"),
         "a bold status token": ("- **[pending-ci]** {item} -- {detail}", "replaced"),
         "an italic status token": ("- _[pending-ci]_ {item} -- {detail}", "replaced"),
         "a bold item": ("- [pending-ci] **{item}** -- {detail}", "replaced"),
@@ -565,16 +568,22 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
     # intent: fix
     # marker: behaviourally red at `e6934e95`, its own base
     # (`AssertionError`).
-    def test_the_two_readers_agree_on_a_status_line_however_it_is_written(self) -> None:
-        """The rule is one function, and it is asked of the page's reading at both readers.
+    def test_a_status_line_however_it_is_written_keeps_its_bytes_on_the_page(self) -> None:
+        """Every one of these lines is somebody's own bytes, and the page keeps every one.
 
-        They asked it with different text instead: the write with the parser's
-        inline reading of the item, this instrument with the raw source line.
-        On `- **[pending-ci]** <recorded item> -- d` the first said the
-        machine's and replaced the line, the second said the author's and
-        counted the replacement a silent loss -- #1751's own disagreement, on
-        the wrapped form. Five of the eight rows below read differently at the
-        merge base.
+        Round 2 asked the two readers to AGREE about whose a line is, and
+        they do -- the write's ownership rule is one function asked of the
+        page's reading at both ends. What this pins now is what follows from
+        that agreement rather than the agreement itself: the write owns the
+        status line for a recorded item and rewrites the SECTION from its
+        entries, and the bytes it replaces are carried to `## Evidence Notes`
+        with a sentence saying so. So the rows differ in what the write SAYS,
+        not in whether the page keeps the line.
+
+        The instrument no longer exempts these lines. It exempts a line whose
+        bytes this write rendered and nothing else, which is why the same
+        eight rows now read as the author's to it -- an instrument that asks
+        the predicate under test cannot measure it (#1751, round 17).
         """
         for name, (template, outcome) in self.WRAPPED_FORMS.items():
             with self.subTest(form=name):
@@ -587,12 +596,30 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
                 self.assertEqual(sweep_script.lines_lost(source, written), [], name)
                 self.assertEqual(sweep_script.seams_closed(source, written), [], name)
                 self.assertEqual([note for note in said if "not carried" in note], [])
-                if outcome == "carried":
-                    self.assertIn(line, written)
-                    self.assertIn(line, sweep_script.author_lines(source))
+                replaced = [note for note in said if "replaced in" in note]
+                if outcome == "the write's own bytes":
+                    # A SECOND copy of the line this write renders: one claim
+                    # is spent on the first, so this one is the author's at
+                    # both readers and the page keeps it, below the section.
+                    # Nothing is said, because nothing of anybody else's is
+                    # in those bytes (#1751, rounds 9, 16 and 17).
+                    self.assertIn(line, sweep_script.author_lines(source), name)
+                    self.assertIn(line.strip(), written, name)
+                    self.assertEqual(replaced, [], f"{name}: {said}")
+                    continue
+                # Everything else is somebody's own bytes: the author's at the
+                # instrument, and the page keeps them, below the section.
+                self.assertIn(line, sweep_script.author_lines(source), name)
+                self.assertIn(line.strip(), written, name)
+                self.assertNotIn(
+                    line.strip(),
+                    sys.modules["evidence"].markdown_section(written, "Evidence Status"),
+                    f"{name}: the line stayed in the section the write rewrites",
+                )
+                if outcome == "replaced":
+                    self.assertEqual(len(replaced), 1, f"{name}: {said}")
                 else:
-                    self.assertNotIn(line, written)
-                    self.assertNotIn(line, sweep_script.author_lines(source))
+                    self.assertEqual(replaced, [], f"{name}: a note was announced as replaced")
 
     # intent: guard
     # marker: red at `e6934e95`, its own round's base, by API alone and it cannot be otherwise --
@@ -903,13 +930,29 @@ class AWriteOverTheGeneratedFormsKeepsEveryLineTests(unittest.TestCase):
                     if "## Evidence Notes" in written
                     else ""
                 )
+                evidence = sys.modules["evidence"]
+                status_section = evidence.markdown_section(written, "Evidence Status")
                 if form.resolves:
-                    # The machine's line: replaced from the entries in hand,
-                    # and never carried. A status line in the notes is the
-                    # round-3 regression itself -- the write not recognising
-                    # the line it had just rendered (#1751, round 3).
-                    self.assertNotIn(form.line, written)
-                    self.assertEqual(GENERATED_STATUS_RE.findall(notes), [])
+                    # A line naming the recorded item is the machine's and the
+                    # rewrite replaces it in the SECTION -- that rule has not
+                    # moved. What moved is that its bytes are not the write's
+                    # own: the detail is somebody's own words, so the text is
+                    # carried to the notes and the write says so, the way it
+                    # does for any other line of theirs (#1751, round 17).
+                    self.assertNotIn(form.line.strip(), status_section)
+                    self.assertIn(form.line.strip(), notes)
+                    self.assertTrue(
+                        any("replaced in" in line for line in said),
+                        f"the replacement went without a word: {said}",
+                    )
+                    # And round 3's property, stated as what it is about: the
+                    # write never carries a copy of the line it just rendered.
+                    for line in evidence.rendered_entry_lines(
+                        evidence.evidence_entries_of(written)
+                    ):
+                        self.assertNotIn(
+                            line, notes, "the write carried the line it had just rendered"
+                        )
                 else:
                     # The author's: the page keeps it, in the notes.
                     self.assertIn(form.line.strip(), notes)

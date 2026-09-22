@@ -440,6 +440,12 @@ and it stays put; write it under the heading and the next lane run or factory
 turn relocates it -- relocates, not deletes: your own
 `- [blocked] release approval -- the signing profile is missing` under that
 heading comes back in the notes rather than going without a word (#1751).
+A status bullet of your own for an item the body DOES record is the
+machine's: the rewrite renders the recorded entry's line in its place, so the
+section never shows two answers for one requirement. Your text is not deleted
+for it -- it is carried to the notes with a line on the run's output saying
+which bullet was replaced and by which entry, unless your bullet is byte for
+byte the line the write itself rendered, which carries nothing of yours.
 A body carrying no such block has no such section. A block
 indented under a status bullet is the author's too and moves whole, since it
 belongs to the bullet only because the parser folds it there; a status line
