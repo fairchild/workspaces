@@ -1146,30 +1146,32 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
         be sensitive to the thing it compares.
         """
         workflow = LANE_WORKFLOW.read_text(encoding="utf-8")
-        command = lane_file_command(workflow)
-        lane = lane_test_files(command)
         census_population = {
             path.relative_to(TESTS).as_posix() for path in TESTS.rglob("*.py")
         }
-        self.assertTrue(lane, "the lane's own command yielded no files")
-        self.assertEqual(
-            lane,
-            census_population,
-            "the lane runs files the census does not read, or the other way about",
-        )
-        # The comparison, driven against a lane that excludes this very file:
-        # red is what it has to be, and a prefix check was not.
+        # A lane that excludes this very file, read through the SAME
+        # expression as the real one: both halves come from the workflow
+        # text they are handed, so a reading that stops coming from the
+        # workflow makes the second half agree when it must not.
         doctored = workflow.replace(
             "find scripts/tests -type f -name '*.py' -print0",
             "find scripts/tests -type f -name '*.py' ! -name 'test_intent_markers.py' -print0",
             1,
         )
         self.assertNotEqual(doctored, workflow, "the lane's command changed shape")
-        self.assertNotEqual(
-            lane_test_files(lane_file_command(doctored)),
-            census_population,
-            "a lane that skips the census reads the same file set as the census",
-        )
+        for label, text, agrees in (
+            ("the lane's own workflow", workflow, True),
+            ("a workflow that skips the census", doctored, False),
+        ):
+            lane = lane_test_files(lane_file_command(text))
+            self.assertTrue(lane, f"{label}: the command yielded no files")
+            self.assertEqual(
+                lane == census_population,
+                agrees,
+                f"{label}: the lane's file set and the census population "
+                f"{'differ' if agrees else 'agree'}",
+            )
+        lane = lane_test_files(lane_file_command(workflow))
         # And what the old basename filter would have dropped, named rather
         # than counted: today nothing, which is why it looked right for
         # eighteen rounds -- so the agreement above is a fact about this
