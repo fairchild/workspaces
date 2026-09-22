@@ -3407,16 +3407,27 @@ class RecordedRendererResponseTests(unittest.TestCase):
         self.assertIn(RECORD_COMMAND, str(raised.exception))
 
     # The population these three tests quantify over, stated so an empty read
-    # is a failed read rather than a clean sweep. Measured: with the index
-    # patched to `{}` and a token present, all three passed -- every one of
-    # them ITERATES the corpus, and iterating nothing scores nothing
-    # (#1771, round 18). The count moves when a recording is added, which is
-    # a line of this file somebody writes deliberately.
+    # is a failed read rather than a clean sweep, and a corpus read SHORT is
+    # a failed read too. Measured at `f341728e`: with the index patched to
+    # `{}` and a token present, two of the three passed and the third named
+    # recordings; with the fixture directory emptied as well, all three
+    # passed -- every one of them ITERATES the corpus, and iterating nothing
+    # scores nothing (#1771, round 18). The count moves when a recording is
+    # added, which is a line of this file somebody writes deliberately.
     RECORDINGS = 73
 
     def assertTheCorpusWasRead(self, index: dict) -> None:
-        """The corpus this test read is the corpus this file declares."""
-        self.assertTrue(index, "the recorded corpus read as empty; nothing below was checked")
+        """The corpus this test read is the corpus this file declares.
+
+        ONE line, not two. It was written as two -- non-empty, and the
+        declared count -- and both survived alone as mutants, because the
+        only population the seed drove was `{}` and either spelling catches
+        that one: `0 != 73` and `assertTrue({})` are the same sentence about
+        the same input. The count subsumes the emptiness (nothing that
+        equals 73 is empty), so the emptiness line went, and the seed below
+        drives the input that separates them -- an index SHORT of the
+        declared count, which only the count line reads (#1771, round 18).
+        """
         self.assertEqual(
             len(index),
             self.RECORDINGS,
@@ -3446,29 +3457,49 @@ class RecordedRendererResponseTests(unittest.TestCase):
     # still on disk, naming a recording rather than the corpus. Empty the
     # directory as well and all three sweep clean (3 run, 0 failures,
     # measured), which is the one mechanism that bounded them and a
-    # different one from the count this asserts (#1771, round 18).
-    def test_an_empty_corpus_is_a_failed_read_rather_than_a_clean_sweep(self) -> None:
+    # different one from the count this asserts. The short population is red
+    # there for the same reason (#1771, round 18).
+    def test_a_corpus_that_is_not_the_declared_one_is_a_failed_read(self) -> None:
         """A population a test quantifies over is stated, or the test passes over nothing.
 
-        Driven by patching the index reader to answer `{}` and running the
-        three tests that read it: each one fails now, naming the corpus
-        rather than any recording, where at the previous head all three
-        scored clean.
+        Driven by patching the index reader and running the tests that read
+        it. TWO populations, because one of them measures nothing on its
+        own: an empty index, and an index SHORT of the declared count. The
+        empty one is caught by either half of a two-line floor, so with it
+        as the only seed both halves survived as mutants; the short one is
+        caught by the count alone, which is the line that says what the
+        corpus IS. Both fail now, naming the corpus and the count it
+        declares, where at the previous head each reader either scored clean
+        over nothing or named a recording.
         """
         module = sys.modules[__name__]
         readers = [
             f"{type(self).__name__}.test_every_recording_names_the_body_it_answers",
             f"{type(self).__name__}.test_every_recorded_file_is_named_in_the_index",
         ]
-        with mock.patch.object(module, "rendered_index", lambda: {}):
-            suite = unittest.TestLoader().loadTestsFromNames(readers, module)
-            outcome = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
-        self.assertEqual(len(outcome.failures) + len(outcome.errors), len(readers), outcome)
-        for _, message in outcome.failures:
-            self.assertIn("corpus", message)
+        real = rendered_index()
+        short = dict(sorted(real.items())[:2])
+        for population, index in {
+            "an empty index": {},
+            f"an index of {len(short)} where {self.RECORDINGS} are declared": short,
+        }.items():
+            with self.subTest(population=population):
+                with mock.patch.object(module, "rendered_index", lambda index=index: index):
+                    suite = unittest.TestLoader().loadTestsFromNames(readers, module)
+                    outcome = unittest.TextTestRunner(
+                        stream=io.StringIO(), verbosity=0
+                    ).run(suite)
+                self.assertEqual(
+                    len(outcome.failures) + len(outcome.errors), len(readers), outcome
+                )
+                for _, message in outcome.failures:
+                    self.assertIn("corpus", message)
+                    # The count, not just the word: a floor that announces
+                    # "empty" says nothing about a corpus read short.
+                    self.assertIn(str(self.RECORDINGS), message)
         # And the corpus as it stands is read: the same tests over the real
         # index pass, so what this seeds is the floor and not the tests.
-        self.assertGreater(len(rendered_index()), 0)
+        self.assertEqual(len(real), self.RECORDINGS)
 
     def test_the_recordings_still_match_the_live_renderer(self) -> None:
         if not (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")):
