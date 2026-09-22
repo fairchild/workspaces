@@ -9823,9 +9823,10 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
         Matching the whole written body made an echo of the lost line
         anywhere -- inside a fenced example under `## Summary`, say -- read
         as the line still being there, so it left the section and nothing
-        named it. `_still_written` is bound to the write's own output for
-        exactly this reason, sixty lines above: a copy of a line somewhere
-        else in the body is not the line that left the section.
+        named it. A copy of a line somewhere else in the body is not the
+        line that left the section -- which is also why round 23 could
+        delete the backstop that once made that argument from the other
+        side: the sections this write writes are where the question lives.
         """
         evidence = self.evidence()
         author = "- [pending-ci] a line no entry owns -- waiting"
