@@ -3493,10 +3493,16 @@ class RecordedRendererResponseTests(unittest.TestCase):
                     len(outcome.failures) + len(outcome.errors), len(readers), outcome
                 )
                 for _, message in outcome.failures:
-                    self.assertIn("corpus", message)
-                    # The count, not just the word: a floor that announces
-                    # "empty" says nothing about a corpus read short.
-                    self.assertIn(str(self.RECORDINGS), message)
+                    # What the floor SAYS, not what the comparison prints.
+                    # `assertEqual` writes `2 != 73` on its own, so a test
+                    # that asks the failure for the declared count is
+                    # answered by the scaffolding and reads nothing --
+                    # measured: with the floor's own sentence rewritten to
+                    # drop the count, asking for `73` still passed. The
+                    # sentence an author is handed names what was read and
+                    # what this file declares.
+                    self.assertIn(f"the corpus holds {len(index)} recordings", message)
+                    self.assertIn(f"declares {self.RECORDINGS}", message)
         # And the corpus as it stands is read: the same tests over the real
         # index pass, so what this seeds is the floor and not the tests.
         self.assertEqual(len(real), self.RECORDINGS)
