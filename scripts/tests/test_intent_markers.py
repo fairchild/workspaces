@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
+# dependencies = ["pyyaml"]
 # ///
 """The intent-marker census, committed as a test rather than run by hand.
 
@@ -42,6 +43,8 @@ import tokenize
 import unittest
 from pathlib import Path
 from typing import NamedTuple
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TESTS = REPO_ROOT / "scripts" / "tests"
@@ -224,9 +227,17 @@ class Touched(NamedTuple):
 # the direction that fails loudly; but `--diff-filter=AM` dropped the entry
 # ENTIRELY, so a renamed suite with an unmarked test appended left the
 # population empty and the guard announced "no tests added" over 40 tests
-# (#1773, round 19). A COPY is a new file whose source still exists, so its
-# tests are new to the census and its base is nothing.
-RENAME_STATUS, COPY_STATUS, ADDED_STATUS = "R", "C", "A"
+# (#1773, round 19).
+#
+# There is no COPY status here, and the command does not ask for one: `-M`
+# alone never runs copy detection, so a file copied inside the tree arrives
+# as `A` and every test in it is new -- the same answer `-C` would give,
+# since a copy's base path is nothing either way. A branch for `C` stood
+# here with a seed claiming to reach it; the seed arrived as `A`, and
+# deleting the branch left the suite green. It was an unread line, and the
+# seed's label was wrong about git rather than about the census
+# (#1773, round 20).
+RENAME_STATUS, ADDED_STATUS = "R", "A"
 
 
 def touched_test_files(base: str, root: Path = REPO_ROOT) -> tuple[Touched, ...]:
@@ -248,9 +259,17 @@ def touched_test_files(base: str, root: Path = REPO_ROOT) -> tuple[Touched, ...]
     closing.
     """
     inside = "scripts/tests/"
+    # `-z`, so a path is bytes rather than a rendering of them. Without it git
+    # QUOTES any path outside ASCII under its default `core.quotePath`:
+    # `scripts/tests/test_e.py` with an accent arrives as
+    # `"scripts/tests/test_\303\251.py"`, which fails `endswith(".py")` and
+    # leaves the population entirely while the lane's `find` runs the file
+    # (#1773, round 20). With `-z` the stream is NUL-separated RECORDS -- a
+    # status, then one path, or two for a rename -- so it is read by record
+    # and never by splitting a line on tabs.
     shown = subprocess.run(
         [
-            "git", "diff", "--name-status", "-M", "--diff-filter=AMRC",
+            "git", "diff", "--name-status", "-M", "--diff-filter=AMR", "-z",
             base, "HEAD", "--", "scripts/tests",
         ],
         capture_output=True, text=True, cwd=root,
@@ -260,16 +279,21 @@ def touched_test_files(base: str, root: Path = REPO_ROOT) -> tuple[Touched, ...]
             f"the marker census could not read what changed since `{base}`: "
             f"{shown.stderr.strip() or 'git diff failed with no message'}"
         )
+    records = [record for record in shown.stdout.split("\0") if record]
     touched: list[Touched] = []
-    for row in shown.stdout.split("\n"):
-        if not row.strip():
-            continue
-        status, *paths = row.split("\t")
-        if status.startswith(RENAME_STATUS) and len(paths) == 2:
-            old, new = paths
-            here, there = new, old
-        elif status.startswith(COPY_STATUS) and len(paths) == 2:
-            here, there = paths[1], None
+    index = 0
+    while index < len(records):
+        status = records[index]
+        follows = 2 if status.startswith(RENAME_STATUS) else 1
+        paths = records[index + 1 : index + 1 + follows]
+        index += 1 + follows
+        if len(paths) != follows:
+            raise AssertionError(
+                f"the marker census could not read what changed since `{base}`: "
+                f"a `{status}` record names {len(paths)} path(s)"
+            )
+        if status.startswith(RENAME_STATUS):
+            there, here = paths
         elif status.startswith(ADDED_STATUS):
             here, there = paths[0], None
         else:
@@ -282,14 +306,24 @@ def touched_test_files(base: str, root: Path = REPO_ROOT) -> tuple[Touched, ...]
     return tuple(sorted(touched))
 
 
-# What git says when a path is not in a commit, as against any other reason a
-# `git show` can fail. Reading every failure as "absent at the base" published
-# old tests as new (#1773, round 19).
-ABSENT_AT_BASE = ("exists on disk, but not in", "does not exist in", "path not in")
-
-
 def source_at_base(base: str, relative: str | None, root: Path = REPO_ROOT) -> str:
-    """The file as the base holds it, or empty when the base does not hold it at all."""
+    """The file as the base holds it; `None` says the diff found no path there.
+
+    WHETHER the base holds it is the diff's answer rather than this
+    function's. `relative` is `Touched.at_base`, which git filled in: an
+    added file has none, a modified one has its own path, a renamed one has
+    its old path. So a `git show` that fails here is a question git could
+    answer and did not -- a missing blob in a half-fetched object store, say
+    -- and it raises with git's own message.
+
+    Absence used to be decided by matching three English fragments of git's
+    stderr, which is not part of git's interface, and nothing committed drove
+    the constant: replacing it with `()` left every test green. Exit codes do
+    not separate the two cases either -- measured, `git cat-file -e` answers
+    128 both for a path a commit does not hold and for a rev it cannot
+    resolve -- so the answer comes from the diff, which already knows
+    (#1773, round 20).
+    """
     if relative is None:
         return ""
     shown = subprocess.run(
@@ -298,42 +332,76 @@ def source_at_base(base: str, relative: str | None, root: Path = REPO_ROOT) -> s
     )
     if shown.returncode == 0:
         return shown.stdout
-    message = shown.stderr.strip()
-    if any(phrase in message for phrase in ABSENT_AT_BASE):
-        return ""
     raise AssertionError(
         f"the marker census could not read `{relative}` at `{base}`: "
-        f"{message or 'git show failed with no message'}"
+        f"{shown.stderr.strip() or 'git show failed with no message'}"
     )
 
 
-def new_tests(path: Path, base: str, touched: Touched, root: Path = REPO_ROOT) -> set[tuple[str, int]]:
+class Asked(NamedTuple):
+    """What the census asks about in one file, and which paths it asks wholesale."""
+
+    keys: set[tuple[str, int]]
+    repeated: set[str]
+
+
+def repeated_at_either_end(*readings: dict[tuple[str, int], list[str]]) -> set[str]:
+    """Every dotted path that ANY of these readings defines more than once.
+
+    Both ends, because the ordinal is positional at both. Read from HEAD
+    alone, a base defining `A.test_same` twice against a HEAD defining it
+    once kept the key the round before stopped trusting: the subtraction
+    matched the surviving definition against the base's FIRST, found a
+    marker, and an unmarked replacement of two marked definitions gave
+    `counted=0` and no offender (#1773, round 20).
+
+    More than one, not exactly two: a path with three definitions is
+    repeated by the same argument, and `== 2` is a coarser key wearing this
+    one's name.
+    """
+    return {
+        dotted
+        for reading in readings
+        for dotted, _ in reading
+        if sum(1 for other, _ in reading if other == dotted) > 1
+    }
+
+
+def new_tests(path: Path, base: str, touched: Touched, root: Path = REPO_ROOT) -> Asked:
     """Which tests in this file the census asks about, and why each one is in.
 
-    A test absent at the base is new. And EVERY definition at a dotted path
-    that has more than one definition in this file is in, whatever the base
-    held: the occurrence beside the path is a positional ordinal, so it
-    names a different definition at the base than at HEAD -- insert an
-    unmarked definition ABOVE a marked one and occurrence 0 is the new
-    unmarked test while occurrence 1 carries the base's marker, so the
-    subtraction checks the wrong definition and passes the added one
-    (#1773, round 19).
+    A test absent at the base is new. A test whose MARKER CHANGED is in too:
+    the invariant is about what a change leaves behind, and a rename that
+    carried a marked test to a new path and dropped its marker left
+    `counted=0` and a green lane -- enforced only at the moment of addition,
+    the guard could not see a marker deleted from a test that was already
+    there (#1773, round 20). A relabelled marker is in the population for
+    the same reason and passes the same way any correct marker does.
+
+    And EVERY definition at a dotted path that either end defines more than
+    once is in, whatever the base held: the occurrence beside the path is a
+    positional ordinal, so it names a different definition at the base than
+    at HEAD -- insert an unmarked definition ABOVE a marked one and
+    occurrence 0 is the new unmarked test while occurrence 1 carries the
+    base's marker, so the subtraction checks the wrong definition and passes
+    the added one (#1773, round 19).
 
     Not keyed on the COUNT growing, either: a definition removed and another
     added at one path leaves the count where it was and the same hole opens.
     The walk cannot say WHICH definition of a repeated path is new, so it
     stops trying and asks all of them.
     """
-    at_base = set(markers_in(source_at_base(base, touched.at_base, root)))
+    at_base = markers_in(source_at_base(base, touched.at_base, root))
     here = markers_in(path.read_text(encoding="utf-8"))
-    repeated = {dotted for dotted, _ in here if sum(1 for other, _ in here if other == dotted) > 1}
-    return {key for key in here if key[0] in repeated or key not in at_base}
-
-
-def repeated_paths(path: Path) -> set[str]:
-    """The dotted paths this file defines more than once."""
-    here = markers_in(path.read_text(encoding="utf-8"))
-    return {dotted for dotted, _ in here if sum(1 for other, _ in here if other == dotted) > 1}
+    repeated = repeated_at_either_end(here, at_base)
+    return Asked(
+        {
+            key
+            for key in here
+            if key[0] in repeated or key not in at_base or here[key] != at_base[key]
+        },
+        repeated,
+    )
 
 
 class Census(NamedTuple):
@@ -362,8 +430,9 @@ def census(base: str, root: Path = REPO_ROOT) -> Census:
     for touched in files:
         path = root / "scripts" / "tests" / touched.relative
         found = markers_in(path.read_text(encoding="utf-8"))
-        repeated = repeated_paths(path)
-        for key in sorted(new_tests(path, base, touched, root)):
+        asked = new_tests(path, base, touched, root)
+        repeated = asked.repeated
+        for key in sorted(asked.keys):
             marks = found[key]
             counted += 1
             named = f"{touched.relative}::{names_one(key)}"
@@ -383,6 +452,102 @@ def census(base: str, root: Path = REPO_ROOT) -> Census:
         counted, split, {k: v for k, v in offenders.items() if v},
         tuple(touched.relative for touched in files),
     )
+
+
+LANE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci-agents.yml"
+
+
+def lane_file_command(workflow_text: str) -> str:
+    """The command the lane's loop reads its file list from, taken from the workflow.
+
+    Read as YAML and then as the shell line it is, rather than matched as a
+    substring of the file: the check this replaces asserted that the
+    workflow CONTAINED `find scripts/tests -type f -name '*.py'`, which is a
+    PREFIX of the lane's command -- appending `! -name 'test_intent_markers.py'`
+    to it kept the assertion green while the lane stopped running this census
+    altogether (#1773, round 20).
+
+    One step, asserted: a second step running files under `scripts/tests`
+    would mean the population has two lanes to agree with and this reads one
+    of them.
+    """
+    workflow = yaml.safe_load(workflow_text)
+    steps = [
+        step
+        for job in (workflow.get("jobs") or {}).values()
+        for step in (job.get("steps") or [])
+        if "scripts/tests" in str(step.get("run", ""))
+    ]
+    if len(steps) != 1:
+        raise AssertionError(
+            f"{len(steps)} step(s) in this workflow run files under `scripts/tests`; "
+            "the census agrees with one lane and this reads it"
+        )
+    inside = re.search(r"<\s*<\((?P<command>[^)]+)\)", str(steps[0]["run"]))
+    if inside is None:
+        raise AssertionError(
+            "the lane's run step no longer feeds its loop from a command; "
+            "this comparison is against a command nobody runs"
+        )
+    return inside.group("command").strip()
+
+
+def lane_test_files(command: str, root: Path = REPO_ROOT) -> set[str]:
+    """The files that command yields, run the way the lane runs it."""
+    done = subprocess.run(
+        ["bash", "-c", command], capture_output=True, text=True, cwd=root,
+    )
+    if done.returncode != 0:
+        raise AssertionError(
+            f"the lane's own file command failed: {done.stderr.strip() or 'no message'}"
+        )
+    inside = "scripts/tests/"
+    return {
+        name[len(inside):]
+        for name in done.stdout.split("\0")
+        if name.strip() and name.startswith(inside)
+    }
+
+
+def commit_named_by(argument: str, root: Path = REPO_ROOT) -> str | None:
+    """The commit this argument names, or None with the reason on stderr.
+
+    THREE LAYERS, because each one catches something the others do not.
+
+    An argument beginning with `-` is refused before anything is run: the
+    census used to hand its argument straight to `git diff` ahead of the
+    `--` separator, so `--census --output=<path>` reached git as an OPTION.
+    git created and truncated that file, printed nothing, and the census
+    reported `0 test file(s) touched`, `no tests added` and exited 0 -- a
+    green census over a diff that never happened (#1773, round 20). This
+    layer is the one that catches the next argument somebody adds.
+
+    Then `git rev-parse --verify <argument>^{commit}`, so the thing named is
+    a commit rather than a tree, a blob or a tag pointing at one, and the
+    refusal carries git's own message.
+
+    And every command below puts `--` before its path arguments, so a path
+    can never be read as an option either.
+    """
+    if argument.startswith("-"):
+        print(
+            f"the marker census will not take `{argument}` as a base: an argument "
+            "beginning with `-` is an option to git, not a commit",
+            file=sys.stderr,
+        )
+        return None
+    named = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{argument}^{{commit}}"],
+        capture_output=True, text=True, cwd=root,
+    )
+    if named.returncode != 0 or not named.stdout.strip():
+        print(
+            f"the marker census could not resolve `{argument}` to a commit: "
+            f"{named.stderr.strip() or 'git rev-parse named nothing'}",
+            file=sys.stderr,
+        )
+        return None
+    return named.stdout.strip()
 
 
 def print_census(base: str, root: Path = REPO_ROOT) -> int:
@@ -484,9 +649,27 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
         2, 3), the offender's position among them (first, middle, last), what
         git did to the file (added, modified, renamed with an edit, renamed
         with nothing added, renamed heavily enough to arrive as add-plus-
-        delete, copied), the path's shape (nested, and a basename that is not
-        `test_*`), and what the base holds at the offender's path (nothing, a
-        marked definition of the same dotted path, two of them).
+        delete, copied -- which git reports as an add), the path's shape
+        (nested, a basename that is not `test_*`, and one git would quote),
+        what the base holds at the offender's path (nothing, one marked
+        definition of the same dotted path, two of them), what changed about
+        a marker (added, dropped, relabelled), and the offender's kind
+        (unmarked, multi-marked, a kind nobody defined).
+
+        A STAR, not a cross: each axis moves from one centre, so what the
+        seeds catch is each axis alone. Two pairs are crossed deliberately --
+        file count with offender position, and a rename with a path the file
+        defines twice -- because those are the interactions a mutant lived
+        in. The rest of the cross is not driven, and that is the honest
+        state of it (#1773, round 20).
+
+        CARRIED, and covered by unit cases over source strings rather than
+        by a branch: the marker kinds `guard` and `control` (the walk's own
+        shapes, and `--census` over this tree, which holds all three); a
+        nesting depth of two (`T.Inner.test_deep`); a rename INTO
+        `scripts/tests/` from outside it and a copy whose source keeps its
+        marker, both of which git reports as adds, which the added-file
+        seeds drive.
 
         HELD FIXED, named here rather than left implicit: one commit on each
         side of the base (no history to walk), one class holding one test
@@ -770,10 +953,21 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
         Four shapes, because `-M` is similarity-thresholded and the path a
         rename takes through git depends on how much of the file changed: a
         rename with a small edit arrives as `R`, a rename with a heavy one
-        as add-plus-delete, a rename with no edit at all is a file with
-        nothing new in it, and a COPY is a new file whose source still
-        exists -- so its tests are new to the census and its base is
-        nothing.
+        as add-plus-delete, and a rename with no edit at all is a file with
+        nothing new in it.
+
+        The fourth is a COPY, and what it drives is that git reports it as
+        an ADD. Nothing here asks for copy detection -- `-M` alone never
+        runs it -- so a copied file arrives as `A` and every test in it is
+        new, which is the same answer `-C` would give, since a copy's base
+        path is nothing either way. The census had a branch for `C` and this
+        seed's old label claimed to reach it; the seed arrived as `A` and
+        deleting the branch left the suite green, so the branch went and the
+        label says what git does (#1773, round 20).
+
+        And the crossed pair the star of axes was missing: the rename below
+        carries a REPEATED path, so the operation and the key that asks a
+        path wholesale are driven together rather than one at a time.
         """
         keep = "".join(self.planted(True, n) for n in range(6))
         with self.subTest(shape="a rename with a small edit, plus an unmarked test"):
@@ -815,7 +1009,30 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
                 reported = self.census_in(sandbox, ci=True)
             self.assertIn("FAILED", reported, reported)
             self.assertIn("test_rewritten.py::T9.test_9", reported)
-        with self.subTest(shape="a copy is an added file"):
+        with self.subTest(shape="a rename carrying a repeated path"):
+            # Crossed, not varied one at a time: the file moves AND its
+            # dotted path is defined twice at the new end, with the second
+            # definition unmarked. Either key alone reports nothing here --
+            # the rename is what puts the file in the population, and the
+            # repetition is what asks both definitions.
+            twice = (
+                "class A:\n    # intent: fix\n    def test_same(self):\n        pass\n"
+                "class A:\n    def test_same(self):\n        pass\n"
+            )
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                upstream = self.upstream_with_a_branch(
+                    root,
+                    main={"test_suite.py": keep},
+                    renames={"test_suite.py": "test_renamed_pair.py"},
+                    work={"test_renamed_pair.py": twice},
+                )
+                sandbox = self.clone_with_the_base(root, upstream)
+                reported = self.census_in(sandbox, ci=True)
+            self.assertIn("FAILED", reported, reported)
+            self.assertIn("test_renamed_pair.py::A.test_same", reported)
+            self.assertIn("repeated definitions", reported)
+        with self.subTest(shape="a copy arrives as an added file"):
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 upstream = self.upstream_with_a_branch(
@@ -944,37 +1161,43 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
         """Two filters over one directory is the shape this file keeps closing.
 
         The census's population is every `.py` the diff touches under
-        `scripts/tests`; the lane runs every `*.py` it finds there. Those
-        are the same predicate, and this asserts it over the real tree by
-        running the lane's own command rather than by restating it -- with
-        the workflow line checked too, because a find that changes shape
-        makes this test a comparison against a command nobody runs.
+        `scripts/tests`; the lane runs every file ITS OWN COMMAND yields.
+        That command is read out of the workflow and run here, rather than
+        restated: the restatement was a prefix of the real one, so appending
+        `! -name 'test_intent_markers.py'` to the lane's find kept this test
+        green while the lane stopped running the census (#1773, round 20).
+        The doctored workflow is driven below, so the comparison is known to
+        be sensitive to the thing it compares.
         """
-        workflow = (REPO_ROOT / ".github" / "workflows" / "ci-agents.yml").read_text(
-            encoding="utf-8"
-        )
-        found = subprocess.run(
-            ["find", "scripts/tests", "-type", "f", "-name", "*.py"],
-            capture_output=True, text=True, cwd=REPO_ROOT, check=True,
-        )
-        self.assertIn(
-            "find scripts/tests -type f -name '*.py'",
-            workflow,
-            "the lane's command changed shape; this comparison is against a command nobody runs",
-        )
-        lane = {line[len("scripts/tests/"):] for line in found.stdout.split("\n") if line.strip()}
+        workflow = LANE_WORKFLOW.read_text(encoding="utf-8")
+        command = lane_file_command(workflow)
+        lane = lane_test_files(command)
         census_population = {
             path.relative_to(TESTS).as_posix() for path in TESTS.rglob("*.py")
         }
+        self.assertTrue(lane, "the lane's own command yielded no files")
         self.assertEqual(
             lane,
             census_population,
             "the lane runs files the census does not read, or the other way about",
         )
-        # And what the old filter would have dropped, named rather than
-        # counted: today nothing, which is why the basename filter looked
-        # right for eighteen rounds -- so the agreement above is a fact
-        # about this tree, and the seed below is the one about the filter.
+        # The comparison, driven against a lane that excludes this very file:
+        # red is what it has to be, and a prefix check was not.
+        doctored = workflow.replace(
+            "find scripts/tests -type f -name '*.py' -print0",
+            "find scripts/tests -type f -name '*.py' ! -name 'test_intent_markers.py' -print0",
+            1,
+        )
+        self.assertNotEqual(doctored, workflow, "the lane's command changed shape")
+        self.assertNotEqual(
+            lane_test_files(lane_file_command(doctored)),
+            census_population,
+            "a lane that skips the census reads the same file set as the census",
+        )
+        # And what the old basename filter would have dropped, named rather
+        # than counted: today nothing, which is why it looked right for
+        # eighteen rounds -- so the agreement above is a fact about this
+        # tree, and the seed below is the one about the filter.
         self.assertEqual(
             sorted(name for name in lane if not Path(name).name.startswith("test_")),
             [],
@@ -994,6 +1217,205 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
             reported = self.census_in(sandbox, ci=True)
         self.assertIn("FAILED", reported, reported)
         self.assertIn("regression.py::T7.test_7", reported)
+
+    # intent: guard
+    # marker: GREEN at `6b3a5a80`, its own base, measured -- the census names
+    # both buckets there; what was missing is any seed that drove them
+    # through a branch, so the two arms were read by unit cases over source
+    # strings alone. This is what makes a change to either arm visible
+    # (#1773, round 20).
+    def test_the_other_two_offender_kinds_are_named_end_to_end(self) -> None:
+        """Every bucket the census reports, driven through a real branch.
+
+        An unmarked test is the shape every other seed plants. These are the
+        two beside it: a test carrying two markers, and one carrying a kind
+        no reader knows. Both are offenders for the same reason -- a test
+        that does not declare exactly one known intent -- and a census that
+        counted them as clean would be a green lane over a declaration
+        nobody can read.
+
+        What this fixture holds fixed: one file per shape, one test in it,
+        and the marker block the only thing that varies.
+        """
+        for shape, source, expected in (
+            ("two markers on one test",
+             "class T:\n    # intent: guard\n    # intent: fix\n"
+             "    def test_two(self):\n        pass\n",
+             "multi-marked"),
+            ("a kind no reader knows",
+             "class T:\n    # intent: banana\n    def test_odd(self):\n        pass\n",
+             "unknown kind"),
+        ):
+            with self.subTest(shape=shape):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    upstream = self.upstream_with_a_branch(root, work={"test_odd.py": source})
+                    sandbox = self.clone_with_the_base(root, upstream)
+                    reported = self.census_in(sandbox, ci=True)
+                self.assertIn("FAILED", reported, reported)
+                self.assertIn(expected, reported, f"{shape}: the bucket is not named")
+
+    # intent: fix
+    # marker: red at `6b3a5a80`, its own base, behaviourally: `repeated` is
+    # read from HEAD alone there, so a path the BASE defines twice against a
+    # HEAD that defines it once falls back on the positional ordinal --
+    # `counted=0`, no offenders, "no tests added" over an unmarked test
+    # (#1773, round 20).
+    def test_a_path_the_base_repeats_is_asked_at_this_end_too(self) -> None:
+        """The ordinal is positional at BOTH ends, so repetition is read at both.
+
+        Round 19 asked every definition of a path HEAD repeats. The same
+        argument runs the other way: two definitions at the base and one at
+        HEAD leave the survivor keyed on occurrence 0, which at the base
+        named a different definition -- and a marked pair replaced by one
+        unmarked test was counted as nothing new.
+
+        What this fixture holds fixed: one file, one path, and the only
+        difference between the shapes is how many definitions each end
+        holds. The control is the same file with the survivor marked.
+        """
+        marked = "class A:\n    # intent: fix\n    def test_same(self):\n        pass\n"
+        unmarked = "class A:\n    def test_same(self):\n        pass\n"
+        for shape, main_source, work_source, offends in (
+            ("two marked at the base, one unmarked at HEAD", marked + marked, unmarked, True),
+            ("two marked at the base, one marked at HEAD", marked + marked, marked, False),
+            ("three definitions at HEAD, one of them unmarked",
+             marked, marked + unmarked + marked, True),
+        ):
+            with self.subTest(shape=shape):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    upstream = self.upstream_with_a_branch(
+                        root,
+                        main={"test_pair.py": main_source},
+                        work={"test_pair.py": work_source},
+                    )
+                    sandbox = self.clone_with_the_base(root, upstream)
+                    reported = self.census_in(sandbox, ci=True)
+                if offends:
+                    self.assertIn("FAILED", reported, reported)
+                    self.assertIn("test_pair.py::A.test_same", reported)
+                else:
+                    self.assertIn("OK", reported, reported)
+
+    # intent: fix
+    # marker: red at `6b3a5a80`, its own base, behaviourally: `--name-status`
+    # is parsed there without `-z`, so git's default `core.quotePath` renders
+    # a non-ASCII path as an escaped, quoted string that fails
+    # `endswith(".py")` -- the file leaves the population while the lane's
+    # own find runs it (#1773, round 20).
+    def test_a_path_git_would_quote_is_still_in_the_population(self) -> None:
+        """A path is bytes, and a rendering of them is not the path.
+
+        The ASCII sibling in the same commit is the control: it is named at
+        every head, so a run that names it and not the other is the quoting
+        and nothing else.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            upstream = self.upstream_with_a_branch(
+                root,
+                work={
+                    "test_\u00e9.py": self.planted(False, 1),
+                    "test_ascii.py": self.planted(False, 2),
+                },
+            )
+            sandbox = self.clone_with_the_base(root, upstream)
+            reported = self.census_in(sandbox, ci=True)
+        self.assertIn("FAILED", reported, reported)
+        self.assertIn("test_ascii.py::T2.test_2", reported)
+        self.assertIn("T1.test_1", reported, "the quoted path left the population")
+
+    # intent: fix
+    # marker: red at `6b3a5a80`, its own base, behaviourally: the invariant is
+    # enforced there only at the moment a test is ADDED, so a marked test
+    # renamed to a new path with its marker dropped gives `counted=0` and a
+    # green lane at `R095` (#1773, round 20).
+    def test_a_marker_a_change_drops_is_asked_where_it_went(self) -> None:
+        """A marker that leaves is a change to what the test declares, and this asks about it.
+
+        The population is every test a touched file holds that is new OR
+        whose marker changed. A rename carrying a marked test to a new path
+        and dropping the marker is the shape that was invisible; a marker
+        deleted in place is the same defect without the rename, and it is
+        driven here beside it. A RELABELLED marker is in the population too
+        and passes the way any correct marker does -- the control.
+
+        What this fixture holds fixed: one test per file, one operation per
+        shape, and the marker the only thing that varies between the base
+        and HEAD.
+        """
+        marked = "class T:\n    # intent: fix\n    def test_one(self):\n        pass\n"
+        relabelled = "class T:\n    # intent: guard\n    def test_one(self):\n        pass\n"
+        bare = "class T:\n    def test_one(self):\n        pass\n"
+        for shape, renames, work, offends in (
+            ("a rename that drops the marker",
+             {"test_suite.py": "test_moved.py"}, {"test_moved.py": bare}, True),
+            ("a marker deleted in place", None, {"test_suite.py": bare}, True),
+            ("a marker relabelled in place", None, {"test_suite.py": relabelled}, False),
+            ("a rename that keeps it",
+             {"test_suite.py": "test_moved.py"}, {"test_moved.py": marked}, False),
+        ):
+            with self.subTest(shape=shape):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    upstream = self.upstream_with_a_branch(
+                        root, main={"test_suite.py": marked}, renames=renames, work=work,
+                    )
+                    sandbox = self.clone_with_the_base(root, upstream)
+                    reported = self.census_in(sandbox, ci=True)
+                if offends:
+                    self.assertIn("FAILED", reported, reported)
+                    self.assertIn("T.test_one", reported)
+                else:
+                    self.assertIn("OK", reported, reported)
+
+    # intent: fix
+    # marker: red at `6b3a5a80`, its own base, behaviourally: `--census` hands
+    # its argument to `git diff` there before any `--`, so `--output=<path>`
+    # arrives as an option -- git creates and truncates the file, prints
+    # nothing, and the census reports no files, nothing added, exit 0
+    # (#1773, round 20).
+    def test_an_argument_shaped_like_an_option_is_not_a_base(self) -> None:
+        """A green census over a diff that never ran is the silence this file is for.
+
+        Three layers, each driven: an argument beginning with `-` refused
+        before anything runs, a base git cannot resolve to a commit refused
+        with git's own message, and a real base still answering. The file
+        the option would have written is asserted absent, because "it exited
+        non-zero" and "it did not write anything" are different claims.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            upstream = self.upstream_with_a_branch(root, work={"test_new.py": self.planted(True, 1)})
+            sandbox = self.clone_with_the_base(root, upstream)
+            written = root / "git-would-have-written-this"
+            for shape, argument in (
+                ("an option", f"--output={written}"),
+                ("the separator itself", "--"),
+                ("a ref that resolves to nothing", "notarev"),
+            ):
+                with self.subTest(shape=shape):
+                    finished = subprocess.run(
+                        [sys.executable, str(sandbox / "scripts" / "tests" / "test_intent_markers.py"),
+                         "--census", argument],
+                        cwd=sandbox, capture_output=True, text=True,
+                        env={**os.environ, "PYTHONPYCACHEPREFIX": str(sandbox / ".pyc")},
+                    )
+                    self.assertNotEqual(finished.returncode, 0, finished.stdout)
+                    self.assertIn("marker census", finished.stderr)
+                    self.assertNotIn("new test(s)", finished.stdout)
+                    self.assertFalse(written.exists(), f"{shape}: git wrote the file anyway")
+            # And the base that is one still answers, so the refusals above
+            # are about the argument rather than about the path through them.
+            finished = subprocess.run(
+                [sys.executable, str(sandbox / "scripts" / "tests" / "test_intent_markers.py"),
+                 "--census", "origin/main"],
+                cwd=sandbox, capture_output=True, text=True,
+                env={**os.environ, "PYTHONPYCACHEPREFIX": str(sandbox / ".pyc")},
+            )
+            self.assertEqual(finished.returncode, 0, finished.stdout + finished.stderr)
+            self.assertIn("1 new test(s)", finished.stdout)
 
     # intent: fix
     # marker: red at `7bf61433`, its own base, behaviourally: the census there
@@ -1195,6 +1617,25 @@ class TheWalkReadsMarkersTheWayItClaimsTests(unittest.TestCase):
     def test_a_marker_a_blank_line_away_is_not_this_tests(self) -> None:
         self.assertEqual(markers_in(self.BLANK_LINE), {("T.test_far", 0): []})
 
+    # A marker comment with anything after the kind: the anchor is what makes
+    # this not a marker, and dropping `\s*$` from the pattern left every test
+    # green (#1773, round 20).
+    TRAILING = "class T:\n    # intent: fix when the lane is green\n    def test_trailing(self):\n        pass\n"
+
+    # intent: guard
+    # marker: GREEN at `6b3a5a80`, its own base: the pattern's end anchor is
+    # already there and this pins it. Dropping `\s*$` left all 27 tests green
+    # at that head, which is what a surviving mutant means -- the property
+    # held and nothing read it (#1773, round 20).
+    def test_a_comment_carrying_more_than_the_kind_is_not_a_marker(self) -> None:
+        # The reader takes a marker as the WHOLE comment, so a sentence that
+        # opens with one is prose about a marker rather than a declaration:
+        # `# intent: fix when the lane is green` declares nothing, and a
+        # pattern without its end anchor read `fix` out of it and called the
+        # test marked. Reported as unmarked, which is the answer that makes
+        # somebody write the marker (#1773, round 20).
+        self.assertEqual(markers_in(self.TRAILING), {("T.test_trailing", 0): []})
+
     # intent: guard
     def test_a_marker_quoted_in_prose_is_not_a_marker(self) -> None:
         self.assertEqual(markers_in(self.PROSE), {("T.test_prose", 0): []})
@@ -1285,5 +1726,11 @@ if __name__ == "__main__":
         if len(sys.argv) != 3:
             print("usage: test_intent_markers.py --census <base>", file=sys.stderr)
             raise SystemExit(2)
-        raise SystemExit(print_census(sys.argv[2]))
+        # Resolved before any diff runs, so a base git cannot answer for is a
+        # refusal with a reason rather than an empty population with an exit
+        # code of 0 (#1773, round 20).
+        resolved = commit_named_by(sys.argv[2])
+        if resolved is None:
+            raise SystemExit(2)
+        raise SystemExit(print_census(resolved))
     unittest.main()
