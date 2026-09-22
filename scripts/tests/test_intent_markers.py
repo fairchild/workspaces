@@ -1372,6 +1372,38 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
         the option would have written is asserted absent, because "it exited
         non-zero" and "it did not write anything" are different claims.
         """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            upstream = self.upstream_with_a_branch(root, work={"test_new.py": self.planted(True, 1)})
+            sandbox = self.clone_with_the_base(root, upstream)
+            written = root / "git-would-have-written-this"
+            for shape, argument in (
+                ("an option", f"--output={written}"),
+                ("the separator itself", "--"),
+                ("a ref that resolves to nothing", "notarev"),
+            ):
+                with self.subTest(shape=shape):
+                    finished = subprocess.run(
+                        [sys.executable, str(sandbox / "scripts" / "tests" / "test_intent_markers.py"),
+                         "--census", argument],
+                        cwd=sandbox, capture_output=True, text=True,
+                        env={**os.environ, "PYTHONPYCACHEPREFIX": str(sandbox / ".pyc")},
+                    )
+                    self.assertNotEqual(finished.returncode, 0, finished.stdout)
+                    self.assertIn("marker census", finished.stderr)
+                    self.assertNotIn("new test(s)", finished.stdout)
+                    self.assertFalse(written.exists(), f"{shape}: git wrote the file anyway")
+            # And the base that is one still answers, so the refusals above
+            # are about the argument rather than about the path through them.
+            finished = subprocess.run(
+                [sys.executable, str(sandbox / "scripts" / "tests" / "test_intent_markers.py"),
+                 "--census", "origin/main"],
+                cwd=sandbox, capture_output=True, text=True,
+                env={**os.environ, "PYTHONPYCACHEPREFIX": str(sandbox / ".pyc")},
+            )
+            self.assertEqual(finished.returncode, 0, finished.stdout + finished.stderr)
+            self.assertIn("1 new test(s)", finished.stdout)
+
         # WHICH LAYER answered, and whether git ran at all. Dropping the
         # first layer left every test green, because the second refuses a
         # dash-led argument too and an end-to-end assertion cannot tell them
@@ -1407,38 +1439,6 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
                 )
         # And the commit that is one resolves, through the same function.
         self.assertIsNotNone(commit_named_by("HEAD"))
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            upstream = self.upstream_with_a_branch(root, work={"test_new.py": self.planted(True, 1)})
-            sandbox = self.clone_with_the_base(root, upstream)
-            written = root / "git-would-have-written-this"
-            for shape, argument in (
-                ("an option", f"--output={written}"),
-                ("the separator itself", "--"),
-                ("a ref that resolves to nothing", "notarev"),
-            ):
-                with self.subTest(shape=shape):
-                    finished = subprocess.run(
-                        [sys.executable, str(sandbox / "scripts" / "tests" / "test_intent_markers.py"),
-                         "--census", argument],
-                        cwd=sandbox, capture_output=True, text=True,
-                        env={**os.environ, "PYTHONPYCACHEPREFIX": str(sandbox / ".pyc")},
-                    )
-                    self.assertNotEqual(finished.returncode, 0, finished.stdout)
-                    self.assertIn("marker census", finished.stderr)
-                    self.assertNotIn("new test(s)", finished.stdout)
-                    self.assertFalse(written.exists(), f"{shape}: git wrote the file anyway")
-            # And the base that is one still answers, so the refusals above
-            # are about the argument rather than about the path through them.
-            finished = subprocess.run(
-                [sys.executable, str(sandbox / "scripts" / "tests" / "test_intent_markers.py"),
-                 "--census", "origin/main"],
-                cwd=sandbox, capture_output=True, text=True,
-                env={**os.environ, "PYTHONPYCACHEPREFIX": str(sandbox / ".pyc")},
-            )
-            self.assertEqual(finished.returncode, 0, finished.stdout + finished.stderr)
-            self.assertIn("1 new test(s)", finished.stdout)
 
     # intent: fix
     # marker: red at `7bf61433`, its own base, behaviourally: the census there
