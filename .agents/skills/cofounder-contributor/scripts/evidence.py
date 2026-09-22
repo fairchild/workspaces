@@ -3734,9 +3734,13 @@ def entry_as_rendered(entry: object) -> tuple[dict[str, object] | None, str | No
         # written that they had to agree.
         #
         # The RAW bytes decide whether every source-line walker in this file
-        # sees two lines. A code span holding a newline and a split HTML tag
-        # render as ONE line on the page and are two lines in the body, so
-        # the write accepted them and then accounted for them line by line:
+        # sees two lines, by ONE definition of what a line ends on
+        # (`spans_two_lines`) -- the guard and the walker that pairs readings
+        # back to source lines used two until round 25, and `str.splitlines()`
+        # breaks on five code points `"\n" in text` does not. A code span
+        # holding a newline and a split HTML tag render as ONE line on the
+        # page and are two lines in the body, so the write accepted them and
+        # then accounted for them line by line:
         # the carry path named the second physical line of its own item as an
         # author's continuation "not carried", and `taken` named the first,
         # `- [pending-ci] verify <b`, as what the write took. Both sentences
@@ -3757,8 +3761,21 @@ def entry_as_rendered(entry: object) -> tuple[dict[str, object] | None, str | No
         parsed = MARKDOWN.parseInline(text)
         reason = _unreadable_inline(parsed[0].children if parsed else None)
         broken = reason if reason is not None and "line break" in reason else None
-        if broken is None and "\n" in text:
+        if broken is None and spans_two_lines(text):
             broken = f"an {carries} whose text spans two source lines"
+        # And the break the page renders from HTML, which carries no newline
+        # and reads as inline HTML rather than as a break: `<br>`, `<br/>`,
+        # `<br />` and every other spelling of that tag passed both arms, so
+        # a detail of `green<br>- [blocked] injected line -- stop` was written
+        # as ONE source line the page renders as two status lines, with
+        # nothing announced -- and the section it leaves then fails the page
+        # reader outright (#1778, round 25). Asked of the RENDERING, so the
+        # spelling does not matter.
+        if broken is None and any(
+            child.type == "html_inline" and BREAK_TAG_RE.search(child.content)
+            for child in ((parsed[0].children if parsed else None) or [])
+        ):
+            broken = f"an {carries} whose text renders a line break as inline HTML"
         if broken is not None:
             return None, broken if carries == "item" else broken.replace(
                 "an item", "a detail", 1
@@ -3865,6 +3882,64 @@ def as_code_span(text: str) -> str:
     HTML comment marker, which is a visible difference in a posted comment.
     """
     return f"`{text}`" if text else ""
+
+
+# WHAT A LINE ENDS ON, in one place, because two definitions of it were
+# exactly what this round found in code this branch added: the refusal asked
+# `"\n" in text` and the walker six hundred lines below split with
+# `str.splitlines()`, which also breaks on `\v`, `\f`, `\x1c`, `\x1d`, `\x1e`,
+# `\x85`, U+2028 and U+2029. A body that is one line to one reader and two to
+# the other is the shape every finding on this pull request is an instance of
+# (#1778, round 25).
+#
+# The WIDER set wins for both: a text that any reader here would see as two
+# lines is not one status line, and refusing it is the answer that cannot
+# leave a section reading differently to the two of them.
+LINE_BOUNDARIES = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+
+# The tag a page renders as a line break, in any spelling it can be written
+# with: `<br>`, `<br/>`, `<br />`, `<BR>`, and one carrying attributes.
+BREAK_TAG_RE = re.compile(r"<\s*br\b[^>]*>", re.IGNORECASE)
+
+
+def spans_two_lines(text: str) -> bool:
+    """Whether any reader in this file would see more than one line here."""
+    return any(boundary in text for boundary in LINE_BOUNDARIES)
+
+
+def split_source_lines(text: str) -> list[str]:
+    """The source lines of this text, by the same definition `spans_two_lines` uses."""
+    return text.splitlines()
+
+
+def quoted_verbatim(text: str, limit: int = COMMENT_QUOTE_LIMIT) -> str:
+    """PR-editable text in a code span that keeps its BYTES, including its backticks.
+
+    `quoted_for_comment` flattens backticks out of the text, which is right
+    for a field a reader only has to recognise and wrong for a line an author
+    is being asked to rewrite: their ``- [blocked] deploy `prod` now -- author
+    proof`` came back without the span markers, so the line they were shown is
+    not the line they lost -- the failure the reading-to-source pairing was
+    added to prevent, arriving one step later (#1778, round 25).
+
+    So the span is sized past the longest backtick run in the text, the way
+    the fenced excerpt next door sizes its fence, and padded where the text
+    starts or ends with one, which is what CommonMark requires for a span to
+    hold them. Everything else `comment_safe` does stays: the newlines and
+    the comment delimiters still come out, because those are what let quoted
+    text act on the comment around it.
+    """
+    flattened = " ".join(text.split())
+    while "<!--" in flattened or "-->" in flattened:
+        flattened = flattened.replace("<!--", "").replace("-->", "")
+    if len(flattened) > limit:
+        flattened = flattened[: limit - 1].rstrip() + "\u2026"
+    if not flattened:
+        return Quoted("")
+    longest = max((len(run) for run in re.findall(r"`+", flattened)), default=0)
+    ticks = "`" * (longest + 1)
+    pad = " " if flattened.startswith("`") or flattened.endswith("`") else ""
+    return Quoted(f"{ticks}{pad}{flattened}{pad}{ticks}")
 
 
 def quoted_for_comment(text: str, limit: int = COMMENT_QUOTE_LIMIT) -> str:
@@ -4026,15 +4101,17 @@ def _replaced_lines_clause(replaced: list[str], restated: list[str] | None = Non
     as one sentence and not two, because it is one write and one loss
     (#1778, round 24).
 
-    Through `quoted_for_comment`, because the author's own text is going into
-    a comment and that is the RENDER half of the one quoting rule.
+    Through `quoted_verbatim`, because what these sentences hand back is a
+    line the author is being asked to rewrite: the comment quoter flattens
+    backticks, and a line quoted without its span markers is not the line
+    that left (#1778, round 25).
     """
     restated = restated or []
     if not replaced and not restated:
         return ""
     clause = ""
     if replaced:
-        quoted = ", ".join(quoted_for_comment(line, 200) for line in replaced)
+        quoted = ", ".join(quoted_verbatim(line, 200) for line in replaced)
         clause += (
             f" This write replaced {'these lines' if len(replaced) != 1 else 'this line'} with "
             f"nothing: {quoted}. Rewriting "
@@ -4042,7 +4119,7 @@ def _replaced_lines_clause(replaced: list[str], restated: list[str] | None = Non
             f"{'them' if len(replaced) != 1 else 'it'} in the body the next run writes."
         )
     if restated:
-        quoted = ", ".join(quoted_for_comment(line, 200) for line in restated)
+        quoted = ", ".join(quoted_verbatim(line, 200) for line in restated)
         clause += (
             f" {'These lines' if len(restated) != 1 else 'This line'} read a requirement this "
             f"record holds, so the entry's own line stands where "
@@ -4408,26 +4485,79 @@ def _render_structured_entries(
     # lines through the same reader -- and where no source line reads as the
     # replaced reading, the reading is named and said to be a reading
     # (#1778, round 24).
-    as_written: dict[str, str] = {}
-    for line in markdown_section(body, EVIDENCE_STATUS_HEADING).splitlines():
+    # BY OCCURRENCE, not by document order. Two source lines can share one
+    # page reading -- an escaped `\[r9]` above an undefined `[r9]`, `&amp;`
+    # above `&`, a trailing space -- and a first-wins map then names the
+    # first spelling for every later occurrence: measured, the escaped one
+    # twice and the unescaped one never, and the two swapped when the lines
+    # were swapped, so which bytes an author was told to rewrite was decided
+    # by which line came first. Last-wins is the same defect facing the other
+    # way, and no test told them apart (#1778, round 25).
+    #
+    # So the readings are consumed: the n-th replaced reading takes the n-th
+    # source line that produced it, which is the (value, occurrence) key this
+    # arc already uses for entries and their rendered lines.
+    as_written: dict[str, list[str]] = {}
+    for line in split_source_lines(markdown_section(body, EVIDENCE_STATUS_HEADING)):
         if line.strip():
             as_written.setdefault(
-                _as_the_page_reads(without_its_list_marker(line).strip()), line.strip()
-            )
+                _as_the_page_reads(without_its_list_marker(line).strip()), []
+            ).append(line.strip())
     # What the write took, named whatever else the record holds. A line the
     # carry path has already spoken about is not named twice -- the same
     # filter the `taken` path applies, for the same reason.
     def _the_authors_bytes(lines: list[str]) -> list[str]:
-        return [
-            as_written.get(line, line)
-            for line in lines
-            if line.strip() not in already_spoken_for
-            and as_written.get(line, line).strip() not in already_spoken_for
-        ]
+        """Each reading's own source line, one per occurrence, in the order they were read."""
+        left = {reading: list(written) for reading, written in as_written.items()}
+        named: list[str] = []
+        for line in lines:
+            queue = left.get(line) or []
+            bytes_of_it = queue.pop(0) if queue else line
+            if (
+                line.strip() in already_spoken_for
+                or bytes_of_it.strip() in already_spoken_for
+            ):
+                continue
+            named.append(bytes_of_it)
+        return named
 
+    # THE COLLAPSES THE PAGE PERFORMS. Ownership is decided on the page's
+    # reading -- two lines a reader cannot tell apart are one requirement,
+    # and the record's is the one that stands -- but the AUTHOR's bytes are
+    # not the page's reading of them: `- [blocked] deploy **the lane** --
+    # author proof` reads exactly as the record's own rendering of
+    # `deploy the lane`, so the line was taken as this write's own and left
+    # the body with nothing said, emphasis and all. The rule stays and the
+    # silence goes: a source line whose reading is ours and whose bytes are
+    # not is named where the entry's own line standing in its place is named
+    # (#1778, round 25).
+    def _as_the_page_shows(line: str) -> str:
+        """What a reader SEES of this line, markup and all, with its marker off.
+
+        Not the flattened reading: ownership is decided on that, and the
+        flattening is where the collapse happens -- `deploy **the lane**` and
+        `deploy the lane` read alike to it and do not look alike on the page.
+        A list marker is the reader's and never part of what it shows, so
+        `*`, `+` and an ordered marker all render to the same thing and are
+        not differences to name (#1778, rounds 22 and 25).
+        """
+        return MARKDOWN.renderInline(without_its_list_marker(line).strip(), reading_context)
+
+    ours = {line.strip() for line in rendered_lines + recorded_lines}
+    shown_by_us = {_as_the_page_shows(line) for line in ours}
+    collapsed = [
+        line
+        for line in split_source_lines(markdown_section(body, EVIDENCE_STATUS_HEADING))
+        if line.strip()
+        and line.strip() not in ours
+        and _as_the_page_reads(without_its_list_marker(line).strip()) in rendered_readings
+        and _as_the_page_shows(line) not in shown_by_us
+        and line.strip() not in already_spoken_for
+    ]
     if (took := replaced_lines_announcement(
         _the_authors_bytes([line for line in replaced if not _about_a_recorded_item(line)]),
-        _the_authors_bytes([line for line in replaced if _about_a_recorded_item(line)]),
+        _the_authors_bytes([line for line in replaced if _about_a_recorded_item(line)])
+        + collapsed,
     )) is not None:
         log(took)
         if announcements is not None:
