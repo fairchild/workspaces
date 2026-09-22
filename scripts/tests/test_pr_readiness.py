@@ -102,48 +102,62 @@ def all_of(cases, expected: set[str], label: str):
 CLAIMS_TABLE_SUFFIX = "_CLAIMS"
 
 
-def a_needle_that_can_fail(needle: object) -> bool:
-    """Whether this needle could be absent from some text, which is what makes it an assertion."""
-    return isinstance(needle, str) and bool(needle.strip())
+def holds_of(claim, text: str) -> bool:
+    """Whether every axis of this claim is true of this text.
 
-
-def says_something(claim) -> bool:
-    """Whether this claim asserts anything about the row it is written for.
-
-    NOT container non-emptiness. `(("",), (), ())` is a non-empty tuple
-    holding a needle every text contains, so `assertIn("", text)` is true of
-    every fixture and the row it names is pinned by nothing -- measured green
-    on both tables at `8d7bf4c1`. That is round 15's emptied claim one
-    wrapper deeper, and each round moved the floor because the predicate was
-    never written in terms of what a claim must ASSERT (#1771, round 17).
-
-    Written over the whole domain, axis by axis: a claim says something when
-    at least one axis carries a needle that can FAIL. A `contains` or
-    `absent` needle is non-empty text. An `order` pair is two non-empty
-    needles that DIFFER, because `text.index(a) < text.index(a)` is false for
-    every text -- an axis that can never pass says as little about its row as
-    one that can never fail, and the guard asks for one that can do both.
+    The row test's own three loops, as one expression, so the guard below
+    asks exactly what the test asks and the two cannot drift.
     """
     contains, absent, order = claim
-    if any(a_needle_that_can_fail(needle) for needle in contains):
-        return True
-    if any(a_needle_that_can_fail(needle) for needle in absent):
-        return True
-    return any(
-        a_needle_that_can_fail(first) and a_needle_that_can_fail(second) and first != second
+    if not all(needle in text for needle in contains):
+        return False
+    if any(needle in text for needle in absent):
+        return False
+    return all(
+        first in text and second in text and text.index(first) < text.index(second)
         for first, second in order
     )
 
 
-def every_claim_says_something(claims, label: str):
-    """Each row's claim asserts SOMETHING, asked before any row is read.
+def tells_its_row_from_every_other(claim, text: str, siblings: dict[str, str]) -> list[str]:
+    """The sibling rows this claim also holds of -- empty when it tells its row from all of them."""
+    return sorted(name for name, other in siblings.items() if holds_of(claim, other))
 
-    The other half of the predicate `all_of` states. `all_of` pins WHICH
-    rows a table has; this pins that the claim written for a row asserts
-    something about it -- `((), (), ())` in place of a row's claim iterates
-    cleanly, asserts nothing, and leaves the row it names unpinned (#1771,
-    round 15), and `(("",), (), ())` does the same one wrapper deeper
-    (round 17). `says_something` is the predicate; this applies it.
+
+def every_claim_says_something(claims, label: str, texts: dict[str, str]):
+    """Each row's claim HOLDS of its own row's text and FAILS on every sibling's.
+
+    THE QUANTIFIER, not another predicate over the needle. Rounds 15, 16 and
+    17 each moved a floor -- `((), (), ()))`, then the second copy of the
+    rule, then `(("",), (), ())` -- and each time the predicate was written
+    over the NEEDLE, so the next needle that no text can fail walked in
+    behind it: `(("## Evidence Status",), (), ())` passes every needle-level
+    test there is, and 27 of the 28 page-reader fixtures carry that heading.
+    Vacuity is not a property of a needle. It is a property of a needle
+    AGAINST THE POPULATION: a claim's job is to tell its row from its
+    siblings, and no predicate over a single needle can decide that
+    (#1771, round 18).
+
+    UNIVERSAL, not existential. "Holds of its row and fails on at least one
+    sibling" is population-relative in form and needle-relative in effect,
+    and the effect is table-dependent: on the page-reader table one row's
+    text lacks the literal heading, so the vacuous claim above "fails on a
+    sibling" for free and is accepted on 27 of 28 rows; on the swallowed
+    table it is sound, 0 of 27. A reader who opens one table must not take
+    its behaviour for the other's, so the form is the one that holds on
+    both: fails on EVERY sibling.
+
+    DISTINGUISHING IS NOT CHARACTERIZING, and this does not chase it. A
+    claim keyed on some incidental token unique to its row still fails the
+    moment a donor's value arrives in that row, which is the property this
+    guard exists to protect. What it does not claim is to be the last word:
+    it is the sixth attempt at this floor, and it is written at the level
+    the defect lives at rather than one wrapper above it.
+
+    `all_of` pins WHICH rows a table has; this pins that the claim written
+    for a row tells that row apart. `texts` is the population -- the row
+    name to its fixture text -- because the predicate cannot be asked
+    without it.
 
     One function rather than the same three lines under each claims table:
     the two copies were a rule with two spellings, and with ONE of them
@@ -158,12 +172,22 @@ def every_claim_says_something(claims, label: str):
     bare method name could not tell "both tables came through" from "one
     came through twice" (#1771, round 17).
     """
-    empty = sorted(name for name, claim in claims.items() if not says_something(claim))
-    if empty:
-        raise AssertionError(
-            f"{label}: a row's claim asserts nothing at all: {empty} -- the row is named "
-            "here and pinned by nothing; write the claim or take the row out"
+    for name, claim in claims.items():
+        text = texts[name]
+        if not holds_of(claim, text):
+            raise AssertionError(
+                f"{label}: a row's claim does not hold of its own row's text: {name} -- "
+                "the claim and the fixture disagree; fix whichever is wrong"
+            )
+        twins = tells_its_row_from_every_other(
+            claim, text, {other: body for other, body in texts.items() if other != name}
         )
+        if twins:
+            raise AssertionError(
+                f"{label}: a row's claim does not tell it from its siblings: {name} "
+                f"(also holds of: {twins}) -- the row is named here and pinned by nothing "
+                "it does not share; add what separates them"
+            )
     return claims
 
 
@@ -319,23 +343,47 @@ class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
         "an order between two things": ((), (), (("first", "second"),)),
     }
 
+    # The population those claims are about. Each holds of its own row's text
+    # and of no other, which is what the guard now asks -- a claims table
+    # cannot be judged without the texts it is written for.
+    TEXTS = {
+        # Each text makes its own row's claim hold and every other row's
+        # fail: the `[blocked]` row is the only one carrying that token, the
+        # `[complete]`-absent row is the only one WITHOUT that one, and the
+        # order row is the only one where `first` precedes `second`.
+        "contains something": "shared scaffolding [blocked] and [complete], second then first",
+        "absent something": "shared scaffolding, second then first",
+        "an order between two things": "shared scaffolding [complete] first then second",
+    }
+
+    def planted(self, claim, name: str = "a row that pins nothing") -> dict:
+        """One table holding the real rows and this claim on a row of its own."""
+        return {**self.WHOLE, name: claim}
+
+    def planted_texts(self, name: str = "a row that pins nothing", text: str = "") -> dict:
+        # The planted row's own text satisfies NO real row's claim, so the
+        # offender the guard names is the planted row and not a real one.
+        return {**self.TEXTS, name: text or "shared scaffolding [complete], second then first"}
+
     # intent: guard
     # marker: red at `bb149390`, its own base, only on the NAME this round adds
     # (`NameError: every_claim_says_something`). The property it pins holds there --
     # the two inline copies of the rule enforce it -- so it is a guard, and the two
     # numbers are counted apart (#1771, round 16).
     def test_a_claim_with_nothing_in_it_is_named(self) -> None:
-        emptied = dict(self.WHOLE)
-        emptied["a row that pins nothing"] = ((), (), ())
         with self.assertRaises(AssertionError) as raised:
-            every_claim_says_something(emptied, "seed")
+            every_claim_says_something(
+                self.planted(((), (), ())), "seed", self.planted_texts()
+            )
         message = str(raised.exception)
         self.assertIn("a row that pins nothing", message)
         self.assertIn("seed", message)
-        # The rows that DO assert something are not named as offenders: a
-        # guard that reports the whole table says nothing about which row.
+        # The OFFENDER is the row, and the siblings it could not be told from
+        # are named after it -- which is the sentence that says what to add.
+        offender, _, twins = message.partition("also holds of")
+        self.assertTrue(twins, message)
         for name in self.WHOLE:
-            self.assertNotIn(name, message, f"{name}: a row with a claim was named as empty")
+            self.assertNotIn(name, offender, f"{name}: a row with a claim was named as the offender")
 
     # intent: guard
     # marker: red at `bb149390`, its own base, only on the NAME this round adds
@@ -346,10 +394,209 @@ class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
         # Each of `contains`, `absent` and `order` is enough on its own, and
         # the guard hands the mapping back the way `all_of` hands back its
         # table, so a caller iterates what it asked about.
-        self.assertIs(every_claim_says_something(self.WHOLE, "seed"), self.WHOLE)
+        self.assertIs(
+            every_claim_says_something(self.WHOLE, "seed", self.TEXTS), self.WHOLE
+        )
         for name, claim in self.WHOLE.items():
             with self.subTest(row=name):
-                self.assertIs(every_claim_says_something({name: claim}, "seed")[name], claim)
+                # A table of ONE row has no siblings to be told from, so the
+                # universal half is vacuously true and what is asked is that
+                # the claim holds of its own row -- the two halves are seeded
+                # apart below.
+                self.assertIs(
+                    every_claim_says_something(
+                        {name: claim}, "seed", {name: self.TEXTS[name]}
+                    )[name],
+                    claim,
+                )
+
+    # The claims a needle-level predicate accepts and a population-level one
+    # does not. Each holds of its own row AND of a sibling, which is what
+    # makes it say nothing: the first is the heading every fixture carries,
+    # the second a letter every text has, the third a live axis whose
+    # siblings are degenerate, and the fourth an order pair over scaffolding
+    # every row shares (#1771, round 18).
+    SAYS_NOTHING_ABOUT_ITS_ROW = {
+        "a needle every row carries": (("shared scaffolding",), (), ()),
+        "a single common letter": (("a",), (), ()),
+        # A live axis beside one that can never fire: the `absent` needle is
+        # a string no text in the population carries, so it rules nothing
+        # out and the `contains` needle is shared by every row.
+        "one live axis with a degenerate sibling axis": (("shared",), ("nothing carries this",), ()),
+        "an order pair over shared scaffolding": ((), (), (("shared", "scaffolding"),)),
+    }
+
+    # intent: fix
+    # marker: red at `f341728e`, its own base, behaviourally: the predicate
+    # there is a property of the NEEDLE, so every shape above is accepted --
+    # measured, `(("## Evidence Status",), (), ())` passes and the row it
+    # names can then be given its neighbour's value with the suite green
+    # (#1771, round 18).
+    def test_a_claim_that_could_not_fail_on_a_sibling_is_named(self) -> None:
+        """Vacuity is a property of the needle AGAINST THE POPULATION.
+
+        A claim's job is to tell its row from its siblings. `()` was round
+        15's floor, `("",)` round 17's, and `("## Evidence Status",)` walks
+        through both -- 27 of 28 page-reader fixtures carry that heading, so
+        a claim made of it pins nothing while passing every predicate
+        written over the needle alone. The floor moved a level each round
+        because the predicate was never written at the level the defect
+        lives at.
+
+        Each shape below is rejected, and the message names the ROW and the
+        SIBLING it could not be told from -- which is the sentence that says
+        what to add. Both directions are seeded: the real claims of the
+        planted table are accepted in the same call.
+        """
+        for shape, claim in self.SAYS_NOTHING_ABOUT_ITS_ROW.items():
+            with self.subTest(rejects=shape):
+                with self.assertRaises(AssertionError) as raised:
+                    every_claim_says_something(
+                        self.planted(claim), "seed", self.planted_texts()
+                    )
+                message = str(raised.exception)
+                self.assertIn("a row that pins nothing", message)
+                self.assertIn("also holds of", message, message)
+                # The sibling is named, not just the row: a guard that says
+                # "this pins nothing" leaves an author guessing which other
+                # row it collided with.
+                named = message.partition("also holds of: ")[2]
+                self.assertTrue(
+                    any(row in named for row in self.WHOLE), f"{shape}: no sibling named"
+                )
+
+    # intent: fix
+    # marker: red at `f341728e`, its own base, behaviourally -- the predicate
+    # there accepts the vacuous claim outright, so there is no existential
+    # form to reject either; this is the seed that keeps the weaker form out
+    # (#1771, round 18).
+    def test_the_existential_form_is_not_the_one_this_guard_uses(self) -> None:
+        """"Fails on at least one sibling" is population-relative in form and needle-relative in effect.
+
+        On a table with one degenerate row -- a row whose text carries none
+        of the scaffolding -- a claim made of that scaffolding "fails on a
+        sibling" for free and is accepted, while telling its own row from
+        every other row it actually shares a page with. Measured on the real
+        page-reader table at this head: the existential form accepts
+        `(("## Evidence Status",), (), ())` on 27 of its 28 rows, because one
+        fixture's text lacks the literal heading.
+
+        So the form is the universal one, and this is what says so: the same
+        claim, the same table, accepted by the weaker reading and rejected by
+        the one the guard uses.
+        """
+        claim = (("shared scaffolding",), (), ())
+        texts = {
+            **self.planted_texts(),
+            "a degenerate row": "nothing in common with the others",
+        }
+        claims = {**self.planted(claim), "a degenerate row": (("nothing in common",), (), ())}
+        mine = texts["a row that pins nothing"]
+        siblings = {name: text for name, text in texts.items() if name != "a row that pins nothing"}
+        # Existentially: it fails on the degenerate row, so it passes.
+        self.assertTrue(
+            any(not holds_of(claim, text) for text in siblings.values()),
+            "the degenerate row does not make the existential form pass; the seed is not built",
+        )
+        # Universally: it holds of a sibling, so it is rejected -- and the
+        # guard is the universal one.
+        self.assertTrue(tells_its_row_from_every_other(claim, mine, siblings))
+        with self.assertRaises(AssertionError):
+            every_claim_says_something(claims, "seed", texts)
+
+    # intent: guard
+    # marker: green at `f341728e`, its own base, over the tables as they were
+    # there for 23 of the 28 rows -- and red for the other five, which is why
+    # five claims moved this round. It is the property the guard asserts,
+    # stated over the real population so the tables themselves are measured
+    # rather than the seeds (#1771, round 18).
+    def test_no_real_claim_holds_of_a_sibling_row(self) -> None:
+        """A row given its neighbour's value is caught by its own claim.
+
+        That is what the donor swap tests one row at a time and what this
+        says of every row of both real tables at once: for each claim, the
+        texts of all its siblings fail it. Five page-reader claims did not
+        hold this at the previous head -- `a break after prose`,
+        `a quoted heading inside`, `an unclosed blockquote before`,
+        `a sibling heading after a nested section` and
+        `a raw pre holding the status` -- and each was strengthened until it
+        did.
+        """
+        module = sys.modules[__name__]
+        for claims_name in sorted(claims_tables(vars(module))):
+            claims = getattr(module, claims_name)
+            table_name = claims_name.replace("_CLAIMS", "_TABLE")
+            table = getattr(module, table_name, None) or getattr(
+                module, claims_name.replace("_CLAIMS", "_HEADING_TABLE")
+            )
+            texts = {row: shape[0] for row, shape in table.items()}
+            for name, claim in claims.items():
+                with self.subTest(table=claims_name, row=name):
+                    siblings = {
+                        other: text for other, text in texts.items() if other != name
+                    }
+                    self.assertEqual(
+                        tells_its_row_from_every_other(claim, texts[name], siblings),
+                        [],
+                        f"{claims_name}: {name} cannot be told from its siblings",
+                    )
+
+    # intent: fix
+    # marker: red at `f341728e`, its own base, behaviourally: each mutant
+    # below runs green over the whole suite there -- `len(value) != 3`
+    # weakened to `< 3`, the non-empty check dropped from the table
+    # enumerator, and the reader prefix narrowed to `test_`. Every one is a
+    # seed gap: a control that plants what must be ACCEPTED without one that
+    # plants what must be REJECTED (#1771, round 18).
+    def test_the_shapes_the_enumerators_must_refuse(self) -> None:
+        """What is not a claim, not a claims table, and not a reader.
+
+        Arity: a claim is three axes. A four-tuple iterates and unpacks
+        nowhere, and a length check written `< 3` takes it; asked at 2, 3, 4
+        and 5, so the check is exercised at a length on both sides of the
+        one it admits.
+
+        A table: a mapping whose ROWS are claim-shaped. An empty dict has no
+        row that is not claim-shaped, so `all()` over it is true and an empty
+        binding named `_CLAIMS` became a claims table -- one the guard then
+        "checked" without reading anything.
+
+        A reader: what unittest COLLECTS, which is every method whose name
+        starts with `test` -- `testsomething` included, its default
+        `testMethodPrefix` being `test` and not `test_`. The narrower prefix
+        would read fewer tests than the lane runs, which is the disagreement
+        this file exists to close, so it is the broader one and this says why.
+        """
+        for length, shape in (
+            (2, (("a",), ())),
+            (3, (("a",), (), ())),
+            (4, (("a",), (), (), ())),
+            (5, (("a",), (), (), (), ())),
+        ):
+            with self.subTest(arity=length):
+                self.assertEqual(
+                    a_claim_shaped_value(shape), length == 3, f"{length} axes read as a claim"
+                )
+        # A claims table is a mapping with rows in it.
+        self.assertEqual(claim_shaped_tables({"EMPTY_CLAIMS": {}}), set())
+        self.assertEqual(claims_tables({"EMPTY_CLAIMS": {}}), set())
+        self.assertEqual(
+            claim_shaped_tables({"REAL_CLAIMS": {"a row": (("a",), (), ())}}),
+            {"REAL_CLAIMS"},
+        )
+        # And the prefix is unittest's own. Asked of the loader rather than
+        # restated: a test method named without the underscore is collected,
+        # so a reader scan that misses it reads fewer tests than the lane.
+        class _Collected(unittest.TestCase):
+            def testsomething(self) -> None:
+                pass
+
+        names = unittest.TestLoader().getTestCaseNames(_Collected)
+        self.assertIn("testsomething", names, "unittest does not collect what this claims it does")
+        self.assertTrue(
+            all(name.startswith("test") for name in names),
+            "the prefix this file scans for is not the loader's",
+        )
 
     # What a claim can look like and still assert nothing about its row. Each
     # is a non-empty container -- which is all `any(claim)` ever asked --
@@ -389,12 +636,15 @@ class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
         for shape, claim in self.SAYS_NOTHING.items():
             with self.subTest(rejects=shape):
                 with self.assertRaises(AssertionError) as raised:
-                    every_claim_says_something({"a row that pins nothing": claim}, "seed")
+                    every_claim_says_something(
+                        self.planted(claim), "seed", self.planted_texts()
+                    )
                 self.assertIn("a row that pins nothing", str(raised.exception))
         for shape, claim in self.WHOLE.items():
             with self.subTest(accepts=shape):
                 self.assertIs(
-                    every_claim_says_something({"a row": claim}, "seed")["a row"], claim,
+                    every_claim_says_something(self.WHOLE, "seed", self.TEXTS)[shape],
+                    claim,
                     f"{shape}: a real claim was rejected",
                 )
         # What the REAL tables do under it is not asserted here: each table's
@@ -460,9 +710,9 @@ class TheClaimGuardIsItselfCheckedTests(unittest.TestCase):
         original = every_claim_says_something
         asked: list[str] = []
 
-        def recording(claims, label):
+        def recording(claims, label, texts):
             asked.append(label)
-            return original(claims, label)
+            return original(claims, label, texts)
 
         with mock.patch.object(module, "every_claim_says_something", recording):
             suite = unittest.TestLoader().loadTestsFromNames(readers, module)
@@ -2940,7 +3190,7 @@ class ThePageReaderTableTests(unittest.TestCase):
         # table whose names `all_of` pins, and the NON-VACUITY of each row's
         # claim through the one function that asks it (#1771, rounds 15, 16).
         for name, (contains, absent, order) in every_claim_says_something(
-            claims, claims_name
+            claims, claims_name, {row: shape[0] for row, shape in table.items()}
         ).items():
             with self.subTest(row=name):
                 text = table[name][0]
@@ -3119,7 +3369,26 @@ class RecordedRendererResponseTests(unittest.TestCase):
                     pr_readiness.page_view(GOOD_BODY)
         self.assertIn(RECORD_COMMAND, str(raised.exception))
 
+    # The population these three tests quantify over, stated so an empty read
+    # is a failed read rather than a clean sweep. Measured: with the index
+    # patched to `{}` and a token present, all three passed -- every one of
+    # them ITERATES the corpus, and iterating nothing scores nothing
+    # (#1771, round 18). The count moves when a recording is added, which is
+    # a line of this file somebody writes deliberately.
+    RECORDINGS = 73
+
+    def assertTheCorpusWasRead(self, index: dict) -> None:
+        """The corpus this test read is the corpus this file declares."""
+        self.assertTrue(index, "the recorded corpus read as empty; nothing below was checked")
+        self.assertEqual(
+            len(index),
+            self.RECORDINGS,
+            f"the corpus holds {len(index)} recordings and this file declares "
+            f"{self.RECORDINGS}; re-count and say so here",
+        )
+
     def test_every_recording_names_the_body_it_answers(self) -> None:
+        self.assertTheCorpusWasRead(rendered_index())
         for digest, text in rendered_index().items():
             with self.subTest(digest=digest[:12]):
                 self.assertEqual(hashlib.sha256(text.encode("utf-8")).hexdigest(), digest)
@@ -3127,13 +3396,44 @@ class RecordedRendererResponseTests(unittest.TestCase):
 
     def test_every_recorded_file_is_named_in_the_index(self) -> None:
         index = rendered_index()
+        self.assertTheCorpusWasRead(index)
         for path in sorted(RENDERED_FIXTURES.glob("*.html")):
             with self.subTest(name=path.name):
                 self.assertIn(path.stem, index)
 
+    # intent: fix
+    # marker: red at `f341728e`, its own base, behaviourally: with the index
+    # patched to `{}` and a token present, all three corpus tests pass there
+    # -- each one ITERATES the corpus, and iterating nothing scores nothing.
+    # The property was bounded only by the fixture directory moving aside,
+    # which is a different mechanism (#1771, round 18).
+    def test_an_empty_corpus_is_a_failed_read_rather_than_a_clean_sweep(self) -> None:
+        """A population a test quantifies over is stated, or the test passes over nothing.
+
+        Driven by patching the index reader to answer `{}` and running the
+        three tests that read it: each one fails now, naming the corpus
+        rather than any recording, where at the previous head all three
+        scored clean.
+        """
+        module = sys.modules[__name__]
+        readers = [
+            f"{type(self).__name__}.test_every_recording_names_the_body_it_answers",
+            f"{type(self).__name__}.test_every_recorded_file_is_named_in_the_index",
+        ]
+        with mock.patch.object(module, "rendered_index", lambda: {}):
+            suite = unittest.TestLoader().loadTestsFromNames(readers, module)
+            outcome = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
+        self.assertEqual(len(outcome.failures) + len(outcome.errors), len(readers), outcome)
+        for _, message in outcome.failures:
+            self.assertIn("corpus", message)
+        # And the corpus as it stands is read: the same tests over the real
+        # index pass, so what this seeds is the floor and not the tests.
+        self.assertGreater(len(rendered_index()), 0)
+
     def test_the_recordings_still_match_the_live_renderer(self) -> None:
         if not (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")):
             self.skipTest("no GH_TOKEN or GITHUB_TOKEN: the live renderer cannot be asked")
+        self.assertTheCorpusWasRead(rendered_index())
         for digest, text in rendered_index().items():
             with self.subTest(digest=digest[:12]):
                 self.assertEqual(
@@ -4360,8 +4660,8 @@ PAGE_READER_CLAIMS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[tupl
     # also carry `Context <br>` and a containment claim alone takes any of
     # them as this row (#1771, round 15).
     "a break after prose": (
-        ("Context <br>",),
-        ("- ", "`", "***", "\n---\n", "<blockquote>", "<ul><li>", "<details>", "> ## "),
+        ("Context <br>", "Status\n\nContext"),
+        ("- ", "`", "***", "\n---\n", "<blockquote>", "<ul><li>", "<details>", "> ## ", "## Notes"),
         (),
     ),
     "a break inside a list item": (("- complete <br>",), (), ()),
@@ -4373,22 +4673,38 @@ PAGE_READER_CLAIMS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[tupl
     "a code span after a break": (("<br>`[blocked]`",), (), ()),
     "a rule of asterisks": (("***",), (), (("***", "[blocked]"),)),
     "a dash rule": (("\n---\n",), (), (("---", "[blocked]"),)),
-    "a quoted heading inside": (("> ## ",), (), (("## Evidence Status", "> ## "),)),
+    "a quoted heading inside": (
+        ("> ## Note\n\nContext",),
+        ("<details>", "<summary>"),
+        (("## Evidence Status", "> ## "),),
+    ),
     "a heading inside a list item": (("- outer", "  - ## "), (), ()),
     "a quoted example elsewhere": (("> ## Evidence Status",), (), (("> ## Evidence Status", "\n## Evidence Status"),)),
     "a long-s heading": (("Statu\u017f",), (), ()),
     "a fold holding the section": (("<details>",), (), (("<details>", "## Evidence Status"),)),
     "a fold holding a quoted heading": (("<details>", "> ## "), (), (("## Evidence Status", "<details>"),)),
-    "an unclosed blockquote before": (("<blockquote>",), ("</blockquote>",), (("<blockquote>", "## Evidence Status"),)),
+    "an unclosed blockquote before": (
+        ("<blockquote>", "Status\n\nContext"),
+        ("</blockquote>", "## Notes"),
+        (("<blockquote>", "## Evidence Status"),),
+    ),
     "an unclosed list item before": (("<ul><li>",), ("</li>",), (("<ul><li>", "## Evidence Status"),)),
     "an unclosed blockquote inside": (("<blockquote>",), ("</blockquote>",), (("## Evidence Status", "<blockquote>"),)),
     "a break inside a quoted heading": (("> ## Context<br>",), (), ()),
     "a sibling heading after a top-level section": (("## Notes",), ("<blockquote>", "> ## "), (("## Evidence Status", "## Notes"),)),
-    "a sibling heading after a nested section": (("<blockquote>", "## Notes"), (), (("<blockquote>", "## Notes"),)),
+    "a sibling heading after a nested section": (
+        ("<blockquote>", "## Notes"),
+        ("</blockquote>",),
+        (("<blockquote>", "## Notes"),),
+    ),
     "a shallower heading after a quoted section": (("> ## Evidence Status", "\n## Notes"), ("<blockquote>",), (("> ## Evidence Status", "## Notes"),)),
     "a shallower heading after a blockquote section": (("<blockquote>", "</blockquote>", "## Notes"), (), (("</blockquote>", "## Notes"),)),
     "a shallower h1 after a quoted section": (("> ## Evidence Status", "\n# Notes"), ("\n## Notes",), ()),
-    "a raw pre holding the status": (("<pre>",), (), (("## Evidence Status", "<pre>"),)),
+    "a raw pre holding the status": (
+        ("<pre>\nnote",),
+        ("Context",),
+        (("## Evidence Status", "<pre>"),),
+    ),
 }
 # Every row of that table states a property, so none of them is a bare label.
 PAGE_READER_LABELS: frozenset[str] = frozenset()
@@ -4668,7 +4984,7 @@ class TheSwallowedHeadingTableTests(unittest.TestCase):
         # table whose names `all_of` pins, and the NON-VACUITY of each row's
         # claim through the one function that asks it (#1771, rounds 15, 16).
         for name, (contains, absent, order) in every_claim_says_something(
-            claims, claims_name
+            claims, claims_name, {row: shape[0] for row, shape in table.items()}
         ).items():
             with self.subTest(row=name):
                 text = table[name][0]
@@ -6770,17 +7086,38 @@ class APrintedLineCanCarryADelimiterCharacterTests(unittest.TestCase):
         self.assertIn(unicodedata.unidata_version, notice)
         self.assertIn("DEFAULT_IGNORABLE_RANGES", notice)
 
-    # intent: guard
-    def test_a_combining_mark_is_content_rather_than_nothing(self) -> None:
-        # The neighbour the criterion excludes, and why: a mark renders as a
-        # diacritic rather than as nothing, so it is not part of the leading
-        # run. Stated as a test so the exclusion is a decision rather than an
-        # omission — and the cost is named in the body.
+    # intent: fix
+    # marker: red at `f341728e`, its own base, on the page plane this round
+    # adds to it: the test there asserts `.ok` from the source model alone
+    # and rests it on "a mark renders as a diacritic rather than as nothing",
+    # which decides whether the CHARACTER is invisible where the gate's
+    # criterion is whether the READER sees the token (#1771, round 18).
+    def test_a_combining_mark_leaves_the_token_where_a_reader_sees_it(self) -> None:
+        """The criterion, in the reader's terms, decided from the page.
+
+        The run this gate refuses on is the one a reader cannot see. A
+        combining mark is not in it -- and the ground for that is not what
+        the mark itself looks like, which is a question about the character.
+        It is what the page does with the line: recorded, GitHub prints the
+        mark glued to the bracket and the token stays on the page, so a
+        reader meets `[blocked] waiting` and the gate accepts.
+
+        Recorded like its neighbours rather than asserted from the source
+        model alone: the frontier shapes beside it record the page plane,
+        and a claim about what a reader sees that never asks the page is a
+        claim about a model of it.
+        """
         self.assertNotIn("\u0308", pr_readiness.INVISIBLE_LEADING)
         self.assertEqual(unicodedata.category("\u0308"), "Mn")
-        self.assertTrue(
-            pr_readiness.evaluate(pr(self.body("- &#776;[blocked] waiting")), self.FILES).ok
-        )
+        body = self.body("- &#776;[blocked] waiting")
+        with recorded_page():
+            page = pr_readiness.page_view(body)
+            verdict = pr_readiness.evaluate(pr(body), self.FILES)
+        self.assertIsNone(page.unverified, page.unverified)
+        self.assertTrue(page.lines, "the page shows no line for this body")
+        # What the READER sees: the token is on the page, mark and all.
+        self.assertIn("[blocked] waiting", page.lines[0], page.lines)
+        self.assertTrue(verdict.ok, "the gate refuses a status the page shows")
 
     # intent: control
     def test_code_is_where_the_two_views_differ_and_the_difference_is_stated(self) -> None:
