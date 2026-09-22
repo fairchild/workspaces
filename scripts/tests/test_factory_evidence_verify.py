@@ -255,6 +255,43 @@ class VerificationSelectionTests(unittest.TestCase):
 
 
 class BlockedLabelClearTests(unittest.TestCase):
+    # intent: fix
+    # marker: red at `614eb162`, its own base, behaviourally -- the refusal
+    # stood and this answered True (`AssertionError: True is not false`)
+    # (#1778, round 23).
+    def test_a_record_the_write_refuses_does_not_clear_the_label(self) -> None:
+        """The gate does not open over a body nobody rewrote.
+
+        An entry no write can render stands the WHOLE record down -- that is
+        the family this branch built for a colliding index and widened in
+        round 22 to an item that renders to nothing. The section on the page
+        is then not what the record says, and a predicate that reads only
+        the record answered "every entry complete" over a body the write had
+        refused. Measured at `614eb162` on a record whose only entry is an
+        `&nbsp;` item: the refusal stands and the label clears.
+
+        The same answer as a colliding index gets, for the same reason: an
+        unanswerable record leaves the label on and the contract with its
+        author.
+        """
+        refused = [{"index": 1, "item": "&nbsp;", "status": "complete", "detail": "d"}]
+        self.assertTrue(verify_evidence.unrenderable_record_refusal(refused))
+        self.assertFalse(verify.should_clear_blocked_label(refused, HEAD, verified={}))
+        # And beside a sibling this run did verify: one entry the write
+        # cannot render is enough, because the write stands down whole.
+        beside = [
+            ci_entry(index=1, status="complete", verified_head_sha=HEAD),
+            {"index": 2, "item": "&nbsp;", "status": "complete", "detail": "d"},
+        ]
+        green = {1: {"status": "complete", "verified_head_sha": HEAD, "check_name": "Web CI"}}
+        self.assertFalse(verify.should_clear_blocked_label(beside, HEAD, verified=green))
+        # The control: the same record with a renderable item clears as it did.
+        renderable = [
+            ci_entry(index=1, status="complete", verified_head_sha=HEAD),
+            {"index": 2, "item": "a screenshot of the sidebar", "status": "complete", "detail": "d"},
+        ]
+        self.assertTrue(verify.should_clear_blocked_label(renderable, HEAD, verified=green))
+
     def test_clears_only_when_all_complete_and_sha_current(self) -> None:
         complete = [
             ci_entry(index=1, status="complete", verified_head_sha=HEAD),
