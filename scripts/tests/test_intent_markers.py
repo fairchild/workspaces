@@ -1450,22 +1450,32 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
 
     # intent: guard
     # marker: red at `66c09bd4` on `loop_feeds`, a name this round adds, and
-    # what it pins is the half of that reader nothing else reaches: the
-    # lane's own parentheses sit inside single quotes, so the quote tracking
-    # answers for them, and the mutant that stops counting DEPTH is green
-    # over the whole file without this -- measured at `0100bff3`, `Ran 43` /
-    # `OK` (#1773, round 21).
+    # what it pins is that BOTH halves of that reader are reached. Each half
+    # has survived as a mutant here: depth counting dropped ran `Ran 43` /
+    # `OK` at `0100bff3` before the unquoted shape was written, and quote
+    # tracking dropped ran `Ran 44` / `OK` at `2a2b8e4c` before the
+    # unbalanced one was -- because the lane's own `:(glob)` parentheses
+    # BALANCE, so depth counting alone reads that pathspec correctly and it
+    # measures nothing about quotes (#1773, round 21).
     def test_a_feed_holding_its_own_parentheses_is_read_whole(self) -> None:
         """A substitution inside the loop's feed is part of the command.
 
-        Two shapes, because the reader has two halves and each answers for
-        a different one: an UNQUOTED `$(...)` inside the feed, which only
-        depth counting reads to the end of, and the quoted `:(glob)`
-        pathspec the lane actually carries, which only quote tracking keeps
-        out of the depth count.
+        Three shapes, and the first two are the ones that separate the
+        reader's halves. An UNQUOTED `$(...)` needs depth counting: without
+        it the feed stops at that substitution's own close. An UNBALANCED
+        parenthesis INSIDE quotes needs quote tracking: without it that
+        close ends the feed early, and depth counting cannot help, because
+        the character is text rather than structure.
+
+        The third is the lane's own pathspec, which needs neither and is
+        here as the control: its parentheses balance, so both halves read
+        it the same way -- which is exactly why it measured nothing when it
+        was written as the quoted case.
         """
         depth = "while read -r f; do :; done < <(printf '%s\\n' $(cat list.txt) | sort)"
         self.assertEqual(loop_feeds(depth), ["printf '%s\\n' $(cat list.txt) | sort"])
+        unbalanced = "done < <(git ls-files -z | grep -zv ')' | sort -z)"
+        self.assertEqual(loop_feeds(unbalanced), ["git ls-files -z | grep -zv ')' | sort -z"])
         quoted = "done < <(git ls-files -z -- ':(glob)**/test*.py' | sort -z)"
         self.assertEqual(
             loop_feeds(quoted), ["git ls-files -z -- ':(glob)**/test*.py' | sort -z"]
