@@ -1769,7 +1769,9 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
     # read from HEAD alone there, so a path the BASE defines twice against a
     # HEAD that defines it once falls back on the positional ordinal --
     # `counted=0`, no offenders, "no tests added" over an unmarked test
-    # (#1773, round 20).
+    # (#1773, round 20). Round 21 adds its fourth shape, the one that needs
+    # the base end of the union and nothing else; that shape is red at
+    # `0100bff3` under the narrowed union and green with it.
     def test_a_path_the_base_repeats_is_asked_at_this_end_too(self) -> None:
         """The ordinal is positional at BOTH ends, so repetition is read at both.
 
@@ -1782,6 +1784,15 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
         What this fixture holds fixed: one file, one path, and the only
         difference between the shapes is how many definitions each end
         holds. The control is the same file with the survivor marked.
+
+        The last shape is the one that needs the BASE end of the union and
+        nothing else: the survivor's marker list is what it was, so the
+        comparison sees nothing, and the path is not repeated at HEAD, so
+        HEAD-side repetition sees nothing either. Measured: with the union
+        narrowed to `repeated_paths(here)` the whole file is green without
+        it -- a mutant that survived this round's first push, because every
+        other base-repeated shape here changes a marker as well
+        (#1773, round 21).
         """
         marked = "class A:\n    # intent: fix\n    def test_same(self):\n        pass\n"
         unmarked = "class A:\n    def test_same(self):\n        pass\n"
@@ -1790,6 +1801,8 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
             ("two marked at the base, one marked at HEAD", marked + marked, marked, False),
             ("three definitions at HEAD, one of them unmarked",
              marked, marked + unmarked + marked, True),
+            ("an unmarked survivor whose own list never changed",
+             unmarked + marked, unmarked, True),
         ):
             with self.subTest(shape=shape):
                 with tempfile.TemporaryDirectory() as directory:
