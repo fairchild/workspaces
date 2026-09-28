@@ -2231,13 +2231,17 @@ class TheWalkReadsMarkersTheWayItClaimsTests(unittest.TestCase):
         "    @staticmethod\n    def test_between():\n        pass\n"
     )
     # A marker TRAILING a line of code, which is not a comment line and so
-    # not this test's marker -- the rule `_marks_above` states.
-    TRAILING = (
+    # not this test's marker -- the rule `_marks_above` states. Named apart
+    # from `TRAILING` below, which is this class's OTHER fixture of that
+    # name: one class binding one name twice keeps the later value, and the
+    # seed written against the earlier one measured that other fixture
+    # instead and passed under its own mutant (#1773, round 21).
+    BESIDE_CODE = (
         "class T:\n    sentinel = True  # intent: fix\n"
         "    def test_trailing(self):\n        pass\n"
     )
     # The same text as a comment LINE above the definition, which is.
-    STANDALONE = (
+    ON_ITS_OWN_LINE = (
         "class T:\n    sentinel = True\n    # intent: fix\n"
         "    def test_trailing(self):\n        pass\n"
     )
@@ -2245,6 +2249,48 @@ class TheWalkReadsMarkersTheWayItClaimsTests(unittest.TestCase):
     # `IsolatedAsyncioTestCase`, so it is a test the census asks about.
     ASYNC = "class T:\n    # intent: guard\n    async def test_async(self):\n        pass\n"
     ASYNC_BARE = "class T:\n    async def test_async(self):\n        pass\n"
+
+    # intent: guard
+    # marker: green at `66c09bd4`, its own base -- no class in that file
+    # binds a name twice, so the property holds there and nothing read it.
+    # RED at `0100bff3` and `2ea7c11f`, this round's own earlier heads,
+    # where `TheWalkReadsMarkersTheWayItClaimsTests` bound `TRAILING` twice:
+    # the later value won, the seed written against the earlier one measured
+    # the other fixture, and its own mutant -- a trailing comment accepted
+    # as a marker again -- ran GREEN over the whole file (measured,
+    # `Ran 43 tests` / `OK`). A key shared by two members, the later
+    # silently winning, is the defect this pull request has closed at four
+    # levels; this one was in its own seed (#1773, round 21).
+    def test_no_class_in_this_file_binds_one_name_twice(self) -> None:
+        """A fixture name is a key, and two members under one key lose one.
+
+        Read off this module's own source rather than its runtime `vars()`,
+        because the runtime holds the survivor and the question is whether
+        anything was overwritten. Class attributes and methods alike: both
+        are names a class binds, and a method defined twice is the same
+        defect with a bigger blast radius.
+        """
+        source = Path(__file__).read_text(encoding="utf-8")
+        for klass in ast.walk(ast.parse(source)):
+            if not isinstance(klass, ast.ClassDef):
+                continue
+            bound: dict[str, int] = {}
+            for item in klass.body:
+                names = []
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    names = [item.name]
+                elif isinstance(item, ast.Assign):
+                    names = [
+                        target.id for target in item.targets if isinstance(target, ast.Name)
+                    ]
+                elif isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                    names = [item.target.id]
+                for name in names:
+                    bound[name] = bound.get(name, 0) + 1
+            twice = sorted(name for name, count in bound.items() if count > 1)
+            self.assertEqual(
+                twice, [], f"{klass.name} binds a name more than once: {twice}"
+            )
 
     # intent: fix
     # marker: red at `66c09bd4`, its own base, behaviourally: `comment_lines`
@@ -2261,8 +2307,8 @@ class TheWalkReadsMarkersTheWayItClaimsTests(unittest.TestCase):
         not a marker, and the same words as a line above the definition
         are.
         """
-        self.assertEqual(markers_in(self.TRAILING), {("T.test_trailing", 0): []})
-        self.assertEqual(markers_in(self.STANDALONE), {("T.test_trailing", 0): ["fix"]})
+        self.assertEqual(markers_in(self.BESIDE_CODE), {("T.test_trailing", 0): []})
+        self.assertEqual(markers_in(self.ON_ITS_OWN_LINE), {("T.test_trailing", 0): ["fix"]})
 
     # intent: guard
     # marker: green at `66c09bd4`, its own base -- the walk there already
