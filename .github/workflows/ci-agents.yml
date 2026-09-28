@@ -138,20 +138,26 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
 
-      - name: Run frontmatter parser tests
-        run: uv run .agents/scripts/test_parse_frontmatter.py
-
-      - name: Run planner tests
-        run: uv run .agents/scripts/test_run_planner.py
-
-      - name: Run gh-discuss tests
-        run: uv run .agents/skills/gh-discuss/scripts/test_gh_discuss.py
-
-      # Recurses scripts/tests/ instead of hand-enumerating scripts here so
-      # "add a test, forget the run step" can't leave a script gating nothing.
-      # find (not a glob) so a future nested scripts/tests/**/test_*.py — which
-      # the paths filter above already covers — isn't silently skipped.
-      - name: Run scripts/tests/*.py
+      # ONE step over the population the TREE holds. Three steps used to name
+      # three files under .agents/ by hand beside a find over scripts/tests/,
+      # and .agents/skills/become-persona/scripts/test_resolve_persona.py was
+      # named by none of them: measured on this branch, 61 of the 62 test
+      # files this repository tracks ran here, and that one never had
+      # (#1805). A list somebody keeps is the shape the census this job runs
+      # exists to refuse, and this job was keeping one.
+      #
+      # Two pathspecs, one population: every Python file whose basename
+      # begins with test, anywhere in the tree, and every .py under
+      # scripts/tests/ whatever it is called. The second is there because a
+      # file in that directory is a test by where it is -- a regression.py
+      # there is one the lane runs and a test_* filter would drop, which is
+      # the population scripts/tests/test_intent_markers.py reads and agrees
+      # with. git ls-files also holds this to what git TRACKS, where find ran
+      # whatever sat on disk.
+      #
+      # An EMPTY discovery fails: a loop over nothing exits 0, which is the
+      # silence this job exists to end.
+      - name: Run every test file the tree holds
         # `test_pr_readiness.py` checks its recorded GitHub-renderer responses
         # against the live renderer, and skips when no token is there to ask
         # with -- which meant the drift detector for those fixtures ran
@@ -162,13 +168,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           failed=()
+          found=0
           while IFS= read -r -d '' test_file; do
+            found=$((found + 1))
             echo "::group::${test_file}"
             if ! uv run --script "$test_file"; then
               failed+=("$test_file")
             fi
             echo "::endgroup::"
-          done < <(find scripts/tests -type f -name '*.py' -print0 | sort -z)
+          done < <(git ls-files -z -- ':(glob)**/test*.py' ':(glob)scripts/tests/**/*.py' | sort -z)
+          echo "ran ${found} test file(s)"
+          if [ "$found" -eq 0 ]; then
+            echo "no test file was discovered; this job would have passed over nothing" >&2
+            exit 1
+          fi
           if [ "${#failed[@]}" -gt 0 ]; then
             echo "Failed: ${failed[*]}" >&2
             exit 1

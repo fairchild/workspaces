@@ -60,6 +60,14 @@ MARKER_RE = re.compile(r"^\s*#\s*intent:\s*(\S+)\s*$")
 def comment_lines(source: str) -> dict[int, str]:
     """Every line of this source that IS a comment, by line number.
 
+    A comment LINE: the token is the first thing on its line. That is the
+    rule the walk below states -- "the contiguous run of comment lines
+    immediately above" -- and reading it in one place is what makes the two
+    agree. A comment trailing code is not a comment line, and recording one
+    at its line number made `sentinel = True  # intent: fix` directly above
+    an unmarked test read as that test's marker: `1 new test(s): 1 fix` and
+    a green guard over a test nobody labelled (#1773, round 21).
+
     Read from the token stream rather than from the characters: a line
     inside a multi-line string can start with `#` and read as a comment to
     a line scanner, so a marker written inside a decorator's own string
@@ -69,7 +77,7 @@ def comment_lines(source: str) -> dict[int, str]:
     found: dict[int, str] = {}
     try:
         for token in tokenize.generate_tokens(io.StringIO(source).readline):
-            if token.type == tokenize.COMMENT:
+            if token.type == tokenize.COMMENT and not token.line[: token.start[1]].strip():
                 found[token.start[0]] = token.string
     except (tokenize.TokenError, IndentationError, SyntaxError):
         # A source `ast.parse` accepted and `tokenize` refuses is not a
@@ -239,7 +247,23 @@ class Touched(NamedTuple):
 # deleting the branch left the suite green. It was an unread line, and the
 # seed's label was wrong about git rather than about the census
 # (#1773, round 20).
-RENAME_STATUS, ADDED_STATUS = "R", "A"
+# A TYPE CHANGE is in the population too. `--diff-filter=AMR` dropped it, so
+# a path that is a symlink at the base and a regular file with an unmarked
+# test at HEAD left the population entirely: measured in a sandbox, git says
+# `T scripts/tests/test_type.py`, the filtered diff says nothing at all, and
+# the census printed `0 test file(s) touched` and exited 0 while the lane's
+# own `find -type f` ran that file (#1773, round 21). Round 19's Enumerated
+# line named symlinks as unchecked and nobody opened it, which is what an
+# unchecked member is for.
+#
+# A MODE-ONLY change needs no letter of its own: git reports `chmod +x` on a
+# tracked file as `M`, measured in the same sandbox, so it is already in the
+# population and its content -- and so its tests -- is unchanged.
+RENAME_STATUS, ADDED_STATUS, TYPE_CHANGE_STATUS = "R", "A", "T"
+
+# The modes a regular file has in a git tree. Anything else at a path --
+# `120000` a symlink, `160000` a gitlink -- holds no Python source.
+REGULAR_FILE_MODES = frozenset({"100644", "100755"})
 
 
 def touched_test_files(base: str, root: Path = REPO_ROOT) -> tuple[Touched, ...]:
@@ -271,7 +295,7 @@ def touched_test_files(base: str, root: Path = REPO_ROOT) -> tuple[Touched, ...]
     # and never by splitting a line on tabs.
     shown = subprocess.run(
         [
-            "git", "diff", "--name-status", "-M", "--diff-filter=AMR", "-z",
+            "git", "diff", "--name-status", "-M", "--diff-filter=AMRT", "-z",
             base, "HEAD", "--", "scripts/tests",
         ],
         capture_output=True, text=True, cwd=root,
@@ -302,6 +326,12 @@ def touched_test_files(base: str, root: Path = REPO_ROOT) -> tuple[Touched, ...]
             here, there = paths[0], paths[0]
         if not (here.startswith(inside) and here.endswith(".py")):
             continue
+        if (root / here).is_symlink():
+            # The lane runs `find scripts/tests -type f`, which does not
+            # follow a symlink, so a symlink is not a file this guard is
+            # about -- and READING through one publishes the target's tests
+            # under a path the lane never runs (#1773, round 21).
+            continue
         touched.append(
             Touched(here[len(inside):], None if there is None else there[len(inside):])
         )
@@ -328,6 +358,24 @@ def source_at_base(base: str, relative: str | None, root: Path = REPO_ROOT) -> s
     """
     if relative is None:
         return ""
+    listed = subprocess.run(
+        ["git", "ls-tree", base, "--", f"scripts/tests/{relative}"],
+        capture_output=True, text=True, cwd=root,
+    )
+    if listed.returncode != 0 or not listed.stdout.strip():
+        raise AssertionError(
+            f"the marker census could not read what kind of entry `{relative}` is at "
+            f"`{base}`: {listed.stderr.strip() or 'git ls-tree named nothing'}"
+        )
+    if listed.stdout.split(" ", 1)[0] not in REGULAR_FILE_MODES:
+        # A symlink or a gitlink holds no Python source, so the base holds
+        # no test at this path and every test HERE is new. Asked of git
+        # rather than inferred from the bytes: a symlink's blob is its
+        # target path, which `ast.parse` may accept (`test_stub.py` is a
+        # name) or refuse (`../shared/test-stub.py` is a syntax error), so
+        # reading it as source answers by accident either way
+        # (#1773, round 21).
+        return ""
     shown = subprocess.run(
         ["git", "show", f"{base}:scripts/tests/{relative}"],
         capture_output=True, text=True, cwd=root,
@@ -341,10 +389,23 @@ def source_at_base(base: str, relative: str | None, root: Path = REPO_ROOT) -> s
 
 
 class Asked(NamedTuple):
-    """What the census asks about in one file, and which of it is there for a changed marker."""
+    """What the census asks about in one file, and under which rule each member is in.
+
+    A key can be in under both rules, and the offender line says both: the
+    rules are reasons, not a partition.
+    """
 
     keys: set[tuple[str, int]]
     changed: set[tuple[str, int]]
+    repeated: set[tuple[str, int]]
+
+
+def repeated_paths(markers: dict[tuple[str, int], list[str]]) -> set[str]:
+    """Every dotted path this reading defines more than once."""
+    counted: dict[str, int] = {}
+    for dotted, _ in markers:
+        counted[dotted] = counted.get(dotted, 0) + 1
+    return {dotted for dotted, count in counted.items() if count > 1}
 
 
 def new_tests(path: Path, base: str, touched: Touched, root: Path = REPO_ROOT) -> Asked:
@@ -358,26 +419,42 @@ def new_tests(path: Path, base: str, touched: Touched, root: Path = REPO_ROOT) -
     there (#1773, round 20). A relabelled marker is in the population for
     the same reason and passes the same way any correct marker does.
 
-    That second rule is what the walk needs for a REPEATED dotted path, and
-    it replaced a rule of its own. The occurrence beside the path is a
-    positional ordinal, so it names a different definition at the base than
-    at HEAD -- insert an unmarked definition ABOVE a marked one and
-    occurrence 0 is the new unmarked test while occurrence 1 carries the
-    base's marker. Round 19 answered that by asking every definition at a
-    path HEAD repeats, and round 20 widened it to either end; the marker
-    comparison above subsumes both, because a definition whose ordinal now
-    names different text declares something different at that ordinal, and
-    a path whose every ordinal declares what it declared before has nothing
-    new to report. Measured: with the repetition term removed, both of
-    round 19's seeds and both of round 20's stay red at their bases and
-    green here, and the two mutants that survived this round's first push
-    were mutants OF that term -- a term the tests could no longer reach
-    (#1773, round 20).
+    TWO RULES, and each catches a shape the other does not.
+
+    The marker comparison catches a test that was already there and now
+    DECLARES something else: a marker dropped by a rename, a marker
+    relabelled, a marker added. It reads the lists at one key and compares
+    them.
+
+    The repetition term catches a definition REPLACED at a dotted path that
+    is defined more than once. The occurrence beside the path is a
+    positional ordinal, so it names different text at each end -- insert an
+    unmarked definition ABOVE a marked one and occurrence 0 is the new
+    unmarked test while occurrence 1 carries the base's marker -- and when
+    the marker lists are EQUAL at both ends, which every pre-existing
+    unmarked pair is, the comparison has nothing to compare. Measured in a
+    sandbox at `66c09bd4`, driving the committed census: two unmarked
+    definitions at one path with ONE replaced reports `OK`, and so do both
+    replaced and a marked pair with one replaced. So every definition at a
+    path repeated at the base OR at HEAD is asked -- round 19's term
+    widened to either end and restored BESIDE the comparison rather than
+    subsumed by it. Round 20 claimed the subsumption; this is the shape
+    that disproves it (#1773, round 21).
+
+    What the union costs, stated rather than hidden: an UNCHANGED repeated
+    path is asked too, and its definitions are counted as new. The census
+    cannot tell "replaced" from "untouched" at such a path -- that is the
+    finding -- so it reports rather than guesses, and a correctly marked
+    pair passes the way any correct marker does.
     """
     at_base = markers_in(source_at_base(base, touched.at_base, root))
     here = markers_in(path.read_text(encoding="utf-8"))
     changed = {key for key in here if key in at_base and here[key] != at_base[key]}
-    return Asked({key for key in here if key not in at_base} | changed, changed)
+    twice = repeated_paths(at_base) | repeated_paths(here)
+    repeated = {key for key in here if key[0] in twice}
+    return Asked(
+        {key for key in here if key not in at_base} | changed | repeated, changed, repeated
+    )
 
 
 class Census(NamedTuple):
@@ -411,11 +488,16 @@ def census(base: str, root: Path = REPO_ROOT) -> Census:
             marks = found[key]
             counted += 1
             named = f"{touched.relative}::{names_one(key)}"
+            # Why this one is here. Both rules can name one definition, and
+            # both are printed: a reader told only one reason cannot tell
+            # which rule to look at.
+            reasons = []
             if key in asked.changed:
-                # Why this one is here when the base held a test at that key:
-                # what it declares is not what it declared, which is a change
-                # this change is answerable for.
-                named += " (its marker changed since the base)"
+                reasons.append("its marker changed since the base")
+            if key in asked.repeated:
+                reasons.append("this path is defined more than once")
+            if reasons:
+                named += f" ({'; '.join(reasons)})"
             if not marks:
                 offenders["unmarked"].append(named)
             elif len(marks) > 1:
@@ -432,6 +514,12 @@ def census(base: str, root: Path = REPO_ROOT) -> Census:
 
 LANE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci-agents.yml"
 
+# What the lane's loop READS ITS LIST FROM: the process substitution the
+# `while read` loop is fed by, which is the redirect on its own `done`. Any
+# other `<(...)` in the step is some other command's input, and the first
+# one anywhere was what a shell comment could answer with (#1773, round 21).
+OPENS_THE_FEED_RE = re.compile(r"done\s*<\s*<\(")
+
 
 def lane_file_command(workflow_text: str) -> str:
     """The command the lane's loop reads its file list from, taken from the workflow.
@@ -447,25 +535,111 @@ def lane_file_command(workflow_text: str) -> str:
     would mean the population has two lanes to agree with and this reads one
     of them.
     """
+    feeds = loop_feeds(without_shell_comments(str(lane_test_step(workflow_text)["run"])))
+    if len(feeds) > 1:
+        raise AssertionError(
+            f"{len(feeds)} loops in this step read a file list; the census agrees with "
+            "one lane and this would read whichever came first"
+        )
+    return feeds[0].strip()
+
+
+def lane_test_step(workflow_text: str) -> dict:
+    """The one step of this workflow whose loop runs a list of files.
+
+    Read by STRUCTURE: the step that feeds a `while read` loop from a
+    command. The selector used to be the substring `scripts/tests` in the
+    step's `run`, which is a property of the text rather than of the step,
+    and the lane no longer names that directory at all -- it reads the
+    tree (#1773, round 21; #1805).
+    """
     workflow = yaml.safe_load(workflow_text)
     steps = [
         step
         for job in (workflow.get("jobs") or {}).values()
         for step in (job.get("steps") or [])
-        if "scripts/tests" in str(step.get("run", ""))
+        if loop_feeds(without_shell_comments(str(step.get("run", ""))))
     ]
-    if len(steps) != 1:
+    if not steps:
         raise AssertionError(
-            f"{len(steps)} step(s) in this workflow run files under `scripts/tests`; "
+            "no step in this workflow feeds a loop from a command; "
+            "this comparison would be against a command nobody runs"
+        )
+    if len(steps) > 1:
+        raise AssertionError(
+            f"{len(steps)} steps in this workflow feed a loop from a file list; "
             "the census agrees with one lane and this reads it"
         )
-    inside = re.search(r"<\s*<\((?P<command>[^)]+)\)", str(steps[0]["run"]))
-    if inside is None:
-        raise AssertionError(
-            "the lane's run step no longer feeds its loop from a command; "
-            "this comparison is against a command nobody runs"
-        )
-    return inside.group("command").strip()
+    return steps[0]
+
+
+def loop_feeds(text: str) -> list[str]:
+    """Every command a `while read` loop in this shell text is FED FROM.
+
+    The redirect on the loop's own `done`, read to the substitution's
+    MATCHING parenthesis rather than to the first `)`: the lane's list is
+    `git ls-files -z -- ':(glob)**/test*.py' ...`, whose pathspec magic
+    carries parentheses of its own, and a reader that stopped at the first
+    close paren would answer with half a command and compare against a
+    population nobody runs. Quoted parentheses are text, not structure, so
+    the scan tracks quotes the way the shell does (#1773, round 21).
+    """
+    found: list[str] = []
+    for opening in OPENS_THE_FEED_RE.finditer(text):
+        index = opening.end()
+        depth, quote = 1, ""
+        while index < len(text) and depth:
+            character = text[index]
+            if quote:
+                if character == quote:
+                    quote = ""
+            elif character in "'\"":
+                quote = character
+            elif character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+            index += 1
+        if depth:
+            raise AssertionError(
+                "the lane's loop is fed from a substitution this step never closes"
+            )
+        found.append(text[opening.end() : index - 1])
+    return found
+
+
+def without_shell_comments(text: str) -> str:
+    """This shell text with its comments removed.
+
+    A `#` opens a comment when it starts a word outside quotes, which is
+    the rule bash reads. Everything else is the command.
+
+    Here because the reader took the FIRST process substitution anywhere in
+    the step, a comment included: measured at `66c09bd4`, a step whose
+    comment carried the original `find` above a loop fed from that find
+    PLUS `! -name 'test_intent_markers.py'` returned the COMMENTED command,
+    so the lane agreed with a population it had stopped running -- round
+    19's finding one layer down (#1773, round 21).
+    """
+    kept: list[str] = []
+    for line in text.split("\n"):
+        out: list[str] = []
+        quote = ""
+        for character in line:
+            if quote:
+                out.append(character)
+                if character == quote:
+                    quote = ""
+                continue
+            if character in "'\"":
+                quote = character
+                out.append(character)
+                continue
+            if character == "#" and (not out or out[-1].isspace()):
+                break
+            out.append(character)
+        kept.append("".join(out))
+    return "\n".join(kept)
 
 
 def lane_test_files(command: str, root: Path = REPO_ROOT) -> set[str]:
@@ -615,6 +789,8 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
         main: dict[str, str] | None = None,
         outside: bool = False,
         renames: dict[str, str] | None = None,
+        links: dict[str, str] | None = None,
+        work_links: dict[str, str] | None = None,
     ) -> Path:
         """A repository with `main` and a `work` branch carrying this file.
 
@@ -675,7 +851,20 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
             for relative, source in where.items():
                 path = tests / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
+                if path.is_symlink():
+                    # Writing THROUGH a symlink would edit its target and
+                    # leave the entry a symlink, which is the one shape
+                    # `links` exists to build.
+                    path.unlink()
                 path.write_text(source, encoding="utf-8")
+
+        def link(where: dict[str, str]) -> None:
+            for relative, target in where.items():
+                path = tests / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if path.exists() or path.is_symlink():
+                    path.unlink()
+                path.symlink_to(target)
 
         # This file is on MAIN, which is where it is once this branch merges
         # -- so the branch under test changes only what the seed asks for,
@@ -684,6 +873,7 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
             "test_stub.py": "",
             "test_intent_markers.py": Path(__file__).read_text(encoding="utf-8"),
         } | (main or {}))
+        link(links or {})
         git("init", "--initial-branch=main")
         git("config", "user.email", "tests@example.invalid")
         git("config", "user.name", "tests")
@@ -694,6 +884,7 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
             (tests / new_path).parent.mkdir(parents=True, exist_ok=True)
             git("mv", f"scripts/tests/{old_path}", f"scripts/tests/{new_path}")
         write(work or {})
+        link(work_links or {})
         if outside:
             (upstream / ".agents").mkdir(exist_ok=True)
             (upstream / ".agents" / "note.md").write_text("a later change\n", encoding="utf-8")
@@ -729,6 +920,23 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
             cwd=sandbox, capture_output=True, text=True, env=environment,
         )
         return finished.stdout + finished.stderr
+
+    def census_printed_in(self, sandbox: Path, base: str = "origin/main") -> tuple[int, str]:
+        """`--census <base>` run inside another checkout, with its exit code.
+
+        The COMMITTED command, the one a body's marker numbers come from:
+        its split is what a reader quotes and its exit code is what
+        `__main__` promises ("exits non-zero on one"), and neither was
+        driven -- `return 1 if found.offenders else 0` weakened to
+        `return 0` left every test in this file green (#1773, round 21).
+        """
+        finished = subprocess.run(
+            [sys.executable, str(sandbox / "scripts" / "tests" / "test_intent_markers.py"),
+             "--census", base],
+            cwd=sandbox, capture_output=True, text=True,
+            env={**os.environ, "PYTHONPYCACHEPREFIX": str(sandbox / ".pyc")},
+        )
+        return finished.returncode, finished.stdout + finished.stderr
 
     def instruction_printed_in(self, output: str) -> list[str]:
         """The command the failure PRINTED, taken from the output rather than rebuilt.
@@ -1047,15 +1255,26 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
         another added at one path leaves the count where it was. Every
         definition at a path with more than one definition is asked,
         whatever the base held.
+
+        The third case is what the rule looks like when nothing is wrong,
+        and it asserts the rule rather than its absence: a TOUCHED file
+        whose repeated path is unchanged has both of its definitions asked
+        and counted, and they pass because they are marked. Round 20 wrote
+        that case as an untouched file, where `OK` meant the census never
+        reached the path at all -- a green the rule's removal would not
+        have changed, under a name that promised the rule (#1773, round
+        21).
         """
         marked = "class A:\n    # intent: fix\n    def test_same(self):\n        pass\n"
         unmarked = "class A:\n    def test_same(self):\n        pass\n"
-        for shape, main_source, work_source, offends in (
+        beside = "class B:\n    # intent: guard\n    def test_other(self):\n        pass\n"
+        for shape, main_source, work_source, offends, counted in (
             ("unmarked inserted above a marked base definition", marked,
-             unmarked + marked, True),
+             unmarked + marked, True, None),
             ("marked removed and unmarked added, count unchanged", marked + marked,
-             unmarked + marked, True),
-            ("the same repeated path, unchanged", marked + marked, marked + marked, False),
+             unmarked + marked, True, None),
+            ("a touched file whose repeated path is unchanged", marked + marked,
+             marked + marked + beside, False, "3 new test(s)"),
         ):
             with self.subTest(shape=shape):
                 with tempfile.TemporaryDirectory() as directory:
@@ -1066,11 +1285,314 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
                     )
                     sandbox = self.clone_with_the_base(root, upstream)
                     reported = self.census_in(sandbox, ci=True)
+                    census_code, census_printed = self.census_printed_in(sandbox)
                 if offends:
                     self.assertIn("FAILED", reported, reported)
                     self.assertIn("marker changed since the base", reported)
                 else:
                     self.assertIn("OK", reported, reported)
+                    # The pair was ASKED: both definitions are in the count,
+                    # beside the test this branch appended. Read from the
+                    # committed `--census`, because the invariant prints no
+                    # population when it passes.
+                    self.assertEqual(census_code, 0, census_printed)
+                    self.assertIn(counted, census_printed, census_printed)
+
+    # intent: fix
+    # marker: red at `66c09bd4`, its own base, behaviourally, both halves.
+    # A symlink at the base replaced by a regular file: git says
+    # `T scripts/tests/test_type.py`, `--diff-filter=AMR` names nothing at
+    # all, and the census prints `0 test file(s) touched` and exits 0 over
+    # an unmarked test the lane runs -- measured in this sandbox. A symlink
+    # ADDED at this end: the census there reads THROUGH it and reports the
+    # target's tests under a path `find -type f` never runs (#1773, round
+    # 21).
+    def test_a_path_whose_type_changes_is_read_at_the_end_that_is_a_file(self) -> None:
+        """What the lane runs is a FILE, and git says which end holds one.
+
+        Round 19 wrote "symlinks" into an Enumerated line as an unchecked
+        member and nobody opened it. Opened here, in both directions: a
+        path that becomes a file is in the population, and a path that
+        becomes a symlink is out of it, because `find -type f` does not
+        follow one -- and reading through it would publish the target's
+        tests under a path nothing runs.
+
+        The base reading comes from git's own answer about the ENTRY, not
+        from the bytes: a symlink's blob is its target path, which
+        `ast.parse` takes as a name (`test_stub.py`) or refuses as a syntax
+        error (`../shared/test-stub.py`), so reading it as source answers
+        by accident either way.
+        """
+        with self.subTest(shape="a symlink at the base, a file with a test here"):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                upstream = self.upstream_with_a_branch(
+                    root,
+                    links={"test_type.py": "test_stub.py"},
+                    work={"test_type.py": self.planted(False, 4)},
+                )
+                sandbox = self.clone_with_the_base(root, upstream)
+                status = subprocess.run(
+                    ["git", "diff", "--name-status", "-M", "origin/main...HEAD"],
+                    cwd=sandbox, capture_output=True, text=True, check=True,
+                ).stdout
+                reported = self.census_in(sandbox, ci=True)
+                code, printed = self.census_printed_in(sandbox)
+            # git's own letter for it, so the seed is known to build the
+            # shape its name claims rather than some other one.
+            self.assertIn("T\tscripts/tests/test_type.py", status)
+            self.assertIn("FAILED", reported, reported)
+            self.assertIn("test_type.py::T4.test_4", reported)
+            self.assertEqual(code, 1, printed)
+        with self.subTest(shape="a symlink at the base whose target is not a python name"):
+            # The base reading is the ENTRY's kind, not the blob's bytes:
+            # this target parses as nothing, so a census that read the blob
+            # as source would raise `SyntaxError` out of the walk instead of
+            # reporting the test the branch added.
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                upstream = self.upstream_with_a_branch(
+                    root,
+                    links={"test_type.py": "../shared/test-stub.py"},
+                    work={"test_type.py": self.planted(False, 6)},
+                )
+                sandbox = self.clone_with_the_base(root, upstream)
+                reported = self.census_in(sandbox, ci=True)
+            self.assertIn("FAILED", reported, reported)
+            self.assertIn("test_type.py::T6.test_6", reported)
+            self.assertNotIn("SyntaxError", reported, reported)
+        with self.subTest(shape="a symlink added here, pointing at a file with a test"):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                upstream = self.upstream_with_a_branch(
+                    root,
+                    main={"test_real.py": self.planted(False, 5)},
+                    work_links={"test_link.py": "test_real.py"},
+                )
+                sandbox = self.clone_with_the_base(root, upstream)
+                reported = self.census_in(sandbox, ci=True)
+                code, printed = self.census_printed_in(sandbox)
+            self.assertIn("OK", reported, reported)
+            self.assertEqual(code, 0, printed)
+            self.assertNotIn("test_link.py", printed)
+
+    # intent: guard
+    # marker: green at `66c09bd4`, its own base -- every git command there
+    # already puts `--` before its path arguments, and nothing read it:
+    # dropping the separator from the diff's argument list left all 33
+    # tests green, because no sandbox held a ref that shares a name with
+    # the path (#1773, round 21).
+    def test_a_path_argument_is_never_read_as_a_rev(self) -> None:
+        """A repository with a branch named `scripts/tests` still answers.
+
+        That is what `--` is for, and it is what nothing was asking: git
+        refuses an ambiguous argument rather than guessing, so without the
+        separator the census cannot read its own population -- in a
+        repository where somebody named a branch after the directory.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            upstream = self.upstream_with_a_branch(
+                root, work={"test_new.py": self.planted(True, 1)}
+            )
+            sandbox = self.clone_with_the_base(root, upstream)
+            subprocess.run(
+                ["git", "branch", "scripts/tests"], cwd=sandbox, capture_output=True, check=True
+            )
+            code, printed = self.census_printed_in(sandbox)
+        self.assertEqual(code, 0, printed)
+        self.assertIn("1 new test(s)", printed)
+
+    # intent: fix
+    # marker: red at `66c09bd4`, its own base, behaviourally: the reader
+    # there takes the FIRST process substitution anywhere in the step, so
+    # the commented one answers -- measured, a step whose comment carries
+    # the original command above a loop fed from that command plus an
+    # exclusion returns the COMMENTED text, and the agreement test compares
+    # the census against a population the lane has stopped running
+    # (#1773, round 21).
+    def test_the_lane_command_comes_from_the_loop_and_not_from_a_comment(self) -> None:
+        """A comment is not what runs, and the loop's own redirect says which is.
+
+        Round 19 made this comparison execute the workflow's command rather
+        than match a substring of it, and round 20's finding was that the
+        substring was a PREFIX. This is the same finding one layer down:
+        the text searched still included text bash never runs.
+        """
+        workflow = LANE_WORKFLOW.read_text(encoding="utf-8")
+        real = lane_file_command(workflow)
+        # The doctored lane: the original command quoted in a comment above
+        # a loop fed from that command PLUS an exclusion of this very file.
+        # The exclusion goes on the real loop FIRST, and the comment quoting
+        # the original goes above it after that -- doctoring the comment
+        # instead would seed nothing.
+        excluded = workflow.replace(
+            "| sort -z)", "| grep -zv 'test_intent_markers.py' | sort -z)", 1
+        )
+        self.assertNotEqual(excluded, workflow, "the lane's command changed shape")
+        doctored = excluded.replace(
+            "          done < <(",
+            f"          # the loop used to read: done < <({real})\n          done < <(",
+            1,
+        )
+        self.assertIn("# the loop used to read:", doctored)
+        read_back = lane_file_command(doctored)
+        self.assertIn("grep -zv 'test_intent_markers.py'", read_back, read_back)
+        self.assertNotEqual(read_back, real)
+        # And what it yields is short of the census population by exactly
+        # the file the exclusion names, which is the disagreement the
+        # agreement test is there to see.
+        self.assertEqual(
+            {name for name in lane_test_files(real) if name.startswith("test_intent")}
+            - lane_test_files(read_back),
+            {"test_intent_markers.py"},
+        )
+
+    # intent: guard
+    # marker: green at `66c09bd4`, its own base -- the one-step rule is
+    # stated there and nothing read it: `len(steps) != 1` weakened to `< 1`
+    # left all 33 tests green, because no workflow this suite hands it has
+    # two. A second lane running test files is a second population, and
+    # reading whichever came first would compare the census against one of
+    # them silently (#1773, round 21).
+    def test_a_workflow_with_a_second_file_loop_is_refused(self) -> None:
+        """One lane, asserted rather than assumed -- and the message says how many."""
+        workflow = LANE_WORKFLOW.read_text(encoding="utf-8")
+        step = lane_test_step(workflow)
+        twice = yaml.safe_load(workflow)
+        job = next(iter(twice["jobs"].values()))
+        job["steps"] = list(job["steps"]) + [{"name": "a second lane", "run": step["run"]}]
+        with self.assertRaises(AssertionError) as raised:
+            lane_file_command(yaml.safe_dump(twice))
+        self.assertIn("2 steps in this workflow feed a loop", str(raised.exception))
+        # And a workflow whose loop is fed by nothing is refused too, with
+        # its own reason: the two are different failures. Built through the
+        # parsed document rather than by editing the text, so what is handed
+        # back is a workflow rather than a file that no longer parses.
+        none = yaml.safe_load(workflow)
+        for other in none["jobs"].values():
+            for candidate in other.get("steps") or []:
+                if "done <" in str(candidate.get("run", "")):
+                    candidate["run"] = 'for f in $(cat list.txt); do echo "$f"; done\n'
+        with self.assertRaises(AssertionError) as raised:
+            lane_file_command(yaml.safe_dump(none))
+        self.assertIn("no step in this workflow feeds a loop", str(raised.exception))
+
+    # intent: fix
+    # marker: red at `66c09bd4`, its own base, behaviourally: the lane there
+    # is three hand-named steps beside a `find` over `scripts/tests`, so a
+    # sandbox holding a FAILING `test_resolve_persona.py` and one passing
+    # file under `scripts/tests` runs the passing one and exits 0 --
+    # measured, driving that head's own run block. The tree it does not read
+    # is the population it claims (#1805, and #1773 round 21).
+    def test_the_lane_runs_every_test_file_the_tree_holds(self) -> None:
+        """The lane's population is read from the tree, and an empty read fails.
+
+        The committed run block, run by bash in a disposable repository
+        rather than restated here: the file that no step ever named is the
+        one planted failing, so a lane that misses it exits 0 over a broken
+        test. `git ls-files` is what makes the population the tree's, and
+        an empty discovery is a failed read rather than a clean sweep --
+        the same rule the census keeps for its own corpus.
+        """
+        block = str(lane_test_step(LANE_WORKFLOW.read_text(encoding="utf-8"))["run"])
+        header = (
+            "#!/usr/bin/env -S uv run --script\n"
+            "# /// script\n# requires-python = \">=3.11\"\n# ///\n"
+        )
+        failing = header + "raise SystemExit(1)\n"
+        passing = header + "raise SystemExit(0)\n"
+        unnamed = ".agents/skills/become-persona/scripts/test_resolve_persona.py"
+        for shape, files, code, says in (
+            ("a failing test in the file no step ever named",
+             {unnamed: failing, "scripts/tests/test_ok.py": passing}, 1, f"Failed: {unnamed}"),
+            ("a tree holding no test file at all",
+             {"scripts/tests/notes.md": "nothing to run\n"}, 1, "no test file was discovered"),
+            ("every test file passing",
+             {unnamed: passing, "scripts/tests/test_ok.py": passing}, 0, "ran 2 test file(s)"),
+        ):
+            with self.subTest(shape=shape):
+                with tempfile.TemporaryDirectory() as directory:
+                    sandbox = Path(directory)
+                    for relative, source in files.items():
+                        written = sandbox / relative
+                        written.parent.mkdir(parents=True, exist_ok=True)
+                        written.write_text(source, encoding="utf-8")
+                    for arguments in (
+                        ["init", "--initial-branch=main"], ["config", "user.email", "t@e.invalid"],
+                        ["config", "user.name", "tests"], ["add", "-A"],
+                    ):
+                        subprocess.run(
+                            ["git", *arguments], cwd=sandbox, capture_output=True, check=True
+                        )
+                    finished = subprocess.run(
+                        ["bash", "-c", block], cwd=sandbox, capture_output=True, text=True,
+                        env={**os.environ, "PYTHONPYCACHEPREFIX": str(sandbox / ".pyc")},
+                    )
+                printed = finished.stdout + finished.stderr
+                self.assertEqual(finished.returncode, code, printed)
+                self.assertIn(says, printed)
+
+    # intent: fix
+    # marker: red at `66c09bd4`, its own base, behaviourally: the marker
+    # comparison there is quieter than the term round 20 removed in its
+    # favour. Measured in a sandbox, driving the committed census: two
+    # unmarked definitions at one dotted path with ONE of them replaced
+    # reports `OK`, and so does both replaced, and so does a marked pair
+    # with one replaced -- three shapes the census never reaches. Red at
+    # `562a0195` too, where none of this file's rules exist (#1773, round
+    # 21).
+    def test_a_definition_replaced_at_a_repeated_path_is_asked(self) -> None:
+        """Equal marker lists at both ends are what the comparison cannot see.
+
+        The comparison reads the marker lists at one key. Replace the TEXT
+        of a definition at a repeated path and the key does not move and
+        the lists do not change -- which every pre-existing unmarked pair
+        satisfies, both ends being `[]`. So a branch replaces a test with a
+        different test, declares nothing about it, and the census has
+        nothing to compare.
+
+        The repetition term is the rule that catches it, and the two rules
+        stand side by side because neither is a superset of the other: this
+        shape is invisible to the comparison, and a marker dropped at a
+        path defined ONCE is invisible to the repetition.
+
+        The marked pair drives what the union costs: asked, and passing
+        because the markers are right.
+        """
+        one = "class A:\n    def test_same(self):\n        pass\n"
+        other = "class A:\n    def test_same(self):\n        assert True\n"
+        kept = "class A:\n    # intent: fix\n    def test_same(self):\n        pass\n"
+        edited = "class A:\n    # intent: fix\n    def test_same(self):\n        assert True\n"
+        for shape, main_source, work_source, offends in (
+            ("one of two unmarked definitions replaced", one + one, other + one, True),
+            ("both unmarked definitions replaced", one + one, other + other, True),
+            ("one of two marked definitions replaced", kept + kept, edited + kept, False),
+        ):
+            with self.subTest(shape=shape):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    upstream = self.upstream_with_a_branch(
+                        root, main={"test_pair.py": main_source},
+                        work={"test_pair.py": work_source},
+                    )
+                    sandbox = self.clone_with_the_base(root, upstream)
+                    reported = self.census_in(sandbox, ci=True)
+                    code, printed = self.census_printed_in(sandbox)
+                if offends:
+                    self.assertIn("FAILED", reported, reported)
+                    # The reason the rule gives, so a reader knows which
+                    # rule put this definition in front of them.
+                    self.assertIn("this path is defined more than once", reported)
+                    self.assertIn("test_pair.py::A.test_same", reported)
+                    # And the committed command answers the same way, with
+                    # the exit code `__main__` promises over an offender.
+                    self.assertEqual(code, 1, printed)
+                    self.assertIn("OFFENDER (unmarked)", printed)
+                else:
+                    self.assertIn("OK", reported, reported)
+                    self.assertEqual(code, 0, printed)
+                    self.assertIn("2 new test(s)", printed, printed)
 
     # intent: fix
     # marker: red at `ad8b6416`, its own base, behaviourally: every non-zero
@@ -1163,8 +1685,8 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
         # text they are handed, so a reading that stops coming from the
         # workflow makes the second half agree when it must not.
         doctored = workflow.replace(
-            "find scripts/tests -type f -name '*.py' -print0",
-            "find scripts/tests -type f -name '*.py' ! -name 'test_intent_markers.py' -print0",
+            "| sort -z)",
+            "| grep -zv 'test_intent_markers.py' | sort -z)",
             1,
         )
         self.assertNotEqual(doctored, workflow, "the lane's command changed shape")
@@ -1440,6 +1962,61 @@ class TheMarkersThisBranchWritesAreCheckedByCITests(unittest.TestCase):
         # And the commit that is one resolves, through the same function.
         self.assertIsNotNone(commit_named_by("HEAD"))
 
+    # intent: guard
+    # marker: green at `66c09bd4`, its own base -- the layer is there and
+    # nothing reached it: dropping `or not named.stdout.strip()` from the
+    # resolver left all 33 tests green, because no git this suite runs
+    # against exits 0 and names nothing. The answer a caller would then get
+    # is the empty string as a base, which every diff below would read as a
+    # rev (#1773, round 21).
+    def test_a_resolver_answering_with_nothing_is_not_a_base(self) -> None:
+        """Exit code 0 and an empty answer is not a commit.
+
+        CONSTRUCTED rather than waited for: the git on this machine refuses
+        a bad rev with a non-zero code, so the only way to drive the second
+        half of the check is to hand the resolver that answer. What is
+        asserted is the behaviour -- None, and a reason naming the argument
+        -- rather than the branch being taken.
+        """
+        answered = subprocess.CompletedProcess(args=["git"], returncode=0, stdout="  \n", stderr="")
+        spoke = io.StringIO()
+        with (
+            mock.patch.object(subprocess, "run", return_value=answered),
+            contextlib.redirect_stderr(spoke),
+        ):
+            self.assertIsNone(commit_named_by("origin/main"))
+        self.assertIn("could not resolve `origin/main`", spoke.getvalue())
+
+    # intent: guard
+    # marker: green at `66c09bd4`, its own base -- the check is there and
+    # nothing reached it: dropping the record-arity refusal left all 33
+    # tests green, because git never truncates its own `-z` stream. What it
+    # protects is the read, not git: a status whose paths are missing would
+    # otherwise pair a status with the NEXT record's path and put a file
+    # nobody touched in the population (#1773, round 21).
+    def test_a_diff_record_short_of_its_paths_is_refused(self) -> None:
+        """A `-z` stream is records, and a record missing its path is unreadable.
+
+        Handed to the walk rather than provoked from git, for the same
+        reason as the resolver above: git does not write this, and the
+        refusal is what keeps a partial read from being read as a whole
+        one. Both shapes: a status with no path at all, and a rename with
+        only one of its two.
+        """
+        for shape, stream, says in (
+            ("a modify with no path", "M\0", "a `M` record names 0 path(s)"),
+            ("a rename with one path", "R100\0scripts/tests/test_a.py\0",
+             "a `R100` record names 1 path(s)"),
+        ):
+            with self.subTest(shape=shape):
+                answered = subprocess.CompletedProcess(
+                    args=["git"], returncode=0, stdout=stream, stderr=""
+                )
+                with mock.patch.object(subprocess, "run", return_value=answered):
+                    with self.assertRaises(AssertionError) as raised:
+                        touched_test_files("origin/main")
+                self.assertIn(says, str(raised.exception))
+
     # intent: fix
     # marker: red at `7bf61433`, its own base, behaviourally: the census there
     # reads a nested added file at the wrong path and raises
@@ -1617,6 +2194,55 @@ class TheWalkReadsMarkersTheWayItClaimsTests(unittest.TestCase):
         "class T:\n    # intent: guard\n    @unittest.skip('why')\n    # intent: fix\n"
         "    @staticmethod\n    def test_between():\n        pass\n"
     )
+    # A marker TRAILING a line of code, which is not a comment line and so
+    # not this test's marker -- the rule `_marks_above` states.
+    TRAILING = (
+        "class T:\n    sentinel = True  # intent: fix\n"
+        "    def test_trailing(self):\n        pass\n"
+    )
+    # The same text as a comment LINE above the definition, which is.
+    STANDALONE = (
+        "class T:\n    sentinel = True\n    # intent: fix\n"
+        "    def test_trailing(self):\n        pass\n"
+    )
+    # `async def test_*` is a test unittest collects through
+    # `IsolatedAsyncioTestCase`, so it is a test the census asks about.
+    ASYNC = "class T:\n    # intent: guard\n    async def test_async(self):\n        pass\n"
+    ASYNC_BARE = "class T:\n    async def test_async(self):\n        pass\n"
+
+    # intent: fix
+    # marker: red at `66c09bd4`, its own base, behaviourally: `comment_lines`
+    # there records every COMMENT token at its line, trailing ones included,
+    # so `markers_in(self.TRAILING)` reads `['fix']` for a test nobody
+    # labelled -- measured, and end to end it prints `1 new test(s): 1 fix`
+    # over an unmarked test. Neither behaviour was pinned: restricting the
+    # walk to comment lines there left all 33 tests green (#1773, round 21).
+    def test_a_marker_trailing_a_line_of_code_is_not_this_tests_marker(self) -> None:
+        """A marker is a comment LINE, which is the rule the walk states.
+
+        Both directions in one measurement, because a walk that read
+        nothing would pass the refusing half alone: the trailing form is
+        not a marker, and the same words as a line above the definition
+        are.
+        """
+        self.assertEqual(markers_in(self.TRAILING), {("T.test_trailing", 0): []})
+        self.assertEqual(markers_in(self.STANDALONE), {("T.test_trailing", 0): ["fix"]})
+
+    # intent: guard
+    # marker: green at `66c09bd4`, its own base -- the walk there already
+    # reads `ast.AsyncFunctionDef`, and nothing asked it to: dropping that
+    # class from the walk left all 33 tests green, so an `async def test_*`
+    # would have been invisible to the census and run by the lane
+    # (#1773, round 21).
+    def test_an_async_test_is_a_test(self) -> None:
+        """What unittest collects is what the census asks about.
+
+        `IsolatedAsyncioTestCase` collects `async def test_*` the way
+        `TestCase` collects `def test_*`, so a population that reads only
+        the synchronous form is narrower than the lane's.
+        """
+        self.assertEqual(markers_in(self.ASYNC), {("T.test_async", 0): ["guard"]})
+        self.assertEqual(markers_in(self.ASYNC_BARE), {("T.test_async", 0): []})
 
     # intent: guard
     def test_one_marker_is_read_as_one(self) -> None:
