@@ -10255,9 +10255,12 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
         this write produced, with the list marker off on both sides because
         a marker is the reader's.
         """
+        # The entry RENDERS the reading the author's two lines carry, which
+        # is what makes the collision: all three read `[blocked] done now --
+        # author proof` to the page.
         entries = [
-            {"index": 1, "item": self.ITEM, "status": "pending-ci",
-             "detail": "queued on head abc", "kind": "ci", "check_name": "test"},
+            {"index": 1, "item": "done now", "status": "pending-ci",
+             "detail": "waiting", "kind": "ci", "check_name": "test"},
         ]
         theirs = (
             "- [blocked] done&#32;now -- author proof",
@@ -10269,7 +10272,7 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
         said: list[str] = []
         with contextlib.redirect_stderr(io.StringIO()):
             written = self.evidence().update_evidence_entries(
-                source, {1: {"status": "complete", "detail": "done now"}},
+                source, {1: {"status": "blocked", "detail": "author proof"}},
                 announcements=said,
             )
         spoken = " ".join(said)

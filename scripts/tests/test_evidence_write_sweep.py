@@ -44,11 +44,11 @@ class OneDefinitionOfALineForTheWriteAndItsSweepTests(unittest.TestCase):
     """
 
     # intent: fix
-    # marker: red at `145af323`, its own base, behaviourally: the sweep
-    # normalises `\r\n|\r|\n` and then splits on a newline, so the other
-    # EIGHT boundaries the write ends a line on are not line ends to it --
-    # measured over every code point, the two definitions differ on exactly
-    # those eight (#1778, round 26).
+    # marker: red at `145af323` on the name this round adds, and the
+    # property underneath is measured there directly: over every code point,
+    # the write ends a line on 10 and that sweep on 2, and the eight in one
+    # and not the other are `0xb`, `0xc`, `0x1c`, `0x1d`, `0x1e`, `0x85`,
+    # `0x2028` and `0x2029` -- nothing the other way (#1778, round 26).
     def test_the_sweep_ends_a_line_where_the_write_does(self) -> None:
         """A census, not a sample: every code point, in both directions.
 
