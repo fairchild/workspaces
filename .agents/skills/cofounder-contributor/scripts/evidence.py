@@ -5,6 +5,7 @@ from __future__ import annotations
 import bisect
 import json
 import re
+from collections import Counter
 import shlex
 import sys
 from collections.abc import Iterable, Iterator
@@ -50,6 +51,31 @@ from _helpers import (
 EVIDENCE_STATUS_PREFIX_RE = re.compile(
     r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<rest>.+)$"
 )
+# A struck status is still the status. The owner decided it on #1792, and the
+# gate already reads it that way on the page: `- ~~[blocked] waiting -- author
+# proof~~` comes back from `POST /markdown` as the line `[blocked] waiting --
+# author proof`, with the markers gone, and the readiness gate refuses it
+# (measured). This file read the same line as prose, because the tildes sit
+# between the list marker and the token, so the author's own tool said the
+# section was clean while the gate refused the pull request -- the two readers
+# disagreeing about one line, which is the thing this pair of instruments
+# exists to prevent (#1778, round 26).
+#
+# THE STATUS READ ONLY. A struck REQUESTED ITEM on the issue side is a
+# different question and is left alone: `inline_text` still keeps the tildes
+# there, where "a struck-out item is not the item" is the reading, and nothing
+# below touches it.
+STRIKETHROUGH_MARKERS_RE = re.compile(r"~~")
+
+
+def as_a_status_read_sees_it(text: str) -> str:
+    """This text with strikethrough markers gone, which is what the page shows.
+
+    Only the markers: the words between them are what a reader meets, so
+    removing `~~` is how this read agrees with the rendered page rather than
+    with the source characters.
+    """
+    return STRIKETHROUGH_MARKERS_RE.sub("", text)
 # Zero-width on both sides, so two separators sharing one space still yield
 # two candidate splits rather than one.
 EVIDENCE_SEPARATOR_RE = re.compile(r"(?<=\s)(?:--|—|–)(?=\s)")
@@ -495,6 +521,7 @@ def _evidence_key_floors(rest: str, cuts: list[int]) -> list[int]:
 
 def _evidence_status_items(line: str) -> Iterator[str]:
     """Every item the line could be read as, leftmost first."""
+    line = as_a_status_read_sees_it(line)
     prefix = EVIDENCE_STATUS_PREFIX_RE.match(line)
     if not prefix or len(line) > EVIDENCE_STATUS_LINE_LIMIT:
         return
@@ -524,6 +551,7 @@ def split_evidence_status_line(
     """
     if len(line) > EVIDENCE_STATUS_LINE_LIMIT:
         return None
+    line = as_a_status_read_sees_it(line)
     prefix = EVIDENCE_STATUS_PREFIX_RE.match(line)
     if not prefix:
         return None
@@ -2185,7 +2213,7 @@ def _is_status_list_item(tokens: list[Token], index: int) -> bool:
         # those took a table's header row for the item's text and deleted the
         # table with it.
         return False
-    text = inline_text(tokens[index + 2].children).strip()
+    text = as_a_status_read_sees_it(inline_text(tokens[index + 2].children).strip())
     return EVIDENCE_STATUS_PREFIX_RE.match(f"- {text}") is not None
 
 
@@ -3899,7 +3927,13 @@ LINE_BOUNDARIES = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
 
 # The tag a page renders as a line break, in any spelling it can be written
 # with: `<br>`, `<br/>`, `<br />`, `<BR>`, and one carrying attributes.
-BREAK_TAG_RE = re.compile(r"<\s*br\b[^>]*>", re.IGNORECASE)
+# The same rule as `_helpers.HTML_BREAK_TAG_RE`, searched rather than
+# anchored because here it is looked for INSIDE a detail rather than asked of
+# a whole token. One spelling of "what the renderer lays out as a break",
+# including the end tag: `</br>` and `</BR>` wrote a two-line detail with
+# nothing announced, and the section the write left then failed this file's
+# own page reader (#1778, round 26).
+BREAK_TAG_RE = re.compile(r"</?br\b[^>]*>", re.IGNORECASE)
 
 
 def spans_two_lines(text: str) -> bool:
@@ -3928,8 +3962,17 @@ def quoted_verbatim(text: str, limit: int = COMMENT_QUOTE_LIMIT) -> str:
     hold them. Everything else `comment_safe` does stays: the newlines and
     the comment delimiters still come out, because those are what let quoted
     text act on the comment around it.
+
+    INTERNAL WHITESPACE IS THE AUTHOR'S TOO. `" ".join(text.split())`
+    collapsed every run, so `deploy  prod<TAB>now` came back as
+    `deploy prod now` under a docstring promising their bytes -- the same
+    sentence as the backticks, one character class over (#1778, round 26).
+    What a comment cannot hold is a LINE BOUNDARY, so those become a space
+    -- by `split_source_lines`, the one definition this file keeps, which
+    also makes CRLF one space rather than two -- and every other run stays
+    as the author typed it.
     """
-    flattened = " ".join(text.split())
+    flattened = " ".join(split_source_lines(text)) if spans_two_lines(text) else text
     while "<!--" in flattened or "-->" in flattened:
         flattened = flattened.replace("<!--", "").replace("-->", "")
     if len(flattened) > limit:
@@ -4468,7 +4511,14 @@ def _render_structured_entries(
             "from the page: {taken}. Rewriting those below the status section keeps them "
             "in the body the next run writes.",
             reason=quoted_for_comment(unreadable_before),
-            taken=quoted_for_comment(", ".join(taken)),
+            # Through `quoted_verbatim`, one span per line, for the reason
+            # its sibling sentence gives: this names lines an author is
+            # being asked to rewrite, and the comment quoter flattens their
+            # backticks -- ``- [blocked] run `special` check -- author
+            # proof`` came back as `run special check`, inside a sentence
+            # saying it names them from the body's own text
+            # (#1778, round 26; identical at `24b68a42`, so residue).
+            taken=Quoted(", ".join(quoted_verbatim(line, 200) for line in taken)),
         )
         log(unread)
         if announcements is not None:
@@ -4544,14 +4594,33 @@ def _render_structured_entries(
         return MARKDOWN.renderInline(without_its_list_marker(line).strip(), reading_context)
 
     ours = {line.strip() for line in rendered_lines + recorded_lines}
-    shown_by_us = {_as_the_page_shows(line) for line in ours}
+    # WHOSE BYTES ARE GONE, asked of the body rather than of the page. The
+    # test here was an appearance comparison -- a source line whose reading
+    # is ours and whose rendering differs from ours -- and an entity renders
+    # as the character it decodes to, so `- [blocked] done&#32;now -- author
+    # proof` and `- [blocked] done&#x20;now -- author proof` beside an entry
+    # rendering `done now` looked exactly like the write's own line and left
+    # the body with nothing said. The membership test above could not see
+    # them either: the reading survives, because the write's own line still
+    # carries it. So the question is the one the author would ask -- are my
+    # bytes still in the section? -- and it is asked of the section this
+    # write produced, which is where the answer is (#1778, round 26).
+    # With the list marker off on both sides, because a marker is the
+    # reader's and never part of what the author wrote: `* x` and `- x` are
+    # one line to the page and to this comparison (#1778, rounds 22 and 25).
+    kept_bytes = {
+        without_its_list_marker(line).strip()
+        for line in split_source_lines(markdown_section(reconciled, EVIDENCE_STATUS_HEADING))
+        if line.strip()
+    }
+    ours_as_written = {without_its_list_marker(line).strip() for line in ours}
     collapsed = [
         line
         for line in split_source_lines(markdown_section(body, EVIDENCE_STATUS_HEADING))
         if line.strip()
-        and line.strip() not in ours
+        and without_its_list_marker(line).strip() not in ours_as_written
         and _as_the_page_reads(without_its_list_marker(line).strip()) in rendered_readings
-        and _as_the_page_shows(line) not in shown_by_us
+        and without_its_list_marker(line).strip() not in kept_bytes
         and line.strip() not in already_spoken_for
     ]
     if (took := replaced_lines_announcement(

@@ -34,6 +34,58 @@ sys.modules["evidence_write_sweep"] = sweep_script
 spec.loader.exec_module(sweep_script)
 
 
+class OneDefinitionOfALineForTheWriteAndItsSweepTests(unittest.TestCase):
+    """The instrument counts lines by the definition the write it measures uses.
+
+    Two definitions of a line in two files is the shape this pull request
+    has closed three times inside `evidence.py`; this is the fourth, across
+    the seam between the write and the instrument that checks it
+    (#1778, round 26).
+    """
+
+    # intent: fix
+    # marker: red at `145af323`, its own base, behaviourally: the sweep
+    # normalises `\r\n|\r|\n` and then splits on a newline, so the other
+    # EIGHT boundaries the write ends a line on are not line ends to it --
+    # measured over every code point, the two definitions differ on exactly
+    # those eight (#1778, round 26).
+    def test_the_sweep_ends_a_line_where_the_write_does(self) -> None:
+        """A census, not a sample: every code point, in both directions.
+
+        For each of the 1,114,112 code points, `a<ch>b` either splits into
+        two source lines or does not, asked of the sweep's reader and of the
+        write's own `LINE_BOUNDARIES`. The two answers agree on every one,
+        which is what makes this one definition rather than two that happen
+        to look alike. CRLF is the one multi-character boundary and is asked
+        separately, because a census keyed on single code points cannot see
+        it.
+        """
+        evidence = sys.modules["evidence"]
+        boundaries = set(evidence.LINE_BOUNDARIES)
+        sweep_says, write_says = set(), set()
+        for point in range(0x110000):
+            character = chr(point)
+            if len(sweep_script._source_lines(f"a{character}b")) > 1:
+                sweep_says.add(character)
+            if character in boundaries:
+                write_says.add(character)
+        self.assertEqual(
+            sorted(sweep_says - write_says), [],
+            "the sweep ends a line where the write does not",
+        )
+        self.assertEqual(
+            sorted(write_says - sweep_says), [],
+            "the write ends a line where the sweep does not",
+        )
+        self.assertEqual(len(write_says), 10, sorted(write_says))
+        # CRLF: one boundary, not two, on both sides -- the normalisation
+        # that runs before the split is what keeps it so.
+        self.assertEqual(
+            len(sweep_script._source_lines(sweep_script.MARKDOWN_LINE_ENDING_RE.sub("\n", "a\r\nb"))),
+            2,
+        )
+
+
 class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
     """The instrument's numbers at this tree, named so a body can cite them (#1738).
 

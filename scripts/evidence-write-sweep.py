@@ -131,6 +131,24 @@ evidence = load("evidence", SKILL_SCRIPTS / "evidence.py")
 MARKDOWN_LINE_ENDING_RE = helpers.MARKDOWN_LINE_ENDING_RE
 
 
+def _source_lines(text: str) -> list[str]:
+    """This text's source lines, by the definition the write itself uses.
+
+    ONE definition, imported rather than restated. `MARKDOWN_LINE_ENDING_RE`
+    is `\\r\\n|\\r|\\n`, three code points, and this instrument then split on
+    `"\\n"`; the write it measures ends a line on ten (`evidence.LINE_BOUNDARIES`,
+    which is CPython's `str.splitlines()` set, censused over every code point
+    in round 25). Eight of them -- the vertical tab, the form feed, the three
+    information separators, NEL, and the line and paragraph separators --
+    were a line to the write and not to the sweep, so an author's line
+    carrying one was counted as part of its neighbour and a write that took
+    it read as a write that took nothing. A CRLF is still normalised first,
+    which is what keeps every boundary one character wide and the offsets
+    below correct (#1778, round 26).
+    """
+    return evidence.split_source_lines(text)
+
+
 def body(tail: str, successor: str, ending: str, second_index: object = NO_SECOND_ENTRY) -> str:
     """One PR body: the metadata the writer reads, the section, the tail under it, and the author's next block.
 
@@ -276,7 +294,7 @@ def author_lines(text: str) -> list[str]:
     """
     source = MARKDOWN_LINE_ENDING_RE.sub("\n", text)
     normalized = evidence._strip_evidence_metadata(source)
-    lines = normalized.split("\n")
+    lines = _source_lines(normalized)
     owned = _entry_line_numbers(lines, normalized, _recorded_items(source))
     return [
         line
@@ -308,7 +326,7 @@ def author_seams(text: str) -> list[tuple[str, str]]:
     """
     source = MARKDOWN_LINE_ENDING_RE.sub("\n", text)
     normalized = evidence._strip_evidence_metadata(source)
-    lines = normalized.split("\n")
+    lines = _source_lines(normalized)
     owned = _entry_line_numbers(lines, normalized, _recorded_items(source))
     seams, previous = [], None
     for index, line in enumerate(lines):
