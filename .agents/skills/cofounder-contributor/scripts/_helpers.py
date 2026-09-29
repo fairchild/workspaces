@@ -161,10 +161,22 @@ def issue_label_presence(issue: dict[str, object]) -> set[str]:
     return issue_label_names(issue)
 
 
-# A `<br>` is the one inline tag that renders as something: a line break. It
-# arrives as `html_inline` like every other tag, and the tag name is what
-# identifies it, so attributes and a self-closing slash are all one shape.
-HTML_BREAK_TAG_RE = re.compile(r"(?i)^<br\b[^>]*>$")
+# A `br` is the one inline tag that renders as something: a line break. It
+# arrives as `html_inline` like every other tag, and the tag NAME is what
+# identifies it, so attributes, a self-closing slash and an END TAG are all
+# one shape. The end tag counts because the HTML standard says it does: in
+# the "in body" insertion mode an end tag `br` is handled as if it were a
+# start tag `br` with its attributes dropped, so a browser lays `</br>` out
+# as the break, and a reader meets two lines. Keyed on what the RENDERER
+# does rather than on what the pattern was first written for, which is the
+# fourth time on this branch that the other key lost a member.
+#
+# No space beside the angle bracket or the slash, because neither is a tag
+# at all: asked of GitHub's own renderer, `</br>` comes back as `<br>` while
+# `</ br>` and `< br>` come back as escaped TEXT (`&lt;/ br&gt;`), which is
+# the HTML parser's bogus-comment and text rules. A pattern that took them
+# would refuse a line the page shows as one (#1778, round 26).
+HTML_BREAK_TAG_RE = re.compile(r"(?i)^</?br\b[^>]*>$")
 def code_span(text: str) -> str:
     """`text` as a code span nothing inside it can break out of, on one line.
 
