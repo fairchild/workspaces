@@ -13,6 +13,7 @@ enum ExperimentalFeature: String, CaseIterable, Identifiable {
     case automationOperator = "automationOperator"
     case minimalToolbar = "minimalToolbar"
     case restoreSessionsOnLaunch = "restoreSessionsOnLaunch"
+    case agentDecisionNotifications = "agentDecisionNotifications"
 
     var id: String { rawValue }
 
@@ -28,6 +29,8 @@ enum ExperimentalFeature: String, CaseIterable, Identifiable {
             return "Minimal Toolbar"
         case .restoreSessionsOnLaunch:
             return "Restore Sessions on Launch"
+        case .agentDecisionNotifications:
+            return "Agent Decision Notifications"
         }
     }
 
@@ -45,6 +48,9 @@ enum ExperimentalFeature: String, CaseIterable, Identifiable {
             return "Hide secondary toolbar controls so terminal surfaces stay closer to the canvas."
         case .restoreSessionsOnLaunch:
             return "Offer to reopen the terminal sessions from your previous run when the app starts."
+        case .agentDecisionNotifications:
+            return "Deliver the one decision an agent is waiting on as a notification whose buttons "
+                + "are that decision's own options, so it can be answered without opening the board."
         }
     }
 
@@ -68,6 +74,8 @@ enum ExperimentalFeature: String, CaseIterable, Identifiable {
             return "WORKSPACES_PERF_MINIMAL_TOOLBAR"
         case .restoreSessionsOnLaunch:
             return "WORKSPACES_RESTORE_SESSIONS_ON_LAUNCH"
+        case .agentDecisionNotifications:
+            return "WORKSPACES_AGENT_DECISION_NOTIFICATIONS"
         }
     }
 }
