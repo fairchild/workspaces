@@ -3331,6 +3331,28 @@ class OwnerLineAsRenderedTests(unittest.TestCase):
             helpers.inline_text(helpers._parsed("~~the item~~\n")[1].children),
             "~~the item~~",
         )
+        # EVERY reader of a status line, not only the one the write above
+        # happens to go through: the read that decides whether a bullet is
+        # the machine's vocabulary is asked directly, because with the
+        # normalisation in the splitter alone it answers from the splitter's
+        # result and the mutant that drops it here runs green.
+        evidence = sys.modules["evidence"]
+        tokens = helpers._parsed(
+            f"## Evidence Status\n\n- ~~[blocked] {self.OWNER_ITEM} -- proof~~\n"
+        )
+        opened = [index for index, token in enumerate(tokens) if token.type == "list_item_open"]
+        self.assertTrue(
+            evidence._is_status_list_item(tokens, opened[0]),
+            "the read that decides whose line it is calls a struck status prose",
+        )
+        # And a break the renderer lays out is one to the reader this file
+        # shares with the gate: dropping `</br>` glues the words on either
+        # side into one, which is the defect that rule's own comment
+        # describes for the opening spelling.
+        self.assertEqual(
+            helpers.inline_text(helpers._parsed("green</br>next\n")[1].children),
+            "green next",
+        )
 
     def test_a_comment_hides_only_what_it_covers(self) -> None:
         for shape, line in (
