@@ -10348,6 +10348,17 @@ class AWriteRemovesNoLineItCannotAccountFor(unittest.TestCase):
         for boundary in ("\r\n", "\n", "\r", "\u2028", "\x1c"):
             with self.subTest(boundary=repr(boundary)):
                 self.assertEqual(evidence.quoted_verbatim(f"a{boundary}b"), "`a b`")
+        # And what the quoter takes out for SAFETY rather than for shape,
+        # which nothing else here asked: a comment delimiter, however it is
+        # spliced. Quoted text sits inside a comment on a pull request, and
+        # a delimiter in it closes that comment and lets the rest act.
+        for shape, text, wanted in (
+            ("an opener", "a <!-- b", "`a  b`"),
+            ("a closer", "a --> b", "`a  b`"),
+            ("a delimiter spliced out of two", "a <!<!---->-- b", "`a  b`"),
+        ):
+            with self.subTest(delimiter=shape):
+                self.assertEqual(evidence.quoted_verbatim(text), wanted)
 
     # intent: fix
     # marker: red at `24b68a42`, its own base, behaviourally: the pairing is

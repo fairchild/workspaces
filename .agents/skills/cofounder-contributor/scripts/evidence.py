@@ -3972,7 +3972,10 @@ def quoted_verbatim(text: str, limit: int = COMMENT_QUOTE_LIMIT) -> str:
     also makes CRLF one space rather than two -- and every other run stays
     as the author typed it.
     """
-    flattened = " ".join(split_source_lines(text)) if spans_two_lines(text) else text
+    # No guard on whether it spans two lines: `split_source_lines` of a
+    # one-line text is that text, so the branch separated no input and was
+    # a comment with an `if` in front of it.
+    flattened = " ".join(split_source_lines(text))
     while "<!--" in flattened or "-->" in flattened:
         flattened = flattened.replace("<!--", "").replace("-->", "")
     if len(flattened) > limit:
