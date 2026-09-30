@@ -8541,6 +8541,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         after = self.flat(body).split("## Evidence Status\n", 1)[1]
         return after.split("\n## ", 1)[0].strip()
 
+    # intent: fix
     def test_the_authors_own_blocked_bullet_lands_in_the_notes(self) -> None:
         for name, ending in self.ENDINGS.items():
             with self.subTest(ending=name):
@@ -8558,6 +8559,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 # Nothing is taken, so nothing is announced.
                 self.assertEqual(said, [])
 
+    # intent: fix
     def test_a_second_write_leaves_the_bullet_where_the_first_put_it(self) -> None:
         # A second write moves nothing.
         for name, ending in self.ENDINGS.items():
@@ -8568,6 +8570,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 self.assertIn(self.THEIRS, self.flat(twice))
                 self.assertEqual(said, [])
 
+    # intent: fix
     def test_a_bullet_of_theirs_for_a_recorded_item_is_replaced_out_loud(self) -> None:
         """The author's own bullet for a recorded item is replaced, carried to the notes and announced."""
         theirs = f"- [complete] {self.ITEM} -- I ran it myself and it passed"
@@ -8586,6 +8589,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         self.assertRegex(replaced[0], r"at line \d+")
         self.assertIn(helpers.code_span(self.ITEM), replaced[0])
 
+    # intent: control
     def test_a_byte_identical_copy_of_the_machines_line_is_still_silent(self) -> None:
         # A byte-identical copy of the machine's line holds nothing of the author's.
         copy = f"- [pending-ci] {self.ITEM} -- {self.DETAIL}"
@@ -8595,6 +8599,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             self.section_of(written), f"- [complete] {self.ITEM} -- {self.RESOLVED}"
         )
 
+    # intent: control
     def test_a_bullet_for_an_item_this_body_does_not_record_still_survives(self) -> None:
         # The write owns no line for an unrecorded item, so nothing is announced.
         written, said = self.written(self.body(tail=f"{self.NOTE}\n{self.THEIRS}\n"))
@@ -8602,6 +8607,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         self.assertIn(self.THEIRS, helpers.markdown_section(written, "Evidence Notes"))
         self.assertEqual([note for note in said if "replaced in" in note], [], said)
 
+    # intent: fix
     def test_a_status_line_naming_a_recorded_item_is_still_the_machines(self) -> None:
         # A stale reading of a recorded item is replaced by the entry, carried and announced.
         stale = f"- [blocked] {self.ITEM} -- an older reading of the same item"
@@ -8614,6 +8620,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         self.assertEqual(len([note for note in said if "replaced in" in note]), 1, said)
         self.assertIn(f"## Evidence Notes\n{self.NOTE}", self.flat(written))
 
+    # intent: fix
     def test_both_writers_carry_it(self) -> None:
         # The lane's re-render and the turn's render must carry the same notes (#1729).
         run_contributor = sys.modules["run_contributor_evidence_kinds"]
@@ -8636,6 +8643,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             self.flat(lane).split("## Evidence Notes\n", 1)[1].rstrip("\n"),
         )
 
+    # intent: guard
     def test_the_carried_excerpt_says_what_it_is_and_holds_what_it_quotes(self) -> None:
         """The carried excerpt's opening sentence and its fence.
 
@@ -8672,6 +8680,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         kinds = {token.type for token in helpers.MARKDOWN.parse(excerpt)}
         self.assertNotIn("bullet_list_open", kinds, excerpt)
 
+    # intent: guard
     def test_the_sentence_about_an_uncarried_block_names_the_line_it_opens_on(self) -> None:
         """A multi-line block, so the first line and the last are different strings."""
         evidence = self.evidence()
@@ -8707,6 +8716,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         self.assertIn(opening, sentences[0], "the sentence does not name the line it opens on")
         self.assertNotIn(closing, sentences[0], "the sentence names the line it ends on")
 
+    # intent: guard
     def test_a_shape_that_would_end_the_notes_section_never_reaches_the_carry(self) -> None:
         """Three shapes that create a heading, and where each one goes.
 
@@ -8743,6 +8753,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 self.assertIsNone(unreadable, f"{shape}: {unreadable}")
                 self.assertEqual(lines, [f"[complete] {item} -- green"], f"{shape}: {lines}")
 
+    # intent: fix
     def test_five_chained_turns_carry_one_excerpt_and_stop(self) -> None:
         """Chained turns carry one excerpt per recorded item, with or without the record comment.
 
@@ -8795,6 +8806,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         # And their line is what the one excerpt holds.
         self.assertEqual(with_record[-1], without_record[-1], "the record changed what is carried")
 
+    # intent: fix
     def test_author_edits_leave_one_status_on_the_page(self) -> None:
         """Author edits and a verdict flip leave one status line and fenced excerpts in the notes.
 
@@ -8853,6 +8865,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         self.assertNotIn("bullet_list_open", kinds, notes)
         self.assertIn("fence", kinds, notes)
 
+    # intent: guard
     def test_one_function_decides_whose_line_it_is(self) -> None:
         evidence = self.evidence()
         self.assertTrue(
@@ -8887,6 +8900,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         "a star marker": "* [pending-ci] {item} -- {detail}",
     }
 
+    # intent: guard
     def test_the_rule_reads_a_line_the_way_the_page_reads_it(self) -> None:
         evidence = self.evidence()
         plain = f"- [pending-ci] {self.ITEM} -- {self.DETAIL}"
@@ -8919,6 +8933,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             )
         )
 
+    # intent: fix
     def test_a_wrapped_line_naming_a_recorded_item_is_the_machines(self) -> None:
         for name, template in self.WRAPPED.items():
             with self.subTest(form=name):
@@ -8938,6 +8953,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                     f"{name}: {said}",
                 )
 
+    # intent: guard
     def test_a_wrapped_line_naming_no_recorded_item_is_the_authors(self) -> None:
         # Wrapping a status token does not make an unrecorded line the machine's.
         theirs = "- **[blocked]** release approval -- the signing profile is missing"
@@ -8946,6 +8962,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         self.assertIn(f"## Evidence Notes\n{self.NOTE}\n\n{theirs}", self.flat(written))
         self.assertEqual(said, [])
 
+    # intent: guard
     def test_the_items_are_read_once_however_the_caller_holds_them(self) -> None:
         # A generator would be spent on the first line and every later status line would
         # read as the author's.
@@ -8973,6 +8990,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         self.assertIn(f"- [pending-ci] {self.ITEM} -- {self.DETAIL}", notes)
         self.assertIn(f"- [pending-ci] {second} -- waiting", notes)
 
+    # intent: guard
     def test_the_writer_is_told_which_items_it_records(self) -> None:
         # The items are passed in; an item with its own ` -- ` cannot be read back out of its
         # line (#1738).
@@ -9061,6 +9079,7 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
         self.assertEqual(errors, [], "the turn refused the fixture")
         return written, said, errors
 
+    # intent: fix
     def test_the_notes_carry_the_published_bodys_text_and_no_other(self) -> None:
         """Each kind of text that can reach the notes, one case each, from both bodies."""
         shapes = [
@@ -9095,6 +9114,7 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
                     f"{name}: {'dropped' if carried else 'carried'} -- notes were {notes!r}",
                 )
 
+    # intent: fix
     def test_the_run_is_told_which_of_the_drafts_blocks_it_did_not_carry(self) -> None:
         """Draft blocks the write does not carry are logged to the run, one line each, naming the line.
 
@@ -9137,6 +9157,7 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
             )
         self.assertNotIn(spoken, said.getvalue())
 
+    # intent: guard
     def test_one_site_in_the_whole_tree_writes_under_the_notes_heading(self) -> None:
         """Exactly one call site in the tree writes under the notes heading.
 
@@ -9331,6 +9352,7 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
                                             found.append((read, inside.lineno))
         return found
 
+    # intent: fix
     def test_every_source_of_the_notes_section_reads_the_carried_body(self) -> None:
         """In every module on the turn path, each read feeding a notes write takes the carried body.
 
@@ -9369,6 +9391,7 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
             "a read routed through a helper is invisible to this walk",
         )
 
+    # intent: fix
     def test_neither_writer_of_a_turn_body_defaults_the_published_body(self) -> None:
         evidence = self.evidence()
         execution = sys.modules["execution"]
@@ -9402,6 +9425,7 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
                     f"{name}:{call.lineno} does not say which published body it has",
                 )
 
+    # intent: fix
     def test_the_write_cannot_be_called_without_saying_whose_body_it_carries(self) -> None:
         evidence = self.evidence()
         entries = [{"index": 1, "item": self.ITEM, "status": "complete",
@@ -9454,6 +9478,7 @@ class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
             f"{self.section(status, detail)}\n## Validation\n\n- ran it\n"
         )
 
+    # intent: guard
     def test_the_two_readings_of_one_item_agree_in_the_lines_own_context(self) -> None:
         # The write reads the line from the section tokens and the item in that section.
         evidence = self.evidence()
@@ -9475,6 +9500,7 @@ class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
             )
         )
 
+    # intent: guard
     def test_the_write_recognises_the_line_it_just_rendered(self) -> None:
         # Three writes leave one line in the section.
         evidence = self.evidence()
@@ -9491,6 +9517,7 @@ class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
         self.assertNotIn("[complete]", notes)
         self.assertEqual(notes.count("[pending-ci]"), 1, notes)
 
+    # intent: guard
     def test_an_item_carrying_its_own_separator_is_still_read_whole(self) -> None:
         # The probe removes what it added instead of searching for a ` -- ` boundary (#1738).
         evidence = self.evidence()
@@ -9501,6 +9528,7 @@ class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
             )
         )
 
+    # intent: guard
     def test_the_reading_is_the_same_one_the_line_goes_through(self) -> None:
         evidence = self.evidence()
         for item in ("**Manual QA** on device", "*QA*", "_QA_", "Manual <span>QA</span>"):
@@ -9537,12 +9565,14 @@ class AnUnreadableRenderedLineIsAnnouncedTests(unittest.TestCase):
     def said(self, write) -> list[str]:
         return [note for note in write.announcements if "not readable back" in note]
 
+    # intent: guard
     def test_a_construct_crossing_the_boundary_is_named(self) -> None:
         said = self.said(self.write(*self.CROSSING))
         self.assertEqual(len(said), 1, said)
         self.assertIn("no reader can say where the item ends", said[0])
         self.assertIn("balance the construct", said[0])
 
+    # intent: guard
     def test_a_line_past_the_limit_is_named_with_its_length(self) -> None:
         said = self.said(self.write(*self.TOO_LONG))
         self.assertEqual(len(said), 1, said)
@@ -9550,9 +9580,11 @@ class AnUnreadableRenderedLineIsAnnouncedTests(unittest.TestCase):
         self.assertIn(str(self.evidence().EVIDENCE_STATUS_LINE_LIMIT), said[0])
         self.assertIn("shorten the item", said[0])
 
+    # intent: guard
     def test_an_ordinary_line_is_not_named(self) -> None:
         self.assertEqual(self.said(self.write(*self.PLAIN)), [])
 
+    # intent: guard
     def test_the_line_is_still_written(self) -> None:
         # Reported, not refused: the requirement stays on the page.
         for item, detail in (self.CROSSING, self.TOO_LONG):
@@ -9571,6 +9603,7 @@ class AnUnreadableRenderedLineIsAnnouncedTests(unittest.TestCase):
             len([line for line in notes.splitlines() if pattern.search(line)]),
         )
 
+    # intent: guard
     def test_the_predicate_answers_about_lines_rather_than_items(self) -> None:
         evidence = self.evidence()
         item, detail = self.CROSSING
@@ -9613,12 +9646,14 @@ class TwoItemsThatReadAsOneStandTheWriteDownTests(unittest.TestCase):
     def evidence(self):
         return sys.modules["evidence"]
 
+    # intent: fix
     def test_the_collision_check_uses_the_ownership_rules_key(self) -> None:
         evidence = self.evidence()
         self.assertEqual(evidence._indistinguishable([self.BOLD, self.PLAIN]), [self.PLAIN])
         # And still tells apart two items that are genuinely different.
         self.assertEqual(evidence._indistinguishable([self.BOLD, "the smoke lane"]), [])
 
+    # intent: fix
     def test_the_turn_refuses_the_contract_and_keeps_the_authors_line(self) -> None:
         run_contributor = sys.modules["run_contributor_evidence_kinds"]
         with contextlib.redirect_stderr(io.StringIO()):
@@ -9635,6 +9670,7 @@ class TwoItemsThatReadAsOneStandTheWriteDownTests(unittest.TestCase):
         self.assertIn("read as one requirement on the page", errors[0])
         self.assertIn("make each item distinct", errors[0])
 
+    # intent: guard
     def test_the_update_path_stands_down_and_keeps_the_authors_line(self) -> None:
         """The lane's update path stands down on the same collision, before any write."""
         evidence = self.evidence()
@@ -9671,6 +9707,7 @@ class TwoItemsThatReadAsOneStandTheWriteDownTests(unittest.TestCase):
         self.assertIn("cannot be told apart", stood_down[0])
         self.assertIn("make each requested item distinct", stood_down[0])
 
+    # intent: fix
     def test_the_accounting_names_the_collision_where_the_author_can_fix_it(self) -> None:
         run_contributor = sys.modules["run_contributor_evidence_kinds"]
         accounting, errors = run_contributor.validate_evidence_accounting(
@@ -9681,6 +9718,7 @@ class TwoItemsThatReadAsOneStandTheWriteDownTests(unittest.TestCase):
             any("asks for the same item more than once" in error for error in errors), errors
         )
 
+    # intent: guard
     def test_a_distinguishable_contract_is_written_as_before(self) -> None:
         # The control: a distinct contract writes, and an unrecorded bullet is carried to the
         # notes.
@@ -9723,6 +9761,7 @@ class OneReadingInOneContextForEverythingComparedTests(unittest.TestCase):
             "## Validation\n\n- ran it\n"
         )
 
+    # intent: guard
     def test_the_two_spellings_are_one_requirement_in_the_section(self) -> None:
         evidence = self.evidence()
         section = sys.modules["_helpers"].markdown_section(self.body(), "Evidence Status")
@@ -9735,6 +9774,7 @@ class OneReadingInOneContextForEverythingComparedTests(unittest.TestCase):
         # Read alone they are two items.
         self.assertEqual(evidence._indistinguishable([self.INLINE, self.REF]), [])
 
+    # intent: guard
     def test_the_write_stands_down_and_the_owners_line_survives(self) -> None:
         evidence = self.evidence()
         body = self.body()
@@ -9775,6 +9815,7 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
         "a span in the item": ("run ", "<span>run</span> "),
     }
 
+    # intent: guard
     def test_the_write_s_path_and_the_sweep_s_path_agree_on_every_spelling(self) -> None:
         """Each path forms its own arguments, and both get the same answer."""
         helpers = sys.modules["_helpers"]
@@ -9827,6 +9868,7 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
             + "\n-->\n\n## Summary\n\n- one change\n\n## Evidence Status\n\n"
             + f"{line}\n\n## Validation\n\n- ran it\n"
         )
+    # intent: guard
     def test_an_authors_edit_of_the_machines_own_line_is_never_the_machines(self) -> None:
         """Only an exact byte match of the rendered line is the machine's.
 
@@ -9860,6 +9902,7 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
             ).machine
         )
 
+    # intent: guard
     def test_a_differently_spelled_author_line_is_never_the_machines(self) -> None:
         evidence = self.evidence()
         section = f"{self.rendered}\n"
@@ -9881,6 +9924,7 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
             ).machine
         )
 
+    # intent: guard
     def test_a_star_marker_line_is_carried_rather_than_deleted(self) -> None:
         # End to end, the author's line survives the write.
         evidence = self.evidence()
@@ -9893,6 +9937,7 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
             write = write_section(body, [self.rendered], [self.ITEM])
         self.assertIn(star, write.body)
 
+    # intent: guard
     def test_the_sweep_and_the_write_answer_the_same_on_the_same_lines(self) -> None:
         """Both readers are called on the same lines and must answer the same."""
         evidence = self.evidence()
@@ -9951,6 +9996,7 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             f"- [pending-ci] {self.ITEM} -- {detail}\n\n## Validation\n\n- ran it\n"
         )
 
+    # intent: fix
     def test_seven_pushes_with_a_changing_detail_and_no_status_change(self) -> None:
         evidence = self.evidence()
         body = self.body_with(f"{self.DETAIL} on head aaaaaaaaaaaX")
@@ -9965,6 +10011,7 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             seen.append(self.counts(body))
         self.assertEqual(seen, [(1, 0)] * 7)
 
+    # intent: fix
     def test_a_status_change_carries_nothing_either(self) -> None:
         """A status change is replaced, not carried, because the cap keys on the entry."""
         evidence = self.evidence()
@@ -9978,6 +10025,7 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             self.assertEqual(self.counts(body), (1, 0))
         self.assertIn("- [complete] ", body)
 
+    # intent: fix
     def test_the_turn_caps_it_too_through_the_entry_point_production_uses(self) -> None:
         """The turn caps through `build_execution_summary_body`, as production calls it.
 
@@ -10003,6 +10051,7 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             published, model = written, written.split("-->\n\n", 1)[1]
         self.assertEqual(seen, [(1, 0)] * 3)
 
+    # intent: guard
     def test_the_turn_reconstructs_from_the_published_body(self) -> None:
         # The same expression over the two bodies; only the published one has the last run's
         # entries.
@@ -10015,6 +10064,7 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             [f"- [pending-ci] {self.ITEM} -- {self.DETAIL} on head aaaaaaaaaaaX"],
         )
 
+    # intent: guard
     def test_the_line_the_last_run_rendered_is_reconstructible(self) -> None:
         evidence = self.evidence()
         entries = evidence.evidence_entries_of(self.body_with("a detail"))
@@ -10062,14 +10112,17 @@ class OneDefinitionOfWhichEntriesTheWriteRendersTests(unittest.TestCase):
             )
         return written, stderr.getvalue()
 
+    # intent: fix
     def test_an_unrenderable_entry_does_not_take_the_owners_line(self) -> None:
         written, stderr = self.written(self.body(with_the_unrenderable_entry=True))
         self.assertIn(self.OWNERS, written, f"the owner's line went; stderr said {stderr!r}")
 
+    # intent: guard
     def test_the_control_without_it_keeps_the_line_too(self) -> None:
         written, _ = self.written(self.body(with_the_unrenderable_entry=False))
         self.assertIn(self.OWNERS, written)
 
+    # intent: fix
     def test_the_reconstruction_names_exactly_the_lines_the_write_renders(self) -> None:
         evidence = self.evidence()
         helpers = sys.modules["_helpers"]
@@ -10089,6 +10142,7 @@ class OneDefinitionOfWhichEntriesTheWriteRendersTests(unittest.TestCase):
             reconstructed, [f"- [complete] {self.ITEM} -- passed on head aaaaaaaaaaa1"]
         )
 
+    # intent: fix
     def test_the_turn_renderer_renders_what_the_reconstruction_rebuilds(self) -> None:
         """The turn renderer also renders exactly what the reconstruction rebuilds."""
         evidence = self.evidence()
@@ -10116,6 +10170,7 @@ class OneDefinitionOfWhichEntriesTheWriteRendersTests(unittest.TestCase):
         # composer no longer stripping the item.
         self.assertEqual(rendered, [f"- [complete] {item.strip()} -- --filter QA` passed"])
 
+    # intent: guard
     def test_the_turn_path_carries_the_same_two_bodies_and_the_same_metadata(self) -> None:
         """Unrenderable metadata and a separate reconstruction body, through both paths."""
         execution = sys.modules["execution"]
@@ -10180,20 +10235,24 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
             )
         return body, stderr.getvalue()
 
+    # intent: fix
     def test_the_second_identical_line_is_the_authors_and_is_carried(self) -> None:
         written, said = self.written(2)
         self.assertEqual(self.counts(written), (1, 1), f"stderr said {said!r}")
         self.assertIn("not readable back", said)
 
+    # intent: fix
     def test_the_same_holds_when_the_verdict_has_not_changed(self) -> None:
         """An unchanged verdict offers the same bytes from both sources and still owns one line."""
         written, said = self.written(2, recorded="complete")
         self.assertEqual(self.counts(written), (1, 1), f"stderr said {said!r}")
 
+    # intent: fix
     def test_a_third_copy_is_the_authors_too(self) -> None:
         written, _ = self.written(3, recorded="complete")
         self.assertEqual(self.counts(written), (1, 2))
 
+    # intent: control
     def test_one_copy_is_still_the_machines_and_is_replaced(self) -> None:
         written, _ = self.written(1)
         self.assertEqual(self.counts(written), (1, 0))
@@ -10209,6 +10268,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
             "kind": "test",
         }
 
+    # intent: guard
     def test_one_entry_offering_its_line_from_both_sources_owns_one_line(self) -> None:
         # An unchanged verdict gives the same bytes from both sources for one entry: one claim.
         evidence = self.evidence()
@@ -10216,6 +10276,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertTrue(owner.claim(self.line))
         self.assertFalse(owner.claim(self.line))
 
+    # intent: guard
     def test_a_previous_line_that_differs_is_a_second_line_that_entry_owns(self) -> None:
         # A changed verdict gives two lines for one entry, and the write owns both.
         evidence = self.evidence()
@@ -10226,6 +10287,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertFalse(owner.claim(self.line))
         self.assertFalse(owner.claim(current))
 
+    # intent: guard
     def test_two_entries_rendering_one_line_keep_two_claims(self) -> None:
         """Two entries that render the same line keep two claims.
 
@@ -10244,6 +10306,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertTrue(owner.claim(line), "the second entry's claim was collapsed away")
         self.assertFalse(owner.claim(line))
 
+    # intent: fix
     def test_the_mirror_pair_is_a_fixed_point_rather_than_an_accrual(self) -> None:
         # Three writes, (2, 0) each time.
         evidence = self.evidence()
@@ -10266,6 +10329,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
             seen.append(self.counts(body))
         self.assertEqual(seen, [(2, 0)] * 3)
 
+    # intent: guard
     def test_both_readers_build_one_owner_from_the_same_inputs(self) -> None:
         """The write and the sweep build equal owners from the same inputs."""
         evidence = self.evidence()
@@ -10285,6 +10349,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertEqual(sorted(instrument), claimed)
         self.assertEqual(len(claimed), 1, "one entry, one line")
 
+    # intent: guard
     def test_the_instrument_owns_the_line_the_write_is_about_to_render(self) -> None:
         """The sweep owns the line the write is about to render.
 
@@ -10326,6 +10391,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                     f"{label}: the line the write is about to render is not the machine's here",
                 )
 
+    # intent: guard
     def test_the_owner_the_write_builds_holds_the_line_it_is_about_to_render(self) -> None:
         """The write's owner holds both this run's line and the last run's line.
 
@@ -10344,6 +10410,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
             "the body's entries twice over cannot hold the line the write will render",
         )
 
+    # intent: guard
     def test_the_instrument_applies_the_writes_updates_to_the_bodys_entries(self) -> None:
         # Both sides use `entries_with_updates`, and the sweep names its update map.
         sweep = load_module(
@@ -10389,6 +10456,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertEqual(errors, [])
         return self.counts(rendered)
 
+    # intent: fix
     def test_an_item_that_keeps_its_text_and_moves_position_owns_one_line(self) -> None:
         """An item that moves position in the contract still owns one line (#1751).
 
@@ -10400,11 +10468,13 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
             "the author's second copy was deleted",
         )
 
+    # intent: guard
     def test_the_same_item_at_one_position_is_unchanged(self) -> None:
         # Controls: the item where the published body left it, with one and two contract items.
         self.assertEqual(self.moved([self.MOVED_ITEM], 1), (1, 1))
         self.assertEqual(self.moved([self.MOVED_ITEM, self.OTHER_ITEM], 1), (1, 1))
 
+    # intent: guard
     def test_an_entry_this_contract_no_longer_asks_for_is_dropped(self) -> None:
         # An item the contract no longer requests owns no line.
         evidence = self.evidence()
@@ -10412,6 +10482,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                     "detail": "d", "kind": "test"}
         self.assertEqual(evidence.entries_keyed_for([recorded], ["something else"]), [])
 
+    # intent: guard
     def test_two_entries_at_one_index_with_two_lines_are_a_fixed_point(self) -> None:
         """Two entries at one index rendering different lines are a fixed point over three writes."""
         evidence = self.evidence()
@@ -10444,6 +10515,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                     seen.append(self.counts(body))
                 self.assertEqual(seen, [expected] * 3)
 
+    # intent: guard
     def test_the_writer_takes_both_ends_of_the_body_with_no_default(self) -> None:
         """`write_evidence_status_section` requires `previous_entries`, with no default.
 
@@ -10465,6 +10537,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                 "body", [], notes_from="body", recorded_items=[], entries=[self.entry()]
             )
 
+    # intent: fix
     def test_two_entries_at_one_index_rendering_one_line_own_both(self) -> None:
         """Two entries at one index rendering one line own both lines, through the lane writer.
 
@@ -10506,12 +10579,14 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                         f"{label}, run {run}: a rendered line went missing",
                     )
 
+    # intent: fix
     def test_two_items_that_both_read_as_nothing_are_one_requirement(self) -> None:
         # `**.**` and `.` both read as empty on the page, so they are one requirement.
         evidence = self.evidence()
         self.assertEqual(evidence._indistinguishable(["**.**", "."]), ["."])
         self.assertEqual(evidence._indistinguishable(["a", "b"]), [], "a control")
 
+    # intent: fix
     def test_two_entries_with_one_item_text_stay_two_claims(self) -> None:
         """Two entries with the same item text at two indexes own two lines."""
         evidence = self.evidence()
@@ -10566,6 +10641,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         record["entries"] = record["entries"] * times
         return published[: found.start(1)] + json.dumps(record, indent=2) + published[found.end(1) :]
 
+    # intent: fix
     def test_one_requirement_recorded_twice_stands_the_write_down(self) -> None:
         """A record naming one requirement twice stands the write down and names both positions.
 
@@ -10618,6 +10694,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                     self.assertIn(f"at position {places}", errors[0], "both positions are not named")
                     self.assertIn(sys.modules["_helpers"].code_span(item), errors[0])
 
+    # intent: control
     def test_one_recorded_entry_still_carries_the_author_s_copy(self) -> None:
         # The control: one entry and two byte-identical lines. The entry owns one, and the
         # author's copy is carried.
@@ -10633,6 +10710,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertNotEqual(written, doubled, "the write did not happen")
         self.assertIn(self.colliding_line, evidence.markdown_section(written, "Evidence Notes"))
 
+    # intent: control
     def test_a_readable_item_s_duplicate_is_the_machine_s_wherever_it_sits(self) -> None:
         """With a readable item, a byte-identical copy of the machine's line is the machine's.
 
@@ -10673,6 +10751,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                     evidence.markdown_section(written, "Evidence Notes").count(line), 0
                 )
 
+    # intent: guard
     def test_the_owner_grants_a_second_claim_on_identical_bytes(self) -> None:
         """The owner still grants two entries two claims; the refusal happens before the owner."""
         evidence = self.evidence()
@@ -10685,6 +10764,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                 owner = evidence.owned_lines(entries, [])
                 self.assertEqual([owner.claim(line) for _ in range(3)], expected)
 
+    # intent: fix
     def test_two_spellings_of_one_requirement_in_the_record_are_refused(self) -> None:
         """Two spellings of one requirement in the record are refused, keyed on the page reading.
 
@@ -10712,6 +10792,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertIn("record one requirement more than once", write.refusal)
         self.assertIn("at position 1, 2", write.refusal)
 
+    # intent: control
     def test_two_entries_whose_items_differ_still_write(self) -> None:
         """Two entries whose different items render the same line still write."""
         evidence = self.evidence()
@@ -10732,6 +10813,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         )
         self.assertIsNone(write.refusal, write.refusal)
 
+    # intent: guard
     def test_both_readers_agree_on_the_shape_the_two_keys_disagree_about(self) -> None:
         # The mirror pair: two entries, one line, twice in the body. Both readers must agree
         # here so a later rule change cannot move one without the other.
@@ -10760,6 +10842,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertEqual(sorted(instrument), claimed)
         self.assertEqual(len(claimed), 2, "two entries, two lines")
 
+    # intent: fix
     def test_the_instrument_calls_the_second_copy_the_authors_too(self) -> None:
         # The sweep builds the same owner, so exactly one of the two lines is the machine's to
         # it.
@@ -10773,6 +10856,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         owned = sweep._entry_line_numbers(lines, normalized, source)
         self.assertEqual(len(owned), 1, "the instrument gave one entry both copies")
 
+    # intent: fix
     def test_the_instrument_reports_the_loss_when_the_write_takes_both(self) -> None:
         # `lines_lost` names the line when a write keeps one copy of two.
         evidence = self.evidence()
