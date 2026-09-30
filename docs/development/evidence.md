@@ -430,22 +430,19 @@ measurements you already wrote. A status line is a list
 item under the one
 `## Evidence Status` heading a reader sees, on a single line, whose text reads
 `[status] item -- proof`, one per requested item. That is the whole of what
-the heading holds: under it a bullet opening with a status token AND naming an
+the heading holds: under it a bullet opening with a status token and naming an
 item the body records is the machine's, and every other block -- a note to a
 reviewer, a link to a run, a pasted log excerpt, a `- [x]` box, a bullet naming
-no status, a status bullet of your own for something the contract does not ask
-for -- is a note, which a rewrite moves, in the order written, to a top-level
+no status, a status bullet for an item the body does not record -- is a note,
+which a rewrite moves, in the order written, to a top-level
 `## Evidence Notes` section directly below. Write your note there
 and it stays put; write it under the heading and the next lane run or factory
-turn relocates it -- relocates, not deletes: your own
-`- [blocked] release approval -- the signing profile is missing` under that
-heading comes back in the notes rather than going without a word (#1751).
-A status bullet of your own for an item the body DOES record is the
-machine's: the rewrite renders the recorded entry's line in its place, so the
-section never shows two answers for one requirement. Your text is not deleted
-for it -- it is carried to the notes with a line on the run's output saying
-which bullet was replaced and by which entry, unless your bullet is byte for
-byte the line the write itself rendered, which carries nothing of yours.
+turn relocates it. If you write your own status bullet for an item the body
+does record, the rewrite puts the recorded entry's line in its place, so the
+section never shows two answers for one requirement. Your line is kept as a
+quoted excerpt under `## Evidence Notes`, and the run's output names the
+bullet it replaced. A byte-for-byte copy of the machine's own line is
+replaced without a message.
 A body carrying no such block has no such section. A block
 indented under a status bullet is the author's too and moves whole, since it
 belongs to the bullet only because the parser folds it there; a status line

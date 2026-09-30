@@ -1034,12 +1034,9 @@ def build_execution_summary_body(
     so it, and not the model's text, is what an owner-written evidence line is
     read from.
 
-    It takes NO DEFAULT, here or at the renderer below it. An empty string is
-    a body a person wrote nothing in, and a caller that omits the argument
-    cannot be told from one: the flag this branch removed was safe by the
-    caller remembering, and a default one level up is the same shape one
-    level up. A caller with no published body -- the turn that opens a pull
-    request -- says `published_body=""` and means it (#1751, round 19).
+    `published_body` has no default here or in the renderer, so no caller can
+    omit it by accident. A turn with no published body yet, such as the one
+    that opens the pull request, passes `""`.
     """
     summary_body = str(data.get("body", "")).strip()
     if not requested_evidence:
