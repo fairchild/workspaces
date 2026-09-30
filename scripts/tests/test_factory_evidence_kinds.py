@@ -36,19 +36,7 @@ SCRIPT_PATH = REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scri
 
 
 def entries_for(lines):
-    """Entries whose rendered lines are exactly these, for a test that holds lines.
-
-    The one helper round 12 keeps, with its reason: these cases are about what
-    the write CARRIES -- a block it moves, a refusal it makes -- and they are
-    written in the lines the case is about rather than in the metadata behind
-    them. Building entries by hand at twenty-one call sites would put the
-    composer's shape in twenty-one places.
-
-    It cannot drift from the composer, because it checks itself against it:
-    the entries it returns render back to the lines it was given, byte for
-    byte, or it raises. A line no entry can produce is passed over rather
-    than invented.
-    """
+    """Entries that render exactly these lines; raises if the composer disagrees."""
     evidence = sys.modules["evidence"]
     shape = re.compile(r"^- \[(complete|blocked|pending-ci)\] (.+?) -- (.+)$")
     entries, expected = [], []
@@ -69,6 +57,18 @@ def entries_for(lines):
     rendered = evidence.rendered_entry_lines(entries)
     assert rendered == expected, f"the helper and the composer disagree: {rendered} != {expected}"
     return entries
+
+
+def write_section(body: str, lines: list[str], items):
+    """The section write over one body whose entries render exactly `lines`."""
+    return sys.modules["evidence"].write_evidence_status_section(
+        body,
+        lines,
+        notes_from=body,
+        entries=entries_for(lines),
+        previous_entries=entries_for(lines),
+        recorded_items=items,
+    )
 
 
 def load_module(name: str, path: Path):
@@ -6077,9 +6077,7 @@ class ALongSHeadingIsAnotherHeadingTests(unittest.TestCase):
     def test_a_rewrite_leaves_the_long_s_section_where_it_is(self) -> None:
         # The harm as the author sees it: their long-s section survives, and
         # the real one is the one rewritten.
-        write = self.evidence().write_evidence_status_section(
-            self.BODY, self.ENTRIES, notes_from=self.BODY, entries=entries_for(self.ENTRIES), previous_entries=entries_for(self.ENTRIES), recorded_items=[self.ITEM]
-        )
+        write = write_section(self.BODY, self.ENTRIES, [self.ITEM])
         self.assertIn(self.LONG_S, write.body, write.refusal)
         self.assertIn("- [complete] the printer's item -- not this section", write.body)
         self.assertNotIn(
@@ -6158,9 +6156,7 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         for name, heading in self.SHAPES.items():
             with self.subTest(shape=name):
                 body = self.body(heading)
-                written, stood_down, _ = self.evidence().write_evidence_status_section(
-                    body, self.ENTRIES, notes_from=body, entries=entries_for(self.ENTRIES), previous_entries=entries_for(self.ENTRIES), recorded_items=[self.ITEM]
-                )
+                written, stood_down, _ = write_section(body, self.ENTRIES, [self.ITEM])
                 self.assertIn(self.AUTHORS_LINE, written, stood_down)
 
     def test_a_plain_heading_is_still_the_section_and_still_rewritten(self) -> None:
@@ -6169,11 +6165,8 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         helpers = self.helpers()
         body = self.body("## Evidence Status")
         self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
-        written, _, _ = self.evidence().write_evidence_status_section(
-            body, self.ENTRIES, notes_from=body, entries=entries_for(self.ENTRIES), previous_entries=entries_for(self.ENTRIES), recorded_items=[self.ITEM]
-        )
-        # Out of the SECTION, which is what "still rewritten" means. Their
-        # bytes are below it now rather than gone (#1751, round 17).
+        written, _, _ = write_section(body, self.ENTRIES, [self.ITEM])
+        # Rewritten means gone from the section. The author's bytes move to the notes.
         self.assertNotIn(self.AUTHORS_LINE, self.helpers().markdown_section(written, "Evidence Status"))
         self.assertIn(self.AUTHORS_LINE, self.helpers().markdown_section(written, "Evidence Notes"))
 
@@ -6186,11 +6179,8 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         helpers = self.helpers()
         body = self.body("## **Evidence Status**")
         self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
-        written, _, _ = self.evidence().write_evidence_status_section(
-            body, self.ENTRIES, notes_from=body, entries=entries_for(self.ENTRIES), previous_entries=entries_for(self.ENTRIES), recorded_items=[self.ITEM]
-        )
-        # Out of the SECTION, which is what "still rewritten" means. Their
-        # bytes are below it now rather than gone (#1751, round 17).
+        written, _, _ = write_section(body, self.ENTRIES, [self.ITEM])
+        # Rewritten means gone from the section. The author's bytes move to the notes.
         self.assertNotIn(self.AUTHORS_LINE, self.helpers().markdown_section(written, "Evidence Status"))
         self.assertIn(self.AUTHORS_LINE, self.helpers().markdown_section(written, "Evidence Notes"))
 
@@ -6281,11 +6271,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
     def written(self, heading: str) -> str:
         """The body the write returns, which is what the note is asked about."""
         with contextlib.redirect_stderr(io.StringIO()):
-            body, refusal, _ = self.evidence().write_evidence_status_section(
-                self.body(heading),
-                ["- [complete] the UI lane -- swift test passed"], notes_from=self.body(heading),
-                entries=entries_for(["- [complete] the UI lane -- swift test passed"]), previous_entries=entries_for(["- [complete] the UI lane -- swift test passed"]), recorded_items=[self.ITEM],
-            )
+            body, refusal, _ = write_section(self.body(heading), ["- [complete] the UI lane -- swift test passed"], [self.ITEM])
         self.assertIsNone(refusal)
         return body
 
@@ -6333,11 +6319,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
         refusing = source.replace("## Validation\n\n- ran\n", "<pre>\nnever closed\n")
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
-            result, refusal, _ = evidence.write_evidence_status_section(
-                refusing,
-                ["- [complete] the UI lane -- swift test passed"], notes_from=refusing,
-                entries=entries_for(["- [complete] the UI lane -- swift test passed"]), previous_entries=entries_for(["- [complete] the UI lane -- swift test passed"]), recorded_items=[self.ITEM],
-            )
+            result, refusal, _ = write_section(refusing, ["- [complete] the UI lane -- swift test passed"], [self.ITEM])
         self.assertIsNotNone(refusal)
         self.assertEqual(result, refusing)
         stood_down = helpers.rejected_heading_note(result, "Evidence Status")
@@ -6357,14 +6339,11 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
             with self.subTest(shape=name):
                 spoke = io.StringIO()
                 with contextlib.redirect_stderr(spoke):
-                    written, refusal, _ = self.evidence().write_evidence_status_section(
+                    written, refusal, _ = write_section(
                         self.body(heading),
-                        # Naming the recorded item, because the write asks its
-                        # own reader whether it can read back what it renders
-                        # and says so when it cannot (#1751, round 4). A line
-                        # for an item nobody recorded is exactly that shape.
-                        [f"- [complete] {self.ITEM} -- swift test passed"], notes_from=self.body(heading),
-                        entries=entries_for([f"- [complete] {self.ITEM} -- swift test passed"]), previous_entries=entries_for([f"- [complete] {self.ITEM} -- swift test passed"]), recorded_items=[self.ITEM],
+                        # A line for the recorded item, so the write can read it back.
+                        [f"- [complete] {self.ITEM} -- swift test passed"],
+                        [self.ITEM],
                     )
                 self.assertIsNone(refusal)
                 self.assertEqual(spoke.getvalue(), "")
@@ -6824,11 +6803,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
             + "## Validation\n\n- ran\n"
         )
         with contextlib.redirect_stderr(io.StringIO()):
-            written, refusal, _ = evidence.write_evidence_status_section(
-                two_tagged,
-                ["- [complete] the UI lane -- swift test passed"], notes_from=two_tagged,
-                entries=entries_for(["- [complete] the UI lane -- swift test passed"]), previous_entries=entries_for(["- [complete] the UI lane -- swift test passed"]), recorded_items=["the UI lane"],
-            )
+            written, refusal, _ = write_section(two_tagged, ["- [complete] the UI lane -- swift test passed"], ["the UI lane"])
         self.assertIsNone(refusal)
         note = helpers.rejected_heading_note(written, "Evidence Status")
         assert note is not None
@@ -6993,10 +6968,8 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
 
     def test_the_factory_turn_writes_the_same_notes_to_the_same_place(self) -> None:
         # Two writers of one section disagreeing about what a body carries is
-        # the failure #1729 named; they share the function that decides. Each
-        # is handed the body it carries FROM, which is the same body here:
-        # the lane rewrites the published body, and the turn is told that the
-        # published body is where a person's text can be (#1751, round 18).
+        # the failure #1729 named; they share the function that decides. Both
+        # carry notes from the same body here.
         body = self.body(self.NOTES_BODY_TAIL)
         rendered, errors = run_contributor.render_execution_summary_body(
             body,
@@ -7346,9 +7319,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertLessEqual(len(body), evidence.PR_BODY_LIMIT)
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
-            written, refusal, _ = evidence.write_evidence_status_section(
-                body, [status], notes_from=body, entries=entries_for([status]), previous_entries=entries_for([status]), recorded_items=[self.ITEM]
-            )
+            written, refusal, _ = write_section(body, [status], [self.ITEM])
         self.assertIsNone(refusal)
         self.assertLessEqual(len(written), evidence.PR_BODY_LIMIT)
         self.assertIn(status, written)
@@ -7356,17 +7327,13 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertIn("not written", spoke.getvalue())
         # The control: the same body one block shorter does carry it.
         shorter = body.replace(note, note[:-32], 1)
-        carried, _, _ = evidence.write_evidence_status_section(
-            shorter, [status], notes_from=shorter, entries=entries_for([status]), previous_entries=entries_for([status]), recorded_items=[self.ITEM]
-        )
+        carried, _, _ = write_section(shorter, [status], [self.ITEM])
         self.assertIn("## Evidence Notes", carried)
         # And where the status alone is already past the limit, dropping the
         # notes buys nothing: the edit fails either way, so the text is kept
         # rather than traded for a body that still cannot be stored.
         huge = f"- [complete] {self.ITEM} -- " + "x" * evidence.PR_BODY_LIMIT
-        kept, _, _ = evidence.write_evidence_status_section(
-            body, [huge], notes_from=body, entries=entries_for([huge]), previous_entries=entries_for([huge]), recorded_items=[self.ITEM]
-        )
+        kept, _, _ = write_section(body, [huge], [self.ITEM])
         self.assertIn("## Evidence Notes", kept)
 
     def test_a_body_at_the_limit_announces_the_notes_it_dropped(self) -> None:
@@ -7379,9 +7346,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         note = "n" * (evidence.PR_BODY_LIMIT - len(shell))
         body = f"## Evidence Status\n\n{status}\n\n{note}\n\n## Validation\n\n- ran it\n"
         with contextlib.redirect_stderr(io.StringIO()):
-            written = evidence.write_evidence_status_section(
-                body, [status], notes_from=body, entries=entries_for([status]), previous_entries=entries_for([status]), recorded_items=[self.ITEM]
-            )
+            written = write_section(body, [status], [self.ITEM])
         self.assertIsNone(written.refusal)
         self.assertNotIn("Evidence Notes", written.body)
         self.assertEqual(len(written.announcements), 1, written.announcements)
@@ -7392,9 +7357,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         # The control: one block shorter carries the note and announces nothing.
         shorter = body.replace(note, note[:-32], 1)
         with contextlib.redirect_stderr(io.StringIO()):
-            carried = evidence.write_evidence_status_section(
-                shorter, [status], notes_from=shorter, entries=entries_for([status]), previous_entries=entries_for([status]), recorded_items=[self.ITEM]
-            )
+            carried = write_section(shorter, [status], [self.ITEM])
         self.assertIn("## Evidence Notes", carried.body)
         self.assertEqual(carried.announcements, [])
 
@@ -8180,9 +8143,7 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
         """The write, and everything it printed while making it."""
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            result = self.evidence().write_evidence_status_section(
-                self.body(tail), self.ENTRIES, notes_from=self.body(tail), entries=entries_for(self.ENTRIES), previous_entries=entries_for(self.ENTRIES), recorded_items=[self.ITEM]
-            )
+            result = write_section(self.body(tail), self.ENTRIES, [self.ITEM])
         return result, err.getvalue()
 
     def metadata_body(self, tail: str) -> str:
@@ -8211,11 +8172,8 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
             with self.subTest(shape=shape):
                 result, _ = self.write(tail)
                 self.assertIsNone(result.refusal)
-                # The loss this shape is about comes back in the result. A
-                # write may say more than one thing about one body -- it also
-                # says when it replaced somebody's status line -- so this
-                # asks WHICH sentence came back rather than how many
-                # (#1751, round 17).
+                # A write can also announce a replaced status line, so this
+                # picks the uncarried-text sentence rather than counting all.
                 carried = [note for note in result.announcements if "not carried" in note]
                 self.assertEqual(len(carried), 1, result.announcements)
                 announcement = carried[0]
@@ -8264,9 +8222,7 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
                         evidence_blocked=[],
                         evidence_pending_ci=[],
                         announcements=factory,
-                        # The same body in both roles: the sentence is about
-                        # text a person may have written, so the turn has to
-                        # be told where that text is (#1751, round 18).
+                        # The turn carries notes from the published body, here the same one.
                         published_body=body,
                     )
                 self.assertNotEqual(lane, [])
@@ -8282,9 +8238,7 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
                 first, _ = self.write(tail)
                 self.assertNotEqual(first.announcements, [])
                 with contextlib.redirect_stderr(io.StringIO()):
-                    second = self.evidence().write_evidence_status_section(
-                        first.body, self.ENTRIES, notes_from=first.body, entries=entries_for(self.ENTRIES), previous_entries=entries_for(self.ENTRIES), recorded_items=[self.ITEM]
-                    )
+                    second = write_section(first.body, self.ENTRIES, [self.ITEM])
                 self.assertEqual(second.announcements, [])
 
     def test_the_lane_writer_hands_its_announcements_to_its_caller(self) -> None:
@@ -8442,10 +8396,7 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
         # ``` inside ` ` was five backticks in a row and the page showed the
         # marker as text rather than as code (#1740, round 3).
         result, _ = self.write(self.LOSSES["an unclosed fence"][0])
-        # The note about the text that could not be CARRIED, which is what
-        # this quoting rule is about. A write may also say it replaced a
-        # status line of somebody's, and that sentence quotes a different
-        # thing (#1751, round 17).
+        # The uncarried-text note; a replaced-line note quotes something else.
         note = next(note for note in result.announcements if "not carried" in note)
         # Five backticks in a row is the bug's signature: a three-backtick
         # marker wrapped in one backtick each side.
@@ -8529,24 +8480,9 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
 
 
 class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase):
-    """Whose line a status-shaped bullet inside the section is, settled at both readers (#1751).
+    """A status bullet naming no recorded item is the author's and moves to `## Evidence Notes` (#1751).
 
-    Two rules stood, and on one body they cost the author a line with nothing
-    printed. The writer rebuilt the section from the entries in hand and took
-    every status-shaped line under the heading; the sweep that measures what
-    the writer costs a body called a line the machine's only when it names an
-    item the body records. So an author's own
-    `- [blocked] release approval -- the signing profile is missing` was the
-    machine's to one and the author's to the other, and an ordinary write
-    deleted it, announced nothing, and refused nothing.
-
-    One rule now, stated in the same words at `write_evidence_status_section`,
-    `_section_notes`, `_is_status_list_item` and the sweep's
-    `_entry_line_numbers`, and read by one function: a status-shaped line
-    inside the section that names no recorded item is the author's, wherever
-    it sits, and it moves to `## Evidence Notes` like any other block. It
-    fails toward keeping the author's words, and there is no new sentence to
-    say, because nothing is taken.
+    A bullet naming a recorded item is the machine's and is rewritten from the entry.
     """
 
     ITEM = "`swift test` passes"
@@ -8588,7 +8524,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         return text.replace("\n", ending)
 
     def written(self, source: str) -> tuple[str, list[str]]:
-        """The lane writer's body and every sentence it owed the author."""
+        """The lane writer's body and every announcement it made."""
         said: list[str] = []
         with contextlib.redirect_stderr(io.StringIO()):
             body = self.evidence().update_evidence_entries(
@@ -8605,17 +8541,12 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         after = self.flat(body).split("## Evidence Status\n", 1)[1]
         return after.split("\n## ", 1)[0].strip()
 
-    # intent: fix
-    # marker: behaviourally red at `016d94ba`, its own base
-    # (`AssertionError`).
     def test_the_authors_own_blocked_bullet_lands_in_the_notes(self) -> None:
         for name, ending in self.ENDINGS.items():
             with self.subTest(ending=name):
                 written, said = self.written(self.body(ending))
                 self.assertIn(self.THEIRS, self.flat(written))
-                # In the notes, in the order the author wrote the three blocks:
-                # a carried status line is a block like any other, and a mover
-                # that reorders is not a mover.
+                # In the notes, in the author's order.
                 self.assertIn(
                     f"## Evidence Notes\n{self.NOTE}\n\n{self.THEIRS}\n\n{self.UNDER}",
                     self.flat(written),
@@ -8624,17 +8555,11 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 self.assertEqual(
                     self.section_of(written), f"- [complete] {self.ITEM} -- {self.RESOLVED}"
                 )
-                # Nothing is taken, so there is nothing to say about it. The
-                # other decision available here kept the deletion and added a
-                # sentence; this one needs no channel at all.
+                # Nothing is taken, so nothing is announced.
                 self.assertEqual(said, [])
 
-    # intent: fix
-    # marker: behaviourally red at `016d94ba`, its own base
-    # (`AssertionError`).
     def test_a_second_write_leaves_the_bullet_where_the_first_put_it(self) -> None:
-        # A fixed point, or the line travels one write at a time and an author
-        # reading the body between two lane runs sees a different page each.
+        # A second write moves nothing.
         for name, ending in self.ENDINGS.items():
             with self.subTest(ending=name):
                 once, _ = self.written(self.body(ending))
@@ -8643,28 +8568,8 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 self.assertIn(self.THEIRS, self.flat(twice))
                 self.assertEqual(said, [])
 
-    # intent: fix
-    # marker: behaviourally red at `61c1e37a`, its own base -- the bullet
-    # leaves the body there with no error, nothing on stderr and no notes
-    # entry (`AssertionError`).
     def test_a_bullet_of_theirs_for_a_recorded_item_is_replaced_out_loud(self) -> None:
-        """Their own words for a requirement this body records, and where they go.
-
-        The rule does not move: a status line naming a recorded item is the
-        machine's, and the rewrite renders the entry's line in its place --
-        two answers for one requirement under the heading would leave a
-        reader choosing between them. What moves is what happens to the bytes
-        it replaces. They are not this write's output: somebody typed them,
-        and at `61c1e37a` they left the body with no error, nothing on
-        stderr and no `## Evidence Notes` entry, while the same bullet for an
-        item the body does NOT record survived into the notes. The
-        instrument built to catch silent losses could not see it either,
-        because it asked the writer's own ownership predicate.
-
-        So the replacement is announced and the text is carried, the way any
-        other line of theirs is. The cost is named rather than hidden: the
-        page does then show their older sentence below the section.
-        """
+        """The author's own bullet for a recorded item is replaced, carried to the notes and announced."""
         theirs = f"- [complete] {self.ITEM} -- I ran it myself and it passed"
         written, said = self.written(self.body(tail=f"{self.NOTE}\n{theirs}\n"))
         helpers = sys.modules["_helpers"]
@@ -8674,21 +8579,15 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         )
         # Their bytes are on the page, below it.
         self.assertIn(theirs, helpers.markdown_section(written, "Evidence Notes"))
-        # And one sentence says what happened, naming the line, its position
-        # and the item the entry records.
+        # One announcement names the line, its position and the item.
         replaced = [note for note in said if "replaced in" in note]
         self.assertEqual(len(replaced), 1, said)
         self.assertIn(helpers.code_span(theirs), replaced[0])
         self.assertRegex(replaced[0], r"at line \d+")
         self.assertIn(helpers.code_span(self.ITEM), replaced[0])
 
-    # intent: control
-    # marker: green at `61c1e37a`, its own base: a copy of the machine's own
-    # bytes says nothing there and says nothing here (#1751, round 17).
     def test_a_byte_identical_copy_of_the_machines_line_is_still_silent(self) -> None:
-        # Round 16's control, which this round must not move: there is
-        # nothing of anybody else's in those bytes, so the page keeps the
-        # line and no sentence is spent on it.
+        # A byte-identical copy of the machine's line holds nothing of the author's.
         copy = f"- [pending-ci] {self.ITEM} -- {self.DETAIL}"
         written, said = self.written(self.body(tail=f"{self.NOTE}\n{copy}\n"))
         self.assertEqual([note for note in said if "replaced in" in note], [], said)
@@ -8696,39 +8595,15 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             self.section_of(written), f"- [complete] {self.ITEM} -- {self.RESOLVED}"
         )
 
-    # intent: control
-    # marker: green at `61c1e37a`, its own base -- the branch made it so --
-    # and behaviourally red on `016d94ba`, where a bullet for an item nothing
-    # records was replaced in silence, which is this branch's first defect
-    # (#1751, round 17).
     def test_a_bullet_for_an_item_this_body_does_not_record_still_survives(self) -> None:
-        # The other side of the rule, unchanged: the write owns no line for
-        # an item it does not record, so the bullet moves to the notes as
-        # any block of theirs does -- and nothing is announced, because
-        # nothing was replaced.
+        # The write owns no line for an unrecorded item, so nothing is announced.
         written, said = self.written(self.body(tail=f"{self.NOTE}\n{self.THEIRS}\n"))
         helpers = sys.modules["_helpers"]
         self.assertIn(self.THEIRS, helpers.markdown_section(written, "Evidence Notes"))
         self.assertEqual([note for note in said if "replaced in" in note], [], said)
 
-    # Guards: a stale reading of a recorded item stays the machine's -- the SECTION
-    # half is green on main; what the write says about replacing it is round 17's.
-    # intent: fix
-    # marker: `control` until round 17, when the behaviour it pins moved.
-    # Behaviourally red at `61c1e37a`, its own base now -- the head this
-    # round started from -- `FAILED (failures=1)`, because the
-    # two assertions this round adds (the text carried, the replacement
-    # announced) are this round's. Red on `016d94ba` the same way. The
-    # section half it kept is green at both (#1751, round 17).
     def test_a_status_line_naming_a_recorded_item_is_still_the_machines(self) -> None:
-        # The other direction of the same rule, and the half that keeps the
-        # section readable: a stale reading of an item the write records is
-        # replaced by the entry in hand. What changed in round 17 is what
-        # happens to the bytes: they are not the write's own, so they are
-        # carried below the section and the replacement is said out loud.
-        # The cost is named rather than hidden -- a reader does see the older
-        # reading under `## Evidence Notes` -- and it is the price of "nothing
-        # leaves without a word" over a line the machine owns.
+        # A stale reading of a recorded item is replaced by the entry, carried and announced.
         stale = f"- [blocked] {self.ITEM} -- an older reading of the same item"
         written, said = self.written(self.body(tail=f"{self.NOTE}\n{stale}\n"))
         self.assertEqual(
@@ -8739,12 +8614,8 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         self.assertEqual(len([note for note in said if "replaced in" in note]), 1, said)
         self.assertIn(f"## Evidence Notes\n{self.NOTE}", self.flat(written))
 
-    # intent: fix
-    # marker: behaviourally red at `016d94ba`, its own base
-    # (`AssertionError`).
     def test_both_writers_carry_it(self) -> None:
-        # The pair that has to agree about what a body carries (#1729): the
-        # lane's re-render and the factory turn's own render, on one body.
+        # The lane's re-render and the turn's render must carry the same notes (#1729).
         run_contributor = sys.modules["run_contributor_evidence_kinds"]
         source = self.body()
         with contextlib.redirect_stderr(io.StringIO()):
@@ -8754,8 +8625,6 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 evidence_complete=[f"1 -- {self.RESOLVED}"],
                 evidence_blocked=None,
                 evidence_pending_ci=None,
-                # One body, both writers: the turn carries from the published
-                # body, so that is the body this hands it (#1751, round 18).
                 published_body=source,
             )
         lane, _ = self.written(source)
@@ -8767,29 +8636,11 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             self.flat(lane).split("## Evidence Notes\n", 1)[1].rstrip("\n"),
         )
 
-    # intent: guard
-    # marker: green at `993dc95e`, its own base: the sentence, the fence
-    # width and the line the log names are all right there. What was missing
-    # is anything reading them -- three mutants on this excerpt were green
-    # across all 685 tests, and one of them publishes a body that credits a
-    # person with the machine's framing (#1751, round 19).
     def test_the_carried_excerpt_says_what_it_is_and_holds_what_it_quotes(self) -> None:
-        """The excerpt is where the attribution claim lives, so its surfaces are pinned here.
+        """The carried excerpt's opening sentence and its fence.
 
-        Three of them, each with its own mutant. The opening sentence is
-        this write's own words about its own act, so it says what the write
-        did and never that a person checked anything -- a body that reads
-        `verified by the person who edited this pull request:` over text the
-        machine moved is a forgery with a machine's byline.
-
-        The fence is longer than the longest backtick run in the line it
-        quotes, so a line carrying three backticks cannot close it from the
-        inside; with an equal fence the remainder renders outside the code
-        block and the quoted bullet comes back as a live status line.
-
-        And the sentence about a block the write did not carry names the
-        line that block OPENS on, which a single-line fixture cannot tell
-        from the line it ends on.
+        The sentence describes the write's own act and never claims a person checked the text.
+        The fence is longer than any backtick run in the quoted line, so the line cannot close it.
         """
         evidence = self.evidence()
         helpers = sys.modules["_helpers"]
@@ -8804,14 +8655,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 claim, opening, "the write's own sentence reads as somebody's attestation"
             )
 
-        # The fence, over the lines that test it. MEASURED, and not what the
-        # report that prompted this said: a three-backtick run MID-LINE does
-        # not close a three-backtick fence -- only a line that is nothing but
-        # backticks does, and a status-shaped line always carries a bullet
-        # and a token, so the write's own path cannot produce one. The
-        # property belongs to the carrier rather than to the path, so it is
-        # driven at the carrier with the line that would close it
-        # (#1751, round 19).
+        # Only a line of bare backticks closes a fence, so drive the carrier with one.
         for shape, theirs in (
             ("a three-backtick run mid-line", "- [complete] run ```a``` -- mine"),
             ("a line that is nothing but a fence", "```"),
@@ -8824,16 +8668,10 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 ]
                 self.assertEqual(len(tokens), 1, excerpt)
                 self.assertIn(theirs, tokens[0].content, excerpt)
-        # The page's own reading: nothing in that block is a list item, so no
-        # reader meets a second status line for the requirement.
+        # Nothing in the excerpt renders as a list item.
         kinds = {token.type for token in helpers.MARKDOWN.parse(excerpt)}
         self.assertNotIn("bullet_list_open", kinds, excerpt)
 
-    # intent: guard
-    # marker: green at `993dc95e`, its own base: the log names the line each
-    # block opens on there. Every fixture that reads it is a single-line
-    # block, so `splitlines()[0]` and `[-1]` are the same string and the
-    # mutant that swaps them is green (#1751, round 19).
     def test_the_sentence_about_an_uncarried_block_names_the_line_it_opens_on(self) -> None:
         """A multi-line block, so the first line and the last are different strings."""
         evidence = self.evidence()
@@ -8869,27 +8707,11 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         self.assertIn(opening, sentences[0], "the sentence does not name the line it opens on")
         self.assertNotIn(closing, sentences[0], "the sentence names the line it ends on")
 
-    # intent: guard
-    # marker: green at `993dc95e` and at `016d94ba`: what it pins is which
-    # PATH each shape takes, and that has been true at both. It is here
-    # because the question was asked of the carry and answered by
-    # measurement rather than by reading (#1751, round 19).
     def test_a_shape_that_would_end_the_notes_section_never_reaches_the_carry(self) -> None:
-        """Three shapes that create a heading, and the path each one takes.
+        """Three shapes that create a heading, and where each one goes.
 
-        The protection under `## Evidence Notes` is the HEADING: a reader
-        takes status lines from under the status heading and nothing else,
-        fenced or bare. So the question worth asking of a carry is whether
-        carried text can END that section and move what follows into one a
-        reader parses.
-
-        Measured: an `## …` line of their own and a setext underline end the
-        STATUS section where they stand, so the text below them is never
-        under the heading and never carried -- they are refused before the
-        carry rather than by it. A footnote definition does travel, and what
-        it does on the page is move itself to the page's own footnote area;
-        it does not end the section for any reader here, and the status
-        section still reads as exactly the line this write rendered.
+        An `## ...` line and a setext underline end the status section where they stand, so the
+        text below them is never carried. A footnote definition is carried and ends no section.
         """
         evidence = self.evidence()
         helpers = sys.modules["_helpers"]
@@ -8916,38 +8738,16 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                     )
                 notes = helpers.markdown_section(written, "Evidence Notes")
                 self.assertEqual(bool(notes.strip()), carried, notes)
-                # Whatever travelled, the status section still reads as the
-                # one line this write rendered -- the section did not end
-                # early and nothing below it became a status line.
+                # The status section still reads as the one line this write rendered.
                 lines, unreadable = evidence._rendered_status_lines(written)
                 self.assertIsNone(unreadable, f"{shape}: {unreadable}")
                 self.assertEqual(lines, [f"[complete] {item} -- green"], f"{shape}: {lines}")
 
-    # intent: fix
-    # marker: red at `993dc95e`, its own base, behaviourally: with no record
-    # comment in the body it carries from, the same author line is carried
-    # again on every turn -- 1, 2, 3, 4, 5 excerpts and 130 to 622 characters
-    # over five chained turns, on a page a person reads. Red on `016d94ba`
-    # for the opposite reason: nothing is carried there at all
-    # (#1751, round 19).
     def test_five_chained_turns_carry_one_excerpt_and_stop(self) -> None:
-        """The carry is idempotent whatever the record holds, and the bound is per ITEM.
+        """Chained turns carry one excerpt per recorded item, with or without the record comment.
 
-        Each turn publishes what the last one wrote, so the body a turn
-        carries from is its own previous output. With the record comment
-        present the machine's own line is claimed by the record and never
-        looks like somebody's; with it absent nothing says which status line
-        an earlier run rendered, every turn's line reads as theirs, and --
-        because the detail moves from turn to turn -- no two excerpts are
-        equal, so byte identity alone cannot stop it.
-
-        One excerpt per recorded item is what stops it. The first reading
-        stays, later ones are announced and not carried, and the section is
-        a fixed point from the second turn on.
-
-        What this fixture holds fixed: one requested item, one author line,
-        and the same draft every turn -- so what varies between the two runs
-        is the record comment and nothing else.
+        Without the record, each turn's own line reads as the author's and its detail changes every
+        turn, so byte identity alone cannot stop the growth. The two runs differ only in the record.
         """
         evidence = self.evidence()
         helpers = sys.modules["_helpers"]
@@ -8987,8 +8787,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
 
         with_record = chain(True)
         without_record = chain(False)
-        # A fixed point either way: one excerpt, one size, from the first
-        # turn to the fifth.
+        # One excerpt of one size from the first turn to the fifth.
         self.assertEqual(len(set(with_record)), 1, with_record)
         self.assertEqual(len(set(without_record)), 1, without_record)
         self.assertEqual(with_record[0][0], 1, with_record)
@@ -8996,27 +8795,10 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         # And their line is what the one excerpt holds.
         self.assertEqual(with_record[-1], without_record[-1], "the record changed what is carried")
 
-    # intent: fix
-    # marker: red at `fa8a2010`, its own base, behaviourally -- the replaced
-    # text is carried there as the `- [complete] …` bullet it was, so after
-    # the machine's verdict flips the page shows `- [blocked] <item>` under
-    # `## Evidence Status` and `- [complete] <item>` directly below it under
-    # `## Evidence Notes`, one such bullet per author edit and nothing marking
-    # either superseded. Red on `016d94ba` for a different reason: nothing is
-    # carried there at all (#1751, round 18).
-    def test_the_page_shows_one_status_however_often_the_author_edits_the_line(self) -> None:
-        """The cost of carrying a replaced line, measured per author edit rather than per write.
+    def test_author_edits_leave_one_status_on_the_page(self) -> None:
+        """Author edits and a verdict flip leave one status line and fenced excerpts in the notes.
 
-        Two edits and a verdict flip, driven through the lane writer: the
-        author's own reading of the item is replaced each time, so what the
-        notes hold grows by one block per EDIT -- not per write, which is why
-        the third write adds nothing, and not per flip.
-
-        What the page must not show is two answers for one requirement. The
-        older readings are carried as fenced excerpts under a sentence saying
-        what they were, so nothing under `## Evidence Notes` renders as a
-        status bullet: the status list has one line, and the excerpts are
-        code.
+        The notes keep the first reading per item, and nothing under them renders as a status bullet.
         """
         evidence = self.evidence()
         helpers = sys.modules["_helpers"]
@@ -9043,8 +8825,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             written = evidence.update_evidence_entries(
                 written, {1: {"status": "pending-ci", "detail": self.DETAIL}}, announcements=said
             )
-            # And the flip, which is where two statuses used to be on the page
-            # at once.
+            # And the verdict flip.
             written = evidence.update_evidence_entries(
                 written, {1: {"status": "blocked", "detail": "the device is not on the bench"}},
                 announcements=said,
@@ -9058,11 +8839,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             written,
         )
         notes = helpers.markdown_section(written, "Evidence Notes")
-        # ONE excerpt per recorded item, which is the bound round 19 put on
-        # this: the first reading stays, later ones are announced and not
-        # carried. Carrying one per EDIT grew the section by a block a turn
-        # on a body with no record comment, where each turn's own line reads
-        # as somebody's (#1751, round 19).
+        # The first reading stays; later ones are announced, not carried.
         self.assertIn(theirs[0], notes, "the first reading of theirs is not in the notes")
         self.assertNotIn(theirs[1], notes, "a second excerpt for one item was carried")
         self.assertEqual(
@@ -9071,19 +8848,12 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         held = [note for note in said if "already holds an excerpt" in note]
         self.assertEqual(len(held), 1, said)
         self.assertIn(theirs[1], held[0], "the reading that was not carried is not named")
-        # The page's own reading: nothing under the notes heading is a list,
-        # so no reader meets a second status bullet for one requirement.
+        # Nothing under the notes heading renders as a list.
         kinds = {token.type for token in helpers.MARKDOWN.parse(notes)}
         self.assertNotIn("bullet_list_open", kinds, notes)
         self.assertIn("fence", kinds, notes)
 
-    # intent: guard
-    # marker: red at `016d94ba`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_one_function_decides_whose_line_it_is(self) -> None:
-        # The rule itself, where both readers call it. Two spellings of one
-        # question were what the disagreement was made of.
         evidence = self.evidence()
         self.assertTrue(
             evidence.is_recorded_status_line(
@@ -9091,14 +8861,11 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             )
         )
         self.assertFalse(evidence.is_recorded_status_line(self.THEIRS, [self.ITEM]))
-        # A write that records nothing owns no line in the section, which is
-        # the conservative answer and the one the sweep gives a body whose
-        # metadata records no entries.
+        # A write that records nothing owns no line.
         self.assertFalse(
             evidence.is_recorded_status_line(f"- [complete] {self.ITEM} -- {self.RESOLVED}", [])
         )
-        # The item is matched whole against the items in hand rather than read
-        # out of the line up to its first ` -- ` (#1738, round 3).
+        # The item is matched whole, not cut at its first ` -- ` (#1738).
         self.assertTrue(
             evidence.is_recorded_status_line("- [pending-ci] build -- release -- d", ["build -- release"])
         )
@@ -9110,11 +8877,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         # Not status-shaped at all: a note is a note however it opens.
         self.assertFalse(evidence.is_recorded_status_line("- a plain bullet", [self.ITEM]))
 
-    # Every way a reader can write one status line, and the reading the page
-    # gives it. The rule takes the page's reading, so these are one line to it
-    # -- and where the two readers handed it different text instead, a wrapped
-    # line naming a recorded item was the machine's to one and the author's to
-    # the other, which is #1751 again on the wrapped form (round 2).
+    # Ways to write one status line; the rule reads each as the page does.
     WRAPPED = {
         "plain": "- [pending-ci] {item} -- {detail}",
         "a bold status token": "- **[pending-ci]** {item} -- {detail}",
@@ -9124,10 +8887,6 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         "a star marker": "* [pending-ci] {item} -- {detail}",
     }
 
-    # intent: guard
-    # marker: red at `e6934e95`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_rule_reads_a_line_the_way_the_page_reads_it(self) -> None:
         evidence = self.evidence()
         plain = f"- [pending-ci] {self.ITEM} -- {self.DETAIL}"
@@ -9140,11 +8899,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                         evidence.status_line_as_page_reads_it(line), [self.ITEM]
                     )
                 )
-        # A code span is not emphasis: the reading keeps its backticks -- not
-        # because the page shows them, which it does not, but because
-        # `inline_text` re-emits them so an item naming its command in a span
-        # stays that item. The line is the author's at both readers, as it was
-        # before this rule existed.
+        # A code span keeps its backticks in the reading, so the line is the author's.
         in_code = f"- `[pending-ci]` {self.ITEM} -- {self.DETAIL}"
         self.assertEqual(evidence.status_line_as_page_reads_it(in_code), in_code)
         self.assertFalse(
@@ -9152,8 +8907,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 evidence.status_line_as_page_reads_it(in_code), [self.ITEM]
             )
         )
-        # A line that is not a list item at all comes back as it was: it names
-        # no item the rule can read either way.
+        # A line that is not a list item comes back unchanged.
         for line in (f"[pending-ci] {self.ITEM} -- {self.DETAIL}", "", "    an indented block"):
             with self.subTest(line=line):
                 self.assertEqual(evidence.status_line_as_page_reads_it(line), line)
@@ -9165,18 +8919,7 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             )
         )
 
-    # Guards: the writer reads the wrapped spellings as the page does -- true on main,
-    # said out loud here so the reader this arc unified cannot quietly narrow.
-    # intent: fix
-    # marker: `control` until round 17. Behaviourally red at `61c1e37a`, its
-    # own base now, in all six spellings -- `FAILED (failures=6)` --
-    # because the carried text and the sentence about it are this round's.
-    # Red the same way on `016d94ba`. The half it kept -- every wrapped
-    # spelling read as the machine's -- is green at both (#1751, round 17).
     def test_a_wrapped_line_naming_a_recorded_item_is_the_machines(self) -> None:
-        # The writer's half of the pair, pinned: it read the page all along,
-        # and this says so rather than leaving it to the docstring. Round 17
-        # adds what it does with the bytes it replaces.
         for name, template in self.WRAPPED.items():
             with self.subTest(form=name):
                 line = template.format(item=self.ITEM, detail=self.DETAIL)
@@ -9187,37 +8930,25 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
                 self.assertNotIn(line, self.section_of(written))
                 self.assertIn(line, self.flat(written))
                 self.assertIn(f"## Evidence Notes\n{self.NOTE}", self.flat(written))
-                # The plain form is byte-identical to the line the last run
-                # rendered, so its claim is spent on the body's own copy and
-                # this one moves in silence: nothing of anybody else's is in
-                # those bytes. Every other spelling is somebody's own, and
-                # the replacement is said (#1751, rounds 9, 16 and 17).
+                # The plain form matches the last run's rendered bytes and moves silently.
+                # Every other spelling is the author's own, so its replacement is announced.
                 self.assertEqual(
                     len([note for note in said if "replaced in" in note]),
                     0 if name == "plain" else 1,
                     f"{name}: {said}",
                 )
 
-    # intent: guard
-    # marker: green at `e6934e95`, its own base.
     def test_a_wrapped_line_naming_no_recorded_item_is_the_authors(self) -> None:
-        # The other half on the same shapes: wrapping a status token does not
-        # hand the write a line it does not record.
+        # Wrapping a status token does not make an unrecorded line the machine's.
         theirs = "- **[blocked]** release approval -- the signing profile is missing"
         written, said = self.written(self.body(tail=f"{self.NOTE}\n{theirs}\n"))
         self.assertIn(theirs, self.flat(written))
         self.assertIn(f"## Evidence Notes\n{self.NOTE}\n\n{theirs}", self.flat(written))
         self.assertEqual(said, [])
 
-    # intent: guard
-    # marker: red at `016d94ba`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_items_are_read_once_however_the_caller_holds_them(self) -> None:
-        # They are walked for every line of every section, so a generator
-        # handed in is spent on the first of them -- after which every status
-        # line below reads as the author's, and the section the write just
-        # rebuilt fills again with the entries it was replacing.
+        # A generator would be spent on the first line and every later status line would
+        # read as the author's.
         evidence = self.evidence()
         second = "the smoke lane"
         body = (
@@ -9227,32 +8958,24 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             "## Validation\n\n- ran it\n"
         )
         with contextlib.redirect_stderr(io.StringIO()):
-            write = evidence.write_evidence_status_section(
+            write = write_section(
                 body,
-                [f"- [complete] {self.ITEM} -- {self.RESOLVED}", f"- [complete] {second} -- ran"], notes_from=body,
-                entries=entries_for([f"- [complete] {self.ITEM} -- {self.RESOLVED}", f"- [complete] {second} -- ran"]), previous_entries=entries_for([f"- [complete] {self.ITEM} -- {self.RESOLVED}", f"- [complete] {second} -- ran"]), recorded_items=(item for item in (self.ITEM, second)),
+                [f"- [complete] {self.ITEM} -- {self.RESOLVED}", f"- [complete] {second} -- ran"],
+                (item for item in (self.ITEM, second)),
             )
         self.assertIsNone(write.refusal)
         self.assertEqual(
             self.section_of(write.body),
             f"- [complete] {self.ITEM} -- {self.RESOLVED}\n- [complete] {second} -- ran",
         )
-        # This body records no metadata, so the write holds no claim on the
-        # two lines already under the heading: they are somebody's bytes, and
-        # round 17 keeps them below the section rather than dropping them.
+        # No metadata, so both existing lines are the author's and are carried.
         notes = sys.modules["_helpers"].markdown_section(write.body, "Evidence Notes")
         self.assertIn(f"- [pending-ci] {self.ITEM} -- {self.DETAIL}", notes)
         self.assertIn(f"- [pending-ci] {second} -- waiting", notes)
 
-    # intent: guard
-    # marker: red at `016d94ba`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_writer_is_told_which_items_it_records(self) -> None:
-        # Not read back out of the rendered lines: an item carrying its own
-        # ` -- ` cannot be recovered from the line it was rendered into, which
-        # is the reading that handed a write its own entry back as somebody
-        # else's (#1738, round 3). The caller has the items; it passes them.
+        # The items are passed in; an item with its own ` -- ` cannot be read back out of its
+        # line (#1738).
         evidence = self.evidence()
         body = (
             "## Summary\n\n- did the thing\n\n## Evidence Status\n\n"
@@ -9260,15 +8983,9 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
             f"{self.THEIRS}\n\n## Validation\n\n- ran it\n"
         )
         with contextlib.redirect_stderr(io.StringIO()):
-            write = evidence.write_evidence_status_section(
-                body,
-                ["- [complete] build -- release -- 214 tests passed"], notes_from=body,
-                entries=entries_for(["- [complete] build -- release -- 214 tests passed"]), previous_entries=entries_for(["- [complete] build -- release -- 214 tests passed"]), recorded_items=["build -- release"],
-            )
+            write = write_section(body, ["- [complete] build -- release -- 214 tests passed"], ["build -- release"])
         self.assertIsNone(write.refusal)
-        # Replaced in the section -- which is what "the writer is told which
-        # items it records" pins -- and carried below it, with one sentence
-        # about the replacement (#1751, round 17).
+        # Replaced in the section, carried below it, and announced once.
         self.assertNotIn(
             "- [pending-ci] build -- release -- waiting",
             sys.modules["_helpers"].markdown_section(write.body, "Evidence Status"),
@@ -9281,24 +8998,10 @@ class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase
         )
 
 class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
-    """`## Evidence Notes` is written from the published body and never from the draft (#1751, round 18).
+    """`## Evidence Notes` is written from the published body and never from the draft (#1751).
 
-    Round 17 asked "might a person have written this?" as a FLAG, and the flag
-    gated one of the paths into that section: the item-claimed lines a write
-    replaces. Every other block under the heading carried regardless, so a
-    forged `- [complete] <item the record does not hold> -- trust me` planted
-    in the MODEL's own draft came back as a note under a body whose metadata
-    says otherwise -- measured at `61c1e37a` and `fa8a2010`, not at
-    `016d94ba`, which is a path this branch opened at or before round 16 and
-    round 17's guard never covered.
-
-    The fix is not a fourth guard. The section's text has ONE source now, the
-    body a person can edit, named by the parameter the caller passes: the turn
-    passes the published body, the lane passes the body it is rewriting, and
-    the trusted thing and the used thing are one object. The same change turns
-    a second loss around -- at every head including the merge base, a note a
-    person left under either heading on GitHub was dropped by the turn with
-    nothing said, because the turn read its notes out of the draft.
+    The draft is the model's text, so a block carried from it would publish text nobody wrote.
+    The turn passes the published body as `notes_from`, and the lane passes the body it rewrites.
     """
 
     ITEM = "run the QA filter"
@@ -9328,10 +9031,7 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
     def published(self, under_heading: str = "", notes: str = "", status_line: str = "") -> str:
         """The body GitHub holds, with the record the last run left in it.
 
-        The record matters: without it the last run's own status line is
-        nobody's claim and reads as a person's sentence, so a fixture without
-        metadata would make the machine's line carry and prove nothing about
-        whose text this reads.
+        Without the record, the last run's own line reads as a person's and the fixture proves nothing.
         """
         body = (
             "## Summary\n\n- published\n\n"
@@ -9361,22 +9061,8 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
         self.assertEqual(errors, [], "the turn refused the fixture")
         return written, said, errors
 
-    # intent: fix
-    # marker: red at `fa8a2010`, its own base, behaviourally -- the three
-    # draft shapes below are carried there (the unrecorded bullet, the prose
-    # and the draft's own notes section) and the three published ones are
-    # dropped. Red on `016d94ba` too, where the bullet does not survive but
-    # the prose and the notes section do, and where nothing of the published
-    # body is read (#1751, round 18).
     def test_the_notes_carry_the_published_bodys_text_and_no_other(self) -> None:
-        """Every kind of text that can reach the section, one case each, both directions.
-
-        The population is not these seven shapes; it is the two sources the
-        section has, which the walk below reads out of the code. These are
-        the regression pins over it: one per shape that has been found in the
-        wild or constructed here, so a later change that reopens one is named
-        by the shape rather than by a diff.
-        """
+        """Each kind of text that can reach the notes, one case each, from both bodies."""
         shapes = [
             ("a status bullet for an item the record does not hold",
              self.draft(self.FORGED_UNRECORDED + "\n"), self.published(),
@@ -9409,20 +9095,10 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
                     f"{name}: {'dropped' if carried else 'carried'} -- notes were {notes!r}",
                 )
 
-    # intent: fix
-    # marker: red at `fa8a2010`, its own base, behaviourally: the draft's own
-    # blocks are CARRIED there, so there is nothing for the run to be told and
-    # nothing is said. Red on `016d94ba` the same way. The sentence it pins was
-    # the one thing this round wrote that no test read -- found by a mutant
-    # that dropped it and left every suite green (#1751, round 18).
     def test_the_run_is_told_which_of_the_drafts_blocks_it_did_not_carry(self) -> None:
-        """Text the write leaves behind is said somewhere, and for generated text that is the log.
+        """Draft blocks the write does not carry are logged to the run, one line each, naming the line.
 
-        The author's own losses go to the author, in the comment the turn
-        posts. The draft's do not: a sentence about the model's own text in
-        that comment is noise in the channel this branch keeps clearing. So
-        they are said to the run, one per block, NAMING the line each block
-        opens on -- a count nobody can check is what let this go unpinned.
+        They are not sent to the author, because the author did not write them.
         """
         spoken = "not carried from the body being written"
         shapes = [
@@ -9448,9 +9124,7 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
                 sentences = [line for line in said.getvalue().splitlines() if spoken in line]
                 self.assertEqual(len(sentences), 1, said.getvalue())
                 self.assertIn(text, sentences[0], "the sentence does not name what it left")
-        # The control: a draft with nothing of its own under either heading
-        # says nothing, so the sentence is about what happened rather than
-        # about the path having run.
+        # The control: a draft with nothing of its own under either heading logs nothing.
         said = io.StringIO()
         with contextlib.redirect_stderr(said):
             run_contributor.render_execution_summary_body(
@@ -9463,26 +9137,11 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
             )
         self.assertNotIn(spoken, said.getvalue())
 
-    # intent: guard
-    # marker: green at `993dc95e`, its own base -- there is one writer there
-    # and one here; what this adds is an instrument that COUNTS them. The
-    # walk beside it recognises a shape, and a walk that recognises can only
-    # ever find what it knows: a source routed through a one-line helper
-    # passed it and all 685 tests at that head (#1751, round 19).
     def test_one_site_in_the_whole_tree_writes_under_the_notes_heading(self) -> None:
-        """A census of writers, over every `.py` in the tree, keyed on the site.
+        """Exactly one call site in the tree writes under the notes heading.
 
-        It counts rather than recognises. Every call anywhere in the
-        repository that hands the notes heading -- as the constant, or as
-        its own text -- to anything that is not a KNOWN READER is a site
-        that may write that section, and there is exactly one. A second
-        helper, a fourth module, or a writer nobody thought of moves the
-        count and fails here with its file and line; the walk below cannot
-        do that, because it is keyed on shapes this round knows.
-
-        The readers are named rather than inferred, and naming them is the
-        cost: a reader added to that list is a line of this test, which is
-        the trade for a census that does not have to understand the call.
+        The census counts every call that passes the notes heading, as the constant or as text, to
+        anything outside the known readers. Adding a reader means adding it to the list below.
         """
         evidence = self.evidence()
         readers = {
@@ -9501,11 +9160,7 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
                 part in {".git", ".venv", "node_modules", "build", ".pyc", "tests"}
                 for part in path.parts
             ):
-                # A test file cannot write a pull request body -- it drives
-                # something that does -- and its fixtures spell the heading
-                # constantly. The population is every `.py` the runtime can
-                # reach; a writer added under a test directory is outside it,
-                # and that is stated rather than silently excluded.
+                # Test files are excluded: they drive writers rather than write bodies.
                 continue
             files += 1
             try:
@@ -9539,9 +9194,7 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
                             "the constant" if named else "its own text",
                         ))
                         break
-        # The population's own size, asserted so a walk that silently reads
-        # nothing cannot pass: 95 runtime `.py` files at this head, of 152 in
-        # the tree, the rest being tests.
+        # The walk must actually read files.
         self.assertGreater(files, 90, "the census read almost nothing; check the walk")
         self.assertEqual(
             len(sites),
@@ -9552,25 +9205,13 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
         self.assertEqual(sites[0][0], ".agents/skills/cofounder-contributor/scripts/evidence.py")
         self.assertEqual(sites[0][2], "the constant")
 
-    # intent: fix
-    # marker: red at `fa8a2010` and at `016d94ba`, its own base and the merge
-    # base, behaviourally: both sources of the notes content read the body
-    # being rewritten there, so the walk finds `body` where it requires the
-    # carried body (#1751, round 18).
     def notes_sources(self, source: str) -> list[tuple[str, int]]:
         """Every read that feeds a write of `## Evidence Notes` in this module.
 
-        The walk PINS SHAPES; it does not establish the fact. What it reads:
-        a call to a section inserter whose heading argument is the notes
-        heading BY VALUE -- the constant resolved from this module's own
-        assignment, or the text spelled out -- then every name the written
-        content is built from, back through assignments, tuple unpacking,
-        `append`/`extend` and loop targets, and through ONE hop into a
-        module-level helper that takes such a name as its argument. A source
-        routed through a second helper, built in a fourth module, or handed a
-        heading assembled at runtime is outside it; those are the unchecked
-        members, and the census above is the instrument that counts them
-        instead of recognising them (#1751, round 19).
+        Follows a call to a section inserter whose heading is the notes heading back through
+        assignments, unpacking, `append`/`extend`, loop targets and one hop into a module-level
+        helper. Runtime-assembled headings and deeper helper chains are out of reach; the census
+        test covers those.
         """
         tree = ast.parse(source)
         heading = self.evidence().EVIDENCE_NOTES_HEADING
@@ -9669,10 +9310,8 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
                                 if callee in readers:
                                     found.append((ast.unparse(inner.args[0]), inner.lineno))
                                 elif callee in helpers_by_name:
-                                    # ONE HOP: a helper that takes one of this
-                                    # function's names and reads a section
-                                    # inside it is this site's read, named at
-                                    # the helper's own line.
+                                    # One hop into a helper that reads a section, named at the
+                                    # helper's line.
                                     helper = helpers_by_name[callee]
                                     handed = [ast.unparse(one) for one in inner.args]
                                     for inside in ast.walk(helper):
@@ -9692,26 +9331,11 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
                                             found.append((read, inside.lineno))
         return found
 
-    # intent: fix
-    # marker: red at `993dc95e`, its own base, behaviourally: the walk there
-    # reads one module, resolves names only inside one function and stops at
-    # its parameters, so a read routed through a one-line module-level helper
-    # is invisible -- the doctored source below passes it. Red at `fa8a2010`
-    # and `016d94ba` for the round-18 reason as well: both sources read the
-    # body being rewritten there (#1751, round 19).
     def test_every_source_of_the_notes_section_reads_the_carried_body(self) -> None:
-        """The shapes this walk pins, over the three modules the turn path runs.
+        """In every module on the turn path, each read feeding a notes write takes the carried body.
 
-        The FACT -- that one site in the tree writes that section, fed by two
-        reads of one parameter -- is established by the census above, which
-        counts. This pins the shapes: in every module the turn path runs,
-        each read feeding a notes write takes the CARRIED body, including a
-        read one hop inside a module-level helper.
-
-        The doctored source is the seed: the same module with a new read of
-        the body being rewritten, routed through a helper exactly as a future
-        change would write it. Without the hop it passes, which is what it
-        did at the previous head.
+        The doctored source adds a helper-routed read of the body being rewritten, so the one-hop
+        walk has to catch it.
         """
         modules = ("evidence.py", "run-contributor.py", "execution.py")
         for name in modules:
@@ -9745,12 +9369,6 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
             "a read routed through a helper is invisible to this walk",
         )
 
-    # intent: fix
-    # marker: red at `993dc95e`, its own base, behaviourally -- `TypeError
-    # not raised`: `published_body` defaults to `""` there at the renderer
-    # and at the builder above it, so a caller that says nothing hands the
-    # required parameter an empty string, which cannot be told from a person
-    # who wrote nothing. Red on `016d94ba` the same way (#1751, round 19).
     def test_neither_writer_of_a_turn_body_defaults_the_published_body(self) -> None:
         evidence = self.evidence()
         execution = sys.modules["execution"]
@@ -9766,8 +9384,7 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
         with self.assertRaises(TypeError) as refused:
             execution.build_execution_summary_body({}, requested_evidence=[self.ITEM])
         self.assertIn("published_body", str(refused.exception))
-        # And every production call site answers it, rather than the two this
-        # round happens to have been looking at.
+        # Every production call site passes it.
         for name in ("evidence.py", "execution.py"):
             source = SCRIPT_PATH.with_name(name).read_text(encoding="utf-8")
             calls = [
@@ -9785,13 +9402,6 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
                     f"{name}:{call.lineno} does not say which published body it has",
                 )
 
-    # intent: fix
-    # marker: red at `fa8a2010`, its own base, behaviourally -- `TypeError
-    # not raised`: the flag there defaults to the CARRYING answer, so a
-    # caller that says nothing about whose body it is rewriting gets the
-    # answer that republishes generated text, which is safe by the caller
-    # remembering. Red on `016d94ba` too, on a name (`recorded_items`), which
-    # is counted apart (#1751, round 18).
     def test_the_write_cannot_be_called_without_saying_whose_body_it_carries(self) -> None:
         evidence = self.evidence()
         entries = [{"index": 1, "item": self.ITEM, "status": "complete",
@@ -9805,8 +9415,7 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
                 previous_entries=[],
             )
         self.assertIn("notes_from", str(refused.exception))
-        # And every production call site answers it, rather than the two this
-        # round happens to have been looking at.
+        # Every production call site passes it.
         source = SCRIPT_PATH.with_name("evidence.py").read_text(encoding="utf-8")
         calls = [
             node for node in ast.walk(ast.parse(source))
@@ -9824,23 +9433,10 @@ class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
 
 
 class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
-    """One function asked in two parse contexts (#1751, round 4).
+    """The recorded item is parsed in the same section context as the line (#1751).
 
-    `item_as_page_reads_it` parsed the recorded item ALONE with `parseInline`
-    while the line's item is parsed IN CONTEXT -- inside a list item, inside a
-    section, where the body's link reference definitions are in scope. An
-    inline construct does not have to mean the same thing in the two places:
-    `[Manual QA][qa] on device` is literal text parsed alone and a link where
-    `[qa]:` is defined, so the write did not recognise the line it had just
-    rendered and carried a copy of it per run.
-
-    The same defect one level up from round 3's, which was the same defect one
-    level up from round 2's. Each time: a reading compared against something
-    that went through a different reading.
-
-    The context is the text the LINE is parsed from -- the section -- rather
-    than the whole body, because handing the item more than the line sees is
-    the asymmetry with its sign flipped.
+    `[Manual QA][qa] on device` is plain text parsed alone and a link where `[qa]:` is defined,
+    so both sides are read against the section, not the whole body.
     """
 
     ITEM = "[Manual QA][qa] on device"
@@ -9858,14 +9454,8 @@ class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
             f"{self.section(status, detail)}\n## Validation\n\n- ran it\n"
         )
 
-    # intent: guard
-    # marker: red at `3ac9675e`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_two_readings_of_one_item_agree_in_the_lines_own_context(self) -> None:
-        # The write's own pairing: the line read out of the SECTION tokens,
-        # the item read with that same section as context. Both sides resolve
-        # the definition or neither does.
+        # The write reads the line from the section tokens and the item in that section.
         evidence = self.evidence()
         helpers = sys.modules["_helpers"]
         section = self.section("complete", "214 passed")
@@ -9877,8 +9467,7 @@ class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
         )
         self.assertIn("https://example.invalid/qa", reading)
         self.assertTrue(evidence.is_recorded_status_line(reading, [self.ITEM], section))
-        # And the sweep's pairing, which reads a physical line and so resolves
-        # no definition on either side -- internally consistent too.
+        # The sweep reads a physical line, so neither side resolves a definition.
         line = f"- [complete] {self.ITEM} -- 214 passed"
         self.assertTrue(
             evidence.is_recorded_status_line(
@@ -9886,39 +9475,24 @@ class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
             )
         )
 
-    # intent: guard
-    # marker: red at `3ac9675e`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_write_recognises_the_line_it_just_rendered(self) -> None:
-        # The end of it: three writes, and the section holds one line with
-        # nothing carried. At `3ac9675e` the first write left a copy behind.
+        # Three writes leave one line in the section.
         evidence = self.evidence()
         body = self.body()
         line = f"- [complete] {self.ITEM} -- 214 passed"
         for _ in range(3):
-            write = evidence.write_evidence_status_section(
-                body, [line], notes_from=body, entries=entries_for([line]), previous_entries=entries_for([line]), recorded_items=[self.ITEM]
-            )
+            write = write_section(body, [line], [self.ITEM])
             self.assertIsNone(write.refusal)
             body = write.body
         self.assertEqual(body.count("- [complete]"), 1)
-        # The definition is a note and moves like any other block; what must
-        # not be there is a copy of the line THIS WRITE RENDERED. The body's
-        # own earlier `[pending-ci]` line has no claim here -- this fixture
-        # records no metadata -- so round 17 carries it once, and three
-        # writes leave it at once: the fixed point is what this pins.
+        # The definition is a note and moves. No copy of the rendered line may be there; the
+        # old unrecorded `[pending-ci]` line is carried once.
         notes = sys.modules["_helpers"].markdown_section(body, "Evidence Notes")
         self.assertNotIn("[complete]", notes)
         self.assertEqual(notes.count("[pending-ci]"), 1, notes)
 
-    # intent: guard
-    # marker: green at `3ac9675e`, its own base.
     def test_an_item_carrying_its_own_separator_is_still_read_whole(self) -> None:
-        # The probe reads the item back by REMOVING what it added, not by
-        # searching for a boundary: a search with no contract takes the first
-        # ` -- ` and cut a recorded `build -- release` down to `build`, which
-        # handed the write somebody else's line as its own (#1738, round 3).
+        # The probe removes what it added instead of searching for a ` -- ` boundary (#1738).
         evidence = self.evidence()
         self.assertEqual(evidence.item_as_page_reads_it("build -- release"), "build -- release")
         self.assertFalse(
@@ -9927,11 +9501,7 @@ class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
             )
         )
 
-    # intent: guard
-    # marker: green at `3ac9675e`, its own base.
     def test_the_reading_is_the_same_one_the_line_goes_through(self) -> None:
-        # Round 3's cases, unchanged by round 4: the mechanism got deeper, not
-        # different.
         evidence = self.evidence()
         for item in ("**Manual QA** on device", "*QA*", "_QA_", "Manual <span>QA</span>"):
             with self.subTest(item=item):
@@ -9943,24 +9513,11 @@ class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
                 )
 
 
-class ALineTheWriteCannotReadBackIsSaidRatherThanOrphanedTests(unittest.TestCase):
-    """Two shapes where the LINE, not the item, is what cannot be read (#1751, round 4).
+class AnUnreadableRenderedLineIsAnnouncedTests(unittest.TestCase):
+    """A rendered line no reader can read back is written and announced (#1751).
 
-    An inline construct that opens in the item and closes in the detail takes
-    the ` -- ` separator inside itself, so the rendered line has no boundary
-    any reader can find -- the write's reader, the sweep and a person fail
-    alike. And a line past `EVIDENCE_STATUS_LINE_LIMIT` is refused by
-    `split_evidence_status_line` outright, so a four-thousand-character item
-    renders a line no later run recognises, well under the 65,536 characters
-    GitHub stores.
-
-    Neither is an asymmetry to normalise away, and that is why they are not
-    fixed by the mechanism above: there is no item in the line to compare
-    against. The decision on the 4,000-character case, and on the crossing
-    construct with it: the line is still written, because the requirement
-    belongs on the page and dropping it would take a reader's only sight of
-    it -- and the author is told, by name, that their item's text makes a line
-    nothing can parse. Silence was the cost of not asking.
+    Two shapes: an inline construct spanning the item and the detail, which hides the ` -- `
+    separator, and a line past `EVIDENCE_STATUS_LINE_LIMIT`.
     """
 
     CROSSING = ("run `swift test", "--filter QA` passed")
@@ -9975,27 +9532,17 @@ class ALineTheWriteCannotReadBackIsSaidRatherThanOrphanedTests(unittest.TestCase
             "## Summary\n\n- one change\n\n## Evidence Status\n\n"
             f"- [pending-ci] {item} -- waiting\n\n## Validation\n\n- ran it\n"
         )
-        return self.evidence().write_evidence_status_section(
-            body, [f"- [complete] {item} -- {detail}"], notes_from=body, entries=entries_for([f"- [complete] {item} -- {detail}"]), previous_entries=entries_for([f"- [complete] {item} -- {detail}"]), recorded_items=[item]
-        )
+        return write_section(body, [f"- [complete] {item} -- {detail}"], [item])
 
     def said(self, write) -> list[str]:
         return [note for note in write.announcements if "not readable back" in note]
 
-    # intent: guard
-    # marker: red at `3ac9675e`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_a_construct_crossing_the_boundary_is_named(self) -> None:
         said = self.said(self.write(*self.CROSSING))
         self.assertEqual(len(said), 1, said)
         self.assertIn("no reader can say where the item ends", said[0])
         self.assertIn("balance the construct", said[0])
 
-    # intent: guard
-    # marker: red at `3ac9675e`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_a_line_past_the_limit_is_named_with_its_length(self) -> None:
         said = self.said(self.write(*self.TOO_LONG))
         self.assertEqual(len(said), 1, said)
@@ -10003,17 +9550,9 @@ class ALineTheWriteCannotReadBackIsSaidRatherThanOrphanedTests(unittest.TestCase
         self.assertIn(str(self.evidence().EVIDENCE_STATUS_LINE_LIMIT), said[0])
         self.assertIn("shorten the item", said[0])
 
-    # intent: guard
-    # marker: red at `3ac9675e`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_an_ordinary_line_is_not_named(self) -> None:
         self.assertEqual(self.said(self.write(*self.PLAIN)), [])
 
-    # intent: guard
-    # marker: red at `3ac9675e`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_line_is_still_written(self) -> None:
         # Reported, not refused: the requirement stays on the page.
         for item, detail in (self.CROSSING, self.TOO_LONG):
@@ -10032,10 +9571,6 @@ class ALineTheWriteCannotReadBackIsSaidRatherThanOrphanedTests(unittest.TestCase
             len([line for line in notes.splitlines() if pattern.search(line)]),
         )
 
-    # intent: guard
-    # marker: red at `3ac9675e`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_predicate_answers_about_lines_rather_than_items(self) -> None:
         evidence = self.evidence()
         item, detail = self.CROSSING
@@ -10057,22 +9592,11 @@ class ALineTheWriteCannotReadBackIsSaidRatherThanOrphanedTests(unittest.TestCase
         )
 
 
-class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
-    """The round-3 regression that deleted an owner's line in silence (#1751, round 4).
+class TwoItemsThatReadAsOneStandTheWriteDownTests(unittest.TestCase):
+    """Two items that read as one requirement stand the write down (#1751).
 
-    Round 3 put the ownership rule on the page's reading of the item, and left
-    `_indistinguishable` -- the check that refuses a contract whose items
-    cannot be told apart -- comparing RAW text. `Manual QA on device` and
-    `**Manual QA** on device` are two requirements to that check and one
-    requirement to the rule, so a contract carrying both passed and then cost
-    an author a line: their own
-    `- [blocked] Manual QA on device -- owner says device is unavailable`
-    matched the recorded `**Manual QA** on device` under the reading, was
-    taken for the machine's, and was replaced by the rendered entry. No error,
-    no announcement, nothing in `## Evidence Notes`.
-
-    One key in both places closes it, and the turn stops before writing rather
-    than acting on a contract it cannot tell apart.
+    `Manual QA on device` and `**Manual QA** on device` are one requirement on the page, so the
+    author's line for one would be taken by the entry for the other.
     """
 
     PLAIN = "Manual QA on device"
@@ -10089,18 +9613,12 @@ class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
     def evidence(self):
         return sys.modules["evidence"]
 
-    # intent: fix
-    # marker: behaviourally red at `3ac9675e`, its own base
-    # (`AssertionError`).
     def test_the_collision_check_uses_the_ownership_rules_key(self) -> None:
         evidence = self.evidence()
         self.assertEqual(evidence._indistinguishable([self.BOLD, self.PLAIN]), [self.PLAIN])
         # And still tells apart two items that are genuinely different.
         self.assertEqual(evidence._indistinguishable([self.BOLD, "the smoke lane"]), [])
 
-    # intent: fix
-    # marker: behaviourally red at `3ac9675e`, its own base
-    # (`AssertionError`).
     def test_the_turn_refuses_the_contract_and_keeps_the_authors_line(self) -> None:
         run_contributor = sys.modules["run_contributor_evidence_kinds"]
         with contextlib.redirect_stderr(io.StringIO()):
@@ -10111,27 +9629,14 @@ class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
                 evidence_blocked=None,
                 evidence_pending_ci=None,
             )
-        # The line the round-3 head deleted.
         self.assertIn(self.OWNER, written)
         self.assertEqual(written, self.body())
         self.assertEqual(len(errors), 1)
         self.assertIn("read as one requirement on the page", errors[0])
         self.assertIn("make each item distinct", errors[0])
 
-    # intent: guard
-    # marker: green at `690713b0`, its own base.
     def test_the_update_path_stands_down_and_keeps_the_authors_line(self) -> None:
-        """The same harm on the path a LATER run takes (#1751, round 5).
-
-        The turn's own renderer refuses a colliding contract before it writes,
-        and that guard is tested above. `update_evidence_entries` is the other
-        door: the lane re-renders the section from the entries on every run,
-        and a body whose metadata already records both spellings reaches the
-        write without the turn's check in front of it. Without the stand-down
-        inside `write_evidence_status_section` the owner's line is deleted
-        there instead, with nothing said -- the guard survived a mutant
-        because only the turn's path had a test.
-        """
+        """The lane's update path stands down on the same collision, before any write."""
         evidence = self.evidence()
         entries = [
             {"index": 1, "item": self.BOLD, "status": "pending-ci",
@@ -10154,25 +9659,18 @@ class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
                 {1: {"status": "complete", "detail": "214 passed"}},
                 announcements=announcements,
             )
-        # The line the mutant deletes.
         self.assertIn(self.OWNER, written)
         self.assertEqual(written, body)
         stood_down = [
             note for note in announcements if evidence.is_stood_down_announcement(note)
         ]
         self.assertEqual(len(stood_down), 1, announcements)
-        # The sentence names the colliding spelling -- the second occurrence,
-        # which is what `_indistinguishable` reports and the one an author
-        # removes. Naming both would be a change to the message rather than to
-        # the guard, and this round adds no production change.
+        # The sentence names the second spelling, the one `_indistinguishable` reports.
         self.assertIn(self.PLAIN, stood_down[0])
         self.assertIn("read as one requirement on the page", stood_down[0])
         self.assertIn("cannot be told apart", stood_down[0])
         self.assertIn("make each requested item distinct", stood_down[0])
 
-    # intent: fix
-    # marker: behaviourally red at `3ac9675e`, its own base
-    # (`AssertionError`).
     def test_the_accounting_names_the_collision_where_the_author_can_fix_it(self) -> None:
         run_contributor = sys.modules["run_contributor_evidence_kinds"]
         accounting, errors = run_contributor.validate_evidence_accounting(
@@ -10183,12 +9681,9 @@ class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
             any("asks for the same item more than once" in error for error in errors), errors
         )
 
-    # intent: guard
-    # marker: green at `3ac9675e`, its own base.
     def test_a_distinguishable_contract_is_written_as_before(self) -> None:
-        # The control: the guard costs an ordinary contract nothing, and an
-        # author's status bullet for something the contract does not ask for
-        # is carried to the notes exactly as round 2 made it.
+        # The control: a distinct contract writes, and an unrecorded bullet is carried to the
+        # notes.
         run_contributor = sys.modules["run_contributor_evidence_kinds"]
         theirs = "- [blocked] release approval -- the signing profile is missing"
         body = (
@@ -10203,8 +9698,6 @@ class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
                 evidence_complete=["1 -- 214 passed"],
                 evidence_blocked=None,
                 evidence_pending_ci=None,
-                # Their bullet is in the body GitHub holds, which is the only
-                # copy a person could have written it into (#1751, round 18).
                 published_body=body,
             )
         self.assertEqual(errors, [])
@@ -10213,14 +9706,7 @@ class TwoItemsThatReadAsOneCostAnAuthorALineTests(unittest.TestCase):
 
 
 class OneReadingInOneContextForEverythingComparedTests(unittest.TestCase):
-    """The guard added to stop a deletion had the deletion (#1751, round 6).
-
-    Fifth iteration of one class. `_indistinguishable` keyed on the item read
-    ALONE while the ownership rule reads it IN THE SECTION, so two spellings
-    of one link-reference item were two requirements to the guard and one to
-    the rule: the contract passed, and the owner's line was replaced by the
-    entry with nothing said anywhere.
-    """
+    """The collision guard reads items in the section's context, like the ownership rule (#1751)."""
 
     REF = "[Manual QA][qa] on device"
     INLINE = "[Manual QA](https://example.invalid/qa) on device"
@@ -10237,10 +9723,6 @@ class OneReadingInOneContextForEverythingComparedTests(unittest.TestCase):
             "## Validation\n\n- ran it\n"
         )
 
-    # intent: guard
-    # marker: red at `1955ed15`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_two_spellings_are_one_requirement_in_the_section(self) -> None:
         evidence = self.evidence()
         section = sys.modules["_helpers"].markdown_section(self.body(), "Evidence Status")
@@ -10250,23 +9732,15 @@ class OneReadingInOneContextForEverythingComparedTests(unittest.TestCase):
         )
         # And the guard now sees what the rule sees.
         self.assertEqual(evidence._indistinguishable([self.INLINE, self.REF], section), [self.REF])
-        # Read alone they are two items, which is what the guard used to see.
+        # Read alone they are two items.
         self.assertEqual(evidence._indistinguishable([self.INLINE, self.REF]), [])
 
-    # intent: guard
-    # marker: red at `1955ed15`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_write_stands_down_and_the_owners_line_survives(self) -> None:
         evidence = self.evidence()
         body = self.body()
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
-            write = evidence.write_evidence_status_section(
-                body,
-                [f"- [complete] {self.INLINE} -- 214 passed"], notes_from=body,
-                entries=entries_for([f"- [complete] {self.INLINE} -- 214 passed"]), previous_entries=entries_for([f"- [complete] {self.INLINE} -- 214 passed"]), recorded_items=[self.INLINE, self.REF],
-            )
+            write = write_section(body, [f"- [complete] {self.INLINE} -- 214 passed"], [self.INLINE, self.REF])
         self.assertIn(self.OWNER, write.body)
         self.assertEqual(write.body, body)
         self.assertIsNotNone(write.refusal)
@@ -10281,17 +9755,7 @@ def helpers_section(body: str) -> str:
 
 
 class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
-    """The cap reopened the disagreement this branch exists to close (#1751, round 6).
-
-    It compared the PAGE'S reading of the body line against the RAW bytes of
-    the rendered lines -- two spellings of one comparison -- and the sweep had
-    no cap at all. So an author who wrote the machine's text with a `*` marker
-    had their line taken and deleted by the write while the instrument that
-    measures the write called the same line lost.
-
-    Byte identity on both sides, and ONE function for both readers: they start
-    from the same shape, a line.
-    """
+    """One function decides whose a line is, by exact bytes, for both the write and the sweep (#1751)."""
 
     ITEM = "run `swift test"
     DETAIL = "--filter QA` passed"
@@ -10311,21 +9775,8 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
         "a span in the item": ("run ", "<span>run</span> "),
     }
 
-    # intent: guard
-    # marker: red at `d02bb8cc`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_write_s_path_and_the_sweep_s_path_agree_on_every_spelling(self) -> None:
-        """The two PATHS, each with the arguments it forms itself (#1751, round 8).
-
-        This called `whose_status_line` twice with identical arguments
-        and reported "0 of 8 disagree" -- a tautology wearing a measurement's
-        name, over five spellings and not eight. One function is necessary and
-        not sufficient: the disagreement lives in what each path HANDS it, and
-        the sweep formed the cap from the body with the metadata already
-        stripped, so its cap was empty on every body and the machine's own
-        unreadable line read as the author's, lost.
-        """
+        """Each path forms its own arguments, and both get the same answer."""
         helpers = sys.modules["_helpers"]
         evidence = self.evidence()
         sweep = load_module(
@@ -10376,18 +9827,10 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
             + "\n-->\n\n## Summary\n\n- one change\n\n## Evidence Status\n\n"
             + f"{line}\n\n## Validation\n\n- ran it\n"
         )
-    # intent: guard
-    # marker: red at `d02bb8cc`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_an_authors_edit_of_the_machines_own_line_is_never_the_machines(self) -> None:
-        """Byte identity means bytes, measured (#1751, round 8).
+        """Only an exact byte match of the rendered line is the machine's.
 
-        The comparison was `line.strip() == one.strip()`, which is STRIPPED
-        identity wearing byte identity's name. Measured, a stripped match
-        takes four shapes an exact one does not, and each is an author's edit
-        of a line no reader can parse -- the hard break costs them the
-        continuation line that follows it.
+        A trailing hard break, a trailing tab and a one- or four-space indent are author edits.
         """
         evidence = self.evidence()
         edits = {
@@ -10417,10 +9860,6 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
             ).machine
         )
 
-    # intent: guard
-    # marker: red at `1955ed15`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_a_differently_spelled_author_line_is_never_the_machines(self) -> None:
         evidence = self.evidence()
         section = f"{self.rendered}\n"
@@ -10442,12 +9881,8 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
             ).machine
         )
 
-    # intent: guard
-    # marker: red at `1955ed15`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_a_star_marker_line_is_carried_rather_than_deleted(self) -> None:
-        # The harm, end to end: the author's line survives the write.
+        # End to end, the author's line survives the write.
         evidence = self.evidence()
         star = self.rendered.replace("- ", "* ", 1)
         body = (
@@ -10455,24 +9890,11 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
             f"- [pending-ci] {self.ITEM} -- waiting\n{star}\n\n## Validation\n\n- ran it\n"
         )
         with contextlib.redirect_stderr(io.StringIO()):
-            write = evidence.write_evidence_status_section(
-                body, [self.rendered], notes_from=body, entries=entries_for([self.rendered]), previous_entries=entries_for([self.rendered]), recorded_items=[self.ITEM]
-            )
+            write = write_section(body, [self.rendered], [self.ITEM])
         self.assertIn(star, write.body)
 
-    # intent: guard
-    # marker: red at `f28b61f0`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_sweep_and_the_write_answer_the_same_on_the_same_lines(self) -> None:
-        """The two readers CALLED, not grepped (#1751, round 9).
-
-        This asserted that `evidence-write-sweep.py` contains the text
-        `evidence.whose_status_line(` -- a claim about a spelling wearing
-        a structural property's name, which a rename or an alias satisfies and
-        a wrong answer does not disturb. The property is that the two readers
-        answer the same about the same lines, so it is asked of both.
-        """
+        """Both readers are called on the same lines and must answer the same."""
         evidence = self.evidence()
         helpers = sys.modules["_helpers"]
         sweep = load_module(
@@ -10499,17 +9921,10 @@ class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
 
 
 class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
-    """A volatile detail brought the uncapped rate back with no status change (#1751, round 6).
+    """The cap keys on the entry, so a changing detail does not leave copies behind (#1751).
 
-    The cap keyed on the whole rendered line, and a detail is volatile: the
-    verifier's own `pending-ci` detail carries a head and a run URL and
-    changes on every push. So an unreadable line accrued a copy per push with
-    ZERO status changes -- the rate the cap was added to hold, back through a
-    field nobody counted as changing.
-
-    The metadata comment carries every entry as the last run wrote it, so the
-    line that run rendered is reconstructible byte for byte. A body line
-    identical to THAT, or to the line about to be rendered, is the machine's.
+    The `pending-ci` detail carries a head and a run URL and changes on every push. The metadata
+    lets the write rebuild the line the last run rendered and claim it.
     """
 
     ITEM = "run `swift test"
@@ -10536,10 +9951,6 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             f"- [pending-ci] {self.ITEM} -- {detail}\n\n## Validation\n\n- ran it\n"
         )
 
-    # Guards: seven pushes with a changing detail accrue nothing.
-    # intent: fix
-    # marker: behaviourally red at `1955ed15`, its own base
-    # (`AssertionError`).
     def test_seven_pushes_with_a_changing_detail_and_no_status_change(self) -> None:
         evidence = self.evidence()
         body = self.body_with(f"{self.DETAIL} on head aaaaaaaaaaaX")
@@ -10554,23 +9965,8 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             seen.append(self.counts(body))
         self.assertEqual(seen, [(1, 0)] * 7)
 
-    # Guards: a status change costs no copy. Main passes it under a different key;
-    # it pins the property the entry key has to keep.
-    # intent: fix
-    # marker: behaviourally red at `1955ed15`, its own base
-    # (`AssertionError`).
     def test_a_status_change_carries_nothing_either(self) -> None:
-        """Keyed on the ENTRY, a status change costs no copy at all.
-
-        Round 5's cap keyed on the rendered line, so any change to it -- a
-        status, a detail -- left the old line behind as the author's. Keyed on
-        the entry, the line the last run rendered is reconstructible whatever
-        changed, so it is the machine's and is replaced.
-
-        Named for what it tests, unlike the round-5 test it replaces: that one
-        changed only the DETAIL and called it a status change, so it could not
-        fail on the thing it named.
-        """
+        """A status change is replaced, not carried, because the cap keys on the entry."""
         evidence = self.evidence()
         body = self.body_with(f"{self.DETAIL} on head aaaaaaaaaaaX")
         for _ in range(2):
@@ -10582,31 +9978,15 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             self.assertEqual(self.counts(body), (1, 0))
         self.assertIn("- [complete] ", body)
 
-    # Guards: the cap runs on the path production takes, not only on a hand-made body.
-    # intent: fix
-    # marker: behaviourally red at `d02bb8cc`, its own base
-    # (`AssertionError`).
     def test_the_turn_caps_it_too_through_the_entry_point_production_uses(self) -> None:
-        """The turn path, driven where production drives it (#1751, round 8).
+        """The turn caps through `build_execution_summary_body`, as production calls it.
 
-        Round 7's version called `render_execution_summary_body` with a body
-        carrying metadata, and the turn path cannot produce one: on that path
-        `summary_body` is `data["body"]`, the MODEL's text for this turn, and
-        the metadata comment is inserted by the write itself. So the
-        reconstruction read a body that never holds the previous run's
-        entries, `previously_rendered` was `[]` on every push, and the cap
-        never ran in production at all -- while a test on a hand-made body
-        killed its mutant.
-
-        The body that holds the last run's entries is `published_body`, which
-        is what GitHub currently has. This drives `build_execution_summary_body`
-        with the two bodies split the way the turn splits them.
+        The previous run's entries live in `published_body`; the model's draft has no metadata.
         """
         execution = sys.modules["execution"]
         detail = f"{self.DETAIL} on head aaaaaaaaaaaX"
         published = self.body_with(detail)
-        # The model's text for this turn: the same section, no metadata --
-        # which is what the turn hands in.
+        # The model's text: the same section without metadata.
         model = published.split("-->\n\n", 1)[1]
         self.assertNotIn("evidence-status:v1", model)
         seen = []
@@ -10623,11 +10003,9 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             published, model = written, written.split("-->\n\n", 1)[1]
         self.assertEqual(seen, [(1, 0)] * 3)
 
-    # intent: guard
-    # marker: green at `d02bb8cc`, its own base.
-    def test_the_turn_reconstructs_from_the_published_body_and_not_the_model_s(self) -> None:
-        # The mechanism directly: the same expression over the two bodies
-        # gives different answers, and only one of them is the last run's.
+    def test_the_turn_reconstructs_from_the_published_body(self) -> None:
+        # The same expression over the two bodies; only the published one has the last run's
+        # entries.
         evidence = self.evidence()
         published = self.body_with(f"{self.DETAIL} on head aaaaaaaaaaaX")
         model = published.split("-->\n\n", 1)[1]
@@ -10637,10 +10015,6 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
             [f"- [pending-ci] {self.ITEM} -- {self.DETAIL} on head aaaaaaaaaaaX"],
         )
 
-    # intent: guard
-    # marker: red at `1955ed15`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_line_the_last_run_rendered_is_reconstructible(self) -> None:
         evidence = self.evidence()
         entries = evidence.evidence_entries_of(self.body_with("a detail"))
@@ -10652,17 +10026,9 @@ class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
 
 
 class OneDefinitionOfWhichEntriesTheWriteRendersTests(unittest.TestCase):
-    """A metadata entry the write never renders deleted an owner's line (#1751, round 8).
+    """The cap and the renderer share one definition of which entries render (#1751).
 
-    `_render_structured_entries` renders an entry only at index >= 1 with an
-    in-vocabulary status and a non-empty item and detail; the cap's
-    reconstruction built a line for any entry with a non-empty item, status
-    and detail. So a `{"index": 0, ...}` entry was reconstructed by one reader
-    and skipped by the other, the cap claimed a line the write had never
-    rendered, and the author's own line matching it was replaced -- nothing in
-    `## Evidence Notes`, nothing on stderr, no refusal. Two readers of "which
-    entries exist", which is this family's shape for the tenth time, closed the
-    way #1782 round 3 closed it: one function, asked by both.
+    An entry at index 0 is not rendered, so it must not claim an author's line either.
     """
 
     ITEM = "run `swift test"
@@ -10696,59 +10062,35 @@ class OneDefinitionOfWhichEntriesTheWriteRendersTests(unittest.TestCase):
             )
         return written, stderr.getvalue()
 
-    # intent: fix
-    # marker: behaviourally red at `d02bb8cc`, its own base
-    # (`AssertionError`).
-    def test_an_entry_the_write_would_not_render_does_not_take_the_owners_line(self) -> None:
+    def test_an_unrenderable_entry_does_not_take_the_owners_line(self) -> None:
         written, stderr = self.written(self.body(with_the_unrenderable_entry=True))
         self.assertIn(self.OWNERS, written, f"the owner's line went; stderr said {stderr!r}")
 
-    # intent: guard
-    # marker: green at `d02bb8cc`, its own base.
     def test_the_control_without_it_keeps_the_line_too(self) -> None:
         written, _ = self.written(self.body(with_the_unrenderable_entry=False))
         self.assertIn(self.OWNERS, written)
 
-    # intent: fix
-    # marker: behaviourally red at `d02bb8cc`, its own base
-    # (`AssertionError`).
     def test_the_reconstruction_names_exactly_the_lines_the_write_renders(self) -> None:
         evidence = self.evidence()
         helpers = sys.modules["_helpers"]
         body = self.body(with_the_unrenderable_entry=True)
         self.assertEqual(len(evidence.evidence_entries_of(body)), 2)
         written, _ = self.written(body)
-        # Both read off the body the write PRODUCED: the lines it rendered,
-        # and the lines its own metadata says it rendered. A write renders
-        # exactly the lines its reconstruction rebuilds, or the cap is
-        # claiming lines nothing wrote.
+        # The rendered lines and the lines the metadata says were rendered, off the written
+        # body.
         reconstructed = evidence.rendered_entry_lines(evidence.evidence_entries_of(written))
         rendered = [
             line
             for line in helpers.markdown_section(written, "Evidence Status").splitlines()
             if line.startswith("- [")
         ]
-        # EQUALITY, which is what the name claims. Two counts and a
-        # hand-written prefix let the predicate be copied back inline and the
-        # mutant survive: the structure was right and the composer was not
-        # (#1751, round 9).
         self.assertEqual(reconstructed, rendered)
         self.assertEqual(
             reconstructed, [f"- [complete] {self.ITEM} -- passed on head aaaaaaaaaaa1"]
         )
 
-    # intent: fix
-    # marker: behaviourally red at `f28b61f0`, its own base
-    # (`AssertionError`).
     def test_the_turn_renderer_renders_what_the_reconstruction_rebuilds(self) -> None:
-        """The same equality on the OTHER renderer (#1751, round 9).
-
-        The lane renderer called the one composer and the turn renderer
-        carried a copy of its f-string, taking the item raw where the composer
-        strips it. An item with a trailing space rendered `...y  -- ...` and
-        reconstructed `...y -- ...`, so the write could not recognise its own
-        line on the next push.
-        """
+        """The turn renderer also renders exactly what the reconstruction rebuilds."""
         evidence = self.evidence()
         helpers = sys.modules["_helpers"]
         item = "run `swift test "
@@ -10770,24 +10112,12 @@ class OneDefinitionOfWhichEntriesTheWriteRendersTests(unittest.TestCase):
         self.assertEqual(
             evidence.rendered_entry_lines(evidence.evidence_entries_of(written)), rendered
         )
-        # And what that one composer produces, stated as bytes. Agreement
-        # alone cannot see a change that moves BOTH sides: with one function
-        # answering, a predicate that stopped stripping the item would render
-        # `...test  -- ...` and reconstruct it identically, and the equality
-        # above would hold while every author's copy of the line diverged.
+        # Pinned as bytes too: equality alone misses a change that moves both sides, such as the
+        # composer no longer stripping the item.
         self.assertEqual(rendered, [f"- [complete] {item.strip()} -- --filter QA` passed"])
 
-    # intent: guard
-    # marker: green at `d02bb8cc`, its own base.
     def test_the_turn_path_carries_the_same_two_bodies_and_the_same_metadata(self) -> None:
-        """The axis neither the product nor the corpus can produce (#1751, round 8).
-
-        Every generated body holds exactly one valid entry and is written into
-        and read back out of ONE body. Both round-8 defects live where those
-        two things come apart: metadata whose entries are not all renderable,
-        and a reconstruction source that is a different body from the one
-        being written. This drives both paths over exactly that fixture.
-        """
+        """Unrenderable metadata and a separate reconstruction body, through both paths."""
         execution = sys.modules["execution"]
         published = self.body(with_the_unrenderable_entry=True)
         model = published.split("-->\n\n", 1)[1]
@@ -10800,29 +10130,17 @@ class OneDefinitionOfWhichEntriesTheWriteRendersTests(unittest.TestCase):
             )
         self.assertEqual(errors, [])
         self.assertIn(self.OWNERS, written)
-        # And the previous run's line is still capped on the turn path: the
-        # section holds one status entry, not one per push.
+        # The previous run's line is still capped: one status entry, not one per push.
         helpers = sys.modules["_helpers"]
         section = helpers.markdown_section(written, "Evidence Status")
         self.assertEqual(len([one for one in section.splitlines() if one.startswith("- [")]), 1)
 
 
 class OneEntryOwnsOneLineTests(unittest.TestCase):
-    """The cap was a set, so one entry owned every copy of its line (#1751, round 9).
+    """A rendered line owns one body line, however many copies the body holds (#1751).
 
-    A write renders one line per entry, so it owns one line per entry -- the
-    invariant the section's writer states. The cap held its lines in a set, so
-    a body carrying the machine's unreadable line TWICE had both taken: one
-    written back, nothing carried to `## Evidence Notes`, nothing on stderr
-    about the second, and no refusal. A silent deletion reached through the
-    guard added to stop silent deletions.
-
-    And it was invisible: round 8's fix gave the sweep a non-empty cap, whose
-    set semantics then met the sweep's own multiset accounting and made
-    `lines_lost` return `[]` where it had returned both lines. A correctness
-    fix that stops a defect being detectable is worse than the defect, so the
-    instrument's sight is restored in the same change -- by construction, not
-    by copy: both readers take the same `RenderedLines` owner.
+    The write and the sweep build the same `RenderedLines` owner, so both see a second copy as
+    the author's.
     """
 
     ITEM = "run `swift test"
@@ -10862,42 +10180,20 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
             )
         return body, stderr.getvalue()
 
-    # intent: fix
-    # marker: behaviourally red at `f28b61f0`, its own base
-    # (`AssertionError`).
     def test_the_second_identical_line_is_the_authors_and_is_carried(self) -> None:
         written, said = self.written(2)
         self.assertEqual(self.counts(written), (1, 1), f"stderr said {said!r}")
         self.assertIn("not readable back", said)
 
-    # intent: fix
-    # marker: behaviourally red at `95f74424`, its own base
-    # (`AssertionError`).
     def test_the_same_holds_when_the_verdict_has_not_changed(self) -> None:
-        """The shape round 9's fixture could not reach (#1751, round 10).
-
-        That fixture always changed the verdict, so this run's rendered line
-        and the last run's reconstructed line were two distinct lines and the
-        owner never had to decide what to do with the same bytes offered
-        twice. On a re-run they ARE the same bytes -- and #1782 re-verifies
-        every recorded CI completion, so every run is a rewrite and most
-        rewrites conclude what the last one did. The entry owned its line
-        twice and the second identical copy was deleted after all, with
-        nothing said about the deletion.
-        """
+        """An unchanged verdict offers the same bytes from both sources and still owns one line."""
         written, said = self.written(2, recorded="complete")
         self.assertEqual(self.counts(written), (1, 1), f"stderr said {said!r}")
 
-    # intent: fix
-    # marker: behaviourally red at `95f74424`, its own base
-    # (`AssertionError`).
     def test_a_third_copy_is_the_authors_too(self) -> None:
         written, _ = self.written(3, recorded="complete")
         self.assertEqual(self.counts(written), (1, 2))
 
-    # Guards: the ordinary one-copy body -- the case the cap must leave alone.
-    # intent: control
-    # marker: green at `f28b61f0`, its own base.
     def test_one_copy_is_still_the_machines_and_is_replaced(self) -> None:
         written, _ = self.written(1)
         self.assertEqual(self.counts(written), (1, 0))
@@ -10913,28 +10209,15 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
             "kind": "test",
         }
 
-    # intent: guard
-    # marker: red at `15e80e9e`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_one_entry_offering_its_line_from_both_sources_owns_one_line(self) -> None:
-        # One claim per (entry, line). An unchanged verdict makes this run's
-        # rendered line and the last run's the same bytes for the same entry,
-        # and counting that twice let the entry own two body lines (#1751,
-        # round 10).
+        # An unchanged verdict gives the same bytes from both sources for one entry: one claim.
         evidence = self.evidence()
         owner = evidence.owned_lines([self.entry()], [self.entry()])
         self.assertTrue(owner.claim(self.line))
         self.assertFalse(owner.claim(self.line))
 
-    # intent: guard
-    # marker: red at `95f74424`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_a_previous_line_that_differs_is_a_second_line_that_entry_owns(self) -> None:
-        # The other half: a changed verdict means last run's line and this
-        # run's are two distinct lines for one entry, and the write owns both
-        # -- which is what lets it replace the line it wrote last time.
+        # A changed verdict gives two lines for one entry, and the write owns both.
         evidence = self.evidence()
         current = f"- [complete] {self.ITEM} -- {self.DETAIL}"
         owner = evidence.owned_lines([self.entry(status="complete")], [self.entry()])
@@ -10943,19 +10226,10 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertFalse(owner.claim(self.line))
         self.assertFalse(owner.claim(current))
 
-    # intent: guard
-    # marker: red at `15e80e9e`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_two_entries_rendering_one_line_keep_two_claims(self) -> None:
-        """The mirror pair round 10's key could not tell apart (#1751, round 11).
+        """Two entries that render the same line keep two claims.
 
-        The ` -- ` boundary can fall in two places in one text, so two entries
-        whose items genuinely differ render the same line and no guard sees a
-        collision. Keyed on the bytes alone their two claims collapsed to one,
-        and the write then owned one of the two lines it had just rendered --
-        so it carried its own second line to `## Evidence Notes` on every
-        write, unbounded.
+        The ` -- ` boundary can fall in two places in one text, so different items can render one line.
         """
         evidence = self.evidence()
         mirrored = [
@@ -10970,15 +10244,8 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertTrue(owner.claim(line), "the second entry's claim was collapsed away")
         self.assertFalse(owner.claim(line))
 
-    # Guards: no accrual for the mirror pair. Green on main, red at `15e80e9e`: it
-    # guards a regression this PR introduced and then fixed.
-    # intent: fix
-    # marker: behaviourally red at `15e80e9e`, its own base
-    # (`AssertionError`).
     def test_the_mirror_pair_is_a_fixed_point_rather_than_an_accrual(self) -> None:
-        # Driven through the write, three times: (2,0) each time. At
-        # `15e80e9e` this read (2,1), (2,2), (2,3) -- one machine copy into
-        # `## Evidence Notes` per write, with nothing said about it.
+        # Three writes, (2, 0) each time.
         evidence = self.evidence()
         mirrored = [
             self.entry(index=1, status="complete", item="run `a", detail="b -- c` ok"),
@@ -10999,19 +10266,8 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
             seen.append(self.counts(body))
         self.assertEqual(seen, [(2, 0)] * 3)
 
-    # intent: guard
-    # marker: red at `15e80e9e`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_both_readers_build_one_owner_from_the_same_inputs(self) -> None:
-        """The same VALUE, not merely the same class (#1751, round 11).
-
-        The write built its owner from two lists of lines and the instrument
-        built a second one from a body's entries. Same implementation, two
-        constructions -- so "the same owner" was a claim about a type, and the
-        two would have parted on the first shape where an (entry, line) pair
-        and a line disagree, which the mirror pair above is.
-        """
+        """The write and the sweep build equal owners from the same inputs."""
         evidence = self.evidence()
         sweep = load_module(
             "evidence_write_sweep_owner", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
@@ -11029,28 +10285,11 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertEqual(sorted(instrument), claimed)
         self.assertEqual(len(claimed), 1, "one entry, one line")
 
-    # Guards: the instrument's owner holds the line the write is about to
-    # render, over an update detail carrying a construct and one past the
-    # length limit. Green at `76c65118`; it is the test that kills the
-    # `(source, source)` mutant, which is a guard's job rather than a fix's.
-    # intent: guard
-    # marker: green at `76c65118`, its own base.
     def test_the_instrument_owns_the_line_the_write_is_about_to_render(self) -> None:
-        """The axis round 12's attempt held fixed (#1751, round 13).
+        """The sweep owns the line the write is about to render.
 
-        Round 12 reported the "(source, source)" mutant as unkillable, on the
-        reasoning that the update replaces the detail and so closes any
-        construct the item opened. That reasoning is wrong -- replacing a
-        detail closes nothing. What made the mutant survive is that the
-        instrument's own update carries the detail `214 tests passed`, which
-        holds no construct and is well inside the line limit, so the line it
-        renders is one the RULE can read back and the cap never decides it.
-
-        Vary the update's detail and the two constructions part. The detail is
-        rebound on the sweep module (`mock.patch.object(sweep, "UPDATES", …)`)
-        rather than parametrised into `_entry_line_numbers`, because the
-        instrument's update is a property of the corpus it writes, not an
-        argument its readers take.
+        The update detail is patched on the sweep module because it is a property of the corpus the
+        sweep writes, not an argument its readers take.
         """
         evidence = self.evidence()
         sweep = load_module(
@@ -11087,27 +10326,11 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                     f"{label}: the line the write is about to render is not the machine's here",
                 )
 
-    # intent: guard
-    # marker: red at `d84ea5c9`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_owner_the_write_builds_holds_the_line_it_is_about_to_render(self) -> None:
-        """The property the instrument's second input exists for (#1751, round 12).
+        """The write's owner holds both this run's line and the last run's line.
 
-        The write's owner is built from (the entries this run renders, the
-        entries the body records), so an author's line byte-equal to the line
-        the write is ABOUT to render is claimed and replaced. The instrument
-        built its owner from the body's entries twice over, which holds only
-        the line the LAST run rendered — a different first input on every
-        changed verdict.
-
-        What this asserts is the difference itself, at the owner. The
-        end-to-end consequence is not constructible with the instrument's own
-        update map, and the report says what was tried: a line the write is
-        about to render is read back by the RULE unless its item and detail
-        share a construct, and the instrument's update replaces the detail,
-        which closes any construct the item opened. So the cap never decides
-        that line and the two constructions answer the same.
+        End to end, the two constructions agree with the sweep's own update map, so this asserts the
+        difference at the owner.
         """
         evidence = self.evidence()
         recorded = evidence.evidence_entries_of(self.body(1))
@@ -11121,14 +10344,8 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
             "the body's entries twice over cannot hold the line the write will render",
         )
 
-    # intent: guard
-    # marker: red at `d84ea5c9`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_the_instrument_applies_the_writes_updates_to_the_bodys_entries(self) -> None:
-        # The structural half: `entries_with_updates` is the one helper both
-        # sides use for "the entries this write renders", and the instrument
-        # names the update map it writes with rather than assuming none.
+        # Both sides use `entries_with_updates`, and the sweep names its update map.
         sweep = load_module(
             "evidence_write_sweep_updates", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
         )
@@ -11145,11 +10362,10 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
     OTHER_ITEM = "manual QA"
 
     def moved(self, requested: list[str], index: int) -> tuple[int, int]:
-        """The turn, over a body the author wrote a second copy of the line into.
+        """The turn over a body with a second copy of the line.
 
-        The published body records the item at index 1 -- where the last turn
-        wrote it. `requested` is the contract as it stands NOW, and `index` is
-        this run's position for the same item.
+        The published body records the item at index 1. `requested` is the current contract and
+        `index` is this run's position for the item.
         """
         line = f"- [complete] {self.MOVED_ITEM} -- {self.MOVED_DETAIL}"
         recorded = {"index": 1, "item": self.MOVED_ITEM, "status": "complete",
@@ -11173,23 +10389,10 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertEqual(errors, [])
         return self.counts(rendered)
 
-    # intent: fix
-    # marker: behaviourally red at `76c65118`, its own base
-    # (`AssertionError`).
     def test_an_item_that_keeps_its_text_and_moves_position_owns_one_line(self) -> None:
-        """A claim's key has to name the same entry in BOTH bodies (#1751, round 13).
+        """An item that moves position in the contract still owns one line (#1751).
 
-        Through the turn, which is where the two index spaces met: this run's
-        entries are built from positions in the CURRENT `requested_evidence`
-        and the published body's entries were read at the positions the LAST
-        turn wrote them at. So an issue owner reordering the requested list
-        gave one line two claims, and the write owned both of the author's
-        copies: one rewritten, the other deleted -- nothing in
-        `## Evidence Notes`, nothing on stderr about it, no refusal.
-
-        Both sides are indexed against one list now. At `76c65118` this read
-        (1, 0) while the controls below read (1, 1) -- the position is the
-        only thing that differs between them, which is why nothing caught it.
+        Both bodies' entries are keyed against the current contract, so the index names one entry.
         """
         self.assertEqual(
             self.moved([self.OTHER_ITEM, self.MOVED_ITEM], 2),
@@ -11197,43 +10400,20 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
             "the author's second copy was deleted",
         )
 
-    # intent: guard
-    # marker: green at `76c65118`, its own base.
     def test_the_same_item_at_one_position_is_unchanged(self) -> None:
-        # The same turn with the item where the published body left it: one
-        # contract item, and two, so the second control differs from the fix
-        # case in the position alone.
+        # Controls: the item where the published body left it, with one and two contract items.
         self.assertEqual(self.moved([self.MOVED_ITEM], 1), (1, 1))
         self.assertEqual(self.moved([self.MOVED_ITEM, self.OTHER_ITEM], 1), (1, 1))
 
-    # intent: guard
-    # marker: red at `76c65118`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_an_entry_this_contract_no_longer_asks_for_is_dropped(self) -> None:
-        # Not guessed at: an item the issue no longer requests is not a
-        # requirement of this contract, so it owns no line in it.
+        # An item the contract no longer requests owns no line.
         evidence = self.evidence()
         recorded = {"index": 1, "item": "a requirement since removed", "status": "complete",
                     "detail": "d", "kind": "test"}
         self.assertEqual(evidence.entries_keyed_for([recorded], ["something else"]), [])
 
-    # intent: guard
-    # marker: green at `7808a051`, its own base.
     def test_two_entries_at_one_index_with_two_lines_are_a_fixed_point(self) -> None:
-        """What `rendered_entry_claims` claims about a colliding index, run.
-
-        The docstring used to justify the index key by saying a second entry
-        at one index is refused as a collision. It is not -- that refusal is
-        #1782's -- so the justification was false for the head it sat on. What
-        IS true here is measured: three writes, no accrual either way.
-
-        ONE AXIS, named in the test's own name since round 14: the two entries
-        share an index and render DIFFERENT lines. Hold the other half equal
-        as well -- one index and one line -- and this head carried a line the
-        write had rendered itself, every run, which this test could not see
-        and the sibling above is for.
-        """
+        """Two entries at one index rendering different lines are a fixed point over three writes."""
         evidence = self.evidence()
         entries = [
             self.entry(index=1),
@@ -11264,26 +10444,10 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                     seen.append(self.counts(body))
                 self.assertEqual(seen, [expected] * 3)
 
-    # intent: guard
-    # marker: red at `7808a051`, its own base (`AssertionError: () is not
-    # <class 'inspect._empty'>`), which puts it in the behavioural bucket --
-    # but what it asserts is a SIGNATURE, not behaviour, so it is a guard by
-    # nature: it pins the shape of the call rather than what the call does.
-    # Named here rather than smoothed, because the bucket and the kind
-    # disagree (#1751, round 15). The sha is here because a marker that names
-    # its base in prose alone is one a reader cannot check (round 17).
     def test_the_writer_takes_both_ends_of_the_body_with_no_default(self) -> None:
-        """Required where callers actually reach, not only where the owner is built.
+        """`write_evidence_status_section` requires `previous_entries`, with no default.
 
-        A default for `previous_entries` is a caller dropping the last run's
-        claims without saying so: a changed verdict's old line is then
-        carried to `## Evidence Notes` rather than replaced. It was required
-        at `owned_lines` and defaulted to `()` one layer out at
-        `write_evidence_status_section`, which is the function callers reach
-        -- 21 of 21 test call sites took the default and both production
-        sites passed it, so the guard asserted about a function nobody in the
-        suite called that way. A guard on the function you wish they called
-        is not a guard (#1751, round 14).
+        Without it a changed verdict's old line would be carried instead of replaced.
         """
         evidence = self.evidence()
         for name in ("owned_lines", "write_evidence_status_section"):
@@ -11301,26 +10465,10 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                 "body", [], notes_from="body", recorded_items=[], entries=[self.entry()]
             )
 
-    # intent: fix
-    # marker: behaviourally red at `7808a051`, its own base
-    # (`AssertionError`).
     def test_two_entries_at_one_index_rendering_one_line_own_both(self) -> None:
-        """The conjunction, held at once, through the lane every run calls.
+        """Two entries at one index rendering one line own both lines, through the lane writer.
 
-        Round 11 keyed a claim on the (index, line) PAIR so that two entries
-        offering the same bytes keep two claims -- true only while their
-        indexes differ. Two entries AT ONE INDEX that also render one line
-        collapsed to a single claim, so the write owned one of the two lines
-        it had just rendered and carried the other to `## Evidence Notes`,
-        once per run, with nothing said beyond a generic warning that fires
-        without any accrual (#1751, round 14).
-
-        Both halves are held equal here at the same time, which is the only
-        shape that can see it: the sibling tests vary the index with the
-        bytes fixed and the bytes with the index fixed, and BOTH pass on the
-        broken code. The two items differ genuinely -- the ` -- ` boundary
-        falls in two places in one text -- so nothing refuses them as
-        indistinguishable, and they render one line.
+        The items differ (the ` -- ` boundary falls in two places), so no guard refuses them.
         """
         evidence = self.evidence()
         first = {"item": "run `a", "detail": "b -- c` ok", "status": "pending-ci",
@@ -11358,34 +10506,14 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                         f"{label}, run {run}: a rendered line went missing",
                     )
 
-    # intent: fix
-    # marker: behaviourally red at `7808a051`, its own base
-    # (`AssertionError`).
     def test_two_items_that_both_read_as_nothing_are_one_requirement(self) -> None:
-        # The page reads `**.**` and `.` as the same nothing, so a line naming
-        # either cannot be told from a line naming the other -- which is what
-        # this refusal is for. The guard skipped an empty key, so the one pair
-        # the ownership rule is certain about was the one pair this answered
-        # nothing for (#1751, round 14).
+        # `**.**` and `.` both read as empty on the page, so they are one requirement.
         evidence = self.evidence()
         self.assertEqual(evidence._indistinguishable(["**.**", "."]), ["."])
         self.assertEqual(evidence._indistinguishable(["a", "b"]), [], "a control")
 
-    # intent: fix
-    # marker: behaviourally red at `76c65118`, its own base
-    # (`AssertionError`).
     def test_two_entries_with_one_item_text_stay_two_claims(self) -> None:
-        """What the index buys, in the shape that would cost the item text.
-
-        Two entries in ONE body can carry the same item text at two indexes.
-        The index tells them apart, so they own their two lines; keyed on the
-        item text alone they would be one key and one of the two lines would
-        go unowned -- which is the alternative this round rejected.
-
-        Re-keyed into a contract that names the item once they share an index,
-        and they still own two lines: a claim is an (entry, line) pair, so two
-        entries rendering two different lines are two claims either way.
-        """
+        """Two entries with the same item text at two indexes own two lines."""
         evidence = self.evidence()
         item = "run `a"
         entries = [
@@ -11393,8 +10521,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
             {"index": 2, "item": item, "status": "complete", "detail": "second` ok", "kind": "test"},
         ]
         lines = evidence.rendered_entry_lines(entries)
-        # The key carries the index AND that index's occurrence in this list,
-        # so no two entries of one list can share it (#1751, round 14).
+        # The key is the index and its occurrence in this list, so no two entries share one.
         self.assertEqual(
             evidence.rendered_entry_claims(entries), [((1, 0), lines[0]), ((2, 0), lines[1])]
         )
@@ -11427,12 +10554,9 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
             )
 
     def published_recording(self, times: int, item: str = "", detail: str = "") -> str:
-        """A published body the WRITER wrote, with its recorded entry repeated.
+        """A published body the writer wrote, with its recorded entry repeated.
 
-        Built from the writer's own output rather than hand-written JSON:
-        metadata this code did not write is metadata the parser may decline,
-        and a fixture the parser declines makes every assertion after it
-        vacuous. The read-back below is asserted for that reason.
+        Built from the writer's own output so the parser accepts the metadata; the read-back asserts it.
         """
         published, _ = self.turn(self.PLAIN_BODY, "", item, detail)
         if times == 1:
@@ -11442,40 +10566,13 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         record["entries"] = record["entries"] * times
         return published[: found.start(1)] + json.dumps(record, indent=2) + published[found.end(1) :]
 
-    # intent: fix
-    # marker: red at `35a13793`, its own base, behaviourally --
-    # `FAILED (failures=4)`, both items at both multiplicities: the write
-    # there returns a body with the author's copy gone, no error and nothing
-    # carried. Red on `016d94ba` on a name this branch adds (#1751, round 16).
     def test_one_requirement_recorded_twice_stands_the_write_down(self) -> None:
-        """Two entries recording ONE item are two ownership claims on identical bytes.
+        """A record naming one requirement twice stands the write down and names both positions.
 
-        The duplicate is in the RECORDED METADATA of the published body,
-        which no guard inspects: `entries_keyed_for` re-keys it into two
-        entries at index 1, `rendered_entry_claims` keys on
-        `(index, occurrence)` and gives each its own claim, and the second
-        claim has no line of the write's to own -- so it takes the author's
-        byte-identical copy. The contract's own guard never sees it because
-        `requested_evidence` holds ONE item throughout.
-
-        Measured through the turn's entry point with the author's copy in the
-        body BEING REWRITTEN and the published metadata built from the
-        writer's own output: at `35a13793` one recorded entry gives
-        `(status, notes) = (1, 1)` and owner claims `[True, False, False]`;
-        the same entry recorded twice gives `(1, 0)` and `[True, True,
-        False]`; three times `(1, 0)` and `[True, True, True]` -- no refusal,
-        nothing on stderr about the deletion, no `## Evidence Notes` entry.
-        `76c65118` and `7808a051` carry it at every multiplicity, and
-        `016d94ba` takes it at every multiplicity, so this is round 14's key
-        rather than a defect of main's.
-
-        The question it answers is "is this record VALID?". Ownership of a
-        valid record is round 14's and is unchanged -- two entries ARE two
-        claims. A record naming one requirement twice is not valid, and what
-        a write does with one is stand down whole and name both positions.
+        Otherwise the second entry's claim has no line of the write's own and takes the author's
+        byte-identical copy.
         """
-        # The fixture read-back first: a published body whose metadata the
-        # parser declines makes everything below it vacuous.
+        # The parser must accept the fixture, or every assertion below is vacuous.
         evidence = self.evidence()
         for item, detail in (("run the QA filter", "214 tests passed"),
                              (self.COLLIDING_ITEM, self.COLLIDING_DETAIL)):
@@ -11484,12 +10581,8 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                 1,
                 "the published body's metadata did not parse; the fixture is not built",
             )
-        # The ordinary fixture first -- a plain item, which is what a contract
-        # carries -- and the pass's own item second, because it is the one
-        # where the end-to-end symptom is VISIBLE: with a plain item the
-        # duplicate line is deduplicated by the item-keyed rule anyway (the
-        # control below), so only an item that rule cannot own shows the
-        # author's copy leaving.
+        # A plain item first, then one the item-keyed rule cannot own, where the author's copy
+        # visibly leaves.
         for label, item, detail in (
             ("a plain item", "run the QA filter", "214 tests passed"),
             ("an item the reader cannot own", self.COLLIDING_ITEM, self.COLLIDING_DETAIL),
@@ -11506,9 +10599,7 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                         evidence.evidence_entries_of(published), [item]
                     )
                     self.assertEqual(len(keyed), times, "the duplicate did not survive the re-keying")
-                    # The owner-level tell, on identical bytes: the second
-                    # entry's claim is the one with no line of the write's
-                    # to own.
+                    # The second entry's claim has no line of the write's to own.
                     owner = evidence.owned_lines(
                         [{"index": 1, "item": item, "status": "pending-ci",
                           "detail": detail, "kind": "test"}],
@@ -11527,24 +10618,11 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                     self.assertIn(f"at position {places}", errors[0], "both positions are not named")
                     self.assertIn(sys.modules["_helpers"].code_span(item), errors[0])
 
-    # intent: control
-    # marker: green at `35a13793`, its own base -- `Ran 1 test ... OK` -- which
-    # is what makes it a control; behaviourally red on `016d94ba`, where the
-    # author's copy is taken at every multiplicity (#1751, round 16).
     def test_one_recorded_entry_still_carries_the_author_s_copy(self) -> None:
-        # The multiplicity the refusal does not reach, and the reason the
-        # refusal is keyed on the RECORD rather than on the copy: one entry,
-        # two byte-identical lines, the entry owns one and the author's copy
-        # is carried. This is the behaviour the fix must not move.
+        # The control: one entry and two byte-identical lines. The entry owns one, and the
+        # author's copy is carried.
         evidence = self.evidence()
-        # Driven through the LANE writer, where the body being rewritten and
-        # the body notes may come from are one object. The turn path is the
-        # same claim about a copy in the PUBLISHED body, and it moved there in
-        # round 18: a copy in the model's own draft is the writer's text and
-        # carries nothing, which the provenance suite drives shape by shape.
-        # Keeping this one on the lane path keeps it measuring what round 16
-        # built it for -- ownership multiplicity -- rather than provenance
-        # (#1751, round 18).
+        # Through the lane writer, where the rewritten body and the notes source are one object.
         doubled = self.published_recording(1).replace(
             self.colliding_line, f"{self.colliding_line}\n{self.colliding_line}", 1
         )
@@ -11555,28 +10633,10 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertNotEqual(written, doubled, "the write did not happen")
         self.assertIn(self.colliding_line, evidence.markdown_section(written, "Evidence Notes"))
 
-    # intent: control
-    # marker: green at `35a13793`, its own base, and constant at every head of
-    # this branch and on `016d94ba`: a readable item's duplicate line is
-    # deduplicated by the item-keyed rule wherever it sits, which is why the
-    # shape above needs an item the reader cannot own (#1751, round 16).
     def test_a_readable_item_s_duplicate_is_the_machine_s_wherever_it_sits(self) -> None:
-        """The record that decided this round's scope, kept as a test.
+        """With a readable item, a byte-identical copy of the machine's line is the machine's.
 
-        With a READABLE item the second byte-identical copy of the machine's
-        line is replaced at every multiplicity -- one recorded entry
-        included, and whether the copy sits in the model's draft, in the
-        published body, or in both. Measured constant at `76c65118`,
-        `7808a051`, `5ee6769e`, `35a13793` and this head, so it is neither
-        this round's nor a regression: a line naming a recorded item is the
-        machine's by the item-keyed rule, and a byte-identical copy of the
-        machine's own line carries nothing of the author's -- the page keeps
-        the line they wrote, once.
-
-        It is recorded rather than folded into the finding above, because the
-        end-to-end symptom there belongs to the path where that rule cannot
-        answer -- an item the reader cannot own, where the byte-identical
-        claim is the only claim available.
+        This holds whether the copy is in the draft, the published body or both.
         """
         item, detail = "run the QA filter", "214 tests passed"
         line = f"- [pending-ci] {item} -- {detail}"
@@ -11613,28 +10673,8 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                     evidence.markdown_section(written, "Evidence Notes").count(line), 0
                 )
 
-    # intent: guard
-    # marker: green at `35a13793`, its own base: the owner does what this says
-    # there, and the refusal above is what keeps an invalid record from ever
-    # reaching it. Red on `016d94ba` on a name (#1751, round 16).
     def test_the_owner_grants_a_second_claim_on_identical_bytes(self) -> None:
-        """Where the refusal is, and where it is NOT: ownership is unchanged.
-
-        The tell one level below the write: offer the same bytes three times
-        to the owner of a record that names one requirement once, and to the
-        owner of one that names it twice. Measured at five heads --
-        `76c65118` and `7808a051` grant `[True, False, False]` at both
-        multiplicities; `5ee6769e` and `35a13793` grant `[True, False,
-        False]` for one entry and `[True, True, False]` for two, which is the
-        second claim that takes the author's copy.
-
-        This head grants the same as `35a13793`, deliberately: a claim is an
-        (entry, line) pair and two entries ARE two claims -- round 14's key,
-        which a valid record depends on. What this round changes is that a
-        record naming one requirement twice never reaches the owner, because
-        the write stands down first. Moving the fix into the owner would
-        undo round 14 and re-break the case above it.
-        """
+        """The owner still grants two entries two claims; the refusal happens before the owner."""
         evidence = self.evidence()
         entry = {"index": 1, "item": self.COLLIDING_ITEM, "status": "complete",
                  "detail": self.COLLIDING_DETAIL, "kind": "test-attested"}
@@ -11645,33 +10685,11 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
                 owner = evidence.owned_lines(entries, [])
                 self.assertEqual([owner.claim(line) for _ in range(3)], expected)
 
-    # intent: fix
-    # marker: red at `35a13793`, its own base, behaviourally --
-    # `AssertionError: unexpectedly None`, the write going ahead on a record
-    # naming one requirement in two spellings. Red on `016d94ba` on a name
-    # this branch adds (#1751, round 16).
     def test_two_spellings_of_one_requirement_in_the_record_are_refused(self) -> None:
-        """The key is the page's reading, and this is the shape that says so.
+        """Two spellings of one requirement in the record are refused, keyed on the page reading.
 
-        `Manual QA on device` and `**Manual QA** on device` are two strings
-        and one requirement: the page reads them the same, so every status
-        line naming either is the entry's under the ownership rule, and two
-        entries recording them are two claims on one line's bytes. Keying
-        this check on the raw item text instead leaves the suite green --
-        measured, a surviving mutant of this round -- because no fixture in
-        it records one requirement under two spellings.
-
-        Asked at the WRITER rather than through the turn, which is where the
-        check lives and the only seam where both spellings survive: the
-        turn's re-keying drops an entry whose item is not the requested
-        string, so the pair cannot reach the write through it.
-
-        `recorded_items` holds the requirement ONCE here, which is what the
-        writer is handed in the shape this is about -- the turn builds it
-        from a map keyed by index, so two entries at one index collapse to
-        one recorded item while the entries themselves keep both. Handing
-        both spellings as recorded items instead makes the CONTRACT's own
-        guard fire first, and then this test would be about that guard.
+        Asked at the writer, because the turn's re-keying drops an entry whose item is not the
+        requested string. `recorded_items` holds the requirement once, as the turn builds it.
         """
         evidence = self.evidence()
         entries = [
@@ -11694,22 +10712,8 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertIn("record one requirement more than once", write.refusal)
         self.assertIn("at position 1, 2", write.refusal)
 
-    # intent: control
-    # marker: green at `35a13793`, its own base -- `Ran 1 test ... OK` -- which
-    # is what makes it a control; red on `016d94ba` on a NAME this branch adds,
-    # since the writer takes no `entries` there. The shape it holds is the one
-    # the refusal must not take, which is why the refusal keys on the ITEM and
-    # not on the rendered line (#1751, round 16).
     def test_two_entries_whose_items_differ_still_write(self) -> None:
-        """Round 14's shape, and the one this refusal must leave alone.
-
-        `{item: "run `a", detail: "b -- c` ok"}` and
-        `{item: "run `a -- b", detail: "c` ok"}` render the SAME line because
-        the ` -- ` boundary falls in two places in one text, and their items
-        genuinely differ -- two requirements, two claims, and a write. A
-        refusal keyed on the rendered line rather than on the item would
-        stand this down and cost the author a verdict.
-        """
+        """Two entries whose different items render the same line still write."""
         evidence = self.evidence()
         entries = [
             {"index": 1, "item": "run `a", "status": "complete", "detail": "b -- c` ok"},
@@ -11728,18 +10732,9 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         )
         self.assertIsNone(write.refusal, write.refusal)
 
-    # intent: guard
-    # marker: red at `15e80e9e`, its own round's base, by API alone and it cannot be otherwise --
-    # the seam it pins is one that round ADDS, so there is no property to hold at the base and
-    # no drive that makes it behaviourally red there (#1751, round 15).
     def test_both_readers_agree_on_the_shape_the_two_keys_disagree_about(self) -> None:
-        # The mirror pair: two entries, one line, twice in the body. A
-        # line-keyed owner and a pair-keyed one answer the same here only
-        # because a single body offers each entry's line once -- which is why
-        # the instrument's second construction was equivalent rather than
-        # wrong, and why replacing it is a structural fix and not a behaviour
-        # change. Asserted so a future change to the rule cannot move one
-        # reader without the other.
+        # The mirror pair: two entries, one line, twice in the body. Both readers must agree
+        # here so a later rule change cannot move one without the other.
         evidence = self.evidence()
         sweep = load_module(
             "evidence_write_sweep_mirror", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
@@ -11765,14 +10760,9 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         self.assertEqual(sorted(instrument), claimed)
         self.assertEqual(len(claimed), 2, "two entries, two lines")
 
-    # intent: fix
-    # marker: behaviourally red at `f28b61f0`, its own base
-    # (`AssertionError`).
     def test_the_instrument_calls_the_second_copy_the_authors_too(self) -> None:
-        # The sweep's sight, restored by construction: it builds the same
-        # owner, so exactly one of the two identical lines is the machine's to
-        # it. With the cap a set again this returns both, and the write
-        # deletes both -- which is the pair of facts round 8 made invisible.
+        # The sweep builds the same owner, so exactly one of the two lines is the machine's to
+        # it.
         evidence = self.evidence()
         sweep = load_module(
             "evidence_write_sweep_multiset", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
@@ -11783,14 +10773,8 @@ class OneEntryOwnsOneLineTests(unittest.TestCase):
         owned = sweep._entry_line_numbers(lines, normalized, source)
         self.assertEqual(len(owned), 1, "the instrument gave one entry both copies")
 
-    # intent: fix
-    # marker: behaviourally red at `f28b61f0`, its own base
-    # (`AssertionError`).
     def test_the_instrument_reports_the_loss_when_the_write_takes_both(self) -> None:
-        # What `lines_lost` says about a write that deleted the second copy:
-        # the line, rather than nothing. Asked of the instrument directly with
-        # a written body that kept one line, which is what the set-semantics
-        # write produced.
+        # `lines_lost` names the line when a write keeps one copy of two.
         evidence = self.evidence()
         sweep = load_module(
             "evidence_write_sweep_loss", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
