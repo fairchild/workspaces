@@ -956,11 +956,8 @@ class LaneProvenanceOnHandWrittenBodiesTests(unittest.TestCase):
         self.assertEqual(
             recorded[self.TEST]["detail"], f"`{self.TEST}` succeeded on self-hosted macOS CI"
         )
-        # The lane's verdict is what the SECTION says; their own sentence is
-        # not deleted for it. Round 17 keeps their bytes below the section
-        # with a line saying the entry replaced them, so what this pins is
-        # that their text is no longer a status line rather than that it is
-        # gone (#1751, round 17).
+        # The section carries the lane's verdict, and their replaced line
+        # moves to the notes rather than being deleted.
         helpers = sys.modules["_helpers"]
         self.assertNotIn(
             "ran it on my laptop", helpers.markdown_section(twice, "Evidence Status")
@@ -1208,9 +1205,7 @@ class MetadataBodyIsAlwaysReRenderedTests(unittest.TestCase):
 
         helpers = sys.modules["_helpers"]
         self.assertIn(f"- [complete] {self.BUILD} -- ", reconciled)
-        # Restored in the SECTION, and their edit kept below it: the section
-        # says what was recorded, and the hand edit is not deleted to make
-        # that true (#1751, round 17).
+        # The section is restored and the hand edit moves to the notes.
         self.assertNotIn(
             f"- [blocked] {self.BUILD}", helpers.markdown_section(reconciled, "Evidence Status")
         )
@@ -3337,11 +3332,9 @@ class RevisionTurnTests(unittest.TestCase):
     )
     UNCARRIED_HEADLINE = "was not carried"
 
-    # The draft the model writes this turn, with nothing of anybody's under
-    # the heading: the continued status line belongs to the PUBLISHED body,
-    # because `## Evidence Notes` is written from the body a person can edit
-    # and a sentence about the model's own draft is not a loss of theirs
-    # (#1751, round 18).
+    # The model's draft for this turn. The continued status line lives in the
+    # published body, since the notes are carried only from the body a person
+    # can edit (#1751).
     DRAFT_BODY = (
         "## Summary\n- Rewrote the sheet's status mapping\n\n"
         "## Evidence Status\n\n"
@@ -3354,9 +3347,8 @@ class RevisionTurnTests(unittest.TestCase):
         state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
         if not own_pr:
             # The turn that OPENS the pull request: no PR to advance, and the
-            # lane that runs it does not require one. There is no published
-            # body either, so the loss has to be planted where the create
-            # path reads one -- the body it is handed for the write.
+            # lane that runs it does not require one. With no published body,
+            # the loss goes in the body the create path writes.
             state["own_pr"] = None
             kwargs["require_existing_pr"] = False
         else:
@@ -3398,21 +3390,15 @@ class RevisionTurnTests(unittest.TestCase):
         self.assertTrue(edited and posted, commands)
         self.assertLess(edited[0], posted[-1])
 
-    # An item whose rendered line the write's own reader cannot read back:
-    # past `EVIDENCE_STATUS_LINE_LIMIT`, so the line is written and the next
-    # run will not recognise it. This is the announcement the create path has
-    # to forward, and it is the one that does not depend on whose body the
-    # text came from -- there is no published body on a first push, so nothing
-    # of anybody's can be lost from one, and round 18 makes the draft's own
-    # text the writer's rather than an author's (#1751).
+    # An item whose rendered line runs past `EVIDENCE_STATUS_LINE_LIMIT`, so the
+    # write announces it cannot read the line back. A first push has no
+    # published body, so this is the announcement the create path can owe.
     UNREADABLE_ITEM = "the QA filter " + "x" * 4_000
 
     def test_the_turn_that_opens_a_pull_request_says_it_too(self) -> None:
         # The create path is a second call site, and a fix applied to one of
-        # them is the shape this pins against. What it says here is about a
-        # line the write rendered rather than about text it could not carry;
-        # the claim under test is that this call site forwards what the write
-        # said at all, and posts it after the body it is about.
+        # them is the shape this pins against. This checks that the call site
+        # forwards what the write said, after the body it is about.
         state = {**self._state(), "requested_evidence": [self.UNREADABLE_ITEM]}
         state["own_pr"] = None
         with mock.patch.object(self, "_state", return_value=state):
@@ -3438,8 +3424,7 @@ class RevisionTurnTests(unittest.TestCase):
     def test_a_revision_turn_with_no_diff_says_it_as_well(self) -> None:
         # This path publishes a body without committing one, so it owes the
         # same report as the paths that push. The loss is in the published
-        # body, which is where a person's continued sentence can be
-        # (#1751, round 18).
+        # body, where a person's continued sentence lives.
         state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
         state["own_pr"] = {**state["own_pr"], "body": self.CONTINUED_STATUS_BODY}
         with mock.patch.object(self, "_state", return_value=state):
