@@ -74,3 +74,11 @@ lume (clone `lume-boot-test-26-2` of the 26.2 validated base), done 18:19:47 to 
 - Clone set to 4 GB (`lume set --memory 4GB`), run detached with `--display none --vnc disabled`.
 - Reached at 192.168.8.111. Port 22 open. `lume ssh` returned EOF, and no credentials were tried, so the guest OS version is unverified.
 - Stopped via `lume stop`, status stopped. Clone deleted (steward go); base checked afterward, still stopped with its 8 GB setting.
+
+## Lume upgrade (applied 18:59:30 UTC)
+
+- 0.3.3 backed up to `~/.local/share/lume/lume-0.3.3.app.bak`. A second copy, `lume-0.3.3.app.replaced`, is also there and can be deleted.
+- Stopped the 0.3.3 daemon (pid 803, confirmed as `lume serve --port 7777` before the kill). Swapped in 0.6.0 (signature verified). `lume --version` reads 0.6.0.
+- Started the daemon with `scripts/lume-ensure-daemon.sh` (new pid 12909). `/lume/host/status` is healthy, with `max_vms: 2`, which confirms the two-VM limit.
+- Product validity check, read-only (mirrors `LumeValidatedBaseService.validationReason` plus `vmDirectoryExists`). Manifest `state: ready` with `validatedAt 2026-03-15T11:01:23Z`. `disk.img` and `config.json` present (26.5 GB allocated). `lume get` reports it stopped, and `lume ls --storage` lists it. Not booted. `scripts/lume-standalone-verify-base.sh` boots the base, so it was not run.
+- Telemetry off: `telemetryEnabled: false` in `~/.config/lume/config.yaml` (backup `config.yaml.bak-telemetry`). `lume config get` reads "Telemetry enabled: false".
