@@ -68,7 +68,9 @@ tart (`workspaces-tart-ui`), done 18:14:12 to 18:14:56 UTC (about 44 s running):
 - Swap rose to about 94% during the run. Shut down with `tart stop --timeout 30`,
   exit 0.
 
-lume: blocked at 18:15 (swap 93.9%). A monitor waits for swap under 92% and
-load15 under 40. Plan once it opens: clone the 26.2 validated base into home
-storage (the base itself is never booted), set the clone to 4 GB, run it
-detached, stop it within 15 min.
+lume (clone `lume-boot-test-26-2` of the 26.2 validated base), done 18:19:47 to 18:20:18 UTC:
+
+- Gate opened at 18:19:36 (swap 91%, load15 7.60). The base was cloned, never booted.
+- Clone set to 4 GB (`lume set --memory 4GB`), run detached with `--display none --vnc disabled`.
+- Reached at 192.168.8.111. Port 22 open. `lume ssh` returned EOF, and no credentials were tried, so the guest OS version is unverified.
+- Stopped via `lume stop`, status stopped. Clone deleted (steward go); base checked afterward, still stopped with its 8 GB setting.
