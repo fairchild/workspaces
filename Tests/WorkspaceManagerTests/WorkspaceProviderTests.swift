@@ -304,18 +304,18 @@ struct WorkspaceProviderTests {
 
         let arpOutput =
             """
-            ? (192.168.8.100) at e:cf:3c:8a:f7:bd on en0 ifscope [ethernet]
-            ? (192.168.8.100) at ea:4:3c:6e:f5:71 on en5 ifscope [ethernet]
-            ? (192.168.8.122) at 0:e:58:7f:28:2a on en0 ifscope [ethernet]
+            ? (192.0.2.10) at 2:0:0:0:0:1 on en0 ifscope [ethernet]
+            ? (192.0.2.10) at 2:0:0:0:0:2 on en5 ifscope [ethernet]
+            ? (192.0.2.22) at 2:0:0:0:0:3 on en0 ifscope [ethernet]
             """
 
         let resolvedIP = LumeBridgedVMReachability.ipAddress(
-            forMACAddress: "0e:cf:3c:8a:f7:bd",
+            forMACAddress: "02:00:00:00:00:01",
             interfaceName: "en0",
             arpOutput: arpOutput
         )
 
-        #expect(resolvedIP == "192.168.8.100")
+        #expect(resolvedIP == "192.0.2.10")
     }
 }
 
