@@ -18,10 +18,13 @@ Safe to run with no network, no secrets, no GitHub and no UI.
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
+from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "evidence-write-sweep.py"
@@ -43,9 +46,11 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
     is the property that was missing.
     """
 
-    BODIES = 168
-    REFUSALS = 22
-    ANNOUNCED_LOSSES = 2
+    # Every tail/successor/ending combination is written once per recorded
+    # item, because whose a status line is depends on the item matching.
+    BODIES = 408
+    REFUSALS = 44
+    ANNOUNCED_LOSSES = 4
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -100,7 +105,8 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         self.assertEqual(self.summary["bodies"], self.BODIES)
         self.assertEqual(
             self.summary["bodies"],
-            len(sweep_script.SECTION_TAILS)
+            len(sweep_script.ITEMS)
+            * len(sweep_script.SECTION_TAILS)
             * len(sweep_script.SUCCESSORS)
             * len(sweep_script.LINE_ENDINGS),
         )
@@ -111,12 +117,13 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         # hazards are a block the parser cannot end; the exception is the one
         # the writer documents -- a runaway fence with no heading below it is a
         # cut to the end of the body that the page agrees with, so it writes.
-        refused = {outcome.label.split(" / ")[0] for outcome in self.outcomes if outcome.refused}
+        # A label leads with the recorded item, so the tail is the second field.
+        refused = {outcome.label.split(" / ")[1] for outcome in self.outcomes if outcome.refused}
         self.assertEqual(refused, {"a fence that never closes", "a comment that never closes"})
         wrote = {
-            outcome.label
+            " / ".join(outcome.label.split(" / ")[1:])
             for outcome in self.outcomes
-            if not outcome.refused and outcome.label.startswith("a fence that never closes")
+            if not outcome.refused and outcome.label.split(" / ")[1] == "a fence that never closes"
         }
         self.assertEqual(
             wrote,
@@ -124,6 +131,10 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
                 "a fence that never closes / nothing below / lf",
                 "a fence that never closes / nothing below / crlf",
             },
+        )
+        # Each hazard refuses under both recorded items.
+        self.assertEqual(
+            len([outcome for outcome in self.outcomes if outcome.refused]), self.REFUSALS
         )
         # And the great majority of the corpus is written rather than declined,
         # or "0 bodies lose a section" is a property of a writer that declines.
@@ -445,6 +456,381 @@ class TheSweepReportsTheFiguresAPullRequestQuotesTests(unittest.TestCase):
         written, _, _ = sweep_script.write_once(prose)
         self.assertNotEqual(written, prose)
         self.assertEqual(sweep_script.lines_lost(prose, written), [])
+
+    # intent: guard
+    def test_an_unrecorded_status_bullet_under_the_heading_survives_the_write(self) -> None:
+        """A status line naming no recorded item is the author's and moves to the notes (#1751)."""
+        tail = sweep_script.SECTION_TAILS["an unrecorded status bullet of the author's"]
+        self.assertIn(self.BLOCKED_UNDER_AN_H1, tail)
+        for successor in sweep_script.SUCCESSORS:
+            for ending_name, ending in sweep_script.LINE_ENDINGS.items():
+                with self.subTest(successor=successor, ending=ending_name):
+                    source = sweep_script.body(tail, sweep_script.SUCCESSORS[successor], ending)
+                    written, refused, said = sweep_script.write_once(source)
+                    self.assertFalse(refused)
+                    self.assertEqual(sweep_script.lines_lost(source, written), [])
+                    self.assertEqual(sweep_script.seams_closed(source, written), [])
+                    # Nothing is taken, so nothing is announced.
+                    self.assertEqual([line for line in said if "not carried" in line], [])
+                    self.assertIn(
+                        self.BLOCKED_UNDER_AN_H1,
+                        sweep_script.MARKDOWN_LINE_ENDING_RE.sub("\n", written),
+                    )
+
+    # intent: guard
+    def test_the_instrument_and_the_writer_ask_one_function_whose_line_it_is(self) -> None:
+        # The sweep and the writer both ask `evidence.is_recorded_status_line`.
+        evidence = sys.modules["evidence"]
+        source = sweep_script.body(
+            sweep_script.SECTION_TAILS["an unrecorded status bullet of the author's"],
+            sweep_script.SUCCESSORS["one h2 below"],
+            "\n",
+        )
+        recorded = sweep_script._recorded_items(source)
+        self.assertEqual(recorded, {sweep_script.ITEM})
+        self.assertTrue(
+            evidence.is_recorded_status_line(
+                f"- [pending-ci] {sweep_script.ITEM} -- {sweep_script.DETAIL}", recorded
+            )
+        )
+        self.assertFalse(evidence.is_recorded_status_line(self.BLOCKED_UNDER_AN_H1, recorded))
+        self.assertIn(self.BLOCKED_UNDER_AN_H1, sweep_script.author_lines(source))
+        self.assertNotIn(
+            f"- [pending-ci] {sweep_script.ITEM} -- {sweep_script.DETAIL}",
+            sweep_script.author_lines(source),
+        )
+
+    # One status line in several spellings, with what the write does to it.
+    # "replaced" lines leave the section with an announcement; "carried" lines
+    # are the author's and move to the notes. The page keeps every line.
+    WRAPPED_FORMS = {
+        # Byte-identical to the line the write renders, so nothing is said.
+        "plain": ("- [pending-ci] {item} -- {detail}", "the write's own bytes"),
+        "a bold status token": ("- **[pending-ci]** {item} -- {detail}", "replaced"),
+        "an italic status token": ("- _[pending-ci]_ {item} -- {detail}", "replaced"),
+        "a bold item": ("- [pending-ci] **{item}** -- {detail}", "replaced"),
+        "an ordered marker": ("1. [pending-ci] {item} -- {detail}", "replaced"),
+        "a star marker": ("* [pending-ci] {item} -- {detail}", "replaced"),
+        # `inline_text` keeps a code span's backticks, so this status token
+        # names no status and the line is the author's.
+        "a status token in code": ("- `[pending-ci]` {item} -- {detail}", "carried"),
+        "a wrapped unrecorded bullet": (
+            "- **[blocked]** release approval -- the signing profile is missing",
+            "carried",
+        ),
+    }
+
+    def _wrapped_body(self, line: str) -> str:
+        """The corpus body with one more status line under the heading, written as given."""
+        return sweep_script.body(
+            sweep_script.SECTION_TAILS["a plain note"] + line + "\n",
+            sweep_script.SUCCESSORS["one h2 below"],
+            "\n",
+        )
+
+    # intent: fix
+    def test_a_status_line_however_it_is_written_keeps_its_bytes_on_the_page(self) -> None:
+        """The page keeps every spelling; the rows differ only in what the write says.
+
+        The instrument exempts only bytes the write rendered, so every row
+        reads as the author's to it.
+        """
+        for name, (template, outcome) in self.WRAPPED_FORMS.items():
+            with self.subTest(form=name):
+                line = template.format(item=sweep_script.ITEM, detail=sweep_script.DETAIL)
+                source = self._wrapped_body(line)
+                written, refused, said = sweep_script.write_once(source)
+                self.assertFalse(refused)
+                # Nothing left the page and nothing was pushed together.
+                self.assertEqual(sweep_script.lines_lost(source, written), [], name)
+                self.assertEqual(sweep_script.seams_closed(source, written), [], name)
+                self.assertEqual([note for note in said if "not carried" in note], [])
+                replaced = [note for note in said if "replaced in" in note]
+                if outcome == "the write's own bytes":
+                    # A second copy of the rendered line. The first copy
+                    # spends the claim, so this one is kept below the section
+                    # without a word.
+                    self.assertIn(line, sweep_script.author_lines(source), name)
+                    self.assertIn(line.strip(), written, name)
+                    self.assertEqual(replaced, [], f"{name}: {said}")
+                    continue
+                # Every other row is somebody's own bytes, kept below the section.
+                self.assertIn(line, sweep_script.author_lines(source), name)
+                self.assertIn(line.strip(), written, name)
+                self.assertNotIn(
+                    line.strip(),
+                    sys.modules["evidence"].markdown_section(written, "Evidence Status"),
+                    f"{name}: the line stayed in the section the write rewrites",
+                )
+                if outcome == "replaced":
+                    self.assertEqual(len(replaced), 1, f"{name}: {said}")
+                else:
+                    self.assertEqual(replaced, [], f"{name}: a note was announced as replaced")
+
+    # intent: guard
+    def test_the_reading_the_rule_is_asked_of_is_one_function(self) -> None:
+        # The sweep takes its reading from `evidence`, not from its own normalisation.
+        evidence = sys.modules["evidence"]
+        plain = f"- [pending-ci] {sweep_script.ITEM} -- {sweep_script.DETAIL}"
+        for name, (template, _) in self.WRAPPED_FORMS.items():
+            if "unrecorded" in name or "code" in name:
+                continue
+            with self.subTest(form=name):
+                line = template.format(item=sweep_script.ITEM, detail=sweep_script.DETAIL)
+                self.assertEqual(evidence.status_line_as_page_reads_it(line), plain)
+        # A reported loss quotes the author's bytes, not the reading.
+        theirs = self.WRAPPED_FORMS["a wrapped unrecorded bullet"][0]
+        source = self._wrapped_body(theirs)
+        self.assertIn(theirs, sweep_script.author_lines(source))
+        self.assertEqual(
+            sweep_script.lines_lost(source, source.replace(theirs + "\n", "")), [theirs]
+        )
+
+
+# Every status line the grammar below can make. The table above holds readable
+# examples; this product covers the forms nobody listed. Each axis is one way a
+# line can differ: the status token, the item's markup, the token's wrapper, the
+# list marker, an item carrying its own ` -- `, the detail's wrapper, and
+# trailing and leading whitespace.
+ITEM_MARKUP = {
+    "plain": "Manual QA on device",
+    "bold": "**Manual QA** on device",
+    "italic": "*Manual QA* on device",
+    "underscore": "_Manual QA_ on device",
+    "inline HTML": "Manual <span>QA</span> on device",
+    "a backslash escape": r"Manual \[QA\] on device",
+    "a code span": "`Manual QA` on device",
+    "a link": "[Manual QA](https://example.invalid/qa) on device",
+    "strikethrough": "~~Manual QA~~ on device",
+}
+ITEM_BASE = {"plain": "{text}", "carrying its own separator": "{text} -- release"}
+# Whether the page resolves each wrapper. `inline_text` keeps code spans and
+# strikethrough, so a token inside one names no status and the line is the
+# author's. The expected answer comes from the axis, not from the code under test.
+TOKEN_WRAPPERS = {
+    "none": ("[{status}]", True),
+    "bold": ("**[{status}]**", True),
+    "bold underscores": ("__[{status}]__", True),
+    "italic star": ("*[{status}]*", True),
+    "italic underscore": ("_[{status}]_", True),
+    "nested emphasis": ("**_[{status}]_**", True),
+    "a code span": ("`[{status}]`", False),
+    "strikethrough": ("~~[{status}]~~", False),
+    "emphasis around a code span": ("**`[{status}]`**", False),
+}
+STATUS_TOKENS = ("complete", "blocked", "pending-ci")
+LIST_MARKERS = {"dash": "-", "star": "*", "plus": "+", "ordered dot": "1.", "ordered paren": "1)"}
+DETAIL_WRAPPERS = {"none": "{detail}", "a code span": "`{detail}`"}
+TRAILING_WHITESPACE = {"none": "", "one space": " ", "a tab": "\t"}
+LEADING_INDENT = {"none": "", "one space": " ", "two spaces": "  "}
+# Distinct from the corpus's resolved detail, so a replaced line cannot pass
+# for the line it was written as.
+GENERATED_STATUS_RE = re.compile(r"\[(?:complete|blocked|pending-ci)\]")
+GENERATED_DETAIL = "the reviewer ran it by hand"
+
+
+class Form(NamedTuple):
+    """One generated status line, with the axis values it was built from."""
+
+    axes: dict[str, str]
+    line: str
+    item: str
+    resolves: bool
+
+
+def generated_status_forms():
+    """Every line the wrapper grammar can make, as `Form`s."""
+    axes = itertools.product(
+        STATUS_TOKENS,
+        ITEM_MARKUP.items(),
+        ITEM_BASE.items(),
+        TOKEN_WRAPPERS.items(),
+        LIST_MARKERS.items(),
+        DETAIL_WRAPPERS.items(),
+        TRAILING_WHITESPACE.items(),
+        LEADING_INDENT.items(),
+    )
+    for status, markup, base, wrapper, marker, detail, trailing, indent in axes:
+        item = base[1].format(text=markup[1])
+        token = wrapper[1][0].format(status=status)
+        yield Form(
+            axes={
+                "status": status,
+                "item markup": markup[0],
+                "item base": base[0],
+                "token wrapper": wrapper[0],
+                "list marker": marker[0],
+                "detail wrapper": detail[0],
+                "trailing whitespace": trailing[0],
+                "leading indent": indent[0],
+            },
+            line=(
+                f"{indent[1]}{marker[1]} {token} {item} -- "
+                f"{detail[1].format(detail=GENERATED_DETAIL)}{trailing[1]}"
+            ),
+            item=item,
+            resolves=wrapper[1][1],
+        )
+
+
+def writers_reading(line: str) -> str:
+    """The write's reading of a line, taken from a parsed section."""
+    evidence = sys.modules["evidence"]
+    helpers = sys.modules["_helpers"]
+    tokens = helpers.MARKDOWN.parse(f"## Evidence Status\n\n{line}\n")
+    for index, token in enumerate(tokens):
+        if token.type == "list_item_open":
+            return evidence._status_item_reading(tokens, index) or line
+    return line
+
+
+class TheTwoProducersOfOneReadingAgreeAcrossTheGrammarTests(unittest.TestCase):
+    """Both producers of a line's reading agree, and the rule classifies, across the whole grammar.
+
+    `_status_item_reading` serves the write, which holds a parsed section, and
+    `status_line_as_page_reads_it` serves this instrument, which holds source
+    bytes (#1751).
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.forms = list(generated_status_forms())
+
+    # intent: control
+    def test_the_product_covers_every_axis_it_claims_to(self) -> None:
+        # A product missing an axis value covers less than it claims.
+        self.assertEqual(len(self.forms), 43_740)
+        seen: dict[str, set[str]] = {}
+        for form in self.forms:
+            for axis, value in form.axes.items():
+                seen.setdefault(axis, set()).add(value)
+        self.assertEqual(
+            {axis: len(values) for axis, values in sorted(seen.items())},
+            {
+                "detail wrapper": 2,
+                "item base": 2,
+                "item markup": 9,
+                "leading indent": 3,
+                "list marker": 5,
+                "status": 3,
+                "token wrapper": 9,
+                "trailing whitespace": 3,
+            },
+        )
+
+    # intent: guard
+    def test_the_two_producers_read_every_form_the_same_way(self) -> None:
+        evidence = sys.modules["evidence"]
+        disagreements = [
+            (form.axes, form.line)
+            for form in self.forms
+            if writers_reading(form.line) != evidence.status_line_as_page_reads_it(form.line)
+        ]
+        self.assertEqual(len(disagreements), 0, disagreements[:5])
+
+    # intent: fix
+    def test_the_rule_classifies_every_form_the_way_its_axis_says(self) -> None:
+        # A line naming a recorded item is the machine's whatever the item's
+        # markup; a token inside a code span or strikethrough names no status.
+        evidence = sys.modules["evidence"]
+        wrong = [
+            (form.axes, form.line)
+            for form in self.forms
+            if evidence.is_recorded_status_line(writers_reading(form.line), [form.item])
+            is not form.resolves
+        ]
+        self.assertEqual(len(wrong), 0, wrong[:5])
+
+    # intent: guard
+    def test_a_crlf_line_reads_the_same_as_its_lf_form(self) -> None:
+        evidence = sys.modules["evidence"]
+        form = next(f for f in self.forms if f.axes["item markup"] == "bold")
+        self.assertEqual(
+            evidence.status_line_as_page_reads_it(form.line + "\r\n"),
+            evidence.status_line_as_page_reads_it(form.line),
+        )
+
+
+class AWriteOverTheGeneratedFormsKeepsEveryLineTests(unittest.TestCase):
+    """Two real writes over a covering sample of the grammar keep every line and reach a fixed point.
+
+    A sample rather than the product, because each case is two whole-body
+    writes. Every axis value appears at least once.
+    """
+
+    def covering_sample(self) -> list:
+        """One form per axis value."""
+        forms = list(generated_status_forms())
+        chosen: dict[tuple[str, str], int] = {}
+        for index, form in enumerate(forms):
+            for axis, value in form.axes.items():
+                chosen.setdefault((axis, value), index)
+        return [forms[index] for index in sorted(set(chosen.values()))]
+
+    # intent: guard
+    def test_every_axis_value_is_written_without_losing_or_duplicating_a_line(self) -> None:
+        sample = self.covering_sample()
+        # A sample that skipped an axis value would miss a defect there.
+        covered: dict[str, set[str]] = {}
+        for form in sample:
+            for axis, value in form.axes.items():
+                covered.setdefault(axis, set()).add(value)
+        self.assertEqual(
+            {axis: sorted(values) for axis, values in covered.items()},
+            {
+                "detail wrapper": sorted(DETAIL_WRAPPERS),
+                "item base": sorted(ITEM_BASE),
+                "item markup": sorted(ITEM_MARKUP),
+                "leading indent": sorted(LEADING_INDENT),
+                "list marker": sorted(LIST_MARKERS),
+                "status": sorted(STATUS_TOKENS),
+                "token wrapper": sorted(TOKEN_WRAPPERS),
+                "trailing whitespace": sorted(TRAILING_WHITESPACE),
+            },
+        )
+        for form in sample:
+            with self.subTest(**form.axes):
+                source = sweep_script.body(
+                    sweep_script.SECTION_TAILS["a plain note"] + form.line + "\n",
+                    sweep_script.SUCCESSORS["one h2 below"],
+                    "\n",
+                    form.item,
+                )
+                written, refused, said = sweep_script.write_once(source)
+                self.assertFalse(refused)
+                # Nothing left the page and nothing was pushed together.
+                self.assertEqual(sweep_script.lines_lost(source, written), [])
+                self.assertEqual(sweep_script.seams_closed(source, written), [])
+                # A fixed point, so a second write recognises the first one's line.
+                again, _, _ = sweep_script.write_once(written)
+                self.assertEqual(again, written)
+                notes = (
+                    written.split("## Evidence Notes", 1)[1]
+                    if "## Evidence Notes" in written
+                    else ""
+                )
+                evidence = sys.modules["evidence"]
+                status_section = evidence.markdown_section(written, "Evidence Status")
+                if form.resolves:
+                    # The write replaces the line in the section. Its detail
+                    # is somebody's own words, so the text moves to the notes
+                    # with an announcement.
+                    self.assertNotIn(form.line.strip(), status_section)
+                    self.assertIn(form.line.strip(), notes)
+                    self.assertTrue(
+                        any("replaced in" in line for line in said),
+                        f"the replacement went without a word: {said}",
+                    )
+                    # The write never carries a copy of the line it just rendered.
+                    for line in evidence.rendered_entry_lines(
+                        evidence.evidence_entries_of(written)
+                    ):
+                        self.assertNotIn(
+                            line, notes, "the write carried the line it had just rendered"
+                        )
+                else:
+                    # The author's line, kept in the notes.
+                    self.assertIn(form.line.strip(), notes)
 
 
 if __name__ == "__main__":

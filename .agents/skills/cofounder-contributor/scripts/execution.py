@@ -1024,7 +1024,7 @@ def build_execution_summary_body(
     *,
     requested_evidence: list[str],
     visual_evidence_available: bool = True,
-    published_body: str = "",
+    published_body: str,
     announcements: list[str] | None = None,
 ) -> tuple[str, list[str]]:
     """The PR body this turn will publish.
@@ -1033,6 +1033,10 @@ def build_execution_summary_body(
     GitHub currently holds, which is the only copy a person can have edited --
     so it, and not the model's text, is what an owner-written evidence line is
     read from.
+
+    `published_body` has no default here or in the renderer, so no caller can
+    omit it by accident. A turn with no published body yet, such as the one
+    that opens the pull request, passes `""`.
     """
     summary_body = str(data.get("body", "")).strip()
     if not requested_evidence:

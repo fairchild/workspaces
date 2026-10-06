@@ -721,7 +721,7 @@ class RunContributorEvidenceTests(unittest.TestCase):
         rendered, errors = run_contributor.build_execution_summary_body(
             {
                 "body": "## Summary\nVisual change\n\n## Validation\n- downstream evidence",
-            },
+            }, published_body="",
             requested_evidence=["screenshot of the main window"],
             visual_evidence_available=False,
         )
@@ -956,7 +956,13 @@ class LaneProvenanceOnHandWrittenBodiesTests(unittest.TestCase):
         self.assertEqual(
             recorded[self.TEST]["detail"], f"`{self.TEST}` succeeded on self-hosted macOS CI"
         )
-        self.assertNotIn("ran it on my laptop", twice)
+        # The section carries the lane's verdict, and their replaced line
+        # moves to the notes rather than being deleted.
+        helpers = sys.modules["_helpers"]
+        self.assertNotIn(
+            "ran it on my laptop", helpers.markdown_section(twice, "Evidence Status")
+        )
+        self.assertIn("ran it on my laptop", helpers.markdown_section(twice, "Evidence Notes"))
         self.assertEqual(self.reconcile(twice, [self.BUILD, self.TEST]), twice)
 
     def test_an_owner_item_keeps_being_read_from_its_line(self) -> None:
@@ -1100,7 +1106,7 @@ class MetadataBodyIsAlwaysReRenderedTests(unittest.TestCase):
     ) -> str:
         body, errors = run_contributor.render_execution_summary_body(
             "## Summary\n- Reordered the sidebar rows\n\n"
-            "## Validation\n- blocked on evidence: waiting on the owner\n",
+            "## Validation\n- blocked on evidence: waiting on the owner\n", published_body="",
             requested_evidence=requested,
             evidence_complete=complete,
             evidence_blocked=blocked,
@@ -1197,8 +1203,15 @@ class MetadataBodyIsAlwaysReRenderedTests(unittest.TestCase):
 
         reconciled = self.reconcile(edited, requested)
 
+        helpers = sys.modules["_helpers"]
         self.assertIn(f"- [complete] {self.BUILD} -- ", reconciled)
-        self.assertNotIn(f"- [blocked] {self.BUILD}", reconciled)
+        # The section is restored and the hand edit moves to the notes.
+        self.assertNotIn(
+            f"- [blocked] {self.BUILD}", helpers.markdown_section(reconciled, "Evidence Status")
+        )
+        self.assertIn(
+            f"- [blocked] {self.BUILD}", helpers.markdown_section(reconciled, "Evidence Notes")
+        )
 
     def test_a_deleted_section_is_still_repaired(self) -> None:
         requested = [self.BUILD]
@@ -1501,7 +1514,7 @@ class EvidenceValidationTests(unittest.TestCase):
         requested = ["`swift test --filter Foo`", "screenshot of main window"]
         summary_body = "## Summary\nSome PR description\n\n## Validation\n- looks good\n"
         rendered, render_errors = run_contributor.render_execution_summary_body(
-            summary_body,
+            summary_body, published_body="",
             requested_evidence=requested,
             evidence_complete=["1 -- all tests pass"],
             evidence_blocked=None,
@@ -1830,7 +1843,7 @@ class MergeabilitySeedTests(unittest.TestCase):
         rendered, errors = run_contributor.build_execution_summary_body(
             {
                 "body": self.SUMMARY_BODY,
-            },
+            }, published_body="",
             requested_evidence=["swift test --filter WorkspaceServiceTests"],
         )
         self.assertEqual(errors, [])
@@ -2733,7 +2746,7 @@ class RevisionTurnTests(unittest.TestCase):
 
     def _rendered_pr_body(self, data: dict[str, object]) -> str:
         execution = sys.modules["execution"]
-        summary, _ = execution.build_execution_summary_body(data, requested_evidence=[])
+        summary, _ = execution.build_execution_summary_body(data, published_body="", requested_evidence=[])
         seeded = execution.seed_mergeability_section(summary, changed_files=[])
         return execution.compose_pr_body(42, self.PERSONA, seeded)
 
@@ -3319,19 +3332,34 @@ class RevisionTurnTests(unittest.TestCase):
     )
     UNCARRIED_HEADLINE = "was not carried"
 
+    # The model's draft for this turn. The continued status line lives in the
+    # published body, since the notes are carried only from the body a person
+    # can edit (#1751).
+    DRAFT_BODY = (
+        "## Summary\n- Rewrote the sheet's status mapping\n\n"
+        "## Evidence Status\n\n"
+        "- [complete] `swift test` passes -- Test run with 1992 tests passed\n\n"
+        "## Validation\n- `swift test --filter SheetTests`\n"
+    )
+
     def _route_with_a_continued_status(self, *, own_pr: bool = True, **kwargs):
-        """One turn over a body whose status line the author continued."""
+        """One turn whose PUBLISHED body carries a status line its author continued."""
         state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
         if not own_pr:
             # The turn that OPENS the pull request: no PR to advance, and the
-            # lane that runs it does not require one.
+            # lane that runs it does not require one. With no published body,
+            # the loss goes in the body the create path writes.
             state["own_pr"] = None
             kwargs["require_existing_pr"] = False
+        else:
+            state["own_pr"] = {**state["own_pr"], "body": self.CONTINUED_STATUS_BODY}
         with mock.patch.object(self, "_state", return_value=state):
             return self._route(
                 dirty=True,
-                live_body="stale body",
-                data=self._data(self.CONTINUED_STATUS_BODY),
+                live_body=self.CONTINUED_STATUS_BODY,
+                data=self._data(
+                    self.CONTINUED_STATUS_BODY if not own_pr else self.DRAFT_BODY
+                ),
                 revision=False,
                 **kwargs,
             )
@@ -3362,12 +3390,28 @@ class RevisionTurnTests(unittest.TestCase):
         self.assertTrue(edited and posted, commands)
         self.assertLess(edited[0], posted[-1])
 
+    # An item whose rendered line runs past `EVIDENCE_STATUS_LINE_LIMIT`, so the
+    # write announces it cannot read the line back. A first push has no
+    # published body, so this is the announcement the create path can owe.
+    UNREADABLE_ITEM = "the QA filter " + "x" * 4_000
+
     def test_the_turn_that_opens_a_pull_request_says_it_too(self) -> None:
         # The create path is a second call site, and a fix applied to one of
-        # them is the shape this pins against.
-        exit_code, commands, comments, _ = self._route_with_a_continued_status(own_pr=False)
+        # them is the shape this pins against. This checks that the call site
+        # forwards what the write said, after the body it is about.
+        state = {**self._state(), "requested_evidence": [self.UNREADABLE_ITEM]}
+        state["own_pr"] = None
+        with mock.patch.object(self, "_state", return_value=state):
+            exit_code, commands, comments, _ = self._route(
+                dirty=True,
+                live_body="stale body",
+                data=self._data(self.DRAFT_BODY),
+                revision=False,
+                require_existing_pr=False,
+            )
         self.assertEqual(exit_code, 0)
-        self.assertEqual(len(self.uncarried(comments)), 1, comments)
+        said = [comment for comment in comments if "not readable back" in comment]
+        self.assertEqual(len(said), 1, comments)
         created = [
             index for index, command in enumerate(commands) if command[:3] == ["gh", "pr", "create"]
         ]
@@ -3379,13 +3423,15 @@ class RevisionTurnTests(unittest.TestCase):
 
     def test_a_revision_turn_with_no_diff_says_it_as_well(self) -> None:
         # This path publishes a body without committing one, so it owes the
-        # same report as the paths that push.
+        # same report as the paths that push. The loss is in the published
+        # body, where a person's continued sentence lives.
         state = {**self._state(), "requested_evidence": ["`swift test` passes"]}
+        state["own_pr"] = {**state["own_pr"], "body": self.CONTINUED_STATUS_BODY}
         with mock.patch.object(self, "_state", return_value=state):
             exit_code, _, comments, outputs = self._route(
                 dirty=False,
-                live_body="stale body",
-                data=self._data(self.CONTINUED_STATUS_BODY),
+                live_body=self.CONTINUED_STATUS_BODY,
+                data=self._data(self.DRAFT_BODY),
             )
         self.assertEqual(exit_code, 0)
         self.assertEqual(outputs.get("revision_outcome"), "body-only")
