@@ -21,14 +21,18 @@ from _helpers import (
     contract_read_refusal,
     has_markdown_section,
     code_span,
+    code_span_ranges,
     heading_identity,
     inline_text,
-    insert_markdown_section,
     is_section_boundary,
     is_section_heading,
     log,
     markdown_section,
     removed_section_texts,
+    UNVERIFIED_ANNOUNCEMENT_PREFIX,
+    inserted_markdown_section,
+    page_was_not_asked,
+    is_unverified_announcement,
     placement_refusal,
     rejected_section_headings,
     reparsed_without_runaway,
@@ -38,6 +42,8 @@ from _helpers import (
     strip_markdown_section,
     unmovable_block,
     unterminated_block,
+    unverified_announcement,
+    unverified_heading,
 )
 
 # An item's own text carries em-dashes as a matter of house style, so a
@@ -403,46 +409,6 @@ SAFE_CANDIDATE_ENV_KEYS = {
 }
 
 
-def _code_span_ranges(text: str) -> list[tuple[int, int]]:
-    """Half-open ranges covering each code span, by CommonMark's own rules.
-
-    A `--` inside one is an argument rather than a boundary: `resolve_persona.py
-    -- mara` is one name.
-
-    A backtick run opens a span and the next run of equal length closes it; a
-    run that finds no match is literal text. Backslash escapes hide a backtick
-    in ordinary prose but do nothing inside a span, which is why this reads
-    left to right rather than masking escapes up front: `\\`` opens nothing,
-    while the same sequence inside a span still closes it.
-    """
-    ranges: list[tuple[int, int]] = []
-    index, length = 0, len(text)
-    while index < length:
-        if text[index] == "\\":
-            index += 2
-            continue
-        if text[index] != "`":
-            index += 1
-            continue
-        opened = index
-        while index < length and text[index] == "`":
-            index += 1
-        width = index - opened
-        probe = index
-        while probe < length:
-            if text[probe] != "`":
-                probe += 1
-                continue
-            run = probe
-            while probe < length and text[probe] == "`":
-                probe += 1
-            if probe - run == width:
-                ranges.append((opened, probe))
-                index = probe
-                break
-    return ranges
-
-
 def _evidence_status_boundaries(rest: str) -> list[tuple[int, int, str]]:
     """`(item_end, detail_start, separator)` for every reading, leftmost first.
 
@@ -453,7 +419,7 @@ def _evidence_status_boundaries(rest: str) -> list[tuple[int, int, str]]:
     line's first and last non-blank character instead of stripping two fresh
     slices per candidate. Both leave the same readings the loop always had.
     """
-    spans = _code_span_ranges(rest)
+    spans = code_span_ranges(rest)
     span_starts = [start for start, _ in spans]
     first_visible = len(rest) - len(rest.lstrip())
     last_visible = len(rest.rstrip())
@@ -2373,8 +2339,8 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
     return carried, announcements
 
 
-def _placement_a_reader_cannot_see(written: str) -> str | None:
-    """Why the page would not show the `## Evidence Status` this write just placed, or None.
+def _placement_a_reader_cannot_see(written: str):
+    """Why the page would not show the `## Evidence Status` this write just placed, and what went unasked.
 
     The placement walks to the first `## Validation` the page shows as a
     heading and falls back to the end of the body when it shows none. Below a
@@ -2431,7 +2397,25 @@ def is_stood_down_announcement(announcement: str) -> bool:
     return announcement.startswith(STOOD_DOWN_ANNOUNCEMENT_PREFIX)
 
 
-def _stood_down(source: str, refusal: str) -> SectionWrite:
+# The third claim these sentences can make, and it is about neither the
+# author's text nor this write: a question the check could not ask. The
+# surface that posts them has to tell it from the other two, because a
+# deletion and a stand-down each name an edit the author can make and this
+# one names a condition of the run (#1773, round 2).
+def _announce_unverified(announcements: list[str], note: str) -> None:
+    """Put the unread-page note in the list the author's surface is composed from, once.
+
+    The note arrives COMPLETE from `unverified_announcement`, prefix and
+    heading included, rather than being finished here: a sentence half-built
+    at the constructor and half-built at one of its callers is a sentence the
+    other callers get wrong, and one of them did (#1773, round 11). Deduping
+    on the whole sentence therefore keys on the heading as well as the reason.
+    """
+    if note not in announcements:
+        announcements.append(note)
+
+
+def _stood_down(source: str, refusal: str, announcements: list[str] | None = None) -> SectionWrite:
     """The body standing whole, with the reason said as the author's to act on.
 
     A stand-down is a loss of the same kind as a deleted note and larger: the
@@ -2441,7 +2425,8 @@ def _stood_down(source: str, refusal: str) -> SectionWrite:
     of them until #1740 round 3: both returned on an unchanged body before
     they posted, and an unchanged body is exactly what a stand-down produces.
     """
-    return SectionWrite(source, refusal, [f"{STOOD_DOWN_ANNOUNCEMENT_PREFIX}{refusal}"])
+    said = [note for note in announcements or [] if is_unverified_announcement(note)]
+    return SectionWrite(source, refusal, [*said, f"{STOOD_DOWN_ANNOUNCEMENT_PREFIX}{refusal}"])
 
 
 def write_evidence_status_section(
@@ -2499,9 +2484,37 @@ def write_evidence_status_section(
 
     def placed(candidate: str) -> SectionWrite:
         """The rewritten body, or the source standing whole and why."""
-        unseen = _placement_a_reader_cannot_see(candidate)
-        if unseen:
-            return _stood_down(source, unseen)
+        answer = _placement_a_reader_cannot_see(candidate)
+        if answer.unverified is not None:
+            # On an accepted write as much as a refused one: the write went
+            # ahead under a weaker check than a lane runs, and the author is
+            # the one who has to know that (#1773, round 2).
+            _announce_unverified(announcements, answer.unverified)
+        else:
+            # And retracted when a later render in the same run answers. A
+            # failure is not cached, so an earlier question that went unasked
+            # can be asked again -- and telling an author the page could not
+            # be reached about a body it was then reached about is a sentence
+            # they cannot act on (#1773, round 3). This is the LAST question,
+            # and it is about the body being returned.
+            #
+            # Only the notes this answer IS about. `_placement_a_reader_cannot_see`
+            # asks about the status heading alone, and clearing every
+            # unverified note on its answer retracted the one raised about
+            # the `## Evidence Notes` insert -- a question that was never
+            # asked answering for a section it never looked at, so a run
+            # whose notes render failed and whose status render succeeded
+            # returned a body with the notes placement unchecked and nothing
+            # said (#1773, round 19). The note carries its heading for
+            # exactly this, and `unverified_heading` reads it back.
+            announcements[:] = [
+                note
+                for note in announcements
+                if not is_unverified_announcement(note)
+                or unverified_heading(note) != EVIDENCE_STATUS_HEADING
+            ]
+        if answer.refusal:
+            return _stood_down(source, answer.refusal, announcements)
         return SectionWrite(candidate, None, announcements)
 
     # The note about a heading this reader declined is NOT said here. It was,
@@ -2511,20 +2524,40 @@ def write_evidence_status_section(
     # refusal, in the same log. It also made the note the writer's, and the
     # writer runs more than once in a turn. It belongs to whatever reports the
     # turn, composed from the body the write returned (#1730, round 2).
-    written = insert_markdown_section(
+    # The reason comes back with the body: an insert that stands down returns
+    # a body with no such section, so asking `placed` about it answers "not a
+    # heading on the page" and the fold that stopped the write reaches the
+    # author as a weaker sentence than the one the check made (#1773).
+    written, stood_down, unverified = inserted_markdown_section(
         strip_markdown_section(body, EVIDENCE_NOTES_HEADING) if kept else body,
         EVIDENCE_STATUS_HEADING,
         "\n".join(status_lines),
         before_heading="Validation",
     )
+    if unverified is not None:
+        _announce_unverified(announcements, unverified)
+    if stood_down is not None:
+        return _stood_down(source, stood_down, announcements)
     if not blocks:
         # Nothing to hold, and no heading left behind: an empty one is a
         # section this writer would place next run and a reader would find
         # above the status now.
         return placed(written)
-    with_notes = insert_markdown_section(
+    # The same answer the status path takes, from the same function. Through
+    # the back-compat wrapper this insert's refusal reached only the step log:
+    # the notes had already been cut out of the body above, so a refusal left
+    # a placed status section, no notes, an empty announcement list and no
+    # refusal on the write -- the author's own words gone with nothing said,
+    # which is the failure this branch closed one call site over (#1773,
+    # round 6). A refusal stands the whole write down instead, so the notes
+    # are not cut when they cannot be placed.
+    with_notes, notes_stood_down, notes_unverified = inserted_markdown_section(
         written, EVIDENCE_NOTES_HEADING, "\n\n".join(blocks), after_heading=EVIDENCE_STATUS_HEADING
     )
+    if notes_unverified is not None:
+        _announce_unverified(announcements, notes_unverified)
+    if notes_stood_down is not None:
+        return _stood_down(source, notes_stood_down, announcements)
     if len(with_notes) > PR_BODY_LIMIT >= len(written):
         # A body GitHub will not store is not a body, and dropping the notes is
         # what makes this one storable: without them the status the lane just
@@ -2639,7 +2672,22 @@ def render_execution_summary_body(
             validation = f"{validation.rstrip()}\n- blocked on evidence: {blocked_note}"
         else:
             validation = f"- blocked on evidence: {blocked_note}"
-        rendered = insert_markdown_section(rendered, "Validation", validation, before_heading="Risks")
+        # The write's answer, not the wrapper's silence: a placement the page
+        # would fold away is a `blocked on evidence` line no reader sees, and
+        # through the back-compat wrapper the reason reached a step log alone
+        # (#1773, round 8).
+        placed = inserted_markdown_section(
+            rendered, "Validation", validation, before_heading="Risks"
+        )
+        if placed.unverified is not None and announcements is not None:
+            _announce_unverified(announcements, placed.unverified)
+        if placed.refusal is not None:
+            note = f"`## Validation` not rewritten: {placed.refusal}"
+            log(note)
+            if announcements is not None:
+                announcements.append(note)
+        else:
+            rendered = placed.body
     return rendered, []
 
 
