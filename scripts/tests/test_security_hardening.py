@@ -324,7 +324,7 @@ class SecurityHardeningTests(unittest.TestCase):
 
     def test_mise_invocations_are_locked_and_pinned(self) -> None:
         verify_mise = (REPO_ROOT / "scripts/verify-mise-security.sh").read_text()
-        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.10.3\"", verify_mise)
+        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.10.8\"", verify_mise)
         self.assertIn("verify_locked_zig_exec", verify_mise)
         self.assertIn("github.com/repos/jdx/mise/releases/latest", verify_mise)
         self.assertIn("Authorization: Bearer $GITHUB_TOKEN", verify_mise)
@@ -369,9 +369,9 @@ class SecurityHardeningTests(unittest.TestCase):
         sandbox = (REPO_ROOT / "web/src/lib/agent-runtime/vercel-sandbox.ts").read_text()
         # The pin lives in TS constants (single source of truth) that feed both
         # the install command and the base-snapshot fingerprint.
-        self.assertIn('const MISE_VERSION = "v2026.10.3"', sandbox)
+        self.assertIn('const MISE_VERSION = "v2026.10.8"', sandbox)
         self.assertIn(
-            '"8d48bc510b7d844fad0bc7156c0855c2a1e7230c51e498a7f6b63b021f8b57c5"',
+            '"c72477ae6c3a8e7d817a322f43da70e4643e75ee5c21265f1c19c894273b7428"',
             sandbox,
         )
         # The install command still wires the pinned constant and verifies it.
