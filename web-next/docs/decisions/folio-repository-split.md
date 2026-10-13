@@ -5,7 +5,7 @@ deferred a repository split until the package and its release pressure were
 understood.
 
 The extracted repository exists at `~/code/folio` (history via filter-repo,
-tag `v0.1.0`; GitHub `fairchild/folio` once created, private first, then
+tag `v0.1.0`; its own GitHub repository once created, private first, then
 public with GitHub Packages publishing). Its `docs/plan.md` is the master
 plan; this file is the web-next-side record and the cutover checklist for
 step 3 below. Steps 1–2 happen in that repository.
@@ -28,7 +28,7 @@ host deployment. Three things share the word; only the package moves.
 
 ## Decisions
 
-**Repo.** `github.com/fairchild/folio`, public. Everything in the package is
+**Repo.** Its own GitHub repository under the same owner, public. Everything in the package is
 already public under Apache-2.0 in `fairchild/workspaces`; there is nothing to
 redact. Package name stays `@fairchild/folio` so neither consumer changes an
 import.
@@ -76,7 +76,7 @@ a new accepted record anyway.
 
 ## What moves, what stays
 
-| Moves to `fairchild/folio` | Stays in web-next |
+| Moves to the split-out repository | Stays in web-next |
 | --- | --- |
 | `packages/folio/{src,LICENSE,README,CHANGELOG,RELEASING,tsup.*,tsconfig}` → repo root | `src/lib/folio/workspaces-conversation-adapter.*` (host adapter) |
 | `scripts/build-folio-css.mjs` → `scripts/build-css.mjs` | `tests/e2e/folio-styles.spec.ts` (needs `/sessions/demo`; browser proof of the sheet stays host-side for now) |

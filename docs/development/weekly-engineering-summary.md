@@ -18,10 +18,8 @@ The script emits:
 - Window start is inferred from the latest `Window reviewed: ... to ...` entry in:
   - `~/.codex/automations/weekly-engineering-summary/memory.md`
 - If no reviewed window exists, the script falls back to the latest `- Run time (UTC): ...`.
-- Repos included by default:
-  - `fairchild/workspaces`
-  - `fairchild/services`
-  - `fairchild/code-cadence`
+- Repos included by default: `fairchild/workspaces`, or the comma-separated list in
+  `WEEKLY_SUMMARY_REPOS` when it is set.
 - Incident detection query:
   - `incident OR postmortem OR sev OR outage OR rollback OR regression`
 - Broad incident-query matches are lifecycle-filtered to the current window.
@@ -45,5 +43,5 @@ uv run --script scripts/weekly-engineering-summary.py \
 ```bash
 uv run --script scripts/weekly-engineering-summary.py \
   --repo fairchild/workspaces \
-  --repo fairchild/services
+  --repo owner/another-repo
 ```
