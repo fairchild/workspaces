@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -18,11 +19,9 @@ from typing import Any
 
 
 INCIDENT_QUERY = "incident OR postmortem OR sev OR outage OR rollback OR regression"
-DEFAULT_REPOS = (
-    "fairchild/workspaces",
-    "fairchild/services",
-    "fairchild/code-cadence",
-)
+DEFAULT_REPOS = tuple(
+    repo.strip() for repo in os.environ.get("WEEKLY_SUMMARY_REPOS", "").split(",") if repo.strip()
+) or ("fairchild/workspaces",)
 
 
 @dataclass
