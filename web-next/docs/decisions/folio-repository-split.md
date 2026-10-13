@@ -16,13 +16,13 @@ step 3 below. Steps 1–2 happen in that repository.
 conversation UI: ~3.2k lines of source, ~800 lines of vitest, one released
 version (`folio-v0.1.0`, tag `ac2b5bb8`, source unchanged since except
 `RELEASING.md`). Two consumers today: Workspaces `web-next` through
-`workspace:*`, and MFWiki `web/folio-consumer` through the GitHub Release
+`workspace:*`, and a private external consumer app (`web/folio-consumer`) through the GitHub Release
 tarball, verified against `folio-artifact.json`.
 
-Not being extracted: MFWiki's consumer island (`mfwiki-port`,
-`mfwiki-projection`, threads surface, `turn-follow.*` — host-owned by design),
+Not being extracted: the external consumer's island (its port and
+projection modules, threads surface, `turn-follow.*` — host-owned by design),
 Workspaces' adapter (`src/lib/folio/`), and Workspaces' product design doc
-(`docs/design.md`). MFWiki's `raw/assets/folio-package/` is the unrelated
+(`docs/design.md`). The external consumer's `raw/assets/folio-package/` is the unrelated
 "personal folio" website design; `folio.cloudcompute.com` is the Workspaces
 host deployment. Three things share the word; only the package moves.
 
@@ -41,7 +41,7 @@ drop the `folio-` prefix (`v0.1.1`); the asset filename stays
 `fairchild-folio-<version>.tgz`; `RELEASE_BASE_URL` and
 `CANONICAL_GIT_REMOTE` in the release script point at the new repo. The
 `folio-v0.1.0` release on `fairchild/workspaces` stays where it is forever —
-MFWiki's lock pins it and nothing needs it moved.
+the external consumer's lock pins it and nothing needs it moved.
 
 **History.** `git filter-repo` on a fresh clone, keeping the package directory
 and the pre-package `src/components/folio` + `src/lib/theme.*` lineage (16
@@ -123,7 +123,7 @@ operator flow) with its own verification.
    the `v0.1.1` release URL. pnpm 10 records only
    `resolution: {tarball: <url>}` for a URL dependency — no integrity
    (verified against `folio-v0.1.0` on 2026-08-16) — so web-next keeps a
-   consumer pin the way MFWiki does: `folio-release.json` (tag, source
+   consumer pin the way the external consumer does: `folio-release.json` (tag, source
    commit, compressed and payload SHA-256, per-file SHA-256 of the packed
    contents) and a `scripts/verify-folio-install.mjs` run after install in
    CI that hashes `node_modules/@fairchild/folio/**` against it. The per-file
@@ -142,7 +142,7 @@ operator flow) with its own verification.
    `pnpm link ../folio` (source-first via `transpilePackages`), which is what
    the split costs: a host change that needs a package change now needs a
    package PR, a release, and a bump.
-4. **MFWiki bump PR — only when the next bump is wanted.** Three files
+4. **External-consumer bump PR — only when the next bump is wanted.** Three files
    (`web/folio-consumer/package.json` URL, regenerated `package-lock.json`,
    `folio-artifact.json` with the new `releaseUrl`/`artifactUrl`/checksums/
    `sourceCommit`) plus the two "Workspaces GitHub Release" sentences in
@@ -158,14 +158,14 @@ operator flow) with its own verification.
 - The strict release gate now runs in a repo whose CI has no host app, so the
   clean-consumer fixture (a `next build` in a temp dir, ~1–2 min) is the only
   end-to-end proof there. Browser proof of the stylesheet stays in web-next
-  and MFWiki e2e lanes until a package-repo demo page earns its keep.
+  and the external consumer's e2e lanes until a package-repo demo page earns its keep.
 - Two repos to keep `RELEASING.md` truthful in: the package repo owns the
   release flow; web-next's `CONTRIBUTING.md` points at it.
 
 ## Non-goals
 
 - Publishing to npm.
-- Moving MFWiki's threads surface, turn-follow animator, or Workspaces'
+- Moving the external consumer's threads surface, turn-follow animator, or Workspaces'
   adapter into the package.
 - Changing the port, entries, or CSS contract as part of the move.
 

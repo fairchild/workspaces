@@ -20,10 +20,8 @@ from typing import Any
 
 INCIDENT_QUERY = "incident OR postmortem OR sev OR outage OR rollback OR regression"
 DEFAULT_REPOS = tuple(
-    repo.strip()
-    for repo in os.environ.get("WEEKLY_SUMMARY_REPOS", "fairchild/workspaces").split(",")
-    if repo.strip()
-)
+    repo.strip() for repo in os.environ.get("WEEKLY_SUMMARY_REPOS", "").split(",") if repo.strip()
+) or ("fairchild/workspaces",)
 
 
 @dataclass
