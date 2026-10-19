@@ -37,7 +37,7 @@ what they are, and useless from a phone.
 The product need: see and steer agent sessions from a phone, on any machine
 that can run agents (Linux boxes included), for a self-hosted single owner —
 with friends able to run their own stack. A live tailnet
-(`tail3bb13.ts.net`, MagicDNS, HTTPS certs enabled) changes the shape of the
+(MagicDNS, HTTPS certs enabled) changes the shape of the
 problem: the phone can talk **directly to the node running the turn**, which
 dissolves the hazards a shared-cloud-database design would have had to solve
 (false stale-turn closes across instances, steering misdirection,
