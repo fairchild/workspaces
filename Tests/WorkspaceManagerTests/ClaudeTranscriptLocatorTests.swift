@@ -53,8 +53,8 @@ struct ClaudeTranscriptLocatorTests {
         )
         #expect(
             ClaudeTranscriptLocator.encodeProjectDirectory(
-                "/Users/fairchild/code/mfwiki/.claude/worktrees/chat-noise-routing"
-            ) == "-Users-fairchild-code-mfwiki--claude-worktrees-chat-noise-routing"
+                "/Users/fairchild/code/example/.claude/worktrees/chat-noise-routing"
+            ) == "-Users-fairchild-code-example--claude-worktrees-chat-noise-routing"
         )
     }
 

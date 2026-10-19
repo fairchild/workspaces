@@ -8,9 +8,11 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -149,6 +151,21 @@ class WeeklyEngineeringSummaryTests(unittest.TestCase):
         self.assertIn("No confirmed incident matches", markdown)
         self.assertIn("broad incident-query matches not classified", markdown)
         self.assertIn("APPROVED=2", markdown)
+
+    def test_default_repos_fall_back_when_env_names_no_repo(self) -> None:
+        cases = {
+            None: ("fairchild/workspaces",),
+            "": ("fairchild/workspaces",),
+            " , ": ("fairchild/workspaces",),
+            "a/b, c/d,": ("a/b", "c/d"),
+        }
+        for value, expected in cases.items():
+            with self.subTest(value=value), unittest.mock.patch.dict(os.environ, clear=False):
+                os.environ.pop("WEEKLY_SUMMARY_REPOS", None)
+                if value is not None:
+                    os.environ["WEEKLY_SUMMARY_REPOS"] = value
+                module = load_module("weekly_engineering_summary_env", SCRIPT_PATH)
+                self.assertEqual(module.DEFAULT_REPOS, expected)
 
 
 if __name__ == "__main__":

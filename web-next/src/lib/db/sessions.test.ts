@@ -261,7 +261,7 @@ describe("session store", () => {
 				},
 				{
 					id: "repo-b",
-					full_name: "fairchild/services",
+					full_name: "fairchild/example",
 					default_branch: "main",
 					created_at: "2026-01-01T00:00:00.000Z",
 				},
