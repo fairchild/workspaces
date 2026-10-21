@@ -1,6 +1,6 @@
 # Ops Dashboard
 
-Last updated: `2026-10-20T13:37:46.099460Z`
+Last updated: `2026-10-21T13:37:13.227716Z`
 Source: `live`
 
 ## Funnel
@@ -52,8 +52,8 @@ Freshness: n/a days
 
 ## Stale Planned Work
 
-- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (218.9 days idle)
-- #110 — [idea][endorsed] Fix environment status color semantics in New Workspace sheet (210.0 days idle)
+- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (219.9 days idle)
+- #110 — [idea][endorsed] Fix environment status color semantics in New Workspace sheet (211.0 days idle)
 
 ## Current Breaches
 
