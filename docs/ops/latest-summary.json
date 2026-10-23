@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-22T13:39:16.976092Z",
+  "generated_at": "2026-10-23T13:39:17.547699Z",
   "source_mode": "live",
   "fixture_name": null,
   "window_days": 30,
@@ -19,20 +19,20 @@
   },
   "ci": {
     "window_days": 30,
-    "window_start": "2026-09-22T13:39:16.976092Z",
+    "window_start": "2026-09-23T13:39:17.547699Z",
     "completed_runs": 499,
-    "failure_runs": 36,
-    "failure_rate": 7.214428857715431,
+    "failure_runs": 39,
+    "failure_rate": 7.8156312625250495,
     "rerun_runs": 0,
     "rerun_rate": 0.0,
     "top_failing_workflows": [
       {
         "workflow_name": "Factory Implement",
-        "failures": 20
+        "failures": 22
       },
       {
         "workflow_name": "Web Next Validate",
-        "failures": 11
+        "failures": 12
       },
       {
         "workflow_name": "PR Readiness",
@@ -49,14 +49,14 @@
     ],
     "agents": {
       "Mention Triage": {
-        "completed_runs": 47,
+        "completed_runs": 50,
         "failure_runs": 0,
         "failure_rate": 0.0,
         "rerun_runs": 0,
         "rerun_rate": 0.0
       },
       "Approved Mention Execution": {
-        "completed_runs": 45,
+        "completed_runs": 49,
         "failure_runs": 0,
         "failure_rate": 0.0,
         "rerun_runs": 0,
@@ -89,13 +89,13 @@
     {
       "discussion_number": 43,
       "discussion_title": "[task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane",
-      "days_since_activity": 220.87576361217592,
+      "days_since_activity": 221.8757702279977,
       "discussion_url": "https://github.com/fairchild/workspaces/discussions/43"
     },
     {
       "discussion_number": 110,
       "discussion_title": "[idea][endorsed] Fix environment status color semantics in New Workspace sheet",
-      "days_since_activity": 211.96785851958333,
+      "days_since_activity": 212.9678651354051,
       "discussion_url": "https://github.com/fairchild/workspaces/discussions/110"
     }
   ],
@@ -108,13 +108,13 @@
         {
           "discussion_number": 43,
           "discussion_title": "[task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane",
-          "days_since_activity": 220.87576361217592,
+          "days_since_activity": 221.8757702279977,
           "discussion_url": "https://github.com/fairchild/workspaces/discussions/43"
         },
         {
           "discussion_number": 110,
           "discussion_title": "[idea][endorsed] Fix environment status color semantics in New Workspace sheet",
-          "days_since_activity": 211.96785851958333,
+          "days_since_activity": 212.9678651354051,
           "discussion_url": "https://github.com/fairchild/workspaces/discussions/110"
         }
       ],
