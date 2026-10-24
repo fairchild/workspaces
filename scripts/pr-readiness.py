@@ -39,6 +39,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -161,9 +162,214 @@ HEADING_INDENT = r" {0,3}"
 LIST_MARKER = r"(?:[-*+]|[0-9]{1,9}[.)])"
 LINE_ENDING_RE = re.compile(r"\r\n?")
 # A status token is read however a reader sees it written: in code, bold or
-# italics, or behind a task box (`- [ ] [pending-ci]`).
+# italics, or behind a task box (`- [ ] [pending-ci]`). One spelling of each
+# piece for every reader below, because three copies of them drifted apart
+# once already and the gap was the same in all three (#1771).
+#
+# WHICH READER TAKES WHICH PIECE IS A CRITERION, not a list -- and the axis it
+# turns on is the LIST MARKER, not the wrapper:
+#
+#   A line shows a status when the token is the FIRST thing on it, after any
+#   list marker, task box, and any run of delimiter characters or spaces.
+#   What follows the token does not decide it: `[blocked]`, `**[blocked]:**`,
+#   `[blocked][missing]` and `_[blocked]_x` all put the token in front of a
+#   reader, and a reader scanning the section sees the same thing in each.
+#   A line that mentions the token part-way along -- `the lane is [blocked]x
+#   by nothing` -- is prose about a status rather than one.
+#
+#   The WRITTEN view (`PENDING_STATUS_RE`) reads the characters an author
+#   typed, which is markdown, and in markdown a status bullet is a line that
+#   opens a list item -- so the marker is REQUIRED there and nowhere else.
+#
+#   CODE is where the two views differ, and the difference is stated rather
+#   than left to be found (#1771, round 6). A FENCED block is cut out of the
+#   written view before it reads (`split_fenced_blocks`) and carries no inline
+#   content for the printed views, so `- [blocked] waiting` inside a fence is
+#   accepted: a fence is code the page shows verbatim, which is #1727's
+#   decision for the source model and the page agrees by construction. An
+#   INDENTED code block is code too, and it is REFUSED -- the written view's
+#   pattern allows the leading spaces and the line matches. That asymmetry
+#   stands rather than being tidied: the rule here is that a reader on the
+#   refusing side may add refusals and may never remove one, and dropping this
+#   refusal means deciding, against the page, that no author writing an
+#   indented `- [blocked]` under this heading means it. Both shapes have a
+#   control.
+#
+#   Every PRINTED view (`PRINTED_PENDING_RE`) reads a line as the page puts it
+#   on one, and takes it marker or no marker: a raw HTML block prints whatever
+#   sits on the line; the model's resolved inline text and the page's own text
+#   carry a marker only when the parser did not model one (a bulleted table
+#   cell), and CommonMark has no task list, so `- [x] ` arrives as characters.
+#
+# The wrapper axis does NOT separate the readers, and the sentence here that
+# said it did was wrong twice over. A post-parse line can carry a delimiter
+# character: an escape and a character reference are markup the parser
+# RESOLVES TO one, so `- \*\*[blocked]\*\*`, `- &#42;&#42;[blocked]&#42;&#42;`,
+# `` - \`[blocked]\` ``, `- &#96;[blocked]&#96;`, `- &#95;[blocked]&#95;`,
+# `- _[blocked]_x` and `- [blocked][missing]` each print the token with its
+# delimiters intact -- measured through GitHub's renderer, and through this
+# parser's own resolved text, on all seven (#1771, round 4). Every printed
+# view therefore takes the wrapper, and "allowing them there would be allowing
+# something its input cannot contain" was false of the input.
+#
+# The padding inside a wrapper is part of the wrapper rather than part of the
+# token: a code span written `` ` [blocked] ` `` shows its spaces to a reader
+# wherever the span is printed as characters (#1771).
+# The leading run, as a PROPERTY rather than as a list of characters: the
+# inline delimiter characters a wrapper is made of, and every character that
+# occupies the line without showing anything.
+#
+# Round 4 enumerated three invisible characters and four more went through it;
+# round 5 made the run `Cf` plus `Zs` and 22 more went through THAT -- every
+# default-ignorable combining mark (U+034F, U+17B4-U+17B5, U+180B-U+180D,
+# U+FE00-U+FE0F), which round 5 excluded on the stated ground that a mark
+# "renders as a diacritic rather than as nothing". False for these: GitHub
+# prints U+034F and U+FE00 verbatim at zero width, and the gate accepted the
+# status behind them (#1771, round 6).
+#
+# The property the body already named as the right one is the run now:
+# Unicode's Default_Ignorable_Code_Point -- the characters Unicode says
+# should render as nothing -- in union with the format characters (`Cf`) and
+# the space separators (`Zs`).
+#
+# Why the union rather than Default_Ignorable alone: 32 format characters are
+# NOT default-ignorable (the prepended concatenation marks U+0600-U+0605 and
+# their kin), and round 5 already refused them. A narrower run would be a
+# regression dressed as a rule.
+#
+# THE COST, written where the ranges are: `unicodedata` exposes no
+# Default_Ignorable predicate, so the ranges below are TRANSCRIBED from
+# Unicode's DerivedCoreProperties. That is a snapshot. Unicode adds code
+# points; this table does not. A table a reader can check beats one the
+# interpreter picks -- but it goes stale silently, so the version it was
+# copied from is recorded beside it and `unicode_data_notice()` says so out
+# loud when the running interpreter's UCD is newer. `Cf` and `Zs` keep
+# tracking the interpreter, so a new format character is covered the day
+# Python knows about it; only the default-ignorable half needs a human.
+DEFAULT_IGNORABLE_TRANSCRIBED_FROM = "15.1.0"
+DEFAULT_IGNORABLE_RANGES = (
+    (0x00AD, 0x00AD),    # SOFT HYPHEN
+    (0x034F, 0x034F),    # COMBINING GRAPHEME JOINER
+    (0x061C, 0x061C),    # ARABIC LETTER MARK
+    (0x115F, 0x1160),    # HANGUL CHOSEONG/JUNGSEONG FILLER
+    (0x17B4, 0x17B5),    # KHMER VOWEL INHERENT AQ/AA
+    (0x180B, 0x180F),    # MONGOLIAN FREE VARIATION SELECTORS, VOWEL SEPARATOR
+    (0x200B, 0x200F),    # ZERO WIDTH SPACE .. RIGHT-TO-LEFT MARK
+    (0x202A, 0x202E),    # BIDI EMBEDDING AND OVERRIDE CONTROLS
+    (0x2060, 0x206F),    # WORD JOINER .. NOMINAL DIGIT SHAPES
+    (0x3164, 0x3164),    # HANGUL FILLER
+    (0xFE00, 0xFE0F),    # VARIATION SELECTORS 1-16
+    (0xFEFF, 0xFEFF),    # ZERO WIDTH NO-BREAK SPACE
+    (0xFFA0, 0xFFA0),    # HALFWIDTH HANGUL FILLER
+    (0xFFF0, 0xFFF8),    # unassigned specials, default-ignorable by property
+    (0x1BCA0, 0x1BCA3),  # SHORTHAND FORMAT CONTROLS
+    (0x1D173, 0x1D17A),  # MUSICAL SYMBOL BEAM/PHRASE CONTROLS
+    (0xE0000, 0xE0FFF),  # TAGS AND VARIATION SELECTORS SUPPLEMENT
+)
+INVISIBLE_CATEGORIES = ("Cf", "Zs")
+INVISIBLE_LEADING = "".join(
+    sorted(
+        {chr(code) for first, last in DEFAULT_IGNORABLE_RANGES for code in range(first, last + 1)}
+        | {
+            chr(code)
+            for code in range(0x110000)
+            if unicodedata.category(chr(code)) in INVISIBLE_CATEGORIES
+        }
+    )
+)
+# The MEASURED facts, pinned as literals rather than recomputed: a test that
+# rebuilds the set from the interpreter it is running on cannot see the
+# interpreter change under it. `requires-python = ">=3.11"` permits a range,
+# and the range matters -- 3.11 (UCD 14.0.0) builds a 4,216-character run and
+# accepts U+13439, 3.13 (UCD 15.1.0) builds 4,223 and refuses it (#1771,
+# round 6).
+MEASURED_UNIDATA_VERSION = "15.1.0"
+MEASURED_LEADING_RUN_SIZE = 4223
+
+
+def _unicode_version_key(version: str) -> tuple[int, ...]:
+    """A Unicode version as numbers, so `14.0.0` sorts below `15.1.0`."""
+    parts = []
+    for piece in version.split("."):
+        parts.append(int(piece) if piece.isdigit() else 0)
+    return tuple(parts)
+
+
+def unicode_data_notice() -> str | None:
+    """Whether this interpreter's Unicode data differs from the transcription, and which way.
+
+    Loud, not fatal: a supported interpreter is not a defect, and a gate that
+    refused to run on one would be worse than the drift it is warning about.
+
+    The DIRECTION is the part worth saying, and the first version of this
+    sentence got it backwards: under an interpreter OLDER than the
+    transcription it said "re-derive the ranges from DerivedCoreProperties
+    14.0.0", which is re-deriving a newer table from older data (#1771,
+    round 7). The two directions ask for different things:
+
+    interpreter NEWER -- Unicode has moved and the transcription has not, so
+    the table is the stale half: re-transcribe it and re-measure the size.
+
+    interpreter OLDER -- the table leads the data the `Cf` and `Zs` halves
+    come from, which is not wrong and not fixable by editing the table: the
+    run is simply smaller here, so the size to expect is that interpreter's,
+    and the pin belongs to the version it was measured against.
+    """
+    running = unicodedata.unidata_version
+    if running == DEFAULT_IGNORABLE_TRANSCRIBED_FROM:
+        return None
+    pinned = (
+        f"MEASURED_LEADING_RUN_SIZE is pinned at {MEASURED_LEADING_RUN_SIZE} against "
+        f"{MEASURED_UNIDATA_VERSION}"
+    )
+    if _unicode_version_key(running) > _unicode_version_key(DEFAULT_IGNORABLE_TRANSCRIBED_FROM):
+        return (
+            f"Unicode data moved AHEAD of this gate: this interpreter's UCD is {running}, "
+            f"newer than the {DEFAULT_IGNORABLE_TRANSCRIBED_FROM} the default-ignorable table "
+            f"was transcribed from. The cost: any default-ignorable code point added since "
+            f"{DEFAULT_IGNORABLE_TRANSCRIBED_FROM} is missing from the table, so the gate "
+            f"accepts a status hidden behind one. Re-transcribe DEFAULT_IGNORABLE_RANGES from "
+            f"DerivedCoreProperties {running} and re-measure the run ({pinned})."
+        )
+    # MEASURED rather than assumed. An older UCD does not always build a
+    # smaller run: 3.11 (14.0.0) builds 4,216 against the pinned 4,223, and
+    # 3.12 (15.0.0) builds exactly 4,223 -- equal, with a different version
+    # string. The word was unconditionally SMALLER and a test pinned the
+    # wrong half of that (#1771, round 9).
+    size = len(INVISIBLE_LEADING)
+    if size < MEASURED_LEADING_RUN_SIZE:
+        comparison = (
+            f"SMALLER than the one this gate was measured with ({size} against "
+            f"{MEASURED_LEADING_RUN_SIZE}): format and space characters added since {running} "
+            "are not covered and a status hidden behind one is accepted"
+        )
+    elif size == MEASURED_LEADING_RUN_SIZE:
+        comparison = (
+            f"EQUAL to the one this gate was measured with ({size}): nothing this gate reads "
+            f"changed between {running} and {DEFAULT_IGNORABLE_TRANSCRIBED_FROM}, so the run "
+            "covers what it was measured to cover"
+        )
+    else:
+        comparison = (
+            f"LARGER than the one this gate was measured with ({size} against "
+            f"{MEASURED_LEADING_RUN_SIZE}), which means this interpreter knows members the "
+            "measured one did not -- re-measure before trusting either number"
+        )
+    return (
+        f"This interpreter's Unicode data is BEHIND the gate's table: its UCD is {running}, "
+        f"older than the {DEFAULT_IGNORABLE_TRANSCRIBED_FROM} the default-ignorable table was "
+        f"transcribed from. The table itself is unaffected, but `Cf` and `Zs` come from the "
+        f"interpreter, so the run here is {comparison}. Nothing to re-transcribe -- run the "
+        f"gate on {DEFAULT_IGNORABLE_TRANSCRIBED_FROM} data or later, and expect this "
+        f"interpreter's own size rather than the pin ({pinned})."
+    )
+
+
+WRAPPER_DELIMITERS = "`*_"
+OPENING_WRAPPER = "[" + re.escape(WRAPPER_DELIMITERS + "\t" + INVISIBLE_LEADING) + "]*"
+STATUS_TOKEN = r"\[(?:blocked|pending-ci)\]"
 PENDING_STATUS_RE = re.compile(
-    rf"(?im)^\s*{LIST_MARKER}\s*(?:\[[ x]\]\s*)?[`*_]*\[(?:blocked|pending-ci)\][`*_]*(?:\s|$)"
+    rf"(?im)^\s*{LIST_MARKER}\s*(?:\[[ x]\]\s*)?{OPENING_WRAPPER}{STATUS_TOKEN}"
 )
 FENCE_OPENER_RE = re.compile(r" {0,3}(?P<run>`{3,}|~{3,})(?P<info>.*)")
 
@@ -407,24 +613,17 @@ MARKDOWN = MarkdownIt("commonmark").enable(["table", "strikethrough"])
 # of a table does -- `- [blocked] | x |` above a delimiter row is one table
 # whose first cell reads `- [blocked]`. Marking it optional here keeps a
 # reader's view of that cell and the gate's the same (#1727).
-RENDERED_PENDING_RE = re.compile(
-    rf"(?i)^(?:{LIST_MARKER}\s*)?(?:\[[ x]\]\s*)?\[(?:blocked|pending-ci)\](?:\s|$)"
-)
-
-# The same line, in text no markdown parser ever touched. A raw HTML block
-# prints its contents as characters, so `**[blocked]**` inside one is a status
-# a reader sees with two literal asterisks either side of it, where in ordinary
-# markdown the parser resolves the emphasis away long before the pattern above
-# reads the line. So the wrappers the written view tolerates are tolerated
-# here, and the list marker stays optional the way the rendered view has it.
 #
-# Neither existing pattern covers that pair: `RENDERED_PENDING_RE` makes the
-# marker optional and allows no wrapper, and `PENDING_STATUS_RE` allows the
-# wrappers and REQUIRES a marker -- so `` `[blocked]` waiting `` on a line of
-# its own inside a `<pre>` matched neither, and the page prints it (#1742,
-# round 5).
-RAW_HTML_PENDING_RE = re.compile(
-    rf"(?i)^(?:{LIST_MARKER}\s*)?(?:\[[ x]\]\s*)?[`*_]*\[(?:blocked|pending-ci)\][`*_]*(?:\s|$)"
+# ONE reader for every printed view: the page's own text, the model's resolved
+# inline text, and the characters a raw HTML block puts on a line. They were
+# two patterns differing in the wrapper, on the reasoning that a post-parse
+# line could not carry one -- and it can, through an escape or a character
+# reference, so the split had the post-parse reader missing seven shapes the
+# page prints and the raw-block reader missing two of them (#1771, round 4).
+# What separates a reader here from the written view is the list marker and
+# nothing else, so there is one spelling of this line to keep in step.
+PRINTED_PENDING_RE = re.compile(
+    rf"(?i)^\s*(?:{LIST_MARKER}\s*)?(?:\[[ x]\]\s*)?{OPENING_WRAPPER}{STATUS_TOKEN}"
 )
 
 
@@ -645,7 +844,26 @@ def _html_block_runs(content: str, *, unparsed_as_tag: bool) -> list[str]:
 
 
 def rendered_status_lines(body: str) -> list[str]:
-    """The text of every line a reader sees under `## Evidence Status`.
+    """Every line a reader sees under `## Evidence Status`.
+
+    ONE list, because the kind of text a line is no longer decides anything.
+    It was two -- `parsed` for inline text the markdown parser had resolved,
+    `printed` for the characters a raw HTML block puts on the page -- on the
+    reasoning that the two take different readers. They do not: a post-parse
+    line can carry a delimiter character, so both take the reader that allows
+    the wrapper, and a field nothing reads differently is a distinction
+    remembered rather than carried (#1771, round 4).
+
+    What the two sources still are is two SOURCES, and every caller asks both:
+    a raw block contributes no parsed lines at all, and an inline run
+    contributes no printed ones, so a caller that drops either loses a status
+    the page shows.
+    """
+    return _status_lines(body)
+
+
+def _status_lines(body: str) -> list[str]:
+    """Each line under the heading, as the page puts it on one.
 
     A line is what the page puts on one: an inline run the parser models -- a
     list item, a paragraph, a table cell, a sub-heading, a line inside a quote
@@ -1327,18 +1545,22 @@ def _a_status_is_kept_out(normalized: str, block: Token) -> bool:
     block's own contents are the first half's job and are read there as text,
     which is the reading the page agrees with.
 
-    Read as text, and therefore through `RAW_HTML_PENDING_RE`: markup inside a
+    Read as text, and therefore through `PRINTED_PENDING_RE`: markup inside a
     raw block is characters, so a status wrapped in backticks, asterisks or
     underscores there is a status the page prints wrapped, not one a parser
     unwraps.
     """
-    if any(RAW_HTML_PENDING_RE.match(text) for text in html_block_text_lines(block.content)):
+    if any(PRINTED_PENDING_RE.match(text) for text in html_block_text_lines(block.content)):
         return True
     below = "\n".join(normalized.split("\n")[(block.map or [0, 0])[1] :])
     probe = f"## {EVIDENCE_STATUS_HEADING}\n{below}"
     written, _ = split_fenced_blocks(extract_section(probe, EVIDENCE_STATUS_HEADING, strip=False))
+    # Both sources of printed lines, in one read. The case that needs the
+    # raw-block half is a SECOND raw block below the swallowing one holding an
+    # unmarked status: the written view needs a list marker, and an inline run
+    # contributes nothing for a raw block (#1771, round 3).
     return bool(PENDING_STATUS_RE.search(written)) or any(
-        RENDERED_PENDING_RE.match(text) for text in rendered_status_lines(probe)
+        PRINTED_PENDING_RE.match(text) for text in rendered_status_lines(probe)
     )
 
 
@@ -1655,6 +1877,21 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
     failures: list[str] = []
     notices: list[str] = []
 
+    # Said BEFORE the draft return, because it is about the interpreter this
+    # gate is running on and not about the body's readiness. The return used
+    # to swallow it, so three rounds built a notice that was silent in the
+    # state a pull request spends most of its life in (#1771, round 9).
+    #
+    # What else lives after that return, enumerated: the readiness FAILURES
+    # (which a draft is meant to be spared), the rendered-view notice, and
+    # the `page_view` render that produces it. The rendered-view notice stays
+    # below, and that is a decision rather than an oversight: it comes from a
+    # network render, and spending the markdown quota on every draft
+    # evaluation to say the renderer was unreachable is a cost a draft should
+    # not pay. So the rule is: an environment notice that costs nothing to
+    # produce is said on a draft; one that needs a request is not.
+    if (drift := unicode_data_notice()) is not None:
+        notices.append(drift)
     if pr.get("draft"):
         notices.append("Draft PR: readiness gate is advisory until the PR is ready for review.")
         return Result(failures, notices)
@@ -1715,11 +1952,19 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
             f"Rendered view unverified: {page.unverified}. The gate read this body with its "
             "source model alone, which refuses on the page's behalf but never accepts for it."
         )
+    # Every printed line through one reader: the page's own text, the model's
+    # resolved inline text, and the characters a raw HTML block puts on a
+    # line. `page.lines` holds what GitHub's HTML shows -- the element's text
+    # with its delimiter characters intact, `**[blocked]** waiting` where the
+    # author wrote `\*\*[blocked]\*\*` -- and asking it a reader that allowed
+    # no wrapper accepted seven shapes the page prints a status on (#1771,
+    # round 4). All three sources are asked, because each holds lines the
+    # other two do not.
     rendered_pending = next(
         (
             line
             for line in (*page.lines, *rendered_status_lines(body))
-            if RENDERED_PENDING_RE.match(line)
+            if PRINTED_PENDING_RE.match(line)
         ),
         None,
     )
