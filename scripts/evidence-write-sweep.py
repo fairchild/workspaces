@@ -24,6 +24,7 @@ import argparse
 import contextlib
 import importlib.util
 import io
+import itertools
 import json
 import re
 import sys
@@ -38,6 +39,13 @@ INSTRUMENT = "evidence-write-sweep v1"
 ITEM = "`swift test` passes"
 DETAIL = "the lane has not run yet"
 RESOLVED_DETAIL = "214 tests passed"
+
+# The recorded item varies too. Ownership matches the item as the page reads
+# it, so one item carries markup the page resolves and one does not.
+ITEMS = {
+    "an item in a code span": ITEM,
+    "an item carrying resolved markup": "**Manual QA** on device",
+}
 
 # What sits under the status line. Each entry is a block the rewrite has to
 # carry to `## Evidence Notes`, or a hazard it has to decline -- the two
@@ -62,6 +70,22 @@ SECTION_TAILS = {
     # (codex, gpt-5.6-sol, xhigh). `author_lines` matches the entry SHAPE now,
     # and this body is what says so.
     "a note naming the item in prose": f"\nReviewer note: {ITEM} only on this head.\n",
+    # The author's own status bullet for a recorded item. The write replaces
+    # it, carries their text to the notes and says so.
+    "a recorded item's bullet in the author's own words": (
+        f"\n- [complete] {ITEM} -- I ran it myself and it passed\n"
+    ),
+    # The same in another shape: a different status token, below a note of
+    # theirs.
+    "a recorded item read as blocked beside a note of theirs": (
+        f"\nA note for the reviewer.\n\n- [blocked] {ITEM} -- the device is not on the bench\n"
+    ),
+    # The author's status bullet for an item the body does not record. It is
+    # theirs, so it moves to the notes.
+    "an unrecorded status bullet of the author's": (
+        "\nA note for the reviewer.\n"
+        "- [blocked] release approval -- the signing profile is missing\n"
+    ),
 }
 
 # What the author wrote after the section. The successor decides where the
@@ -103,14 +127,17 @@ evidence = load("evidence", SKILL_SCRIPTS / "evidence.py")
 MARKDOWN_LINE_ENDING_RE = helpers.MARKDOWN_LINE_ENDING_RE
 
 
-def body(tail: str, successor: str, ending: str) -> str:
-    """One PR body: the metadata the writer reads, the section, the tail under it, and the author's next block."""
+def body(tail: str, successor: str, ending: str, item: str = ITEM) -> str:
+    """One PR body: the metadata the writer reads, the section, the tail under it, and the author's next block.
+
+    `item` is the recorded item the section's status line names.
+    """
     meta = {
         "entries": [
-            {"index": 1, "item": ITEM, "status": "pending-ci", "detail": DETAIL, "kind": "test"}
+            {"index": 1, "item": item, "status": "pending-ci", "detail": DETAIL, "kind": "test"}
         ]
     }
-    section = f"- [pending-ci] {ITEM} -- {DETAIL}\n" + tail
+    section = f"- [pending-ci] {item} -- {DETAIL}\n" + tail
     text = (
         "<!-- evidence-status:v1\n"
         + json.dumps(meta)
@@ -122,21 +149,9 @@ def body(tail: str, successor: str, ending: str) -> str:
     return text.replace("\n", ending)
 
 
+# The shape a reader reads as an entry (#1734). The fixtures build from it;
+# ownership is decided by the write's own claims, not by this pattern.
 ENTRY_LINE_RE = re.compile(r"^\s*- \[(?:complete|blocked|pending-ci)\] .+ -- .+$")
-
-
-def _entry_line_for(item: str) -> re.Pattern[str]:
-    """The line the write renders for one recorded item, as a pattern.
-
-    Built from the item rather than read out of the line. Reading it out took
-    the text up to the FIRST ` -- `, so a recorded item that itself holds one
-    -- `build -- release` -- was cut to `build`, which no metadata records; the
-    write's own entry then read as the author's, and an ordinary write reported
-    the entry it had just rewritten as a silent loss (#1738, round 3).
-    """
-    return re.compile(
-        rf"^\s*- \[(?:complete|blocked|pending-ci)\] {re.escape(item)} -- .+$"
-    )
 
 
 def _recorded_items(text: str) -> set[str]:
@@ -162,33 +177,29 @@ def _recorded_items(text: str) -> set[str]:
     }
 
 
-def _entry_line_numbers(lines: list[str], text: str, recorded: set[str]) -> set[int]:
+def _entry_line_numbers(lines: list[str], text: str, source: str) -> set[int]:
     """Which lines are the status entries this write owns.
 
-    Three conditions, and each one answers a way the filter was wrong.
+    Two conditions. The line sits inside the section, so an author's copy of
+    a recorded line under their own `## Validation` stays theirs. And its
+    bytes match a line the write rendered, spending one claim of the same
+    owner the write builds (`evidence.owned_lines`), so a further copy of
+    those bytes stays the author's.
 
-    It is entry-SHAPED, rather than carrying the item's text anywhere: a line
-    naming the item in prose is the author's sentence about it.
-
-    It names an item the metadata RECORDS -- matched whole, escaped, rather
-    than read out of the line up to the first ` -- `, which cut a recorded
-    `build -- release` down to `build` and handed the write's own entry back as
-    the author's (#1738, round 3). So the author's own `- [blocked] release
-    approval -- the signing profile is missing` is never the machine's,
-    wherever it sits and however the section is read.
-
-    And it sits INSIDE the section, so an author's copy of a recorded item
-    under their own `## Validation` stays theirs.
+    This does not ask the write's ownership rule (a status line naming a
+    recorded item is the machine's). The sweep measures that rule, so it
+    cannot share it.
 
     A body with no metadata has no entries the write owns, and a body with no
     readable section has none either: both are the conservative answer, which
     is that every line is the author's.
 
-    `recorded` is read from the body BEFORE its metadata comment is stripped,
-    and `text` is the body after -- the comment is not the author's and does
-    not take part in the comparison, but it is where the entries are written
-    down.
+    `source` is the body before its metadata comment is stripped and `text` is
+    the body after. The comment is not the author's, but it records the
+    entries, so the recorded items and the last run's lines are read from
+    `source`.
     """
+    recorded = _recorded_items(source)
     if not recorded:
         return set()
     bounds = helpers._section_bounds(text, "Evidence Status")
@@ -198,12 +209,15 @@ def _entry_line_numbers(lines: list[str], text: str, recorded: set[str]) -> set[
     for line in lines:
         starts.append(offset)
         offset += len(line) + 1
-    patterns = [_entry_line_for(item) for item in recorded]
+    # The write's own owner, from the same two inputs: the entries this write
+    # produces and the entries the body records.
+    recorded_entries = evidence.evidence_entries_of(source)
+    updated_entries, _ = evidence.entries_with_updates(recorded_entries, UPDATES)
+    owned = evidence.owned_lines(updated_entries, recorded_entries)
     return {
         index
         for index, start in enumerate(starts)
-        if bounds[1] <= start < bounds[2]
-        and any(pattern.match(lines[index]) for pattern in patterns)
+        if bounds[1] <= start < bounds[2] and owned.claim(lines[index])
     }
 
 
@@ -217,16 +231,15 @@ def author_lines(text: str) -> list[str]:
     those lines (codex, gpt-5.6-sol, xhigh). Source lines see every one of
     them, and a fence marker and an indent besides.
 
-    Two things come out, and both are this write's to change. The metadata
-    comment is re-rendered on every write. And the status entries -- matched on
-    the SHAPE a reader reads as an entry rather than on the item's text,
-    because a line naming the item in prose is the author's, and matched only
-    where the write owns them, which is inside the section and nowhere else.
+    Two things come out, and both are this write's own: the metadata comment,
+    which every write re-renders, and a line inside the section byte-identical
+    to one this write rendered. One rendered line claims one body line, so a
+    second copy of the same bytes stays the author's.
     """
     source = MARKDOWN_LINE_ENDING_RE.sub("\n", text)
     normalized = evidence._strip_evidence_metadata(source)
     lines = normalized.split("\n")
-    owned = _entry_line_numbers(lines, normalized, _recorded_items(source))
+    owned = _entry_line_numbers(lines, normalized, source)
     return [
         line
         for index, line in enumerate(lines)
@@ -258,7 +271,7 @@ def author_seams(text: str) -> list[tuple[str, str]]:
     source = MARKDOWN_LINE_ENDING_RE.sub("\n", text)
     normalized = evidence._strip_evidence_metadata(source)
     lines = normalized.split("\n")
-    owned = _entry_line_numbers(lines, normalized, _recorded_items(source))
+    owned = _entry_line_numbers(lines, normalized, source)
     seams, previous = [], None
     for index, line in enumerate(lines):
         if not line.strip() or index in owned:
@@ -353,6 +366,11 @@ class Outcome:
         return self.took and not self.announced
 
 
+# The one update every corpus body is written with. The sweep also applies it
+# to a body's entries, so it builds its owner from the same inputs the write does.
+UPDATES: dict[int, dict[str, object]] = {1: {"status": "complete", "detail": RESOLVED_DETAIL}}
+
+
 def write_once(text: str) -> tuple[str, bool, tuple[str, ...]]:
     """The body after one rewrite, whether the writer declined it, and what it said.
 
@@ -362,9 +380,7 @@ def write_once(text: str) -> tuple[str, bool, tuple[str, ...]]:
     """
     spoke = io.StringIO()
     with contextlib.redirect_stderr(spoke):
-        written = evidence.update_evidence_entries(
-            text, {1: {"status": "complete", "detail": RESOLVED_DETAIL}}
-        )
+        written = evidence.update_evidence_entries(text, UPDATES)
     said = tuple(line for line in spoke.getvalue().splitlines() if line.strip())
     refused = any("refusing to rewrite" in line for line in said)
     return written, refused, said
@@ -373,22 +389,25 @@ def write_once(text: str) -> tuple[str, bool, tuple[str, ...]]:
 def sweep() -> list[Outcome]:
     """Every generated body, written twice, with what the write cost it."""
     outcomes = []
-    for tail_name, tail in SECTION_TAILS.items():
-        for successor_name, successor in SUCCESSORS.items():
-            for ending_name, ending in LINE_ENDINGS.items():
-                source = body(tail, successor, ending)
-                written, refused, said = write_once(source)
-                again, _, _ = write_once(written)
-                outcomes.append(
-                    Outcome(
-                        label=f"{tail_name} / {successor_name} / {ending_name}",
-                        refused=refused,
-                        lost=tuple(lines_lost(source, written)),
-                        closed=tuple(seams_closed(source, written)),
-                        announced=tuple(line for line in said if "not carried" in line),
-                        fixed_point=again == written,
-                    )
-                )
+    for (item_name, item), (tail_name, tail), (successor_name, successor), (
+        ending_name,
+        ending,
+    ) in itertools.product(
+        ITEMS.items(), SECTION_TAILS.items(), SUCCESSORS.items(), LINE_ENDINGS.items()
+    ):
+        source = body(tail, successor, ending, item)
+        written, refused, said = write_once(source)
+        again, _, _ = write_once(written)
+        outcomes.append(
+            Outcome(
+                label=f"{item_name} / {tail_name} / {successor_name} / {ending_name}",
+                refused=refused,
+                lost=tuple(lines_lost(source, written)),
+                closed=tuple(seams_closed(source, written)),
+                announced=tuple(line for line in said if "not carried" in line),
+                fixed_point=again == written,
+            )
+        )
     return outcomes
 
 

@@ -1860,7 +1860,7 @@ class RunContributorTests(unittest.TestCase):
 
     def test_render_execution_summary_body_renders_exact_requested_items_from_indexes(self) -> None:
         body, errors = run_contributor.render_execution_summary_body(
-            "## Summary\n- Updated the status severity mapping\n\n## Validation\n- `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests`\n",
+            "## Summary\n- Updated the status severity mapping\n\n## Validation\n- `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests`\n", published_body="",
             requested_evidence=[
                 "Screenshot of NewWorkspaceSheet from the exact commit under review",
                 "swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests",
@@ -1969,7 +1969,7 @@ class RunContributorTests(unittest.TestCase):
 
     def test_render_execution_summary_body_rejects_out_of_range_index(self) -> None:
         _, errors = run_contributor.render_execution_summary_body(
-            "## Summary\n- Updated the status severity mapping\n",
+            "## Summary\n- Updated the status severity mapping\n", published_body="",
             requested_evidence=["swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests"],
             evidence_complete=["2 -- `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests`"],
             evidence_blocked=[],
@@ -1980,7 +1980,7 @@ class RunContributorTests(unittest.TestCase):
 
     def test_render_execution_summary_body_supports_pending_ci_from_indexes(self) -> None:
         body, errors = run_contributor.render_execution_summary_body(
-            "## Summary\n- Updated the status severity mapping\n\n## Validation\n- workflow updated\n",
+            "## Summary\n- Updated the status severity mapping\n\n## Validation\n- workflow updated\n", published_body="",
             requested_evidence=[
                 "Screenshot of NewWorkspaceSheet from the exact commit under review",
                 "swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests",
@@ -2163,7 +2163,7 @@ class RunContributorTests(unittest.TestCase):
                     "## Validation\n"
                     "- validation will run in the evidence workflow\n"
                 )
-            },
+            }, published_body="",
             requested_evidence=[
                 "swift test --filter WorkspaceManagerTests.WorkspaceProviderTests",
                 "Manual QA sign-off from the owner",
@@ -2241,7 +2241,7 @@ class RunContributorTests(unittest.TestCase):
 
     def test_reconcile_pending_ci_evidence_blocks_structured_test_entries_with_no_matches(self) -> None:
         body, errors = run_contributor.render_execution_summary_body(
-            "## Summary\n- Updated the status severity mapping\n\n## Validation\n- blocked on evidence: waiting on CI\n",
+            "## Summary\n- Updated the status severity mapping\n\n## Validation\n- blocked on evidence: waiting on CI\n", published_body="",
             requested_evidence=["swift test --filter WorkspaceManagerTests.WorkspaceProviderTests"],
             evidence_complete=[],
             evidence_blocked=[],

@@ -18,6 +18,7 @@ import bisect
 import contextlib
 import importlib.util
 import io
+import inspect
 import itertools
 import os
 import json
@@ -32,6 +33,42 @@ from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "run-contributor.py"
+
+
+def entries_for(lines):
+    """Entries that render exactly these lines; raises if the composer disagrees."""
+    evidence = sys.modules["evidence"]
+    shape = re.compile(r"^- \[(complete|blocked|pending-ci)\] (.+?) -- (.+)$")
+    entries, expected = [], []
+    for line in lines:
+        match = shape.match(line)
+        if not match:
+            continue
+        entries.append(
+            {
+                "index": len(entries) + 1,
+                "item": match[2],
+                "status": match[1],
+                "detail": match[3],
+                "kind": "test",
+            }
+        )
+        expected.append(line)
+    rendered = evidence.rendered_entry_lines(entries)
+    assert rendered == expected, f"the helper and the composer disagree: {rendered} != {expected}"
+    return entries
+
+
+def write_section(body: str, lines: list[str], items):
+    """The section write over one body whose entries render exactly `lines`."""
+    return sys.modules["evidence"].write_evidence_status_section(
+        body,
+        lines,
+        notes_from=body,
+        entries=entries_for(lines),
+        previous_entries=entries_for(lines),
+        recorded_items=items,
+    )
 
 
 def load_module(name: str, path: Path):
@@ -261,7 +298,7 @@ class EvidenceSynthesisTests(unittest.TestCase):
 
     def test_rendered_contract_stays_fail_closed_and_carries_kinds(self) -> None:
         rendered, errors = run_contributor.build_execution_summary_body(
-            {"body": "## Summary\n- change\n\n## Validation\n- notes"},
+            {"body": "## Summary\n- change\n\n## Validation\n- notes"}, published_body="",
             requested_evidence=[CI_ITEM, DIFF_ITEM],
         )
 
@@ -283,7 +320,7 @@ class UpdateEvidenceEntriesTests(unittest.TestCase):
 
     def rendered_body(self) -> str:
         rendered, errors = run_contributor.build_execution_summary_body(
-            {"body": "## Summary\n- change\n\n## Validation\n- notes"},
+            {"body": "## Summary\n- change\n\n## Validation\n- notes"}, published_body="",
             requested_evidence=[CI_ITEM, DIFF_ITEM],
         )
         assert not errors
@@ -339,7 +376,7 @@ class MacOSLaneCoexistenceTests(unittest.TestCase):
 
     def test_reconcile_resolves_macos_kinds_and_leaves_event_completed_kinds(self) -> None:
         rendered, errors = run_contributor.build_execution_summary_body(
-            {"body": "## Summary\n- change\n\n## Validation\n- notes"},
+            {"body": "## Summary\n- change\n\n## Validation\n- notes"}, published_body="",
             requested_evidence=["swift test", CI_ITEM],
         )
         self.assertEqual(errors, [])
@@ -3066,7 +3103,7 @@ class OwnerKindHandEditTests(unittest.TestCase):
 
     def render(self, model_body: str) -> str:
         rendered, errors = run_contributor.render_execution_summary_body(
-            model_body,
+            model_body, published_body="",
             requested_evidence=[self.OWNER_ITEM],
             evidence_complete=None,
             evidence_blocked=[f"1 -- {self.MACHINE_DETAIL}"],
@@ -4254,7 +4291,7 @@ class LaneWrittenMetadataMatchesTheFactoryShapeTests(unittest.TestCase):
 
     def factory_body(self) -> str:
         rendered, errors = run_contributor.render_execution_summary_body(
-            "## Summary\n- Reordered the sidebar rows\n\n## Validation\n- blocked on evidence: waiting on CI\n",
+            "## Summary\n- Reordered the sidebar rows\n\n## Validation\n- blocked on evidence: waiting on CI\n", published_body="",
             requested_evidence=self.REQUESTED,
             evidence_complete=[],
             evidence_blocked=[],
@@ -4700,7 +4737,7 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
             + "\n\n## Validation\n- local unit tests passed\n"
         )
         written, errors = run_contributor.render_execution_summary_body(
-            model_body,
+            model_body, published_body="",
             requested_evidence=[self.ITEM],
             evidence_complete=["1 -- 10 passed"],
             evidence_blocked=None,
@@ -4842,7 +4879,7 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
         # it stands cannot travel there at all, so this body is written --
         # correctly, above the author's h1 -- rather than stood down.
         written, errors = run_contributor.render_execution_summary_body(
-            self.HIDDEN_PLACEMENT_BODY,
+            self.HIDDEN_PLACEMENT_BODY, published_body="",
             requested_evidence=["`swift test` passes"],
             evidence_complete=["1 -- 214 tests passed"],
             evidence_blocked=None,
@@ -4859,7 +4896,7 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
         # status would be in the source, absent from the page, and still
         # carried to every gate by the metadata comment.
         written, errors = run_contributor.render_execution_summary_body(
-            self.NO_SECTION_PLACEMENT_BODY,
+            self.NO_SECTION_PLACEMENT_BODY, published_body="",
             requested_evidence=["`swift test` passes"],
             evidence_complete=["1 -- 214 tests passed"],
             evidence_blocked=None,
@@ -4910,7 +4947,7 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
         # the placement does.
         evidence = self.evidence()
         written, errors = run_contributor.render_execution_summary_body(
-            self.HIDDEN_PLACEMENT_BODY + "</pre>\n\n## Validation\n\n- ran it\n",
+            self.HIDDEN_PLACEMENT_BODY + "</pre>\n\n## Validation\n\n- ran it\n", published_body="",
             requested_evidence=["`swift test` passes"],
             evidence_complete=["1 -- 214 tests passed"],
             evidence_blocked=None,
@@ -4924,7 +4961,7 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
             "## Summary\n\n- did the thing\n\n"
             "## Evidence Status\n\n- [pending-ci] `swift test` passes -- waiting\n\n"
             "# Release blockers\n\n- [blocked] the signing profile is missing\n\n"
-            "## Validation\n\n- ran it\n",
+            "## Validation\n\n- ran it\n", published_body="",
             requested_evidence=["`swift test` passes"],
             evidence_complete=["1 -- 214 tests passed"],
             evidence_blocked=None,
@@ -5642,7 +5679,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
             "## Validation\n\n- ok\n"
         )
         rendered, errors = run_contributor.render_execution_summary_body(
-            body,
+            body, published_body="",
             requested_evidence=[self.ITEM_FOR_WRITE],
             evidence_complete=["1 -- checked: the fixture survived"],
             evidence_blocked=None,
@@ -5662,7 +5699,7 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         # The control: the same call on an ordinary body still writes.
         ordinary = "## Summary\n\nwhat.\n\n## Validation\n\n- ok\n"
         written, ok_errors = run_contributor.render_execution_summary_body(
-            ordinary,
+            ordinary, published_body="",
             requested_evidence=[self.ITEM_FOR_WRITE],
             evidence_complete=["1 -- checked: the fixture survived"],
             evidence_blocked=None,
@@ -6040,10 +6077,12 @@ class ALongSHeadingIsAnotherHeadingTests(unittest.TestCase):
     def test_a_rewrite_leaves_the_long_s_section_where_it_is(self) -> None:
         # The harm as the author sees it: their long-s section survives, and
         # the real one is the one rewritten.
-        write = self.evidence().write_evidence_status_section(self.BODY, self.ENTRIES)
+        write = write_section(self.BODY, self.ENTRIES, [self.ITEM])
         self.assertIn(self.LONG_S, write.body, write.refusal)
         self.assertIn("- [complete] the printer's item -- not this section", write.body)
-        self.assertNotIn(self.AUTHORS_LINE, write.body)
+        self.assertNotIn(
+            self.AUTHORS_LINE, self.helpers().markdown_section(write.body, "Evidence Status")
+        )
         self.assertEqual(write.body.count("## Evidence Status"), 1)
 
     def test_the_owner_read_sees_one_section_and_does_not_refuse_for_two(self) -> None:
@@ -6117,7 +6156,7 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         for name, heading in self.SHAPES.items():
             with self.subTest(shape=name):
                 body = self.body(heading)
-                written, stood_down, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
+                written, stood_down, _ = write_section(body, self.ENTRIES, [self.ITEM])
                 self.assertIn(self.AUTHORS_LINE, written, stood_down)
 
     def test_a_plain_heading_is_still_the_section_and_still_rewritten(self) -> None:
@@ -6126,8 +6165,10 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         helpers = self.helpers()
         body = self.body("## Evidence Status")
         self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
-        written, _, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
-        self.assertNotIn(self.AUTHORS_LINE, written)
+        written, _, _ = write_section(body, self.ENTRIES, [self.ITEM])
+        # Rewritten means gone from the section. The author's bytes move to the notes.
+        self.assertNotIn(self.AUTHORS_LINE, self.helpers().markdown_section(written, "Evidence Status"))
+        self.assertIn(self.AUTHORS_LINE, self.helpers().markdown_section(written, "Evidence Notes"))
 
     def test_emphasis_is_markdown_rather_than_a_tag_and_stays_this_section(self) -> None:
         # The line this rule does not cross. `**Evidence Status**` is bold on
@@ -6138,8 +6179,10 @@ class AHeadingCarryingInlineHtmlIsNotThisSectionTests(unittest.TestCase):
         helpers = self.helpers()
         body = self.body("## **Evidence Status**")
         self.assertTrue(helpers.has_markdown_section(body, "Evidence Status"))
-        written, _, _ = self.evidence().write_evidence_status_section(body, self.ENTRIES)
-        self.assertNotIn(self.AUTHORS_LINE, written)
+        written, _, _ = write_section(body, self.ENTRIES, [self.ITEM])
+        # Rewritten means gone from the section. The author's bytes move to the notes.
+        self.assertNotIn(self.AUTHORS_LINE, self.helpers().markdown_section(written, "Evidence Status"))
+        self.assertIn(self.AUTHORS_LINE, self.helpers().markdown_section(written, "Evidence Notes"))
 
     def test_the_internal_read_says_why_rather_than_saying_nothing_is_there(self) -> None:
         # Named for what it checks. This is `_rendered_markdown_entries`, an
@@ -6228,9 +6271,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
     def written(self, heading: str) -> str:
         """The body the write returns, which is what the note is asked about."""
         with contextlib.redirect_stderr(io.StringIO()):
-            body, refusal, _ = self.evidence().write_evidence_status_section(
-                self.body(heading), ["- [complete] the UI lane -- swift test passed"]
-            )
+            body, refusal, _ = write_section(self.body(heading), ["- [complete] the UI lane -- swift test passed"], [self.ITEM])
         self.assertIsNone(refusal)
         return body
 
@@ -6278,9 +6319,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
         refusing = source.replace("## Validation\n\n- ran\n", "<pre>\nnever closed\n")
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
-            result, refusal, _ = evidence.write_evidence_status_section(
-                refusing, ["- [complete] the UI lane -- swift test passed"]
-            )
+            result, refusal, _ = write_section(refusing, ["- [complete] the UI lane -- swift test passed"], [self.ITEM])
         self.assertIsNotNone(refusal)
         self.assertEqual(result, refusing)
         stood_down = helpers.rejected_heading_note(result, "Evidence Status")
@@ -6300,8 +6339,11 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
             with self.subTest(shape=name):
                 spoke = io.StringIO()
                 with contextlib.redirect_stderr(spoke):
-                    written, refusal, _ = self.evidence().write_evidence_status_section(
-                        self.body(heading), ["- [complete] the UI lane -- swift test passed"]
+                    written, refusal, _ = write_section(
+                        self.body(heading),
+                        # A line for the recorded item, so the write can read it back.
+                        [f"- [complete] {self.ITEM} -- swift test passed"],
+                        [self.ITEM],
                     )
                 self.assertIsNone(refusal)
                 self.assertEqual(spoke.getvalue(), "")
@@ -6315,7 +6357,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
         for name, (heading, _) in self.SHAPES.items():
             with self.subTest(shape=name):
                 rendered, errors = run_contributor.render_execution_summary_body(
-                    self.body(heading),
+                    self.body(heading), published_body="",
                     requested_evidence=[self.ITEM],
                     evidence_complete=["1 -- 214 tests passed"],
                     evidence_blocked=None,
@@ -6332,7 +6374,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
         for name, (heading, _) in self.SHAPES.items():
             with self.subTest(shape=name):
                 rendered, _ = run_contributor.render_execution_summary_body(
-                    self.body(heading),
+                    self.body(heading), published_body="",
                     requested_evidence=[self.ITEM],
                     evidence_complete=["1 -- 214 tests passed"],
                     evidence_blocked=None,
@@ -6761,9 +6803,7 @@ class ARejectedHeadingIsToldWhyAtTheRunsOutputTests(unittest.TestCase):
             + "## Validation\n\n- ran\n"
         )
         with contextlib.redirect_stderr(io.StringIO()):
-            written, refusal, _ = evidence.write_evidence_status_section(
-                two_tagged, ["- [complete] the UI lane -- swift test passed"]
-            )
+            written, refusal, _ = write_section(two_tagged, ["- [complete] the UI lane -- swift test passed"], ["the UI lane"])
         self.assertIsNone(refusal)
         note = helpers.rejected_heading_note(written, "Evidence Status")
         assert note is not None
@@ -6928,7 +6968,8 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
 
     def test_the_factory_turn_writes_the_same_notes_to_the_same_place(self) -> None:
         # Two writers of one section disagreeing about what a body carries is
-        # the failure #1729 named; they share the function that decides.
+        # the failure #1729 named; they share the function that decides. Both
+        # carry notes from the same body here.
         body = self.body(self.NOTES_BODY_TAIL)
         rendered, errors = run_contributor.render_execution_summary_body(
             body,
@@ -6936,6 +6977,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
             evidence_complete=["1 -- 214 tests passed"],
             evidence_blocked=None,
             evidence_pending_ci=None,
+            published_body=body,
         )
         self.assertEqual(errors, [])
         notes = self.notes_section(rendered)
@@ -6997,7 +7039,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertEqual(resolved, body)
         self.assertIn("refusing to rewrite the `Evidence Status` section", spoke.getvalue())
         rendered, errors = run_contributor.render_execution_summary_body(
-            body,
+            body, published_body="",
             requested_evidence=[self.ITEM],
             evidence_complete=["1 -- 214 tests passed"],
             evidence_blocked=None,
@@ -7168,7 +7210,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
             "- [pending-ci] proof -- waiting\n\n## Validation"
         )
         rendered, errors = run_contributor.render_execution_summary_body(
-            pending,
+            pending, published_body="",
             requested_evidence=["proof"],
             evidence_complete=None,
             evidence_blocked=None,
@@ -7277,7 +7319,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertLessEqual(len(body), evidence.PR_BODY_LIMIT)
         spoke = io.StringIO()
         with contextlib.redirect_stderr(spoke):
-            written, refusal, _ = evidence.write_evidence_status_section(body, [status])
+            written, refusal, _ = write_section(body, [status], [self.ITEM])
         self.assertIsNone(refusal)
         self.assertLessEqual(len(written), evidence.PR_BODY_LIMIT)
         self.assertIn(status, written)
@@ -7285,13 +7327,13 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertIn("not written", spoke.getvalue())
         # The control: the same body one block shorter does carry it.
         shorter = body.replace(note, note[:-32], 1)
-        carried, _, _ = evidence.write_evidence_status_section(shorter, [status])
+        carried, _, _ = write_section(shorter, [status], [self.ITEM])
         self.assertIn("## Evidence Notes", carried)
         # And where the status alone is already past the limit, dropping the
         # notes buys nothing: the edit fails either way, so the text is kept
         # rather than traded for a body that still cannot be stored.
         huge = f"- [complete] {self.ITEM} -- " + "x" * evidence.PR_BODY_LIMIT
-        kept, _, _ = evidence.write_evidence_status_section(body, [huge])
+        kept, _, _ = write_section(body, [huge], [self.ITEM])
         self.assertIn("## Evidence Notes", kept)
 
     def test_a_body_at_the_limit_announces_the_notes_it_dropped(self) -> None:
@@ -7304,7 +7346,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         note = "n" * (evidence.PR_BODY_LIMIT - len(shell))
         body = f"## Evidence Status\n\n{status}\n\n{note}\n\n## Validation\n\n- ran it\n"
         with contextlib.redirect_stderr(io.StringIO()):
-            written = evidence.write_evidence_status_section(body, [status])
+            written = write_section(body, [status], [self.ITEM])
         self.assertIsNone(written.refusal)
         self.assertNotIn("Evidence Notes", written.body)
         self.assertEqual(len(written.announcements), 1, written.announcements)
@@ -7315,7 +7357,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         # The control: one block shorter carries the note and announces nothing.
         shorter = body.replace(note, note[:-32], 1)
         with contextlib.redirect_stderr(io.StringIO()):
-            carried = evidence.write_evidence_status_section(shorter, [status])
+            carried = write_section(shorter, [status], [self.ITEM])
         self.assertIn("## Evidence Notes", carried.body)
         self.assertEqual(carried.announcements, [])
 
@@ -8101,7 +8143,7 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
         """The write, and everything it printed while making it."""
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            result = self.evidence().write_evidence_status_section(self.body(tail), self.ENTRIES)
+            result = write_section(self.body(tail), self.ENTRIES, [self.ITEM])
         return result, err.getvalue()
 
     def metadata_body(self, tail: str) -> str:
@@ -8130,8 +8172,11 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
             with self.subTest(shape=shape):
                 result, _ = self.write(tail)
                 self.assertIsNone(result.refusal)
-                self.assertEqual(len(result.announcements), 1, result.announcements)
-                announcement = result.announcements[0]
+                # A write can also announce a replaced status line, so this
+                # picks the uncarried-text sentence rather than counting all.
+                carried = [note for note in result.announcements if "not carried" in note]
+                self.assertEqual(len(carried), 1, result.announcements)
+                announcement = carried[0]
                 self.assertIn(phrase, announcement)
                 # The line the author has to look at, which is the only part of
                 # this a person can act on.
@@ -8177,6 +8222,8 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
                         evidence_blocked=[],
                         evidence_pending_ci=[],
                         announcements=factory,
+                        # The turn carries notes from the published body, here the same one.
+                        published_body=body,
                     )
                 self.assertNotEqual(lane, [])
                 self.assertEqual(lane, factory)
@@ -8191,9 +8238,7 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
                 first, _ = self.write(tail)
                 self.assertNotEqual(first.announcements, [])
                 with contextlib.redirect_stderr(io.StringIO()):
-                    second = self.evidence().write_evidence_status_section(
-                        first.body, self.ENTRIES
-                    )
+                    second = write_section(first.body, self.ENTRIES, [self.ITEM])
                 self.assertEqual(second.announcements, [])
 
     def test_the_lane_writer_hands_its_announcements_to_its_caller(self) -> None:
@@ -8329,11 +8374,14 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
         # losses read as two (#1740, round 3).
         first, _ = self.write(f"{self.STATUS}\n  the first sentence I wrote under it")
         second, _ = self.write(f"{self.STATUS}\n  a different sentence, same line")
-        self.assertEqual(len(first.announcements), 1, first.announcements)
-        self.assertEqual(len(second.announcements), 1, second.announcements)
-        self.assertNotEqual(first.announcements[0], second.announcements[0])
-        prior = self.posted([], list(first.announcements))
-        self.assertEqual(len(self.posted(prior, list(second.announcements))), 1)
+        uncarried = [
+            [note for note in result.announcements if "not carried" in note]
+            for result in (first, second)
+        ]
+        self.assertEqual([len(notes) for notes in uncarried], [1, 1], uncarried)
+        self.assertNotEqual(uncarried[0][0], uncarried[1][0])
+        prior = self.posted([], uncarried[0])
+        self.assertEqual(len(self.posted(prior, uncarried[1])), 1)
 
     def test_the_note_quotes_the_line_that_went(self) -> None:
         # What makes the two distinguishable is also what makes the note
@@ -8348,7 +8396,8 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
         # ``` inside ` ` was five backticks in a row and the page showed the
         # marker as text rather than as code (#1740, round 3).
         result, _ = self.write(self.LOSSES["an unclosed fence"][0])
-        note = result.announcements[0]
+        # The uncarried-text note; a replaced-line note quotes something else.
+        note = next(note for note in result.announcements if "not carried" in note)
         # Five backticks in a row is the bug's signature: a three-backtick
         # marker wrapped in one backtick each side.
         self.assertNotIn("`````", note)
@@ -8428,6 +8477,2395 @@ class AnUncarriedNoteIsAnnouncedWhereItsAuthorLooksTests(unittest.TestCase):
         execution = self.execution()
         sent = self.posted([], self.notes())
         self.assertIn(execution.UNCARRIED_NOTES_HEADLINE, sent[0])
+
+
+class AnUnrecordedStatusBulletUnderTheHeadingIsTheAuthorsTests(unittest.TestCase):
+    """A status bullet naming no recorded item is the author's and moves to `## Evidence Notes` (#1751).
+
+    A bullet naming a recorded item is the machine's and is rewritten from the entry.
+    """
+
+    ITEM = "`swift test` passes"
+    DETAIL = "the lane has not run yet"
+    RESOLVED = "214 tests passed"
+    NOTE = "A note for the reviewer."
+    UNDER = "And what I checked after it."
+    THEIRS = "- [blocked] release approval -- the signing profile is missing"
+    ENDINGS = {"lf": "\n", "crlf": "\r\n"}
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def body(self, ending: str = "\n", *, tail: str | None = None) -> str:
+        """The issue's own body: the recorded entry, a note, the author's bullet, a note under it."""
+        payload = json.dumps(
+            {
+                "entries": [
+                    {
+                        "index": 1,
+                        "item": self.ITEM,
+                        "status": "pending-ci",
+                        "detail": self.DETAIL,
+                        "kind": "test",
+                    }
+                ]
+            },
+            indent=2,
+        )
+        section = f"{self.NOTE}\n{self.THEIRS}\n\n{self.UNDER}\n" if tail is None else tail
+        text = (
+            "## Summary\n\n- did the thing\n\n"
+            f"<!-- evidence-status:v1\n{payload}\n-->\n\n"
+            "## Evidence Status\n\n"
+            f"- [pending-ci] {self.ITEM} -- {self.DETAIL}\n\n"
+            f"{section}\n"
+            "## Validation\n\n- ran the suite on this head\n"
+        )
+        return text.replace("\n", ending)
+
+    def written(self, source: str) -> tuple[str, list[str]]:
+        """The lane writer's body and every announcement it made."""
+        said: list[str] = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            body = self.evidence().update_evidence_entries(
+                source, {1: {"status": "complete", "detail": self.RESOLVED}}, announcements=said
+            )
+        return body, said
+
+    @staticmethod
+    def flat(body: str) -> str:
+        return body.replace("\r\n", "\n")
+
+    def section_of(self, body: str) -> str:
+        """What stands under the `## Evidence Status` heading, and nothing else."""
+        after = self.flat(body).split("## Evidence Status\n", 1)[1]
+        return after.split("\n## ", 1)[0].strip()
+
+    # intent: fix
+    def test_the_authors_own_blocked_bullet_lands_in_the_notes(self) -> None:
+        for name, ending in self.ENDINGS.items():
+            with self.subTest(ending=name):
+                written, said = self.written(self.body(ending))
+                self.assertIn(self.THEIRS, self.flat(written))
+                # In the notes, in the author's order.
+                self.assertIn(
+                    f"## Evidence Notes\n{self.NOTE}\n\n{self.THEIRS}\n\n{self.UNDER}",
+                    self.flat(written),
+                )
+                # The section itself holds the machine's line and nothing else.
+                self.assertEqual(
+                    self.section_of(written), f"- [complete] {self.ITEM} -- {self.RESOLVED}"
+                )
+                # Nothing is taken, so nothing is announced.
+                self.assertEqual(said, [])
+
+    # intent: fix
+    def test_a_second_write_leaves_the_bullet_where_the_first_put_it(self) -> None:
+        # A second write moves nothing.
+        for name, ending in self.ENDINGS.items():
+            with self.subTest(ending=name):
+                once, _ = self.written(self.body(ending))
+                twice, said = self.written(once)
+                self.assertEqual(self.flat(twice), self.flat(once))
+                self.assertIn(self.THEIRS, self.flat(twice))
+                self.assertEqual(said, [])
+
+    # intent: fix
+    def test_a_bullet_of_theirs_for_a_recorded_item_is_replaced_out_loud(self) -> None:
+        """The author's own bullet for a recorded item is replaced, carried to the notes and announced."""
+        theirs = f"- [complete] {self.ITEM} -- I ran it myself and it passed"
+        written, said = self.written(self.body(tail=f"{self.NOTE}\n{theirs}\n"))
+        helpers = sys.modules["_helpers"]
+        # The section says what was recorded.
+        self.assertEqual(
+            self.section_of(written), f"- [complete] {self.ITEM} -- {self.RESOLVED}"
+        )
+        # Their bytes are on the page, below it.
+        self.assertIn(theirs, helpers.markdown_section(written, "Evidence Notes"))
+        # One announcement names the line, its position and the item.
+        replaced = [note for note in said if "replaced in" in note]
+        self.assertEqual(len(replaced), 1, said)
+        self.assertIn(helpers.code_span(theirs), replaced[0])
+        self.assertRegex(replaced[0], r"at line \d+")
+        self.assertIn(helpers.code_span(self.ITEM), replaced[0])
+
+    # intent: control
+    def test_a_byte_identical_copy_of_the_machines_line_is_still_silent(self) -> None:
+        # A byte-identical copy of the machine's line holds nothing of the author's.
+        copy = f"- [pending-ci] {self.ITEM} -- {self.DETAIL}"
+        written, said = self.written(self.body(tail=f"{self.NOTE}\n{copy}\n"))
+        self.assertEqual([note for note in said if "replaced in" in note], [], said)
+        self.assertEqual(
+            self.section_of(written), f"- [complete] {self.ITEM} -- {self.RESOLVED}"
+        )
+
+    # intent: control
+    def test_a_bullet_for_an_item_this_body_does_not_record_still_survives(self) -> None:
+        # The write owns no line for an unrecorded item, so nothing is announced.
+        written, said = self.written(self.body(tail=f"{self.NOTE}\n{self.THEIRS}\n"))
+        helpers = sys.modules["_helpers"]
+        self.assertIn(self.THEIRS, helpers.markdown_section(written, "Evidence Notes"))
+        self.assertEqual([note for note in said if "replaced in" in note], [], said)
+
+    # intent: fix
+    def test_a_status_line_naming_a_recorded_item_is_still_the_machines(self) -> None:
+        # A stale reading of a recorded item is replaced by the entry, carried and announced.
+        stale = f"- [blocked] {self.ITEM} -- an older reading of the same item"
+        written, said = self.written(self.body(tail=f"{self.NOTE}\n{stale}\n"))
+        self.assertEqual(
+            self.section_of(written), f"- [complete] {self.ITEM} -- {self.RESOLVED}"
+        )
+        self.assertNotIn("an older reading of the same item", self.section_of(written))
+        self.assertIn("an older reading of the same item", self.flat(written))
+        self.assertEqual(len([note for note in said if "replaced in" in note]), 1, said)
+        self.assertIn(f"## Evidence Notes\n{self.NOTE}", self.flat(written))
+
+    # intent: fix
+    def test_both_writers_carry_it(self) -> None:
+        # The lane's re-render and the turn's render must carry the same notes (#1729).
+        run_contributor = sys.modules["run_contributor_evidence_kinds"]
+        source = self.body()
+        with contextlib.redirect_stderr(io.StringIO()):
+            rendered, errors = run_contributor.render_execution_summary_body(
+                source,
+                requested_evidence=[self.ITEM],
+                evidence_complete=[f"1 -- {self.RESOLVED}"],
+                evidence_blocked=None,
+                evidence_pending_ci=None,
+                published_body=source,
+            )
+        lane, _ = self.written(source)
+        self.assertEqual(errors, [])
+        self.assertIn(self.THEIRS, rendered)
+        self.assertEqual(self.section_of(rendered), self.section_of(lane))
+        self.assertEqual(
+            self.flat(rendered).split("## Evidence Notes\n", 1)[1].rstrip("\n"),
+            self.flat(lane).split("## Evidence Notes\n", 1)[1].rstrip("\n"),
+        )
+
+    # intent: guard
+    def test_the_carried_excerpt_says_what_it_is_and_holds_what_it_quotes(self) -> None:
+        """The carried excerpt's opening sentence and its fence.
+
+        The sentence describes the write's own act and never claims a person checked the text.
+        The fence is longer than any backtick run in the quoted line, so the line cannot close it.
+        """
+        evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
+        # The sentence, by its own constant and by what it must not say.
+        self.assertEqual(
+            evidence.SUPERSEDED_CARRY_OPENING,
+            "previously in the status list, replaced by the entry the record holds:",
+        )
+        opening = evidence.SUPERSEDED_CARRY_OPENING.lower()
+        for claim in ("verified", "attested", "approved", "checked by", "signed"):
+            self.assertNotIn(
+                claim, opening, "the write's own sentence reads as somebody's attestation"
+            )
+
+        # Only a line of bare backticks closes a fence, so drive the carrier with one.
+        for shape, theirs in (
+            ("a three-backtick run mid-line", "- [complete] run ```a``` -- mine"),
+            ("a line that is nothing but a fence", "```"),
+            ("a longer run than the fence would be", "``````"),
+        ):
+            with self.subTest(line=shape):
+                excerpt = evidence._superseded_carry(theirs)
+                tokens = [
+                    token for token in helpers.MARKDOWN.parse(excerpt) if token.type == "fence"
+                ]
+                self.assertEqual(len(tokens), 1, excerpt)
+                self.assertIn(theirs, tokens[0].content, excerpt)
+        # Nothing in the excerpt renders as a list item.
+        kinds = {token.type for token in helpers.MARKDOWN.parse(excerpt)}
+        self.assertNotIn("bullet_list_open", kinds, excerpt)
+
+    # intent: guard
+    def test_the_sentence_about_an_uncarried_block_names_the_line_it_opens_on(self) -> None:
+        """A multi-line block, so the first line and the last are different strings."""
+        evidence = self.evidence()
+        item = "run the QA filter"
+        opening = "the model's own paragraph about the lane"
+        closing = "and a second line under it that is not the first"
+        draft = (
+            "## Summary\n\n- did the thing\n\n"
+            f"## Evidence Status\n\n- [pending-ci] {item} -- waiting\n\n"
+            f"{opening}\n{closing}\n\n"
+            "## Validation\n- ran it\n"
+        )
+        published = (
+            "## Summary\n\n- published\n\n"
+            f"## Evidence Status\n\n- [pending-ci] {item} -- waiting on CI\n\n"
+            "## Validation\n- ran it\n"
+        )
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            run_contributor.render_execution_summary_body(
+                draft,
+                requested_evidence=[item],
+                evidence_complete=None,
+                evidence_blocked=None,
+                evidence_pending_ci=["1 -- 214 tests passed"],
+                published_body=published,
+            )
+        sentences = [
+            line for line in said.getvalue().splitlines()
+            if "not carried from the body being written" in line
+        ]
+        self.assertEqual(len(sentences), 1, said.getvalue())
+        self.assertIn(opening, sentences[0], "the sentence does not name the line it opens on")
+        self.assertNotIn(closing, sentences[0], "the sentence names the line it ends on")
+
+    # intent: guard
+    def test_a_shape_that_would_end_the_notes_section_never_reaches_the_carry(self) -> None:
+        """Three shapes that create a heading, and where each one goes.
+
+        An `## ...` line and a setext underline end the status section where they stand, so the
+        text below them is never carried. A footnote definition is carried and ends no section.
+        """
+        evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
+        item = "run the QA filter"
+        for shape, text, carried in (
+            ("a footnote definition", "[^note]: a definition of theirs", True),
+            ("a setext underline", "their paragraph\n===", False),
+            ("an h2 of their own", "## Their own heading", False),
+        ):
+            with self.subTest(shape=shape):
+                entries = [{
+                    "index": 1, "item": item, "status": "pending-ci",
+                    "detail": "waiting", "kind": "ci",
+                }]
+                body = (
+                    "<!-- evidence-status:v1\n"
+                    + json.dumps({"entries": entries})
+                    + "\n-->\n\n## Summary\n\n- one change\n\n## Evidence Status\n\n"
+                    f"- [pending-ci] {item} -- waiting\n\n{text}\n\n## Validation\n\n- ran it\n"
+                )
+                with contextlib.redirect_stderr(io.StringIO()):
+                    written = evidence.update_evidence_entries(
+                        body, {1: {"status": "complete", "detail": "green"}}
+                    )
+                notes = helpers.markdown_section(written, "Evidence Notes")
+                self.assertEqual(bool(notes.strip()), carried, notes)
+                # The status section still reads as the one line this write rendered.
+                lines, unreadable = evidence._rendered_status_lines(written)
+                self.assertIsNone(unreadable, f"{shape}: {unreadable}")
+                self.assertEqual(lines, [f"[complete] {item} -- green"], f"{shape}: {lines}")
+
+    # intent: fix
+    def test_five_chained_turns_carry_one_excerpt_and_stop(self) -> None:
+        """Chained turns carry one excerpt per recorded item, with or without the record comment.
+
+        Without the record, each turn's own line reads as the author's and its detail changes every
+        turn, so byte identity alone cannot stop the growth. The two runs differ only in the record.
+        """
+        evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
+        item = "run the QA filter"
+        theirs = f"- [complete] {item} -- I ran it by hand"
+        draft = (
+            "## Summary\n\n- did the thing\n\n"
+            f"## Evidence Status\n\n- [pending-ci] {item} -- waiting\n\n"
+            "## Validation\n- ran it\n"
+        )
+        published = (
+            "## Summary\n\n- published\n\n"
+            f"## Evidence Status\n\n{theirs}\n\n"
+            "## Validation\n- ran it\n"
+        )
+
+        def chain(keep_the_record: bool) -> list[tuple[int, int]]:
+            carried = published
+            seen: list[tuple[int, int]] = []
+            for number in range(1, 6):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    written, errors = run_contributor.render_execution_summary_body(
+                        draft,
+                        requested_evidence=[item],
+                        evidence_complete=None,
+                        evidence_blocked=None,
+                        evidence_pending_ci=[f"1 -- run {number}"],
+                        published_body=carried,
+                    )
+                self.assertEqual(errors, [], f"turn {number}")
+                notes = helpers.markdown_section(written, "Evidence Notes")
+                seen.append((notes.count("previously in the status list"), len(notes)))
+                carried = written if keep_the_record else re.sub(
+                    r"<!-- evidence-status:v1.*?-->\n*", "", written, flags=re.S
+                )
+            return seen
+
+        with_record = chain(True)
+        without_record = chain(False)
+        # One excerpt of one size from the first turn to the fifth.
+        self.assertEqual(len(set(with_record)), 1, with_record)
+        self.assertEqual(len(set(without_record)), 1, without_record)
+        self.assertEqual(with_record[0][0], 1, with_record)
+        self.assertEqual(without_record[0][0], 1, without_record)
+        # And their line is what the one excerpt holds.
+        self.assertEqual(with_record[-1], without_record[-1], "the record changed what is carried")
+
+    # intent: fix
+    def test_author_edits_leave_one_status_on_the_page(self) -> None:
+        """Author edits and a verdict flip leave one status line and fenced excerpts in the notes.
+
+        The notes keep the first reading per item, and nothing under them renders as a status bullet.
+        """
+        evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
+        theirs = [
+            f"- [complete] {self.ITEM} -- I ran it by hand",
+            f"- [complete] {self.ITEM} -- I ran it again on the rebuild",
+        ]
+
+        def edited(body: str, line: str) -> str:
+            """The author replacing the machine's status line with their own words."""
+            section = helpers.markdown_section(body, "Evidence Status")
+            return body.replace(section, line, 1)
+
+        said: list[str] = []
+        written = self.body()
+        with contextlib.redirect_stderr(io.StringIO()):
+            for their_line in theirs:
+                written = evidence.update_evidence_entries(
+                    edited(written, their_line),
+                    {1: {"status": "pending-ci", "detail": self.DETAIL}},
+                    announcements=said,
+                )
+            # A third write with nothing edited: one per edit, not one per run.
+            written = evidence.update_evidence_entries(
+                written, {1: {"status": "pending-ci", "detail": self.DETAIL}}, announcements=said
+            )
+            # And the verdict flip.
+            written = evidence.update_evidence_entries(
+                written, {1: {"status": "blocked", "detail": "the device is not on the bench"}},
+                announcements=said,
+            )
+        replaced = [note for note in said if evidence.says_text_was_replaced(note)]
+        self.assertEqual(len(replaced), len(theirs), said)
+        status = helpers.markdown_section(written, "Evidence Status")
+        self.assertEqual(
+            status.splitlines(),
+            [f"- [blocked] {self.ITEM} -- the device is not on the bench"],
+            written,
+        )
+        notes = helpers.markdown_section(written, "Evidence Notes")
+        # The first reading stays; later ones are announced, not carried.
+        self.assertIn(theirs[0], notes, "the first reading of theirs is not in the notes")
+        self.assertNotIn(theirs[1], notes, "a second excerpt for one item was carried")
+        self.assertEqual(
+            notes.count("previously in the status list"), 1, notes
+        )
+        held = [note for note in said if "already holds an excerpt" in note]
+        self.assertEqual(len(held), 1, said)
+        self.assertIn(theirs[1], held[0], "the reading that was not carried is not named")
+        # Nothing under the notes heading renders as a list.
+        kinds = {token.type for token in helpers.MARKDOWN.parse(notes)}
+        self.assertNotIn("bullet_list_open", kinds, notes)
+        self.assertIn("fence", kinds, notes)
+
+    # intent: guard
+    def test_one_function_decides_whose_line_it_is(self) -> None:
+        evidence = self.evidence()
+        self.assertTrue(
+            evidence.is_recorded_status_line(
+                f"- [complete] {self.ITEM} -- {self.RESOLVED}", [self.ITEM]
+            )
+        )
+        self.assertFalse(evidence.is_recorded_status_line(self.THEIRS, [self.ITEM]))
+        # A write that records nothing owns no line.
+        self.assertFalse(
+            evidence.is_recorded_status_line(f"- [complete] {self.ITEM} -- {self.RESOLVED}", [])
+        )
+        # The item is matched whole, not cut at its first ` -- ` (#1738).
+        self.assertTrue(
+            evidence.is_recorded_status_line("- [pending-ci] build -- release -- d", ["build -- release"])
+        )
+        self.assertFalse(
+            evidence.is_recorded_status_line(
+                "- [blocked] build -- staging -- someone else's line", ["build -- release"]
+            )
+        )
+        # Not status-shaped at all: a note is a note however it opens.
+        self.assertFalse(evidence.is_recorded_status_line("- a plain bullet", [self.ITEM]))
+
+    # Ways to write one status line; the rule reads each as the page does.
+    WRAPPED = {
+        "plain": "- [pending-ci] {item} -- {detail}",
+        "a bold status token": "- **[pending-ci]** {item} -- {detail}",
+        "an italic status token": "- _[pending-ci]_ {item} -- {detail}",
+        "a bold item": "- [pending-ci] **{item}** -- {detail}",
+        "an ordered marker": "1. [pending-ci] {item} -- {detail}",
+        "a star marker": "* [pending-ci] {item} -- {detail}",
+    }
+
+    # intent: guard
+    def test_the_rule_reads_a_line_the_way_the_page_reads_it(self) -> None:
+        evidence = self.evidence()
+        plain = f"- [pending-ci] {self.ITEM} -- {self.DETAIL}"
+        for name, template in self.WRAPPED.items():
+            with self.subTest(form=name):
+                line = template.format(item=self.ITEM, detail=self.DETAIL)
+                self.assertEqual(evidence.status_line_as_page_reads_it(line), plain)
+                self.assertTrue(
+                    evidence.is_recorded_status_line(
+                        evidence.status_line_as_page_reads_it(line), [self.ITEM]
+                    )
+                )
+        # A code span keeps its backticks in the reading, so the line is the author's.
+        in_code = f"- `[pending-ci]` {self.ITEM} -- {self.DETAIL}"
+        self.assertEqual(evidence.status_line_as_page_reads_it(in_code), in_code)
+        self.assertFalse(
+            evidence.is_recorded_status_line(
+                evidence.status_line_as_page_reads_it(in_code), [self.ITEM]
+            )
+        )
+        # A line that is not a list item comes back unchanged.
+        for line in (f"[pending-ci] {self.ITEM} -- {self.DETAIL}", "", "    an indented block"):
+            with self.subTest(line=line):
+                self.assertEqual(evidence.status_line_as_page_reads_it(line), line)
+        # And a task box stays the author's, however the status is wrapped.
+        boxed = f"- [x] **[pending-ci]** {self.ITEM} -- {self.DETAIL}"
+        self.assertFalse(
+            evidence.is_recorded_status_line(
+                evidence.status_line_as_page_reads_it(boxed), [self.ITEM]
+            )
+        )
+
+    # intent: fix
+    def test_a_wrapped_line_naming_a_recorded_item_is_the_machines(self) -> None:
+        for name, template in self.WRAPPED.items():
+            with self.subTest(form=name):
+                line = template.format(item=self.ITEM, detail=self.DETAIL)
+                written, said = self.written(self.body(tail=f"{self.NOTE}\n{line}\n"))
+                self.assertEqual(
+                    self.section_of(written), f"- [complete] {self.ITEM} -- {self.RESOLVED}"
+                )
+                self.assertNotIn(line, self.section_of(written))
+                self.assertIn(line, self.flat(written))
+                self.assertIn(f"## Evidence Notes\n{self.NOTE}", self.flat(written))
+                # The plain form matches the last run's rendered bytes and moves silently.
+                # Every other spelling is the author's own, so its replacement is announced.
+                self.assertEqual(
+                    len([note for note in said if "replaced in" in note]),
+                    0 if name == "plain" else 1,
+                    f"{name}: {said}",
+                )
+
+    # intent: guard
+    def test_a_wrapped_line_naming_no_recorded_item_is_the_authors(self) -> None:
+        # Wrapping a status token does not make an unrecorded line the machine's.
+        theirs = "- **[blocked]** release approval -- the signing profile is missing"
+        written, said = self.written(self.body(tail=f"{self.NOTE}\n{theirs}\n"))
+        self.assertIn(theirs, self.flat(written))
+        self.assertIn(f"## Evidence Notes\n{self.NOTE}\n\n{theirs}", self.flat(written))
+        self.assertEqual(said, [])
+
+    # intent: guard
+    def test_the_items_are_read_once_however_the_caller_holds_them(self) -> None:
+        # A generator would be spent on the first line and every later status line would
+        # read as the author's.
+        evidence = self.evidence()
+        second = "the smoke lane"
+        body = (
+            "## Summary\n\n- did the thing\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {self.ITEM} -- {self.DETAIL}\n"
+            f"- [pending-ci] {second} -- waiting\n\n"
+            "## Validation\n\n- ran it\n"
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            write = write_section(
+                body,
+                [f"- [complete] {self.ITEM} -- {self.RESOLVED}", f"- [complete] {second} -- ran"],
+                (item for item in (self.ITEM, second)),
+            )
+        self.assertIsNone(write.refusal)
+        self.assertEqual(
+            self.section_of(write.body),
+            f"- [complete] {self.ITEM} -- {self.RESOLVED}\n- [complete] {second} -- ran",
+        )
+        # No metadata, so both existing lines are the author's and are carried.
+        notes = sys.modules["_helpers"].markdown_section(write.body, "Evidence Notes")
+        self.assertIn(f"- [pending-ci] {self.ITEM} -- {self.DETAIL}", notes)
+        self.assertIn(f"- [pending-ci] {second} -- waiting", notes)
+
+    # intent: guard
+    def test_the_writer_is_told_which_items_it_records(self) -> None:
+        # The items are passed in; an item with its own ` -- ` cannot be read back out of its
+        # line (#1738).
+        evidence = self.evidence()
+        body = (
+            "## Summary\n\n- did the thing\n\n## Evidence Status\n\n"
+            "- [pending-ci] build -- release -- waiting\n"
+            f"{self.THEIRS}\n\n## Validation\n\n- ran it\n"
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            write = write_section(body, ["- [complete] build -- release -- 214 tests passed"], ["build -- release"])
+        self.assertIsNone(write.refusal)
+        # Replaced in the section, carried below it, and announced once.
+        self.assertNotIn(
+            "- [pending-ci] build -- release -- waiting",
+            sys.modules["_helpers"].markdown_section(write.body, "Evidence Status"),
+        )
+        self.assertIn("- [pending-ci] build -- release -- waiting", write.body)
+        self.assertIn(self.THEIRS, write.body)
+        self.assertEqual(
+            len([note for note in write.announcements if "replaced in" in note]), 1,
+            write.announcements,
+        )
+
+class TheNotesComeFromTheBodyAPersonCanEditTests(unittest.TestCase):
+    """`## Evidence Notes` is written from the published body and never from the draft (#1751).
+
+    The draft is the model's text, so a block carried from it would publish text nobody wrote.
+    The turn passes the published body as `notes_from`, and the lane passes the body it rewrites.
+    """
+
+    ITEM = "run the QA filter"
+    DETAIL = "214 tests passed"
+    LAST_RUN = f"- [pending-ci] {ITEM} -- waiting on CI"
+    FORGED_UNRECORDED = "- [complete] manual QA on device -- trust me"
+    FORGED_RECORDED = f"- [complete] {ITEM} -- trust me"
+    FORGED_PROSE = "the model says the filter passed, honestly"
+    FORGED_NOTE = "a note the draft wrote into the notes section itself"
+    THEIR_PROSE = "a person wrote this under the heading on GitHub"
+    THEIR_NOTE = "a person wrote this under the notes heading on GitHub"
+    THEIR_BULLET = f"- [complete] {ITEM} -- I checked it by hand"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def draft(self, under_heading: str = "", notes: str = "") -> str:
+        """The model's own text for this turn."""
+        body = (
+            "## Summary\n\n- did the thing\n\n"
+            f"## Evidence Status\n\n- [pending-ci] {self.ITEM} -- waiting\n"
+            f"{under_heading}"
+            "\n## Validation\n- ran it\n"
+        )
+        return body + (f"\n## Evidence Notes\n\n{notes}\n" if notes else "")
+
+    def published(self, under_heading: str = "", notes: str = "", status_line: str = "") -> str:
+        """The body GitHub holds, with the record the last run left in it.
+
+        Without the record, the last run's own line reads as a person's and the fixture proves nothing.
+        """
+        body = (
+            "## Summary\n\n- published\n\n"
+            f"## Evidence Status\n\n{status_line or self.LAST_RUN}\n"
+            f"{under_heading}"
+            "\n## Validation\n- ran it\n"
+        ) + (f"\n## Evidence Notes\n\n{notes}\n" if notes else "")
+        return self.evidence()._insert_evidence_metadata(
+            body,
+            {"entries": [{"index": 1, "item": self.ITEM, "status": "pending-ci",
+                          "detail": "waiting on CI", "kind": "ci"}]},
+        )
+
+    def turn(self, draft: str, published: str) -> tuple[str, list[str], list[str]]:
+        """The turn's entry point, driven the way production drives it."""
+        said: list[str] = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            written, errors = run_contributor.render_execution_summary_body(
+                draft,
+                requested_evidence=[self.ITEM],
+                evidence_complete=None,
+                evidence_blocked=None,
+                evidence_pending_ci=[f"1 -- {self.DETAIL}"],
+                published_body=published,
+                announcements=said,
+            )
+        self.assertEqual(errors, [], "the turn refused the fixture")
+        return written, said, errors
+
+    # intent: fix
+    def test_the_notes_carry_the_published_bodys_text_and_no_other(self) -> None:
+        """Each kind of text that can reach the notes, one case each, from both bodies."""
+        shapes = [
+            ("a status bullet for an item the record does not hold",
+             self.draft(self.FORGED_UNRECORDED + "\n"), self.published(),
+             self.FORGED_UNRECORDED, False),
+            ("a status bullet for a recorded item",
+             self.draft(self.FORGED_RECORDED + "\n"), self.published(), "trust me", False),
+            ("prose under the status heading",
+             self.draft("\n" + self.FORGED_PROSE + "\n"), self.published(),
+             self.FORGED_PROSE, False),
+            ("a notes section of the draft's own",
+             self.draft(notes=self.FORGED_NOTE), self.published(), self.FORGED_NOTE, False),
+            ("their prose under the status heading",
+             self.draft(), self.published("\n" + self.THEIR_PROSE + "\n"),
+             self.THEIR_PROSE, True),
+            ("their notes section",
+             self.draft(), self.published(notes=self.THEIR_NOTE), self.THEIR_NOTE, True),
+            ("their own words on a recorded item's line",
+             self.draft(), self.published(status_line=self.THEIR_BULLET),
+             "I checked it by hand", True),
+            ("the last run's own status line",
+             self.draft(), self.published(), "waiting on CI", False),
+        ]
+        for name, draft, published, text, carried in shapes:
+            with self.subTest(shape=name):
+                written, _, _ = self.turn(draft, published)
+                notes = self.evidence().markdown_section(written, "Evidence Notes")
+                self.assertEqual(
+                    text in notes,
+                    carried,
+                    f"{name}: {'dropped' if carried else 'carried'} -- notes were {notes!r}",
+                )
+
+    # intent: fix
+    def test_the_run_is_told_which_of_the_drafts_blocks_it_did_not_carry(self) -> None:
+        """Draft blocks the write does not carry are logged to the run, one line each, naming the line.
+
+        They are not sent to the author, because the author did not write them.
+        """
+        spoken = "not carried from the body being written"
+        shapes = [
+            ("a status bullet for an item the record does not hold",
+             self.draft(self.FORGED_UNRECORDED + "\n"), self.FORGED_UNRECORDED),
+            ("prose under the status heading",
+             self.draft("\n" + self.FORGED_PROSE + "\n"), self.FORGED_PROSE),
+            ("a notes section of the draft's own",
+             self.draft(notes=self.FORGED_NOTE), self.FORGED_NOTE),
+        ]
+        for name, draft, text in shapes:
+            with self.subTest(shape=name):
+                said = io.StringIO()
+                with contextlib.redirect_stderr(said):
+                    run_contributor.render_execution_summary_body(
+                        draft,
+                        requested_evidence=[self.ITEM],
+                        evidence_complete=None,
+                        evidence_blocked=None,
+                        evidence_pending_ci=[f"1 -- {self.DETAIL}"],
+                        published_body=self.published(),
+                    )
+                sentences = [line for line in said.getvalue().splitlines() if spoken in line]
+                self.assertEqual(len(sentences), 1, said.getvalue())
+                self.assertIn(text, sentences[0], "the sentence does not name what it left")
+        # The control: a draft with nothing of its own under either heading logs nothing.
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            run_contributor.render_execution_summary_body(
+                self.draft(),
+                requested_evidence=[self.ITEM],
+                evidence_complete=None,
+                evidence_blocked=None,
+                evidence_pending_ci=[f"1 -- {self.DETAIL}"],
+                published_body=self.published(),
+            )
+        self.assertNotIn(spoken, said.getvalue())
+
+    # intent: guard
+    def test_one_site_in_the_whole_tree_writes_under_the_notes_heading(self) -> None:
+        """Exactly one call site in the tree writes under the notes heading.
+
+        The census counts every call that passes the notes heading, as the constant or as text, to
+        anything outside the known readers. Adding a reader means adding it to the list below.
+        """
+        evidence = self.evidence()
+        readers = {
+            "markdown_section",
+            "removed_section_texts",
+            "strip_markdown_section",
+            "_section_bounds",
+            "rendered_section_lines",
+            "section_heading_index",
+        }
+        heading = evidence.EVIDENCE_NOTES_HEADING
+        sites: list[tuple[str, int, str]] = []
+        files = 0
+        for path in sorted(REPO_ROOT.rglob("*.py")):
+            if any(
+                part in {".git", ".venv", "node_modules", "build", ".pyc", "tests"}
+                for part in path.parts
+            ):
+                # Test files are excluded: they drive writers rather than write bodies.
+                continue
+            files += 1
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except (SyntaxError, UnicodeDecodeError):
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                called = (
+                    node.func.id if isinstance(node.func, ast.Name)
+                    else node.func.attr if isinstance(node.func, ast.Attribute)
+                    else ""
+                )
+                if called in readers:
+                    continue
+                for argument in list(node.args) + [keyword.value for keyword in node.keywords]:
+                    named = (
+                        isinstance(argument, ast.Name)
+                        and argument.id == "EVIDENCE_NOTES_HEADING"
+                    )
+                    spelled = (
+                        isinstance(argument, ast.Constant)
+                        and isinstance(argument.value, str)
+                        and heading in argument.value
+                    )
+                    if named or spelled:
+                        sites.append((
+                            str(path.relative_to(REPO_ROOT)),
+                            node.lineno,
+                            "the constant" if named else "its own text",
+                        ))
+                        break
+        # The walk must actually read files.
+        self.assertGreater(files, 90, "the census read almost nothing; check the walk")
+        self.assertEqual(
+            len(sites),
+            1,
+            f"{len(sites)} sites in the tree hand the notes heading to something that is "
+            f"not a known reader: {sites}",
+        )
+        self.assertEqual(sites[0][0], ".agents/skills/cofounder-contributor/scripts/evidence.py")
+        self.assertEqual(sites[0][2], "the constant")
+
+    def notes_sources(self, source: str) -> list[tuple[str, int]]:
+        """Every read that feeds a write of `## Evidence Notes` in this module.
+
+        Follows a call to a section inserter whose heading is the notes heading back through
+        assignments, unpacking, `append`/`extend`, loop targets and one hop into a module-level
+        helper. Runtime-assembled headings and deeper helper chains are out of reach; the census
+        test covers those.
+        """
+        tree = ast.parse(source)
+        heading = self.evidence().EVIDENCE_NOTES_HEADING
+        constants = {
+            target.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Constant)
+            and node.value.value == heading
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+        readers = {"removed_section_texts", "markdown_section", "strip_markdown_section"}
+        inserters = {"insert_markdown_section", "inserted_markdown_section"}
+        helpers_by_name = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+
+        def named(node) -> set[str]:
+            return {found.id for found in ast.walk(node) if isinstance(found, ast.Name)}
+
+        def is_the_heading(node) -> bool:
+            if isinstance(node, ast.Name):
+                return node.id in constants
+            return isinstance(node, ast.Constant) and node.value == heading
+
+        found: list[tuple[str, int]] = []
+        for function in ast.walk(tree):
+            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for call in ast.walk(function):
+                if not (
+                    isinstance(call, ast.Call)
+                    and (
+                        (isinstance(call.func, ast.Name) and call.func.id in inserters)
+                        or (isinstance(call.func, ast.Attribute) and call.func.attr in inserters)
+                    )
+                    and len(call.args) > 2
+                    and is_the_heading(call.args[1])
+                ):
+                    continue
+                parameters = {
+                    argument.arg
+                    for argument in function.args.args + function.args.kwonlyargs
+                }
+                reached, frontier = set(), named(call.args[2])
+                while frontier:
+                    name = frontier.pop()
+                    if name in reached:
+                        continue
+                    reached.add(name)
+                    if name in parameters:
+                        continue
+                    for node in ast.walk(function):
+                        sources = []
+                        if isinstance(node, ast.Assign):
+                            for target in node.targets:
+                                if isinstance(target, ast.Name) and target.id == name:
+                                    sources.append(node.value)
+                                if isinstance(target, ast.Tuple) and any(
+                                    isinstance(element, ast.Name) and element.id == name
+                                    for element in target.elts
+                                ):
+                                    sources.append(node.value)
+                        if (
+                            isinstance(node, ast.AnnAssign)
+                            and node.value is not None
+                            and isinstance(node.target, ast.Name)
+                            and node.target.id == name
+                        ):
+                            sources.append(node.value)
+                        if (
+                            isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Attribute)
+                            and isinstance(node.func.value, ast.Name)
+                            and node.func.value.id == name
+                            and node.func.attr in {"append", "extend"}
+                        ):
+                            sources.extend(node.args)
+                        if (
+                            isinstance(node, ast.For)
+                            and isinstance(node.target, ast.Name)
+                            and node.target.id == name
+                        ):
+                            sources.append(node.iter)
+                        for reads in sources:
+                            frontier |= named(reads) - reached
+                            for inner in ast.walk(reads):
+                                if not isinstance(inner, ast.Call) or not inner.args:
+                                    continue
+                                callee = (
+                                    inner.func.id if isinstance(inner.func, ast.Name) else ""
+                                )
+                                if callee in readers:
+                                    found.append((ast.unparse(inner.args[0]), inner.lineno))
+                                elif callee in helpers_by_name:
+                                    # One hop into a helper that reads a section, named at the
+                                    # helper's line.
+                                    helper = helpers_by_name[callee]
+                                    handed = [ast.unparse(one) for one in inner.args]
+                                    for inside in ast.walk(helper):
+                                        if (
+                                            isinstance(inside, ast.Call)
+                                            and isinstance(inside.func, ast.Name)
+                                            and inside.func.id in readers
+                                            and inside.args
+                                        ):
+                                            read = ast.unparse(inside.args[0])
+                                            position = [
+                                                argument.arg
+                                                for argument in helper.args.args
+                                            ]
+                                            if read in position and position.index(read) < len(handed):
+                                                read = handed[position.index(read)]
+                                            found.append((read, inside.lineno))
+        return found
+
+    # intent: fix
+    def test_every_source_of_the_notes_section_reads_the_carried_body(self) -> None:
+        """In every module on the turn path, each read feeding a notes write takes the carried body.
+
+        The doctored source adds a helper-routed read of the body being rewritten, so the one-hop
+        walk has to catch it.
+        """
+        modules = ("evidence.py", "run-contributor.py", "execution.py")
+        for name in modules:
+            with self.subTest(module=name):
+                source = SCRIPT_PATH.with_name(name).read_text(encoding="utf-8")
+                for argument, line in self.notes_sources(source):
+                    self.assertEqual(
+                        argument,
+                        "notes_from",
+                        f"{name}:{line} feeds `## Evidence Notes` from a body "
+                        "other than the carried one",
+                    )
+        written = SCRIPT_PATH.with_name("evidence.py").read_text(encoding="utf-8")
+        self.assertTrue(self.notes_sources(written), "the walk found no source at all")
+        # The seed: a helper-routed read of the body being rewritten.
+        doctored = written.replace(
+            "def write_evidence_status_section(",
+            "def _sneaked_in(text):\n"
+            "    return removed_section_texts(text, EVIDENCE_NOTES_HEADING)\n\n\n"
+            "def write_evidence_status_section(",
+            1,
+        ).replace(
+            "    blocks = standing_blocks + carried_notes",
+            "    blocks = standing_blocks + carried_notes + list(_sneaked_in(body)[0])",
+            1,
+        )
+        self.assertNotEqual(doctored, written, "the seed did not apply")
+        self.assertIn(
+            "body",
+            [argument for argument, _ in self.notes_sources(doctored)],
+            "a read routed through a helper is invisible to this walk",
+        )
+
+    # intent: fix
+    def test_neither_writer_of_a_turn_body_defaults_the_published_body(self) -> None:
+        evidence = self.evidence()
+        execution = sys.modules["execution"]
+        with self.assertRaises(TypeError) as refused:
+            evidence.render_execution_summary_body(
+                self.draft(),
+                requested_evidence=[self.ITEM],
+                evidence_complete=None,
+                evidence_blocked=None,
+                evidence_pending_ci=None,
+            )
+        self.assertIn("published_body", str(refused.exception))
+        with self.assertRaises(TypeError) as refused:
+            execution.build_execution_summary_body({}, requested_evidence=[self.ITEM])
+        self.assertIn("published_body", str(refused.exception))
+        # Every production call site passes it.
+        for name in ("evidence.py", "execution.py"):
+            source = SCRIPT_PATH.with_name(name).read_text(encoding="utf-8")
+            calls = [
+                node for node in ast.walk(ast.parse(source))
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in {
+                    "render_execution_summary_body", "build_execution_summary_body"
+                }
+            ]
+            for call in calls:
+                self.assertIn(
+                    "published_body",
+                    [keyword.arg for keyword in call.keywords],
+                    f"{name}:{call.lineno} does not say which published body it has",
+                )
+
+    # intent: fix
+    def test_the_write_cannot_be_called_without_saying_whose_body_it_carries(self) -> None:
+        evidence = self.evidence()
+        entries = [{"index": 1, "item": self.ITEM, "status": "complete",
+                    "detail": self.DETAIL, "kind": "ci"}]
+        with self.assertRaises(TypeError) as refused:
+            evidence.write_evidence_status_section(
+                self.draft(),
+                [f"- [complete] {self.ITEM} -- {self.DETAIL}"],
+                recorded_items=[self.ITEM],
+                entries=entries,
+                previous_entries=[],
+            )
+        self.assertIn("notes_from", str(refused.exception))
+        # Every production call site passes it.
+        source = SCRIPT_PATH.with_name("evidence.py").read_text(encoding="utf-8")
+        calls = [
+            node for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "write_evidence_status_section"
+        ]
+        self.assertEqual(len(calls), 2, "a call site appeared or went; check what it carries")
+        for call in calls:
+            self.assertIn(
+                "notes_from",
+                [keyword.arg for keyword in call.keywords],
+                f"the call at line {call.lineno} does not say whose body it carries",
+            )
+
+
+class TheRecordedItemIsReadWhereTheLineIsReadTests(unittest.TestCase):
+    """The recorded item is parsed in the same section context as the line (#1751).
+
+    `[Manual QA][qa] on device` is plain text parsed alone and a link where `[qa]:` is defined,
+    so both sides are read against the section, not the whole body.
+    """
+
+    ITEM = "[Manual QA][qa] on device"
+    DEFINITION = "[qa]: https://example.invalid/qa"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def section(self, status: str, detail: str) -> str:
+        return f"- [{status}] {self.ITEM} -- {detail}\n\n{self.DEFINITION}\n"
+
+    def body(self, status: str = "pending-ci", detail: str = "waiting") -> str:
+        return (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"{self.section(status, detail)}\n## Validation\n\n- ran it\n"
+        )
+
+    # intent: guard
+    def test_the_two_readings_of_one_item_agree_in_the_lines_own_context(self) -> None:
+        # The write reads the line from the section tokens and the item in that section.
+        evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
+        section = self.section("complete", "214 passed")
+        tokens = helpers.MARKDOWN.parse(section)
+        reading = next(
+            evidence._status_item_reading(tokens, index)
+            for index, token in enumerate(tokens)
+            if token.type == "list_item_open"
+        )
+        self.assertIn("https://example.invalid/qa", reading)
+        self.assertTrue(evidence.is_recorded_status_line(reading, [self.ITEM], section))
+        # The sweep reads a physical line, so neither side resolves a definition.
+        line = f"- [complete] {self.ITEM} -- 214 passed"
+        self.assertTrue(
+            evidence.is_recorded_status_line(
+                evidence.status_line_as_page_reads_it(line), [self.ITEM]
+            )
+        )
+
+    # intent: guard
+    def test_the_write_recognises_the_line_it_just_rendered(self) -> None:
+        # Three writes leave one line in the section.
+        evidence = self.evidence()
+        body = self.body()
+        line = f"- [complete] {self.ITEM} -- 214 passed"
+        for _ in range(3):
+            write = write_section(body, [line], [self.ITEM])
+            self.assertIsNone(write.refusal)
+            body = write.body
+        self.assertEqual(body.count("- [complete]"), 1)
+        # The definition is a note and moves. No copy of the rendered line may be there; the
+        # old unrecorded `[pending-ci]` line is carried once.
+        notes = sys.modules["_helpers"].markdown_section(body, "Evidence Notes")
+        self.assertNotIn("[complete]", notes)
+        self.assertEqual(notes.count("[pending-ci]"), 1, notes)
+
+    # intent: guard
+    def test_an_item_carrying_its_own_separator_is_still_read_whole(self) -> None:
+        # The probe removes what it added instead of searching for a ` -- ` boundary (#1738).
+        evidence = self.evidence()
+        self.assertEqual(evidence.item_as_page_reads_it("build -- release"), "build -- release")
+        self.assertFalse(
+            evidence.is_recorded_status_line(
+                "- [blocked] build -- staging -- someone else's line", ["build -- release"]
+            )
+        )
+
+    # intent: guard
+    def test_the_reading_is_the_same_one_the_line_goes_through(self) -> None:
+        evidence = self.evidence()
+        for item in ("**Manual QA** on device", "*QA*", "_QA_", "Manual <span>QA</span>"):
+            with self.subTest(item=item):
+                line = f"- [complete] {item} -- 214 passed"
+                self.assertTrue(
+                    evidence.is_recorded_status_line(
+                        evidence.status_line_as_page_reads_it(line), [item]
+                    )
+                )
+
+
+class AnUnreadableRenderedLineIsAnnouncedTests(unittest.TestCase):
+    """A rendered line no reader can read back is written and announced (#1751).
+
+    Two shapes: an inline construct spanning the item and the detail, which hides the ` -- `
+    separator, and a line past `EVIDENCE_STATUS_LINE_LIMIT`.
+    """
+
+    CROSSING = ("run `swift test", "--filter QA` passed")
+    TOO_LONG = ("Manual QA " + "x" * 4000, "214 passed")
+    PLAIN = ("Manual QA on device", "214 passed")
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def write(self, item: str, detail: str):
+        body = (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {item} -- waiting\n\n## Validation\n\n- ran it\n"
+        )
+        return write_section(body, [f"- [complete] {item} -- {detail}"], [item])
+
+    def said(self, write) -> list[str]:
+        return [note for note in write.announcements if "not readable back" in note]
+
+    # intent: guard
+    def test_a_construct_crossing_the_boundary_is_named(self) -> None:
+        said = self.said(self.write(*self.CROSSING))
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("no reader can say where the item ends", said[0])
+        self.assertIn("balance the construct", said[0])
+
+    # intent: guard
+    def test_a_line_past_the_limit_is_named_with_its_length(self) -> None:
+        said = self.said(self.write(*self.TOO_LONG))
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("4037 characters", said[0])
+        self.assertIn(str(self.evidence().EVIDENCE_STATUS_LINE_LIMIT), said[0])
+        self.assertIn("shorten the item", said[0])
+
+    # intent: guard
+    def test_an_ordinary_line_is_not_named(self) -> None:
+        self.assertEqual(self.said(self.write(*self.PLAIN)), [])
+
+    # intent: guard
+    def test_the_line_is_still_written(self) -> None:
+        # Reported, not refused: the requirement stays on the page.
+        for item, detail in (self.CROSSING, self.TOO_LONG):
+            with self.subTest(item=item[:30]):
+                write = self.write(item, detail)
+                self.assertIsNone(write.refusal)
+                self.assertIn(f"- [complete] {item} -- {detail}", write.body)
+
+    def counts(self, body: str) -> tuple[int, int]:
+        helpers = sys.modules["_helpers"]
+        status = helpers.markdown_section(body, "Evidence Status")
+        notes = helpers.markdown_section(body, "Evidence Notes")
+        pattern = re.compile(r"\[(complete|blocked|pending-ci)\]")
+        return (
+            len([line for line in status.splitlines() if pattern.search(line)]),
+            len([line for line in notes.splitlines() if pattern.search(line)]),
+        )
+
+    # intent: guard
+    def test_the_predicate_answers_about_lines_rather_than_items(self) -> None:
+        evidence = self.evidence()
+        item, detail = self.CROSSING
+        self.assertEqual(
+            [why for _, why in evidence.unreadable_status_lines(
+                [f"- [complete] {item} -- {detail}"], [item])],
+            [
+                "the item and the detail share an inline construct, so the ` -- ` that "
+                "separates them is inside it and no reader can say where the item ends; "
+                "balance the construct inside the item"
+            ],
+        )
+        plain_item, plain_detail = self.PLAIN
+        self.assertEqual(
+            evidence.unreadable_status_lines(
+                [f"- [complete] {plain_item} -- {plain_detail}"], [plain_item]
+            ),
+            [],
+        )
+
+
+class TwoItemsThatReadAsOneStandTheWriteDownTests(unittest.TestCase):
+    """Two items that read as one requirement stand the write down (#1751).
+
+    `Manual QA on device` and `**Manual QA** on device` are one requirement on the page, so the
+    author's line for one would be taken by the entry for the other.
+    """
+
+    PLAIN = "Manual QA on device"
+    BOLD = "**Manual QA** on device"
+    OWNER = "- [blocked] Manual QA on device -- owner says device is unavailable"
+
+    def body(self) -> str:
+        return (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {self.BOLD} -- waiting\n{self.OWNER}\n\n"
+            "## Validation\n\n- ran it\n"
+        )
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    # intent: fix
+    def test_the_collision_check_uses_the_ownership_rules_key(self) -> None:
+        evidence = self.evidence()
+        self.assertEqual(evidence._indistinguishable([self.BOLD, self.PLAIN]), [self.PLAIN])
+        # And still tells apart two items that are genuinely different.
+        self.assertEqual(evidence._indistinguishable([self.BOLD, "the smoke lane"]), [])
+
+    # intent: fix
+    def test_the_turn_refuses_the_contract_and_keeps_the_authors_line(self) -> None:
+        run_contributor = sys.modules["run_contributor_evidence_kinds"]
+        with contextlib.redirect_stderr(io.StringIO()):
+            written, errors = run_contributor.render_execution_summary_body(
+                self.body(), published_body="",
+                requested_evidence=[self.BOLD, self.PLAIN],
+                evidence_complete=["1 -- 214 passed"],
+                evidence_blocked=None,
+                evidence_pending_ci=None,
+            )
+        self.assertIn(self.OWNER, written)
+        self.assertEqual(written, self.body())
+        self.assertEqual(len(errors), 1)
+        self.assertIn("read as one requirement on the page", errors[0])
+        self.assertIn("make each item distinct", errors[0])
+
+    # intent: guard
+    def test_the_update_path_stands_down_and_keeps_the_authors_line(self) -> None:
+        """The lane's update path stands down on the same collision, before any write."""
+        evidence = self.evidence()
+        entries = [
+            {"index": 1, "item": self.BOLD, "status": "pending-ci",
+             "detail": "waiting", "kind": "test"},
+            {"index": 2, "item": self.PLAIN, "status": "pending-ci",
+             "detail": "waiting", "kind": "test"},
+        ]
+        body = (
+            "<!-- evidence-status:v1\n"
+            + json.dumps({"entries": entries})
+            + "\n-->\n\n## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {self.BOLD} -- waiting\n{self.OWNER}\n\n"
+            "## Validation\n\n- ran it\n"
+        )
+        announcements: list[str] = []
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            written = evidence.update_evidence_entries(
+                body,
+                {1: {"status": "complete", "detail": "214 passed"}},
+                announcements=announcements,
+            )
+        self.assertIn(self.OWNER, written)
+        self.assertEqual(written, body)
+        stood_down = [
+            note for note in announcements if evidence.is_stood_down_announcement(note)
+        ]
+        self.assertEqual(len(stood_down), 1, announcements)
+        # The sentence names the second spelling, the one `_indistinguishable` reports.
+        self.assertIn(self.PLAIN, stood_down[0])
+        self.assertIn("read as one requirement on the page", stood_down[0])
+        self.assertIn("cannot be told apart", stood_down[0])
+        self.assertIn("make each requested item distinct", stood_down[0])
+
+    # intent: fix
+    def test_the_accounting_names_the_collision_where_the_author_can_fix_it(self) -> None:
+        run_contributor = sys.modules["run_contributor_evidence_kinds"]
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            self.body(), [self.BOLD, self.PLAIN], review_ci=[]
+        )
+        self.assertEqual(accounting["duplicate_requested_items"], [self.PLAIN])
+        self.assertTrue(
+            any("asks for the same item more than once" in error for error in errors), errors
+        )
+
+    # intent: guard
+    def test_a_distinguishable_contract_is_written_as_before(self) -> None:
+        # The control: a distinct contract writes, and an unrecorded bullet is carried to the
+        # notes.
+        run_contributor = sys.modules["run_contributor_evidence_kinds"]
+        theirs = "- [blocked] release approval -- the signing profile is missing"
+        body = (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {self.BOLD} -- waiting\n{theirs}\n\n"
+            "## Validation\n\n- ran it\n"
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            written, errors = run_contributor.render_execution_summary_body(
+                body,
+                requested_evidence=[self.BOLD],
+                evidence_complete=["1 -- 214 passed"],
+                evidence_blocked=None,
+                evidence_pending_ci=None,
+                published_body=body,
+            )
+        self.assertEqual(errors, [])
+        self.assertIn("- [complete] ", written)
+        self.assertIn(theirs, written)
+
+
+class OneReadingInOneContextForEverythingComparedTests(unittest.TestCase):
+    """The collision guard reads items in the section's context, like the ownership rule (#1751)."""
+
+    REF = "[Manual QA][qa] on device"
+    INLINE = "[Manual QA](https://example.invalid/qa) on device"
+    OWNER = "- [blocked] [Manual QA][qa] on device -- owner says device is unavailable"
+    DEFINITION = "[qa]: https://example.invalid/qa"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def body(self) -> str:
+        return (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {self.INLINE} -- waiting\n{self.OWNER}\n\n{self.DEFINITION}\n\n"
+            "## Validation\n\n- ran it\n"
+        )
+
+    # intent: guard
+    def test_the_two_spellings_are_one_requirement_in_the_section(self) -> None:
+        evidence = self.evidence()
+        section = sys.modules["_helpers"].markdown_section(self.body(), "Evidence Status")
+        self.assertEqual(
+            evidence.item_as_page_reads_it(self.INLINE, section),
+            evidence.item_as_page_reads_it(self.REF, section),
+        )
+        # And the guard now sees what the rule sees.
+        self.assertEqual(evidence._indistinguishable([self.INLINE, self.REF], section), [self.REF])
+        # Read alone they are two items.
+        self.assertEqual(evidence._indistinguishable([self.INLINE, self.REF]), [])
+
+    # intent: guard
+    def test_the_write_stands_down_and_the_owners_line_survives(self) -> None:
+        evidence = self.evidence()
+        body = self.body()
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            write = write_section(body, [f"- [complete] {self.INLINE} -- 214 passed"], [self.INLINE, self.REF])
+        self.assertIn(self.OWNER, write.body)
+        self.assertEqual(write.body, body)
+        self.assertIsNotNone(write.refusal)
+        self.assertIn("cannot be told apart", write.refusal)
+        self.assertEqual(
+            len([n for n in write.announcements if evidence.is_stood_down_announcement(n)]), 1
+        )
+
+
+def helpers_section(body: str) -> str:
+    return sys.modules["_helpers"].markdown_section(body, "Evidence Status")
+
+
+class OneFunctionAnswersWhoseLineItIsTests(unittest.TestCase):
+    """One function decides whose a line is, by exact bytes, for both the write and the sweep (#1751)."""
+
+    ITEM = "run `swift test"
+    DETAIL = "--filter QA` passed"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    @property
+    def rendered(self) -> str:
+        return f"- [complete] {self.ITEM} -- {self.DETAIL}"
+
+    SPELLINGS = {
+        "byte-identical": None,
+        "a star marker": ("- ", "* "),
+        "an ordered marker": ("- ", "1. "),
+        "a bold status token": ("[complete]", "**[complete]**"),
+        "a span in the item": ("run ", "<span>run</span> "),
+    }
+
+    # intent: guard
+    def test_the_write_s_path_and_the_sweep_s_path_agree_on_every_spelling(self) -> None:
+        """Each path forms its own arguments, and both get the same answer."""
+        helpers = sys.modules["_helpers"]
+        evidence = self.evidence()
+        sweep = load_module(
+            "evidence_write_sweep_agreement", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        disagreements: list[str] = []
+        for label, swap in self.SPELLINGS.items():
+            line = self.rendered if swap is None else self.rendered.replace(*swap, 1)
+            source = self.body_with_line(line)
+            # The write's path: the section it parses, the lines it last rendered.
+            write_says = evidence.whose_status_line(
+                line,
+                {self.ITEM},
+                helpers.markdown_section(source, "Evidence Status"),
+                evidence.owned_lines(evidence.evidence_entries_of(source), evidence.evidence_entries_of(source)),
+            ).machine
+            # The sweep's path: its own scan over the body's physical lines.
+            normalized = evidence._strip_evidence_metadata(
+                sweep.MARKDOWN_LINE_ENDING_RE.sub("\n", source)
+            )
+            lines = normalized.split("\n")
+            owned = sweep._entry_line_numbers(lines, normalized, source)
+            sweep_says = lines.index(line) in owned
+            if write_says != sweep_says:
+                disagreements.append(f"{label} (write {write_says}, sweep {sweep_says})")
+        self.assertEqual(
+            disagreements,
+            [],
+            f"{len(disagreements)} of {len(self.SPELLINGS)} spellings read two ways",
+        )
+
+    def body_with_line(self, line: str) -> str:
+        return (
+            "<!-- evidence-status:v1\n"
+            + json.dumps(
+                {
+                    "entries": [
+                        {
+                            "index": 1,
+                            "item": self.ITEM,
+                            "status": "complete",
+                            "detail": self.DETAIL,
+                            "kind": "test",
+                        }
+                    ]
+                }
+            )
+            + "\n-->\n\n## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            + f"{line}\n\n## Validation\n\n- ran it\n"
+        )
+    # intent: guard
+    def test_an_authors_edit_of_the_machines_own_line_is_never_the_machines(self) -> None:
+        """Only an exact byte match of the rendered line is the machine's.
+
+        A trailing hard break, a trailing tab and a one- or four-space indent are author edits.
+        """
+        evidence = self.evidence()
+        edits = {
+            "a trailing hard break": self.rendered + "  ",
+            "a trailing tab": self.rendered + "\t",
+            "a one-space indent": " " + self.rendered,
+            "a four-space indent": "    " + self.rendered,
+        }
+        taken = []
+        for label, line in edits.items():
+            source = self.body_with_line(line)
+            if evidence.whose_status_line(
+                line,
+                {self.ITEM},
+                helpers_section(source),
+                evidence.owned_lines(evidence.evidence_entries_of(source), evidence.evidence_entries_of(source)),
+            ).machine:
+                taken.append(label)
+        self.assertEqual(taken, [], "an author's edit was taken as the machine's")
+        source = self.body_with_line(self.rendered)
+        self.assertTrue(
+            evidence.whose_status_line(
+                self.rendered,
+                {self.ITEM},
+                helpers_section(source),
+                evidence.owned_lines(evidence.evidence_entries_of(source), evidence.evidence_entries_of(source)),
+            ).machine
+        )
+
+    # intent: guard
+    def test_a_differently_spelled_author_line_is_never_the_machines(self) -> None:
+        evidence = self.evidence()
+        section = f"{self.rendered}\n"
+        for label, swap in self.SPELLINGS.items():
+            if swap is None:
+                continue
+            with self.subTest(spelling=label):
+                line = self.rendered.replace(*swap, 1)
+                self.assertFalse(
+                    evidence.whose_status_line(
+                        line, [self.ITEM], section, evidence.owned_lines(entries_for([self.rendered]), ())
+                    ).machine,
+                    f"{label} was taken for the machine's",
+                )
+        # The write's own bytes still are.
+        self.assertTrue(
+            evidence.whose_status_line(
+                self.rendered, [self.ITEM], section, evidence.owned_lines(entries_for([self.rendered]), ())
+            ).machine
+        )
+
+    # intent: guard
+    def test_a_star_marker_line_is_carried_rather_than_deleted(self) -> None:
+        # End to end, the author's line survives the write.
+        evidence = self.evidence()
+        star = self.rendered.replace("- ", "* ", 1)
+        body = (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {self.ITEM} -- waiting\n{star}\n\n## Validation\n\n- ran it\n"
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            write = write_section(body, [self.rendered], [self.ITEM])
+        self.assertIn(star, write.body)
+
+    # intent: guard
+    def test_the_sweep_and_the_write_answer_the_same_on_the_same_lines(self) -> None:
+        """Both readers are called on the same lines and must answer the same."""
+        evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
+        sweep = load_module(
+            "evidence_write_sweep_answers", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        for label, swap in self.SPELLINGS.items():
+            line = self.rendered if swap is None else self.rendered.replace(*swap, 1)
+            source = self.body_with_line(line)
+            with self.subTest(spelling=label):
+                write_says = evidence.whose_status_line(
+                    line,
+                    {self.ITEM},
+                    helpers.markdown_section(source, "Evidence Status"),
+                    evidence.owned_lines(evidence.evidence_entries_of(source), evidence.evidence_entries_of(source)),
+                ).machine
+                normalized = evidence._strip_evidence_metadata(
+                    sweep.MARKDOWN_LINE_ENDING_RE.sub("\n", source)
+                )
+                lines = normalized.split("\n")
+                sweep_says = lines.index(line) in sweep._entry_line_numbers(
+                    lines, normalized, source
+                )
+                self.assertEqual(write_says, sweep_says, label)
+
+
+class TheCapKeysOnTheEntryNotTheRenderedLineTests(unittest.TestCase):
+    """The cap keys on the entry, so a changing detail does not leave copies behind (#1751).
+
+    The `pending-ci` detail carries a head and a run URL and changes on every push. The metadata
+    lets the write rebuild the line the last run rendered and claim it.
+    """
+
+    ITEM = "run `swift test"
+    DETAIL = "--filter QA` passed"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def counts(self, body: str) -> tuple[int, int]:
+        helpers = sys.modules["_helpers"]
+        pattern = re.compile(r"\[(complete|blocked|pending-ci)\]")
+        return tuple(
+            len([line for line in helpers.markdown_section(body, heading).splitlines()
+                 if pattern.search(line)])
+            for heading in ("Evidence Status", "Evidence Notes")
+        )
+
+    def body_with(self, detail: str) -> str:
+        entry = {"index": 1, "item": self.ITEM, "status": "pending-ci",
+                 "detail": detail, "kind": "test"}
+        return (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {self.ITEM} -- {detail}\n\n## Validation\n\n- ran it\n"
+        )
+
+    # intent: fix
+    def test_seven_pushes_with_a_changing_detail_and_no_status_change(self) -> None:
+        evidence = self.evidence()
+        body = self.body_with(f"{self.DETAIL} on head aaaaaaaaaaaX")
+        seen = []
+        for push in range(7):
+            with contextlib.redirect_stderr(io.StringIO()):
+                body = evidence.update_evidence_entries(
+                    body,
+                    {1: {"status": "pending-ci",
+                         "detail": f"{self.DETAIL} on head aaaaaaaaaaa{push}"}},
+                )
+            seen.append(self.counts(body))
+        self.assertEqual(seen, [(1, 0)] * 7)
+
+    # intent: fix
+    def test_a_status_change_carries_nothing_either(self) -> None:
+        """A status change is replaced, not carried, because the cap keys on the entry."""
+        evidence = self.evidence()
+        body = self.body_with(f"{self.DETAIL} on head aaaaaaaaaaaX")
+        for _ in range(2):
+            with contextlib.redirect_stderr(io.StringIO()):
+                body = evidence.update_evidence_entries(
+                    body,
+                    {1: {"status": "complete", "detail": f"{self.DETAIL} on head aaaaaaaaaaaY"}},
+                )
+            self.assertEqual(self.counts(body), (1, 0))
+        self.assertIn("- [complete] ", body)
+
+    # intent: fix
+    def test_the_turn_caps_it_too_through_the_entry_point_production_uses(self) -> None:
+        """The turn caps through `build_execution_summary_body`, as production calls it.
+
+        The previous run's entries live in `published_body`; the model's draft has no metadata.
+        """
+        execution = sys.modules["execution"]
+        detail = f"{self.DETAIL} on head aaaaaaaaaaaX"
+        published = self.body_with(detail)
+        # The model's text: the same section without metadata.
+        model = published.split("-->\n\n", 1)[1]
+        self.assertNotIn("evidence-status:v1", model)
+        seen = []
+        for push in range(3):
+            with contextlib.redirect_stderr(io.StringIO()):
+                written, errors = execution.build_execution_summary_body(
+                    {"body": model},
+                    requested_evidence=[self.ITEM],
+                    visual_evidence_available=False,
+                    published_body=published,
+                )
+            self.assertEqual(errors, [])
+            seen.append(self.counts(written))
+            published, model = written, written.split("-->\n\n", 1)[1]
+        self.assertEqual(seen, [(1, 0)] * 3)
+
+    # intent: guard
+    def test_the_turn_reconstructs_from_the_published_body(self) -> None:
+        # The same expression over the two bodies; only the published one has the last run's
+        # entries.
+        evidence = self.evidence()
+        published = self.body_with(f"{self.DETAIL} on head aaaaaaaaaaaX")
+        model = published.split("-->\n\n", 1)[1]
+        self.assertEqual(evidence.rendered_entry_lines(evidence.evidence_entries_of(model)), [])
+        self.assertEqual(
+            evidence.rendered_entry_lines(evidence.evidence_entries_of(published)),
+            [f"- [pending-ci] {self.ITEM} -- {self.DETAIL} on head aaaaaaaaaaaX"],
+        )
+
+    # intent: guard
+    def test_the_line_the_last_run_rendered_is_reconstructible(self) -> None:
+        evidence = self.evidence()
+        entries = evidence.evidence_entries_of(self.body_with("a detail"))
+        self.assertEqual(
+            evidence.rendered_entry_lines(entries),
+            [f"- [pending-ci] {self.ITEM} -- a detail"],
+        )
+        self.assertEqual(evidence.rendered_entry_lines(None), [])
+
+
+class OneDefinitionOfWhichEntriesTheWriteRendersTests(unittest.TestCase):
+    """The cap and the renderer share one definition of which entries render (#1751).
+
+    An entry at index 0 is not rendered, so it must not claim an author's line either.
+    """
+
+    ITEM = "run `swift test"
+    DETAIL = "--filter QA` passed"
+    OWNERS = "- [blocked] release approval -- the signing profile is missing"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def body(self, *, with_the_unrenderable_entry: bool) -> str:
+        entries = [
+            {"index": 1, "item": self.ITEM, "status": "pending-ci",
+             "detail": self.DETAIL, "kind": "test"},
+        ]
+        if with_the_unrenderable_entry:
+            entries.insert(0, {"index": 0, "item": "release approval", "status": "blocked",
+                               "detail": "the signing profile is missing", "kind": "manual"})
+        return (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": entries}) + "\n-->\n\n"
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"- [pending-ci] {self.ITEM} -- {self.DETAIL}\n{self.OWNERS}\n"
+            "\n## Validation\n\n- ran it\n"
+        )
+
+    def written(self, body: str) -> tuple[str, str]:
+        evidence = self.evidence()
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            written = evidence.update_evidence_entries(
+                body, {1: {"status": "complete", "detail": "passed on head aaaaaaaaaaa1"}}
+            )
+        return written, stderr.getvalue()
+
+    # intent: fix
+    def test_an_unrenderable_entry_does_not_take_the_owners_line(self) -> None:
+        written, stderr = self.written(self.body(with_the_unrenderable_entry=True))
+        self.assertIn(self.OWNERS, written, f"the owner's line went; stderr said {stderr!r}")
+
+    # intent: guard
+    def test_the_control_without_it_keeps_the_line_too(self) -> None:
+        written, _ = self.written(self.body(with_the_unrenderable_entry=False))
+        self.assertIn(self.OWNERS, written)
+
+    # intent: fix
+    def test_the_reconstruction_names_exactly_the_lines_the_write_renders(self) -> None:
+        evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
+        body = self.body(with_the_unrenderable_entry=True)
+        self.assertEqual(len(evidence.evidence_entries_of(body)), 2)
+        written, _ = self.written(body)
+        # The rendered lines and the lines the metadata says were rendered, off the written
+        # body.
+        reconstructed = evidence.rendered_entry_lines(evidence.evidence_entries_of(written))
+        rendered = [
+            line
+            for line in helpers.markdown_section(written, "Evidence Status").splitlines()
+            if line.startswith("- [")
+        ]
+        self.assertEqual(reconstructed, rendered)
+        self.assertEqual(
+            reconstructed, [f"- [complete] {self.ITEM} -- passed on head aaaaaaaaaaa1"]
+        )
+
+    # intent: fix
+    def test_the_turn_renderer_renders_what_the_reconstruction_rebuilds(self) -> None:
+        """The turn renderer also renders exactly what the reconstruction rebuilds."""
+        evidence = self.evidence()
+        helpers = sys.modules["_helpers"]
+        item = "run `swift test "
+        with contextlib.redirect_stderr(io.StringIO()):
+            written, errors = evidence.render_execution_summary_body(
+                "## Summary\n\n- one change\n\n## Validation\n\n- ran it\n",
+                requested_evidence=[item],
+                evidence_complete=["1 -- --filter QA` passed"],
+                evidence_blocked=[],
+                evidence_pending_ci=[],
+                published_body="",
+            )
+        self.assertEqual(errors, [])
+        rendered = [
+            line
+            for line in helpers.markdown_section(written, "Evidence Status").splitlines()
+            if line.startswith("- [")
+        ]
+        self.assertEqual(
+            evidence.rendered_entry_lines(evidence.evidence_entries_of(written)), rendered
+        )
+        # Pinned as bytes too: equality alone misses a change that moves both sides, such as the
+        # composer no longer stripping the item.
+        self.assertEqual(rendered, [f"- [complete] {item.strip()} -- --filter QA` passed"])
+
+    # intent: guard
+    def test_the_turn_path_carries_the_same_two_bodies_and_the_same_metadata(self) -> None:
+        """Unrenderable metadata and a separate reconstruction body, through both paths."""
+        execution = sys.modules["execution"]
+        published = self.body(with_the_unrenderable_entry=True)
+        model = published.split("-->\n\n", 1)[1]
+        with contextlib.redirect_stderr(io.StringIO()):
+            written, errors = execution.build_execution_summary_body(
+                {"body": model},
+                requested_evidence=[self.ITEM],
+                visual_evidence_available=False,
+                published_body=published,
+            )
+        self.assertEqual(errors, [])
+        self.assertIn(self.OWNERS, written)
+        # The previous run's line is still capped: one status entry, not one per push.
+        helpers = sys.modules["_helpers"]
+        section = helpers.markdown_section(written, "Evidence Status")
+        self.assertEqual(len([one for one in section.splitlines() if one.startswith("- [")]), 1)
+
+
+class OneEntryOwnsOneLineTests(unittest.TestCase):
+    """A rendered line owns one body line, however many copies the body holds (#1751).
+
+    The write and the sweep build the same `RenderedLines` owner, so both see a second copy as
+    the author's.
+    """
+
+    ITEM = "run `swift test"
+    DETAIL = "--filter QA` passed"
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    @property
+    def line(self) -> str:
+        return f"- [pending-ci] {self.ITEM} -- {self.DETAIL}"
+
+    def body(self, copies: int, recorded: str = "pending-ci") -> str:
+        entry = {"index": 1, "item": self.ITEM, "status": recorded,
+                 "detail": self.DETAIL, "kind": "test"}
+        return (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            + "\n".join([f"- [{recorded}] {self.ITEM} -- {self.DETAIL}"] * copies)
+            + "\n\n## Validation\n\n- ran it\n"
+        )
+
+    def counts(self, text: str) -> tuple[int, int]:
+        helpers = sys.modules["_helpers"]
+        pattern = re.compile(r"\[(complete|blocked|pending-ci)\]")
+        return tuple(
+            len([line for line in helpers.markdown_section(text, heading).splitlines()
+                 if pattern.search(line)])
+            for heading in ("Evidence Status", "Evidence Notes")
+        )
+
+    def written(self, copies: int, recorded: str = "pending-ci") -> tuple[str, str]:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            body = self.evidence().update_evidence_entries(
+                self.body(copies, recorded), {1: {"status": "complete", "detail": self.DETAIL}}
+            )
+        return body, stderr.getvalue()
+
+    # intent: fix
+    def test_the_second_identical_line_is_the_authors_and_is_carried(self) -> None:
+        written, said = self.written(2)
+        self.assertEqual(self.counts(written), (1, 1), f"stderr said {said!r}")
+        self.assertIn("not readable back", said)
+
+    # intent: fix
+    def test_the_same_holds_when_the_verdict_has_not_changed(self) -> None:
+        """An unchanged verdict offers the same bytes from both sources and still owns one line."""
+        written, said = self.written(2, recorded="complete")
+        self.assertEqual(self.counts(written), (1, 1), f"stderr said {said!r}")
+
+    # intent: fix
+    def test_a_third_copy_is_the_authors_too(self) -> None:
+        written, _ = self.written(3, recorded="complete")
+        self.assertEqual(self.counts(written), (1, 2))
+
+    # intent: control
+    def test_one_copy_is_still_the_machines_and_is_replaced(self) -> None:
+        written, _ = self.written(1)
+        self.assertEqual(self.counts(written), (1, 0))
+        self.assertIn("- [complete] ", written)
+
+    def entry(self, index: int = 1, status: str = "pending-ci", item: str | None = None,
+              detail: str | None = None) -> dict[str, object]:
+        return {
+            "index": index,
+            "item": self.ITEM if item is None else item,
+            "status": status,
+            "detail": self.DETAIL if detail is None else detail,
+            "kind": "test",
+        }
+
+    # intent: guard
+    def test_one_entry_offering_its_line_from_both_sources_owns_one_line(self) -> None:
+        # An unchanged verdict gives the same bytes from both sources for one entry: one claim.
+        evidence = self.evidence()
+        owner = evidence.owned_lines([self.entry()], [self.entry()])
+        self.assertTrue(owner.claim(self.line))
+        self.assertFalse(owner.claim(self.line))
+
+    # intent: guard
+    def test_a_previous_line_that_differs_is_a_second_line_that_entry_owns(self) -> None:
+        # A changed verdict gives two lines for one entry, and the write owns both.
+        evidence = self.evidence()
+        current = f"- [complete] {self.ITEM} -- {self.DETAIL}"
+        owner = evidence.owned_lines([self.entry(status="complete")], [self.entry()])
+        self.assertTrue(owner.claim(self.line))
+        self.assertTrue(owner.claim(current))
+        self.assertFalse(owner.claim(self.line))
+        self.assertFalse(owner.claim(current))
+
+    # intent: guard
+    def test_two_entries_rendering_one_line_keep_two_claims(self) -> None:
+        """Two entries that render the same line keep two claims.
+
+        The ` -- ` boundary can fall in two places in one text, so different items can render one line.
+        """
+        evidence = self.evidence()
+        mirrored = [
+            self.entry(index=1, status="complete", item="run `a", detail="b -- c` ok"),
+            self.entry(index=2, status="complete", item="run `a -- b", detail="c` ok"),
+        ]
+        line = "- [complete] run `a -- b -- c` ok"
+        self.assertEqual(evidence.rendered_entry_lines(mirrored), [line, line])
+        self.assertEqual(evidence._indistinguishable([str(one["item"]) for one in mirrored], ""), [])
+        owner = evidence.owned_lines(mirrored, mirrored)
+        self.assertTrue(owner.claim(line))
+        self.assertTrue(owner.claim(line), "the second entry's claim was collapsed away")
+        self.assertFalse(owner.claim(line))
+
+    # intent: fix
+    def test_the_mirror_pair_is_a_fixed_point_rather_than_an_accrual(self) -> None:
+        # Three writes, (2, 0) each time.
+        evidence = self.evidence()
+        mirrored = [
+            self.entry(index=1, status="complete", item="run `a", detail="b -- c` ok"),
+            self.entry(index=2, status="complete", item="run `a -- b", detail="c` ok"),
+        ]
+        line = "- [complete] run `a -- b -- c` ok"
+        body = (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": mirrored}) + "\n-->\n\n"
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"{line}\n{line}\n\n## Validation\n\n- ran it\n"
+        )
+        seen = []
+        for _ in range(3):
+            with contextlib.redirect_stderr(io.StringIO()):
+                body = evidence.update_evidence_entries(
+                    body, {1: {"status": "complete", "detail": "b -- c` ok"}}
+                )
+            seen.append(self.counts(body))
+        self.assertEqual(seen, [(2, 0)] * 3)
+
+    # intent: guard
+    def test_both_readers_build_one_owner_from_the_same_inputs(self) -> None:
+        """The write and the sweep build equal owners from the same inputs."""
+        evidence = self.evidence()
+        sweep = load_module(
+            "evidence_write_sweep_owner", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        source = self.body(2, recorded="complete")
+        entries = evidence.evidence_entries_of(source)
+        written = sweep.MARKDOWN_LINE_ENDING_RE.sub("\n", source)
+        normalized = evidence._strip_evidence_metadata(written)
+        lines = normalized.split("\n")
+        # The instrument's owner, built where it builds it.
+        instrument = sweep._entry_line_numbers(lines, normalized, written)
+        # The write's, over the same body: the same entries at both ends.
+        owner = evidence.owned_lines(entries, entries)
+        claimed = [index for index, line in enumerate(lines) if owner.claim(line)]
+        self.assertEqual(sorted(instrument), claimed)
+        self.assertEqual(len(claimed), 1, "one entry, one line")
+
+    # intent: guard
+    def test_the_instrument_owns_the_line_the_write_is_about_to_render(self) -> None:
+        """The sweep owns the line the write is about to render.
+
+        The update detail is patched on the sweep module because it is a property of the corpus the
+        sweep writes, not an argument its readers take.
+        """
+        evidence = self.evidence()
+        sweep = load_module(
+            "evidence_write_sweep_detail", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        item, waiting = "run `a", "waiting"
+        for label, detail in (
+            ("a detail that closes a construct the item opened", "b` ok"),
+            ("a detail past the status-line limit", "x" * 4100),
+        ):
+            with self.subTest(detail=label):
+                next_line = f"- [complete] {item} -- {detail}"
+                entry = {
+                    "index": 1, "item": item, "status": "pending-ci",
+                    "detail": waiting, "kind": "test",
+                }
+                source = (
+                    "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
+                    "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+                    f"- [pending-ci] {item} -- {waiting}\n{next_line}\n\n"
+                    "## Validation\n\n- ran it\n"
+                )
+                normalized = evidence._strip_evidence_metadata(
+                    sweep.MARKDOWN_LINE_ENDING_RE.sub("\n", source)
+                )
+                lines = normalized.split("\n")
+                with mock.patch.object(
+                    sweep, "UPDATES", {1: {"status": "complete", "detail": detail}}
+                ):
+                    owned = sweep._entry_line_numbers(lines, normalized, source)
+                self.assertIn(
+                    lines.index(next_line),
+                    owned,
+                    f"{label}: the line the write is about to render is not the machine's here",
+                )
+
+    # intent: guard
+    def test_the_owner_the_write_builds_holds_the_line_it_is_about_to_render(self) -> None:
+        """The write's owner holds both this run's line and the last run's line.
+
+        End to end, the two constructions agree with the sweep's own update map, so this asserts the
+        difference at the owner.
+        """
+        evidence = self.evidence()
+        recorded = evidence.evidence_entries_of(self.body(1))
+        updates = {1: {"status": "complete", "detail": "214 tests passed"}}
+        updated, changed = evidence.entries_with_updates(recorded, updates)
+        self.assertTrue(changed, "the fixture has to change a verdict to say anything")
+        next_line = evidence.rendered_entry_lines(updated)[0]
+        self.assertTrue(evidence.owned_lines(updated, recorded).claim(next_line))
+        self.assertFalse(
+            evidence.owned_lines(recorded, recorded).claim(next_line),
+            "the body's entries twice over cannot hold the line the write will render",
+        )
+
+    # intent: guard
+    def test_the_instrument_applies_the_writes_updates_to_the_bodys_entries(self) -> None:
+        # Both sides use `entries_with_updates`, and the sweep names its update map.
+        sweep = load_module(
+            "evidence_write_sweep_updates", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        evidence = self.evidence()
+        self.assertEqual(sorted(sweep.UPDATES), [1])
+        updated, changed = evidence.entries_with_updates(
+            evidence.evidence_entries_of(self.body(1)), sweep.UPDATES
+        )
+        self.assertTrue(changed)
+        self.assertEqual([one["status"] for one in updated], ["complete"])
+
+    MOVED_ITEM = "run `a"
+    MOVED_DETAIL = "b` ok"
+    OTHER_ITEM = "manual QA"
+
+    def moved(self, requested: list[str], index: int) -> tuple[int, int]:
+        """The turn over a body with a second copy of the line.
+
+        The published body records the item at index 1. `requested` is the current contract and
+        `index` is this run's position for the item.
+        """
+        line = f"- [complete] {self.MOVED_ITEM} -- {self.MOVED_DETAIL}"
+        recorded = {"index": 1, "item": self.MOVED_ITEM, "status": "complete",
+                    "detail": self.MOVED_DETAIL, "kind": "test"}
+        visible = (
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"{line}\n{line}\n\n## Validation\n\n- ran it\n"
+        )
+        published = (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": [recorded]}) + "\n-->\n\n" + visible
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            rendered, errors = run_contributor.render_execution_summary_body(
+                visible,
+                requested_evidence=requested,
+                evidence_complete=[f"{index} -- {self.MOVED_DETAIL}"],
+                evidence_blocked=None,
+                evidence_pending_ci=None,
+                published_body=published,
+            )
+        self.assertEqual(errors, [])
+        return self.counts(rendered)
+
+    # intent: fix
+    def test_an_item_that_keeps_its_text_and_moves_position_owns_one_line(self) -> None:
+        """An item that moves position in the contract still owns one line (#1751).
+
+        Both bodies' entries are keyed against the current contract, so the index names one entry.
+        """
+        self.assertEqual(
+            self.moved([self.OTHER_ITEM, self.MOVED_ITEM], 2),
+            (1, 1),
+            "the author's second copy was deleted",
+        )
+
+    # intent: guard
+    def test_the_same_item_at_one_position_is_unchanged(self) -> None:
+        # Controls: the item where the published body left it, with one and two contract items.
+        self.assertEqual(self.moved([self.MOVED_ITEM], 1), (1, 1))
+        self.assertEqual(self.moved([self.MOVED_ITEM, self.OTHER_ITEM], 1), (1, 1))
+
+    # intent: guard
+    def test_an_entry_this_contract_no_longer_asks_for_is_dropped(self) -> None:
+        # An item the contract no longer requests owns no line.
+        evidence = self.evidence()
+        recorded = {"index": 1, "item": "a requirement since removed", "status": "complete",
+                    "detail": "d", "kind": "test"}
+        self.assertEqual(evidence.entries_keyed_for([recorded], ["something else"]), [])
+
+    # intent: guard
+    def test_two_entries_at_one_index_with_two_lines_are_a_fixed_point(self) -> None:
+        """Two entries at one index rendering different lines are a fixed point over three writes."""
+        evidence = self.evidence()
+        entries = [
+            self.entry(index=1),
+            self.entry(index=1, item="manual QA on device", detail="queued"),
+        ]
+        self.assertEqual(
+            evidence._indistinguishable([str(one["item"]) for one in entries], ""),
+            [],
+            "the items genuinely differ, so nothing here refuses the shape",
+        )
+        lines = evidence.rendered_entry_lines(entries)
+        update = {1: {"status": "complete", "detail": str(entries[0]["detail"])}}
+        for label, extra, expected in (
+            ("no spare copy", [], (2, 0)),
+            ("a spare copy of the first line", [lines[0]], (2, 1)),
+        ):
+            with self.subTest(body=label):
+                body = (
+                    "<!-- evidence-status:v1\n" + json.dumps({"entries": entries}) + "\n-->\n\n"
+                    "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+                    + "\n".join(lines + extra)
+                    + "\n\n## Validation\n\n- ran it\n"
+                )
+                seen = []
+                for _ in range(3):
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        body = evidence.update_evidence_entries(body, update)
+                    seen.append(self.counts(body))
+                self.assertEqual(seen, [expected] * 3)
+
+    # intent: guard
+    def test_the_writer_takes_both_ends_of_the_body_with_no_default(self) -> None:
+        """`write_evidence_status_section` requires `previous_entries`, with no default.
+
+        Without it a changed verdict's old line would be carried instead of replaced.
+        """
+        evidence = self.evidence()
+        for name in ("owned_lines", "write_evidence_status_section"):
+            with self.subTest(seam=name):
+                parameters = inspect.signature(getattr(evidence, name)).parameters
+                self.assertIs(
+                    parameters["previous_entries"].default,
+                    inspect.Parameter.empty,
+                    f"{name}: a default here drops the last run's claims silently",
+                )
+        with self.assertRaises(TypeError):
+            evidence.owned_lines([self.entry()])
+        with self.assertRaises(TypeError):
+            evidence.write_evidence_status_section(
+                "body", [], notes_from="body", recorded_items=[], entries=[self.entry()]
+            )
+
+    # intent: fix
+    def test_two_entries_at_one_index_rendering_one_line_own_both(self) -> None:
+        """Two entries at one index rendering one line own both lines, through the lane writer.
+
+        The items differ (the ` -- ` boundary falls in two places), so no guard refuses them.
+        """
+        evidence = self.evidence()
+        first = {"item": "run `a", "detail": "b -- c` ok", "status": "pending-ci",
+                 "kind": "ci", "check_name": "Web CI"}
+        second = {"item": "run `a -- b", "detail": "c` ok", "status": "pending-ci",
+                  "kind": "ci", "check_name": "Web CI"}
+        line = "- [pending-ci] run `a -- b -- c` ok"
+        self.assertEqual(evidence.rendered_entry_lines([first | {"index": 2}]), [line])
+        self.assertEqual(evidence.rendered_entry_lines([second | {"index": 2}]), [line])
+        for label, indexes in (("one index", (2, 2)), ("two indexes", (1, 2))):
+            with self.subTest(held=label):
+                entries = [first | {"index": indexes[0]}, second | {"index": indexes[1]}]
+                body = (
+                    "<!-- evidence-status:v1\n"
+                    + json.dumps({"entries": entries})
+                    + "\n-->\n\nWhy this exists, plainly, in a paragraph long enough to read"
+                    " as one.\n\n"
+                    f"## Evidence Status\n\n{line}\n{line}\n\n## Validation\n\n- ran it\n"
+                )
+                for run in range(1, 7):
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        body = run_contributor.reconcile_pending_ci_evidence(
+                            body, build_succeeded=True, tests_succeeded=True,
+                            smoke_succeeded=True,
+                        )
+                    notes = evidence.markdown_section(body, "Evidence Notes")
+                    self.assertEqual(
+                        notes.count("- ["),
+                        0,
+                        f"{label}, run {run}: the write carried a line it rendered itself",
+                    )
+                    self.assertEqual(
+                        evidence.markdown_section(body, "Evidence Status").count("- ["),
+                        2,
+                        f"{label}, run {run}: a rendered line went missing",
+                    )
+
+    # intent: fix
+    def test_two_items_that_both_read_as_nothing_are_one_requirement(self) -> None:
+        # `**.**` and `.` both read as empty on the page, so they are one requirement.
+        evidence = self.evidence()
+        self.assertEqual(evidence._indistinguishable(["**.**", "."]), ["."])
+        self.assertEqual(evidence._indistinguishable(["a", "b"]), [], "a control")
+
+    # intent: fix
+    def test_two_entries_with_one_item_text_stay_two_claims(self) -> None:
+        """Two entries with the same item text at two indexes own two lines."""
+        evidence = self.evidence()
+        item = "run `a"
+        entries = [
+            {"index": 1, "item": item, "status": "complete", "detail": "first` ok", "kind": "test"},
+            {"index": 2, "item": item, "status": "complete", "detail": "second` ok", "kind": "test"},
+        ]
+        lines = evidence.rendered_entry_lines(entries)
+        # The key is the index and its occurrence in this list, so no two entries share one.
+        self.assertEqual(
+            evidence.rendered_entry_claims(entries), [((1, 0), lines[0]), ((2, 0), lines[1])]
+        )
+        keyed = evidence.entries_keyed_for(entries, [item])
+        self.assertEqual([one["index"] for one in keyed], [1, 1], "one requirement, one position")
+        owner = evidence.owned_lines(entries, keyed)
+        self.assertTrue(owner.claim(lines[0]))
+        self.assertTrue(owner.claim(lines[1]), "the second entry's line went unowned")
+
+    COLLIDING_ITEM = "run `swift test"
+    COLLIDING_DETAIL = "--filter QA` passed"
+    PLAIN_BODY = "## Summary\n\n- did the thing\n\n## Validation\n- local unit tests passed\n"
+
+    @property
+    def colliding_line(self) -> str:
+        return f"- [pending-ci] {self.COLLIDING_ITEM} -- {self.COLLIDING_DETAIL}"
+
+    def turn(self, body: str, published: str = "", item: str = "", detail: str = ""):
+        """The turn's entry point, driven the way production drives it."""
+        item = item or self.COLLIDING_ITEM
+        detail = detail or self.COLLIDING_DETAIL
+        with contextlib.redirect_stderr(io.StringIO()):
+            return run_contributor.render_execution_summary_body(
+                body,
+                requested_evidence=[item],
+                evidence_complete=None,
+                evidence_blocked=None,
+                evidence_pending_ci=[f"1 -- {detail}"],
+                published_body=published,
+            )
+
+    def published_recording(self, times: int, item: str = "", detail: str = "") -> str:
+        """A published body the writer wrote, with its recorded entry repeated.
+
+        Built from the writer's own output so the parser accepts the metadata; the read-back asserts it.
+        """
+        published, _ = self.turn(self.PLAIN_BODY, "", item, detail)
+        if times == 1:
+            return published
+        found = re.search(r"<!-- evidence-status:v1\n(.*?)\n-->", published, re.S)
+        record = json.loads(found.group(1))
+        record["entries"] = record["entries"] * times
+        return published[: found.start(1)] + json.dumps(record, indent=2) + published[found.end(1) :]
+
+    # intent: fix
+    def test_one_requirement_recorded_twice_stands_the_write_down(self) -> None:
+        """A record naming one requirement twice stands the write down and names both positions.
+
+        Otherwise the second entry's claim has no line of the write's own and takes the author's
+        byte-identical copy.
+        """
+        # The parser must accept the fixture, or every assertion below is vacuous.
+        evidence = self.evidence()
+        for item, detail in (("run the QA filter", "214 tests passed"),
+                             (self.COLLIDING_ITEM, self.COLLIDING_DETAIL)):
+            self.assertEqual(
+                len(evidence.evidence_entries_of(self.published_recording(1, item, detail)) or []),
+                1,
+                "the published body's metadata did not parse; the fixture is not built",
+            )
+        # A plain item first, then one the item-keyed rule cannot own, where the author's copy
+        # visibly leaves.
+        for label, item, detail in (
+            ("a plain item", "run the QA filter", "214 tests passed"),
+            ("an item the reader cannot own", self.COLLIDING_ITEM, self.COLLIDING_DETAIL),
+        ):
+            line = f"- [pending-ci] {item} -- {detail}"
+            model = (
+                "## Summary\n\n- did the thing\n\n## Evidence Status\n\n"
+                f"{line}\n{line}\n\n## Validation\n- local unit tests passed\n"
+            )
+            for times in (2, 3):
+                with self.subTest(item=label, recorded=times):
+                    published = self.published_recording(times, item, detail)
+                    keyed = evidence.entries_keyed_for(
+                        evidence.evidence_entries_of(published), [item]
+                    )
+                    self.assertEqual(len(keyed), times, "the duplicate did not survive the re-keying")
+                    # The second entry's claim has no line of the write's to own.
+                    owner = evidence.owned_lines(
+                        [{"index": 1, "item": item, "status": "pending-ci",
+                          "detail": detail, "kind": "test"}],
+                        keyed,
+                    )
+                    self.assertEqual(
+                        [owner.claim(line) for _ in range(3)],
+                        # One claim per recorded entry, on identical bytes.
+                        [True] * min(times, 3) + [False] * max(0, 3 - times),
+                    )
+                    written, errors = self.turn(model, published, item, detail)
+                    self.assertEqual(written, model, "the body did not stand whole")
+                    self.assertEqual(len(errors), 1, errors)
+                    self.assertIn("record one requirement more than once", errors[0])
+                    places = ", ".join(str(place) for place in range(1, times + 1))
+                    self.assertIn(f"at position {places}", errors[0], "both positions are not named")
+                    self.assertIn(sys.modules["_helpers"].code_span(item), errors[0])
+
+    # intent: control
+    def test_one_recorded_entry_still_carries_the_author_s_copy(self) -> None:
+        # The control: one entry and two byte-identical lines. The entry owns one, and the
+        # author's copy is carried.
+        evidence = self.evidence()
+        # Through the lane writer, where the rewritten body and the notes source are one object.
+        doubled = self.published_recording(1).replace(
+            self.colliding_line, f"{self.colliding_line}\n{self.colliding_line}", 1
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            written = evidence.update_evidence_entries(
+                doubled, {1: {"status": "pending-ci", "detail": self.COLLIDING_DETAIL}}
+            )
+        self.assertNotEqual(written, doubled, "the write did not happen")
+        self.assertIn(self.colliding_line, evidence.markdown_section(written, "Evidence Notes"))
+
+    # intent: control
+    def test_a_readable_item_s_duplicate_is_the_machine_s_wherever_it_sits(self) -> None:
+        """With a readable item, a byte-identical copy of the machine's line is the machine's.
+
+        This holds whether the copy is in the draft, the published body or both.
+        """
+        item, detail = "run the QA filter", "214 tests passed"
+        line = f"- [pending-ci] {item} -- {detail}"
+
+        def turn(body: str, published: str = ""):
+            with contextlib.redirect_stderr(io.StringIO()):
+                return run_contributor.render_execution_summary_body(
+                    body, requested_evidence=[item], evidence_complete=None,
+                    evidence_blocked=None, evidence_pending_ci=[f"1 -- {detail}"],
+                    published_body=published,
+                )
+
+        published, _ = turn(self.PLAIN_BODY)
+        twice = published.replace(
+            f"## Evidence Status\n\n{line}", f"## Evidence Status\n\n{line}\n{line}", 1
+        )
+        model = (
+            "## Summary\n\n- did the thing\n\n## Evidence Status\n\n"
+            f"{line}\n{line}\n\n## Validation\n- local unit tests passed\n"
+        )
+        evidence = self.evidence()
+        for shape, body, source in (
+            ("the model's draft", model, published),
+            ("the published body", self.PLAIN_BODY, twice),
+            ("both", model, twice),
+        ):
+            with self.subTest(copy_in=shape):
+                written, errors = turn(body, source)
+                self.assertEqual(errors, [])
+                self.assertEqual(
+                    evidence.markdown_section(written, "Evidence Status").count(line), 1
+                )
+                self.assertEqual(
+                    evidence.markdown_section(written, "Evidence Notes").count(line), 0
+                )
+
+    # intent: guard
+    def test_the_owner_grants_a_second_claim_on_identical_bytes(self) -> None:
+        """The owner still grants two entries two claims; the refusal happens before the owner."""
+        evidence = self.evidence()
+        entry = {"index": 1, "item": self.COLLIDING_ITEM, "status": "complete",
+                 "detail": self.COLLIDING_DETAIL, "kind": "test-attested"}
+        for times, expected in ((1, [True, False, False]), (2, [True, True, False])):
+            with self.subTest(recorded=times):
+                entries = [dict(entry) for _ in range(times)]
+                line = evidence.rendered_entry_lines(entries)[0]
+                owner = evidence.owned_lines(entries, [])
+                self.assertEqual([owner.claim(line) for _ in range(3)], expected)
+
+    # intent: fix
+    def test_two_spellings_of_one_requirement_in_the_record_are_refused(self) -> None:
+        """Two spellings of one requirement in the record are refused, keyed on the page reading.
+
+        Asked at the writer, because the turn's re-keying drops an entry whose item is not the
+        requested string. `recorded_items` holds the requirement once, as the turn builds it.
+        """
+        evidence = self.evidence()
+        entries = [
+            {"index": 1, "item": "Manual QA on device", "status": "complete",
+             "detail": "done on the test device"},
+            {"index": 2, "item": "**Manual QA** on device", "status": "complete",
+             "detail": "done on the test device"},
+        ]
+        lines = evidence.rendered_entry_lines(entries)
+        write = evidence.write_evidence_status_section(
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            + "\n".join(lines) + "\n\n## Validation\n\n- ok\n",
+            lines, notes_from="## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            + "\n".join(lines) + "\n\n## Validation\n\n- ok\n",
+            recorded_items=["Manual QA on device"],
+            entries=entries,
+            previous_entries=[],
+        )
+        self.assertIsNotNone(write.refusal, "the write went ahead on two spellings of one item")
+        self.assertIn("record one requirement more than once", write.refusal)
+        self.assertIn("at position 1, 2", write.refusal)
+
+    # intent: control
+    def test_two_entries_whose_items_differ_still_write(self) -> None:
+        """Two entries whose different items render the same line still write."""
+        evidence = self.evidence()
+        entries = [
+            {"index": 1, "item": "run `a", "status": "complete", "detail": "b -- c` ok"},
+            {"index": 1, "item": "run `a -- b", "status": "complete", "detail": "c` ok"},
+        ]
+        lines = evidence.rendered_entry_lines(entries)
+        self.assertEqual(lines[0], lines[1], "the shape is not built: the lines differ")
+        write = evidence.write_evidence_status_section(
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            + "\n".join(lines) + "\n\n## Validation\n\n- ok\n",
+            lines, notes_from="## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            + "\n".join(lines) + "\n\n## Validation\n\n- ok\n",
+            recorded_items=[str(entry["item"]) for entry in entries],
+            entries=entries,
+            previous_entries=[],
+        )
+        self.assertIsNone(write.refusal, write.refusal)
+
+    # intent: guard
+    def test_both_readers_agree_on_the_shape_the_two_keys_disagree_about(self) -> None:
+        # The mirror pair: two entries, one line, twice in the body. Both readers must agree
+        # here so a later rule change cannot move one without the other.
+        evidence = self.evidence()
+        sweep = load_module(
+            "evidence_write_sweep_mirror", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        mirrored = [
+            self.entry(index=1, status="complete", item="run `a", detail="b -- c` ok"),
+            self.entry(index=2, status="complete", item="run `a -- b", detail="c` ok"),
+        ]
+        line = "- [complete] run `a -- b -- c` ok"
+        source = (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": mirrored}) + "\n-->\n\n"
+            "## Summary\n\n- one change\n\n## Evidence Status\n\n"
+            f"{line}\n{line}\n\n## Validation\n\n- ran it\n"
+        )
+        normalized = evidence._strip_evidence_metadata(
+            sweep.MARKDOWN_LINE_ENDING_RE.sub("\n", source)
+        )
+        lines = normalized.split("\n")
+        instrument = sweep._entry_line_numbers(lines, normalized, source)
+        entries = evidence.evidence_entries_of(source)
+        owner = evidence.owned_lines(entries, entries)
+        claimed = [index for index, one in enumerate(lines) if owner.claim(one)]
+        self.assertEqual(sorted(instrument), claimed)
+        self.assertEqual(len(claimed), 2, "two entries, two lines")
+
+    # intent: fix
+    def test_the_instrument_calls_the_second_copy_the_authors_too(self) -> None:
+        # The sweep builds the same owner, so exactly one of the two lines is the machine's to
+        # it.
+        evidence = self.evidence()
+        sweep = load_module(
+            "evidence_write_sweep_multiset", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        source = sweep.MARKDOWN_LINE_ENDING_RE.sub("\n", self.body(2, recorded="complete"))
+        normalized = evidence._strip_evidence_metadata(source)
+        lines = normalized.split("\n")
+        owned = sweep._entry_line_numbers(lines, normalized, source)
+        self.assertEqual(len(owned), 1, "the instrument gave one entry both copies")
+
+    # intent: fix
+    def test_the_instrument_reports_the_loss_when_the_write_takes_both(self) -> None:
+        # `lines_lost` names the line when a write keeps one copy of two.
+        evidence = self.evidence()
+        sweep = load_module(
+            "evidence_write_sweep_loss", REPO_ROOT / "scripts" / "evidence-write-sweep.py"
+        )
+        source = self.body(2)
+        took_both = self.body(1).replace("- [pending-ci] ", "- [complete] ", 1)
+        self.assertIn(self.line, sweep.lines_lost(source, took_both))
 
 
 if __name__ == "__main__":

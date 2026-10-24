@@ -1431,7 +1431,7 @@ def _normalize_evidence_key(text: str) -> str:
     return t
 
 
-def _indistinguishable(texts: list[str]) -> list[str]:
+def _indistinguishable(texts: list[str], context: str = "") -> list[str]:
     """Which of these the gate cannot tell apart, second occurrence onward.
 
     One entry answers one requirement, which needs both sides to be
@@ -1441,15 +1441,56 @@ def _indistinguishable(texts: list[str]) -> list[str]:
     normalize to one key are two answers the gate cannot choose between, and
     which one a requirement takes decides its status. Either is reported as
     malformed, where the author can still fix it, rather than resolved.
+
+    Compared on the key the ownership rule uses, the page's reading of each
+    item in the section's context, so a pair that rule would read as one
+    requirement is refused here before any write.
     """
     seen: set[str] = set()
     duplicates: list[str] = []
     for text in texts:
-        key = _normalize_evidence_key(text)
-        if key and key in seen and text not in duplicates:
+        key = _normalize_evidence_key(item_as_page_reads_it(str(text), context))
+        # An empty key counts: `**.**` and `.` both read as nothing on the
+        # page, so they are one requirement.
+        if key in seen and text not in duplicates:
             duplicates.append(text)
         seen.add(key)
     return duplicates
+
+
+def entries_recording_one_item(entries: object, context: str = "") -> list[tuple[int, str]]:
+    """Positions of the renderable entries in one list whose items read as one requirement.
+
+    `_indistinguishable` asked of a record's entries rather than a contract's
+    items. Two entries for one item make two claims on identical bytes, and
+    the second would take an author's copy of the line. A record like that
+    is invalid, so the write stands down.
+
+    Compared within one list only: the same entry in this run's list and in
+    the recorded list is one claim by design.
+
+    Positions are 1-based over every entry, renderable or not, so they match
+    what an author reads in the metadata.
+    """
+    seen: dict[str, int] = {}
+    collisions: list[tuple[int, str]] = []
+    listed = entries if isinstance(entries, list) else []
+    for position, entry in enumerate(listed, start=1):
+        # One entry at a time, so renderability keeps one definition.
+        rendered = renderable_entries([entry])
+        if not rendered:
+            continue
+        key = _normalize_evidence_key(item_as_page_reads_it(str(rendered[0]["item"]), context))
+        first = seen.get(key)
+        if first is None:
+            seen[key] = position
+            continue
+        # The first occurrence is listed once, however many entries repeat it.
+        named = {place for place, _ in collisions}
+        if first not in named:
+            collisions.append((first, str(rendered[0]["item"])))
+        collisions.append((position, str(rendered[0]["item"])))
+    return sorted(collisions)
 
 
 def _match_evidence_entries(
@@ -2140,8 +2181,8 @@ def _owner_written_entries(
 
 
 # The section's grammar, stated once and enforced by one writer: under the
-# heading a bullet opening with a status token is the machine's, and every
-# other block is a note. A note has a section of its own directly below,
+# heading a bullet opening with a status token and naming a recorded item is
+# the machine's, and every other block is a note. A note has a section of its own directly below,
 # because the readers refuse any block under the heading that is not a list
 # (#1701, #1709) -- so keeping a reviewer's note where it was written and
 # keeping the section readable are the same choice, and only one of them can
@@ -2151,29 +2192,379 @@ EVIDENCE_STATUS_HEADING = "Evidence Status"
 EVIDENCE_NOTES_HEADING = "Evidence Notes"
 
 
-def _is_status_list_item(tokens: list[Token], index: int) -> bool:
-    """Whether the list item opening at `index` belongs to the machine rather than the author.
+def _status_item_reading(tokens: list[Token], index: int) -> str | None:
+    """The page's reading of the list item opening at `index`, or None if it opens with no line of text.
 
-    A bullet whose text opens with a status token -- `[complete]`, `[blocked]`
-    or `[pending-ci]` -- is the machine's vocabulary, and the rewrite replaces
-    it from the entries in hand. Well-formed or not: an item missing its
-    `--` boundary, or wrapping a nested block, is a malformed status line
-    rather than a note, and carrying it would put a status a reader can see
-    outside the one section every reader of a status reads.
-
-    Read as the page reads it, so a numbered item, a bulleted one and a
-    `**[complete]**` are one shape. Everything else under the heading -- a
-    `- [x]` box, a bullet naming no status -- is the author's and moves.
+    Returned as `- <text>`, whatever marker the item used. Emphasis and
+    escapes resolve as the page resolves them; a code span keeps its
+    backticks. An item that opens with a table, quote or nested list has no
+    reading, so a table's header row is never taken for an item's text.
     """
     shape = [tokens[index + offset].type for offset in range(1, 3) if index + offset < len(tokens)]
     if shape != ["paragraph_open", "inline"]:
-        # The item opens with something that is not its own line of text -- a
-        # table, a quote, a nested list. Reading the first inline inside one of
-        # those took a table's header row for the item's text and deleted the
-        # table with it.
+        return None
+    return f"- {inline_text(tokens[index + 2].children).strip()}"
+
+
+def status_line_as_page_reads_it(line: str, context: str = "") -> str:
+    """One source line as the page reads it, for a caller that holds source bytes.
+
+    The write reads the section's parsed tokens and the sweep reads the body's
+    bytes. Both hand the ownership rule this reading, so one line gets one
+    answer. With `context`, the line is parsed inside the section, so both
+    sides resolve the same link reference definitions.
+
+    A line that is not a single list item comes back unchanged.
+    """
+    if not context:
+        tokens = MARKDOWN.parse(line)
+        for index, token in enumerate(tokens):
+            if token.type == "list_item_open":
+                return _status_item_reading(tokens, index) or line
+        return line
+    # The document is a heading, a blank line, this line, then the context, so
+    # only a list item opening on line 2 is this line's.
+    tokens = MARKDOWN.parse(f"## {EVIDENCE_STATUS_HEADING}\n\n{line}\n{context}")
+    for index, token in enumerate(tokens):
+        if token.type == "list_item_open" and token.map is not None and token.map[0] == 2:
+            return _status_item_reading(tokens, index) or line
+    return line
+
+
+def item_as_page_reads_it(item: str, context: str = "") -> str:
+    """One recorded item as the page reads it, in the shape a line's item comes back in.
+
+    A recorded item is raw source from the issue body, and a line's item
+    reaches the ownership rule already resolved by the page, so `**bold**`,
+    `*italic*`, inline HTML and escapes would never match. The item is
+    rendered into a probe line and read back the way a line is, inside the
+    same section `context`, so both sides resolve the same reference
+    definitions.
+
+    Not covered: a construct that opens in the item and closes in the detail.
+    The ` -- ` separator then sits inside it and no reader can find where the
+    item ends; `unreadable_status_lines` reports that line instead.
+    """
+    cached = _ITEM_READINGS.get((item, context))
+    if cached is not None:
+        return cached
+    probe = f"- [{_ITEM_PROBE_STATUS}] {item.strip()} -- {_ITEM_PROBE_DETAIL}"
+    tokens = MARKDOWN.parse(f"## {EVIDENCE_STATUS_HEADING}\n\n{probe}\n{context}")
+    reading = next(
+        (
+            _status_item_reading(tokens, index)
+            for index, token in enumerate(tokens)
+            if token.type == "list_item_open"
+        ),
+        None,
+    )
+    # Strip the probe's known prefix and suffix rather than search for ` -- `,
+    # which an item may contain.
+    prefix, suffix = f"- [{_ITEM_PROBE_STATUS}] ", f" -- {_ITEM_PROBE_DETAIL}"
+    read = item.strip()
+    if reading is not None and reading.startswith(prefix) and reading.endswith(suffix):
+        read = reading[len(prefix) : -len(suffix)].strip()
+    _ITEM_READINGS[(item, context)] = read
+    return read
+
+
+# The probe's status and detail. Any non-empty detail works; one letter adds
+# no markup of its own.
+_ITEM_PROBE_DETAIL = "d"
+_ITEM_PROBE_STATUS = "complete"
+# One reading per (item, context): a write asks for the same item once per
+# line of the section.
+_ITEM_READINGS: dict[tuple[str, str], str] = {}
+
+
+def unreadable_status_lines(
+    status_lines: Iterable[str], recorded_items: Iterable[str], context: str = ""
+) -> list[tuple[str, str]]:
+    """(line, why) for each line this write would render that its own reader cannot read back.
+
+    Two shapes fail. An inline construct that opens in the item and closes in
+    the detail swallows the ` -- ` separator. A line longer than
+    `EVIDENCE_STATUS_LINE_LIMIT` is refused by `split_evidence_status_line`.
+    The next run would read either as the author's and carry a copy each time.
+
+    Reported, not refused: the requirement still belongs on the page, and the
+    fix (balance the construct or shorten the item) is the author's.
+    """
+    items = list(recorded_items)
+    unreadable: list[tuple[str, str]] = []
+    for line in status_lines:
+        if is_recorded_status_line(status_line_as_page_reads_it(line), items, context):
+            continue
+        if len(line) > EVIDENCE_STATUS_LINE_LIMIT:
+            why = (
+                f"the line is {len(line)} characters, past the "
+                f"{EVIDENCE_STATUS_LINE_LIMIT} a status line is read up to, so no later run "
+                "can tell this line is the machine's; shorten the item"
+            )
+        else:
+            why = (
+                "the item and the detail share an inline construct, so the ` -- ` that "
+                "separates them is inside it and no reader can say where the item ends; "
+                "balance the construct inside the item"
+            )
+        unreadable.append((line, why))
+    return unreadable
+
+
+def recorded_item_key(
+    line: str, recorded_items: Iterable[str], context: str = ""
+) -> str | None:
+    """Which recorded item this line names, as the shared key, or None."""
+    items = [
+        item_as_page_reads_it(str(item), context)
+        for item in recorded_items
+        if str(item).strip()
+    ]
+    if not items:
+        return None
+    reading = split_evidence_status_line(line.strip(), items)
+    if reading is None:
+        return None
+    key = _normalize_evidence_key(reading[1])
+    return key if any(_normalize_evidence_key(item) == key for item in items) else None
+
+
+def is_recorded_status_line(
+    line: str, recorded_items: Iterable[str], context: str = ""
+) -> bool:
+    """Whether a line under `## Evidence Status` is the machine's rather than the author's.
+
+    The ownership rule, answered here for the write and the sweep alike. A
+    status-shaped line that names a recorded item is the machine's and is
+    replaced from the entries in hand. One that names no recorded item is the
+    author's, wherever it sits, and moves to `## Evidence Notes`.
+
+    The line and the items are both compared as the page reads them
+    (`status_line_as_page_reads_it`, `item_as_page_reads_it`). Items are
+    matched whole rather than cut at the line's first ` -- `, so an item like
+    `build -- release` still matches.
+
+    A write that records nothing owns no line.
+    """
+    return recorded_item_key(line, recorded_items, context) is not None
+
+
+def evidence_entries_of(body: str) -> list[object] | None:
+    """The entries the body's metadata comment records, or None if it records none."""
+    metadata = _extract_evidence_metadata(body)
+    entries = metadata.get("entries") if isinstance(metadata, dict) else None
+    return entries if isinstance(entries, list) else None
+
+
+# The statuses a status line may carry. The renderer and the reconstruction of
+# the last run's lines both read this.
+VALID_EVIDENCE_STATUSES = frozenset({"complete", "blocked", "pending-ci"})
+
+
+def renderable_entries(entries: object) -> list[dict[str, object]]:
+    """The entries the write will render, normalised exactly as it renders them.
+
+    The one renderability test: an index of at least 1, a known status, and a
+    non-empty item and detail. The renderer and the reconstruction both call
+    it, so they agree on which entries have a line and on its bytes.
+    """
+    renderable: list[dict[str, object]] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            index = int(entry["index"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        item = _encodable(str(entry.get("item", "")).strip())
+        status = str(entry.get("status", "")).strip()
+        detail = _encodable(str(entry.get("detail", "")).strip())
+        if index < 1 or not item or status not in VALID_EVIDENCE_STATUSES or not detail:
+            continue
+        renderable.append({"index": index, "item": item, "status": status, "detail": detail})
+    return renderable
+
+
+def entries_keyed_for(entries: object, requested_evidence: list[str]) -> list[dict[str, object]]:
+    """The published body's entries, re-keyed to their item's position in this turn's contract.
+
+    An index is a position in a list the issue owner can reorder, so each
+    entry is matched to `requested_evidence` by its item and takes that
+    item's position. An entry for an item the contract no longer asks for is
+    dropped.
+    """
+    position = {item: index for index, item in enumerate(requested_evidence, start=1)}
+    keyed: list[dict[str, object]] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        index = position.get(str(entry.get("item", "")))
+        if index is None:
+            continue
+        keyed.append({**entry, "index": index})
+    return keyed
+
+
+def rendered_entry_claims(entries: object) -> list[tuple[tuple[int, int], str]]:
+    """Each renderable entry's key and the line the write renders for it.
+
+    The key is `(index, occurrence)`: the entry's index, and how many earlier
+    entries in the same list share that index. Two entries at one index can
+    render the same line, because the ` -- ` boundary can fall in two places
+    in one text, and each still needs its own claim. Both lists must use one
+    index space, which is why the turn re-keys the published entries first
+    (`entries_keyed_for`).
+    """
+    claims: list[tuple[tuple[int, int], str]] = []
+    seen: dict[int, int] = {}
+    for entry in renderable_entries(entries):
+        index = int(entry["index"])
+        # Counted per list and in order, so an unchanged entry offered by both
+        # lists gets the same key and stays one claim.
+        occurrence = seen.get(index, 0)
+        seen[index] = occurrence + 1
+        claims.append(
+            ((index, occurrence), f"- [{entry['status']}] {entry['item']} -- {entry['detail']}")
+        )
+    return claims
+
+
+def rendered_entry_lines(entries: object) -> list[str]:
+    """The status line the write renders for each renderable entry.
+
+    The metadata comment records each entry as the last run wrote it, so this
+    rebuilds that run's lines byte for byte. The cap keys on entries rather
+    than lines because a detail, such as a `pending-ci` head and run URL,
+    changes on every push.
+    """
+    return [line for _, line in rendered_entry_claims(entries)]
+
+
+class RenderedLines:
+    """The lines a write rendered, each owning at most one line of the body.
+
+    A claim is an (entry key, line) pair, kept once:
+
+    - one entry offering the same bytes from this run and the last is one claim;
+    - one entry offering different bytes from the two runs is two claims, so a
+      changed verdict replaces the line it wrote last time;
+    - two entries rendering the same bytes are two claims.
+
+    `claim` spends one claim per matching body line, so a further copy of a
+    line is the author's.
+    """
+
+    def __init__(self, claims: Iterable[tuple[object, str]]) -> None:
+        self._remaining: list[tuple[object, str]] = list(
+            dict.fromkeys((key, str(line)) for key, line in claims)
+        )
+        # Every rendered line, kept after its claim is spent, so a later copy
+        # of the write's own bytes can be told from an author's own words.
+        self._rendered: set[str] = {line for _, line in self._remaining}
+
+    def claim(self, line: str) -> bool:
+        """Whether one of the claims still unspent is for this line, byte for byte."""
+        for position, (_, owned) in enumerate(self._remaining):
+            if owned == line:
+                del self._remaining[position]
+                return True
         return False
-    text = inline_text(tokens[index + 2].children).strip()
-    return EVIDENCE_STATUS_PREFIX_RE.match(f"- {text}") is not None
+
+    def is_one_of_its_own(self, line: str) -> bool:
+        """Whether these bytes are a line this write rendered, spent claim or not."""
+        return line in self._rendered
+
+    def __bool__(self) -> bool:
+        return bool(self._remaining)
+
+
+def owned_lines(entries: object, previous_entries: object) -> RenderedLines:
+    """The lines a write owns for one body: claims from this run's entries and from the ones the body records.
+
+    The write and the sweep both build their owner here from the same two
+    inputs, so they agree on which lines an entry owns.
+    """
+    return RenderedLines(
+        [*rendered_entry_claims(entries), *rendered_entry_claims(previous_entries)]
+    )
+
+
+# An owner with no claims, for a caller that owns no line.
+NOTHING_OWNED = RenderedLines(())
+
+
+class WhoseLine(NamedTuple):
+    """Whose a status line is, and which claim decided it.
+
+    `by_bytes` means the line is byte-identical to one the write rendered, so
+    nothing in it is anybody else's. A line claimed by its item may be an
+    author's own words, and replacing those is announced. `item` is the
+    recorded item that matched.
+    """
+
+    machine: bool
+    by_bytes: bool
+    item: str | None
+
+
+def whose_status_line(
+    line: str,
+    recorded_items: Iterable[str],
+    context: str = "",
+    rendered: RenderedLines = NOTHING_OWNED,
+) -> WhoseLine:
+    """Whose this line under the heading is, and by which claim. The write and the sweep both ask here.
+
+    `line` is the author's own bytes. First comes exact byte identity with an
+    unspent line the write rendered; a trailing space or an indent is a
+    difference. Then the ownership rule, on the page's reading of the line in
+    the caller's context.
+    """
+    if rendered.claim(line):
+        return WhoseLine(True, True, None)
+    reading = status_line_as_page_reads_it(line, context)
+    key = recorded_item_key(reading, recorded_items, context)
+    if key is None:
+        return WhoseLine(False, False, None)
+    named = next(
+        (
+            item
+            for item in recorded_items
+            if _normalize_evidence_key(item_as_page_reads_it(str(item), context)) == key
+        ),
+        None,
+    )
+    return WhoseLine(True, False, None if named is None else str(named))
+
+
+def _status_item_claim(
+    tokens: list[Token],
+    index: int,
+    recorded_items: Iterable[str],
+    context: str = "",
+    rendered: RenderedLines = NOTHING_OWNED,
+    lines: list[str] | None = None,
+) -> WhoseLine:
+    """Whether the list item opening at `index` belongs to the machine rather than the author, and by which claim.
+
+    A bullet whose text opens with a status token -- `[complete]`, `[blocked]`
+    or `[pending-ci]` -- and names an item this write records is the
+    machine's, and the rewrite replaces it from the entries in hand. So is a
+    line byte-identical to one the write rendered. Everything else under the
+    heading, including a `- [x]` box and a status bullet for an item nothing
+    records, is the author's and moves (`is_recorded_status_line`).
+
+    Read as the page reads it, so a numbered item, a bulleted one and a
+    `**[complete]**` are one shape.
+    """
+    reading = _status_item_reading(tokens, index)
+    if reading is None:
+        return WhoseLine(False, False, None)
+    # Compare the author's own bytes: the source line the item's paragraph
+    # opens on.
+    span = tokens[index + 1].map
+    raw = lines[span[0]] if lines is not None and span and span[0] < len(lines) else reading
+    return whose_status_line(raw, recorded_items, context, rendered)
 
 
 def _without_edge_blank_lines(text: str) -> str:
@@ -2193,12 +2584,23 @@ def _without_edge_blank_lines(text: str) -> str:
 
 
 def _list_item_spans(
-    tokens: list[Token], start: int, machine: list[tuple[int, int]], notes: list[tuple[int, int]]
+    tokens: list[Token],
+    start: int,
+    machine: list[tuple[int, int]],
+    notes: list[tuple[int, int]],
+    recorded_items: Iterable[str],
+    context: str = "",
+    rendered: RenderedLines = NOTHING_OWNED,
+    lines: list[str] | None = None,
+    replaced: list[tuple[int, str, bool]] | None = None,
 ) -> int:
     """Sort the items of the list opening at `start` into the machine's and the author's; return the index past it.
 
     An item is taken as the lines it was written on, nested blocks included,
     so a bullet carrying an indented excerpt moves whole.
+
+    `replaced` collects the machine lines claimed by their item rather than by
+    the write's own bytes, since those may hold somebody's own words.
     """
     close, level = tokens[start].type.replace("_open", "_close"), tokens[start].level
     index = start + 1
@@ -2208,7 +2610,8 @@ def _list_item_spans(
             index += 1
             continue
         if token.map is not None:
-            if _is_status_list_item(tokens, index):
+            claim = _status_item_claim(tokens, index, recorded_items, context, rendered, lines)
+            if claim.machine:
                 # The line the status is written on is the machine's; the rest
                 # of the item is one block of the author's, not a run of loose
                 # lines. A pasted log indented under a status bullet belongs to
@@ -2218,6 +2621,17 @@ def _list_item_spans(
                 # than carried, which is worse than text deleted.
                 first = tokens[index + 1].map or token.map
                 machine.append((first[0], first[1]))
+                # Claimed by item, not by bytes: carry it. The third field says
+                # whether the bytes differ from every line this write rendered,
+                # which decides whether the replacement is announced.
+                if not claim.by_bytes and replaced is not None and lines is not None:
+                    replaced.append(
+                        (
+                            first[0],
+                            claim.item or "",
+                            not rendered.is_one_of_its_own(lines[first[0]]),
+                        )
+                    )
                 if first[1] < token.map[1]:
                     notes.append((first[1], token.map[1]))
             else:
@@ -2234,6 +2648,48 @@ def _list_item_spans(
                 depth -= 1
             index += 1
     return index + 1
+
+
+# How every sentence saying "this write replaced your text" opens.
+REPLACED_ANNOUNCEMENT_PREFIX = "replaced in `## Evidence Status`: "
+
+
+def _replaced_note(line: str, number: int, item: str) -> str:
+    """The sentence telling an author this write replaced their status bullet for a recorded item.
+
+    The entry's line still takes the bullet's place, because two answers for
+    one requirement leave a reader choosing between them. The author's text
+    is carried to `## Evidence Notes`, and this sentence says so. A
+    byte-identical copy of the machine's own line gets no sentence.
+    """
+    return (
+        f"{REPLACED_ANNOUNCEMENT_PREFIX}{code_span(line)} at line {number} names "
+        f"{code_span(item)}, which this body records, so this write replaced it with the "
+        "entry's own line; your text is in `## Evidence Notes`"
+    )
+
+
+# How a carried excerpt opens. The write recognises its own excerpts by it.
+SUPERSEDED_CARRY_OPENING = "previously in the status list, replaced by the entry the record holds:"
+
+
+def _superseded_carry(line: str) -> str:
+    """The author's replaced status line, fenced under a sentence saying it was replaced.
+
+    Carried as a bullet, it would show a second status for one requirement
+    under `## Evidence Notes`. Fenced, the page shows it as quoted text while
+    its bytes stay on a line of their own, which is what the write sweep
+    counts. The fence is longer than any backtick run in the line, so the
+    line cannot close it.
+    """
+    longest = max((len(run) for run in re.findall(r"`+", line)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{SUPERSEDED_CARRY_OPENING}\n\n{fence}\n{line}\n{fence}"
+
+
+def says_text_was_replaced(note: str) -> bool:
+    """Whether this announcement already tells the author a line of theirs was replaced."""
+    return note.startswith(REPLACED_ANNOUNCEMENT_PREFIX)
 
 
 def _uncarried_note(detail: str, line: int, went: str = "") -> str:
@@ -2265,8 +2721,16 @@ def _uncarried_note(detail: str, line: int, went: str = "") -> str:
     )
 
 
-def _section_notes(section: str) -> tuple[list[str], list[str]]:
-    """The blocks of one Evidence Status section that are not status lines, and what went.
+def _section_notes(
+    section: str,
+    recorded_items: Iterable[str],
+    context: str = "",
+    rendered: RenderedLines = NOTHING_OWNED,
+) -> tuple[list[str], list[str]]:
+    """The blocks of one Evidence Status section that are not the machine's status lines, and what went.
+
+    A status-shaped line that names no recorded item is the author's and moves
+    to `## Evidence Notes` like any other block (`is_recorded_status_line`).
 
     Parsed as CommonMark rather than matched line by line, for the reason
     every read of this section is: a line matched by pattern is not always a
@@ -2306,6 +2770,7 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
     tokens = MARKDOWN.parse("\n".join(lines))
     machine: list[tuple[int, int]] = []
     spans: list[tuple[int, int]] = []
+    replaced: list[tuple[int, str, bool]] = []
     index = 0
     while index < len(tokens):
         token = tokens[index]
@@ -2313,7 +2778,10 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
             index += 1
             continue
         if token.type in {"bullet_list_open", "ordered_list_open"}:
-            index = _list_item_spans(tokens, index, machine, spans)
+            index = _list_item_spans(
+                tokens, index, machine, spans, recorded_items, context, rendered, lines,
+                replaced,
+            )
             continue
         spans.append((token.map[0], token.map[1]))
         index += 1
@@ -2323,6 +2791,16 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
     # sentence into a section of its own would be alteration, not carriage --
     # but the loss is still a loss, and it is said.
     losses: list[tuple[int, str]] = []
+    # A line claimed by its item may hold somebody's words. The entry's line
+    # replaces it, the text is carried as an excerpt, and the replacement is
+    # announced when the bytes differ from the write's own.
+    superseded: list[tuple[int, str]] = []
+    for start, item, theirs in replaced:
+        # The raw line, indent and trailing spaces included, so the author's
+        # bytes survive.
+        superseded.append((start, _superseded_carry(lines[start])))
+        if theirs:
+            losses.append((start, _replaced_note(lines[start].strip(), start + 1, item)))
     for start, stop in machine:
         if stop - start > 1:
             losses.append(
@@ -2343,7 +2821,8 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
         for line in range(line_count)
         if line not in covered and lines[line].strip()
     )
-    carried: list[str] = []
+    # Excerpts and carried blocks together, in the order the section had them.
+    blocks: list[tuple[int, str]] = list(superseded)
     for start, stop in sorted(spans):
         while start < stop and not lines[start].strip():
             start += 1
@@ -2362,15 +2841,12 @@ def _section_notes(section: str) -> tuple[list[str], list[str]]:
             # is the only frame this function has.
             losses.append((start, _uncarried_note(reason, start + 1, lines[start])))
             continue
-        carried.append(block)
-    # Said last and all at once, in the order of the section rather than in the
-    # order the two passes above happen to find them: the author reads this as
-    # a list about their own text, and a list that jumps around the section is
-    # harder to act on than one that does not.
-    announcements = [note for _, note in sorted(losses)]
-    for announcement in announcements:
-        log(announcement)
-    return carried, announcements
+        blocks.append((start, block))
+    carried = [text for _, text in sorted(blocks, key=lambda pair: pair[0])]
+    # In section order, so the author reads the list top to bottom. Returned,
+    # not logged: this function sees a section, and only the caller knows
+    # whether its body is one a person wrote.
+    return carried, [note for _, note in sorted(losses)]
 
 
 def _placement_a_reader_cannot_see(written: str) -> str | None:
@@ -2445,7 +2921,13 @@ def _stood_down(source: str, refusal: str) -> SectionWrite:
 
 
 def write_evidence_status_section(
-    body: str, status_lines: Iterable[str]
+    body: str,
+    status_lines: Iterable[str],
+    *,
+    recorded_items: Iterable[str],
+    notes_from: str,
+    entries: object,
+    previous_entries: object,
 ) -> SectionWrite:
     """The one write of `## Evidence Status`, or the body unchanged and why it stands.
 
@@ -2460,6 +2942,16 @@ def write_evidence_status_section(
     body that carried no such block has no such section, a body that has one
     keeps it directly below the status, and a second write over the first
     moves nothing, since by then the notes are no longer under the heading.
+
+    `recorded_items` is what the status lines are rendered from. It is passed
+    rather than parsed back out of them, because an item containing ` -- `
+    cannot be recovered from its line. A status-shaped line naming no recorded
+    item is the author's and moves to `## Evidence Notes`.
+
+    `notes_from` is the body a person can edit, and `## Evidence Notes` is
+    written from it alone. `entries` and `previous_entries` are this run's
+    entries and the ones the rewritten body records; the write owns one body
+    line per claim built from them (`owned_lines`).
 
     A section the body already has is rewritten where its author put it, so a
     write moves the status list's contents and nothing else.
@@ -2478,24 +2970,129 @@ def write_evidence_status_section(
     that heading, so the terminator is no longer part of the question.
     """
     source = body
+    # Materialised once; a generator would be spent after the first line.
+    recorded = list(recorded_items)
+    # Two recorded items that read as one requirement make a line naming
+    # either the machine's, so an author's line could be replaced by the other
+    # entry. Stand down and name them.
+    if (collisions := _indistinguishable(recorded, markdown_section(source, EVIDENCE_STATUS_HEADING))):
+        return _stood_down(
+            source,
+            "two recorded items read as one requirement on the page, so a line naming either "
+            f"of them cannot be told apart: {', '.join(code_span(item) for item in collisions)}; "
+            "make each requested item distinct",
+        )
+    # The same check within each entry list: a second entry for one item
+    # would claim an author's copy of the line.
+    for side, listed in (("this run's entries", entries), ("the recorded entries", previous_entries)):
+        if (recording := entries_recording_one_item(
+            listed, markdown_section(source, EVIDENCE_STATUS_HEADING)
+        )):
+            places = ", ".join(str(position) for position, _ in recording)
+            item = code_span(recording[0][1])
+            return _stood_down(
+                source,
+                f"{side} record one requirement more than once -- {item} at position "
+                f"{places} -- so two claims stand on identical bytes and an author's own "
+                "copy of that line would be taken as the second one's; record the "
+                "requirement once",
+            )
+    rendered = list(status_lines)
+    # The claims this write holds, built from both ends of the body the way
+    # the sweep builds them.
+    owned = owned_lines(entries, previous_entries)
+    # Name each rendered line the next run could not read back, rather than
+    # carry a copy of it on every run.
+    orphaned = [
+        f"`## {EVIDENCE_STATUS_HEADING}` line not readable back: {why} ({code_span(line)})"
+        for line, why in unreadable_status_lines(rendered, recorded)
+    ]
+    for announcement in orphaned:
+        log(announcement)
     sections, refusal = removed_section_texts(body, EVIDENCE_STATUS_HEADING)
     if refusal is not None:
         return _stood_down(source, refusal)
+    # Notes come only from `notes_from`, the body a person can edit.
+    theirs, theirs_refusal = removed_section_texts(notes_from, EVIDENCE_STATUS_HEADING)
+    if theirs_refusal is not None:
+        return _stood_down(source, theirs_refusal)
     notes: list[str] = []
-    announcements: list[str] = []
-    for section in sections:
-        carried, said = _section_notes(section)
+    announcements: list[str] = list(orphaned)
+    for section in theirs:
+        carried, said = _section_notes(section, recorded, section, owned)
         notes.extend(carried)
+        # Logged here, where the body is known to be one a person may have
+        # written.
+        for sentence in said:
+            log(sentence)
         announcements.extend(said)
     # The notes section comes out before the status section goes in, so that
     # neither is standing when the other is placed and both land by the same
     # rule. Placing the status around a notes section still in the body put
     # the two in one order on the first write and the other on the second.
-    kept, notes_refusal = removed_section_texts(body, EVIDENCE_NOTES_HEADING)
+    kept, notes_refusal = removed_section_texts(notes_from, EVIDENCE_NOTES_HEADING)
     if notes_refusal is not None:
         return _stood_down(source, notes_refusal)
+    # The rewritten body's own notes section goes either way, so text this
+    # write did not read never sits beside text it did.
+    standing, standing_refusal = removed_section_texts(body, EVIDENCE_NOTES_HEADING)
+    if standing_refusal is not None:
+        return _stood_down(source, standing_refusal)
+    if notes_from != body:
+        # The rewritten body is not where notes come from, so its own blocks
+        # are not carried. The machine's status lines and the write's own
+        # excerpts are not among them.
+        ungathered = [
+            block
+            for section in sections
+            for block in _section_notes(section, recorded, section, owned)[0]
+            if not block.startswith(SUPERSEDED_CARRY_OPENING)
+        ] + [kept_text for text in standing if (kept_text := _without_edge_blank_lines(text))]
+        # Logged for the run only, one line per block naming where it starts;
+        # the author never wrote this text.
+        for block in ungathered:
+            log(
+                f"not carried from the body being written: {code_span(block.splitlines()[0])} -- "
+                f"`## {EVIDENCE_NOTES_HEADING}` is written from the body a person can edit, "
+                "and this text is not from it"
+            )
     # Appended to what that section already held rather than replacing it.
-    blocks = [kept_text for text in kept if (kept_text := _without_edge_blank_lines(text))] + notes
+    standing_blocks = [
+        kept_text for text in kept if (kept_text := _without_edge_blank_lines(text))
+    ]
+    # At most one excerpt per recorded item, so repeated writes do not grow
+    # the notes. Without the record comment, each turn's previous line reads
+    # as somebody's and its detail differs every time, so byte identity alone
+    # would not bound it. The first excerpt stays, since it is furthest from
+    # the machine's own lines; later ones are announced, not carried. Two
+    # identical paragraphs of the author's own are left alone.
+    already_carried = {
+        block for block in standing_blocks if block.startswith(SUPERSEDED_CARRY_OPENING)
+    }
+    def _excerpt_item(block: str) -> str | None:
+        rows = block.splitlines()
+        if not block.startswith(SUPERSEDED_CARRY_OPENING) or len(rows) < 3:
+            return None
+        return whose_status_line(rows[-2], recorded, rows[-2], NOTHING_OWNED).item
+
+    standing_items = {item for block in already_carried if (item := _excerpt_item(block))}
+    carried_notes: list[str] = []
+    for note in notes:
+        item = _excerpt_item(note)
+        if note in already_carried or (item is not None and item in standing_items):
+            held = (
+                f"`## {EVIDENCE_NOTES_HEADING}` already holds an excerpt for "
+                f"{code_span(str(item)) if item else 'this line'}, so a later reading of it "
+                f"was replaced and not carried a second time: {code_span(note.splitlines()[-2])}"
+            )
+            log(held)
+            announcements.append(held)
+            continue
+        if item is not None:
+            standing_items.add(item)
+        carried_notes.append(note)
+    blocks = standing_blocks + carried_notes
+
 
     def placed(candidate: str) -> SectionWrite:
         """The rewritten body, or the source standing whole and why."""
@@ -2512,9 +3109,9 @@ def write_evidence_status_section(
     # writer runs more than once in a turn. It belongs to whatever reports the
     # turn, composed from the body the write returned (#1730, round 2).
     written = insert_markdown_section(
-        strip_markdown_section(body, EVIDENCE_NOTES_HEADING) if kept else body,
+        strip_markdown_section(body, EVIDENCE_NOTES_HEADING) if standing else body,
         EVIDENCE_STATUS_HEADING,
-        "\n".join(status_lines),
+        "\n".join(rendered),
         before_heading="Validation",
     )
     if not blocks:
@@ -2551,11 +3148,22 @@ def render_execution_summary_body(
     evidence_complete: object,
     evidence_blocked: object,
     evidence_pending_ci: object,
-    published_body: str = "",
+    published_body: str,
     announcements: list[str] | None = None,
 ) -> tuple[str, list[str]]:
     if not _explicit_evidence_contract(requested_evidence):
         return summary_body, []
+
+    # Refuse a contract whose items read as one requirement on the page, on
+    # the ownership rule's key. The body stands whole.
+    if (collisions := _indistinguishable(
+        list(requested_evidence), markdown_section(summary_body, EVIDENCE_STATUS_HEADING)
+    )):
+        return summary_body, [
+            "requested evidence items read as one requirement on the page, so a status line "
+            "naming either of them cannot be told apart and a line would be lost; make each "
+            f"item distinct: {', '.join(code_span(item) for item in collisions)}"
+        ]
 
     used_indexes: set[int] = set()
     complete_entries, errors = parse_structured_evidence_updates(
@@ -2591,10 +3199,6 @@ def render_execution_summary_body(
     evidence_map.update(
         _owner_written_entries(published_body, requested_evidence, mark_carried=True)
     )
-    evidence_lines = [
-        f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
-        for index, entry in sorted(evidence_map.items())
-    ]
     structured_entries = [
         {
             "index": entry["index"],
@@ -2605,12 +3209,29 @@ def render_execution_summary_body(
         }
         for _, entry in sorted(evidence_map.items())
     ]
+    # The same composer the reconstruction uses, so the next push recognises
+    # this line.
+    evidence_lines = rendered_entry_lines(structured_entries)
 
     stripped_body = _strip_evidence_metadata(summary_body)
     # Untrimmed, because that is the text the writer cuts and the text the
     # reason answers about; trimming here and not there is what once let the
     # guard name a refusal while the write went ahead.
-    write = write_evidence_status_section(stripped_body, evidence_lines)
+    write = write_evidence_status_section(
+        stripped_body,
+        evidence_lines,
+        recorded_items=[str(entry["item"]) for _, entry in sorted(evidence_map.items())],
+        # Notes come from the published body, never from the model's draft,
+        # which holds nothing a person wrote. The metadata comment is the
+        # record, not a note.
+        notes_from=_strip_evidence_metadata(published_body),
+        entries=structured_entries,
+        # The last run's entries exist only in the published body, re-keyed to
+        # this turn's contract positions.
+        previous_entries=entries_keyed_for(
+            evidence_entries_of(published_body), requested_evidence
+        ),
+    )
     rendered, write_refusal = write.body, write.refusal
     if announcements is not None:
         announcements.extend(write.announcements)
@@ -3621,35 +4242,21 @@ def _render_structured_entries(
     nowhere to go (#1740). A caller that passes a list gets them and posts
     them; a caller that does not is unchanged.
     """
-    rendered_entries: list[dict[str, object]] = []
-    for entry in updated_entries:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            index = int(entry["index"])
-        except (KeyError, TypeError, ValueError, OverflowError):
-            continue
-        item = _encodable(str(entry.get("item", "")).strip())
-        status = str(entry.get("status", "")).strip()
-        detail = _encodable(str(entry.get("detail", "")).strip())
-        if index < 1 or not item or status not in {"complete", "blocked", "pending-ci"} or not detail:
-            continue
-        rendered_entries.append(
-            {
-                "index": index,
-                "item": item,
-                "status": status,
-                "detail": detail,
-            }
-        )
+    rendered_entries = renderable_entries(updated_entries)
 
     if rendered_entries:
+        # This path rewrites the published body itself, so notes come from the
+        # same body it writes.
+        rewritten = _strip_evidence_metadata(body)
         write = write_evidence_status_section(
-            _strip_evidence_metadata(body),
-            [
-                f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
-                for entry in sorted(rendered_entries, key=lambda entry: int(entry["index"]))
-            ],
+            rewritten,
+            rendered_entry_lines(sorted(rendered_entries, key=lambda entry: int(entry["index"]))),
+            recorded_items=[str(entry["item"]) for entry in rendered_entries],
+            notes_from=rewritten,
+            # The metadata is stripped before the write, so the last run's
+            # entries travel separately.
+            entries=rendered_entries,
+            previous_entries=evidence_entries_of(body),
         )
         reconciled, refusal = write.body, write.refusal
         if announcements is not None:
@@ -3674,6 +4281,44 @@ def _render_structured_entries(
     return reconciled
 
 
+def entries_with_updates(
+    entries: object, updates: dict[int, dict[str, object]]
+) -> tuple[list[object], bool]:
+    """The entries an updates map produces, and whether it changed any.
+
+    Shared with the write sweep, which needs the entries the write is about
+    to render to build the same owner. An entry no update names comes back
+    unchanged; an update for an index no entry has changes nothing.
+    """
+    updated: list[object] = []
+    changed = False
+    for raw_entry in entries if isinstance(entries, list) else []:
+        if not isinstance(raw_entry, dict):
+            updated.append(raw_entry)
+            continue
+        entry = dict(raw_entry)
+        try:
+            # `1e9999` in the editable metadata parses as infinity, and `int()`
+            # of that raises `OverflowError`.
+            index = int(entry["index"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            updated.append(entry)
+            continue
+        update = updates.get(index)
+        if update is not None:
+            status = str(update.get("status", entry.get("status", ""))).strip()
+            detail = str(update.get("detail", entry.get("detail", ""))).strip()
+            if status in VALID_EVIDENCE_STATUSES and detail:
+                entry["status"] = status
+                entry["detail"] = detail
+                for key in ("kind", "check_name", "verified_head_sha", "proof_url"):
+                    if key in update:
+                        entry[key] = update[key]
+                changed = True
+        updated.append(entry)
+    return updated, changed
+
+
 def update_evidence_entries(
     body: str,
     updates: dict[int, dict[str, object]],
@@ -3690,30 +4335,7 @@ def update_evidence_entries(
     metadata = _extract_evidence_metadata(body)
     if not isinstance(metadata, dict) or not isinstance(metadata.get("entries"), list):
         return body
-    updated_entries: list[object] = []
-    changed = False
-    for raw_entry in metadata["entries"]:
-        if not isinstance(raw_entry, dict):
-            updated_entries.append(raw_entry)
-            continue
-        entry = dict(raw_entry)
-        try:
-            index = int(entry["index"])
-        except (KeyError, TypeError, ValueError, OverflowError):
-            updated_entries.append(entry)
-            continue
-        update = updates.get(index)
-        if update is not None:
-            status = str(update.get("status", entry.get("status", ""))).strip()
-            detail = str(update.get("detail", entry.get("detail", ""))).strip()
-            if status in {"complete", "blocked", "pending-ci"} and detail:
-                entry["status"] = status
-                entry["detail"] = detail
-                for key in ("kind", "check_name", "verified_head_sha", "proof_url"):
-                    if key in update:
-                        entry[key] = update[key]
-                changed = True
-        updated_entries.append(entry)
+    updated_entries, changed = entries_with_updates(metadata["entries"], updates)
     if not changed:
         return body
     return _render_structured_entries(body, updated_entries, announcements)
