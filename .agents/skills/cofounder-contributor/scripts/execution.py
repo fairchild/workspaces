@@ -54,6 +54,12 @@ from evidence import (
     _rendered_lines,
     _rendered_status_lines,
     classify_evidence_errors,
+    quoted_for_comment,
+    quoted_sentence,
+    # What anything can ACT on, from the module that fans an update across a
+    # collision. The identity rule is private to that module, where its one
+    # caller is (#1778, rounds 6 and 8).
+    usable_entry_index,
     is_stood_down_announcement,
     resolve_named_ci_evidence,
     requested_evidence_contract,
@@ -553,6 +559,30 @@ def uncarried_notes_checked_line(head_sha: str) -> str:
     return f"Not carried from this PR's body at commit {head_sha}."
 
 
+def _stood_down_repair(notes: list[str]) -> str:
+    """The closing line, chosen by what the stand-down was ABOUT.
+
+    One frame said "Closing the block named above lets the next run write the
+    section" whatever the reason, and round 12 routed a new family into it --
+    a malformed metadata record. An author told to fix an index was also told
+    to close a block they never opened (#1778, round 13). The reasons that
+    name a record say so; anything else keeps the block sentence, which is
+    still true of every reason that came before.
+    """
+    about_the_record = [note for note in notes if "the entry at position" in note]
+    if about_the_record and len(about_the_record) == len(notes):
+        return (
+            "Correcting the entry named above in the `evidence-status` block lets the next "
+            "run write the section."
+        )
+    if about_the_record:
+        return (
+            "Correcting the entry named above, and closing any block the section leaves open, "
+            "lets the next run write it."
+        )
+    return "Closing the block named above lets the next run write the section."
+
+
 def compose_uncarried_notes_comment(
     persona: str | None, notes: list[str], head_sha: str
 ) -> str:
@@ -603,7 +633,7 @@ def compose_uncarried_notes_comment(
             "",
             "\n".join(f"- {note}" for note in stood_down),
             "",
-            "Closing the block named above lets the next run write the section.",
+            _stood_down_repair(stood_down),
             "",
         ]
     return "\n".join([*parts, uncarried_notes_checked_line(head_sha)]) + "\n"
@@ -1257,8 +1287,24 @@ def _live_ci_evidence_gate_error(pr_number: int, env: dict[str, str]) -> str | N
                                           for entry in _pr_evidence_entries(body)]))
     for fact in resolve_named_ci_evidence(items, head_sha, env):
         if fact["status"] != "satisfied":
-            return (f"named check `{fact['check_name']}` is not green on head {head_sha[:12]} "
-                    f"(live state: {fact['status']}; live conclusion: {fact['conclusion'] or 'none'})")
+            # Every value here comes from the PR's own metadata or from a
+            # check name it names, so it goes through the one quoting rule
+            # rather than a hand-written span: a backtick in `check_name`
+            # closes the span and the rest of the sentence renders as markup
+            # (#1778, round 13).
+            # `check_name` comes from the PR's own metadata, so it goes
+            # through the one quoting rule rather than a hand-written span: a
+            # backtick in it closes the span and the rest of the sentence
+            # renders as markup (#1778, round 13). The state and the
+            # conclusion come from GitHub's check-run API and are a closed
+            # vocabulary, so they are not PR-editable and stay as they read.
+            return quoted_sentence(
+                "named check {check} is not green on head "
+                + head_sha[:12]
+                + f" (live state: {fact['status']}; live conclusion: "
+                + f"{fact['conclusion'] or 'none'})",
+                check=quoted_for_comment(str(fact["check_name"])),
+            )
 
     return None
 
@@ -1347,11 +1393,8 @@ def _complete_diff_evidence_after_approval(pr_number: int, env: dict[str, str]) 
     link = f" — {review_url}" if review_url else ""
     updates: dict[int, dict[str, object]] = {}
     for entry in pending_diff:
-        try:
-            index = int(entry["index"])
-        # OverflowError too: `1e9999` in the PR-editable metadata parses as
-        # infinity, and `int()` of that raises a class the others do not cover.
-        except (KeyError, TypeError, ValueError, OverflowError):
+        index = usable_entry_index(entry)
+        if index is None:
             continue
         updates[index] = {
             "status": "complete",

@@ -516,11 +516,23 @@ and `evaluate_evidence_accounting` and `_live_ci_evidence_gate_error` in the
 contributor skill's scripts. A sentence here describing one of them is a copy
 of it that goes stale on its own.
 
-A completion already recorded complete and bound to the current head is
-re-checked by neither the CI verifier nor the macOS evidence lane
-(`ci_entries_needing_verification`, `reconcile_pending_ci_evidence`), and it
-counts toward clearing `blocked:evidence` (`should_clear_blocked_label`); that
-is the gap [#1778](https://github.com/fairchild/workspaces/issues/1778) tracks.
+A completion recorded for a named CI check is re-checked against the live
+check runs on the head every time the verifier runs, and only a completion
+that run verified counts toward clearing `blocked:evidence`
+(`ci_entries_needing_verification`, `should_clear_blocked_label`). A
+completion of any other kind is not re-checked by anything and counts as the
+entry records it: the macOS evidence lane re-resolves only entries still
+`pending-ci` (`reconcile_pending_ci_evidence`), so a completion written by
+hand for a test, a screenshot or any lane-resolved item survives every later
+run and clears the label.
+
+A record this code cannot render every entry of is not rewritten at all. An
+index that is not a whole number above zero, a status outside the vocabulary,
+an empty item or detail — any of these and the write leaves the section and
+the metadata as the author left them and says which entry it could not
+account for, the way it already refuses two entries sharing an index. The rule
+behind both: nothing the author wrote leaves the body without a line saying it
+left.
 
 For a reviewer: a completion in the comment is a claim, not a proof. The run
 link an entry carries is recorded, not verified, so it takes you
