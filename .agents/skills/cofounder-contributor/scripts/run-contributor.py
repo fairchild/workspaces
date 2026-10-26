@@ -66,7 +66,6 @@ from _helpers import (  # noqa: E402, F401
     branch_name_for_issue,
     extract_persona,
     has_markdown_section,
-    insert_markdown_section,
     issue_label_names,
     issue_label_presence,
     log,

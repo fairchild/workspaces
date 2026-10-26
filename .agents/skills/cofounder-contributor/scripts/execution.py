@@ -10,8 +10,13 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
 from _helpers import (
+    MARKDOWN,
+    MARKDOWN_LINE_ENDING_RE,
+    code_span_ranges,
+    inserted_markdown_section,
     AGENT_CLAIM_LABEL,
     AGENT_CLAIM_LABEL_COLOR,
     AGENT_CLAIM_LABEL_DESCRIPTION,
@@ -33,7 +38,6 @@ from _helpers import (
     branch_name_for_issue,
     has_markdown_section,
     rejected_heading_note,
-    insert_markdown_section,
     issue_label_names,
     issue_label_presence,
     log,
@@ -55,6 +59,8 @@ from evidence import (
     _rendered_status_lines,
     classify_evidence_errors,
     is_stood_down_announcement,
+    is_unverified_announcement,
+    unverified_heading,
     resolve_named_ci_evidence,
     requested_evidence_contract,
     render_execution_summary_body,
@@ -534,6 +540,19 @@ STOOD_DOWN_NOTES_HEADLINE = "**Your `## Evidence Status` section was left as wri
 # assumes otherwise says one of the two and drops the other, which is the
 # failure this whole issue is about.
 MIXED_NOTES_HEADLINE = "**Part of your `## Evidence Status` section did not survive this run.**"
+# The third claim, and it is about the run rather than about the body: the
+# renderer could not be reached, so whether this write lands somewhere a
+# reader arrives at was decided by the source model alone. Said under either
+# headline above it would be a claim about the author's text, which it is not
+# (#1773, round 2).
+def unverified_notes_headline(heading: str) -> str:
+    """The headline for notes about a check that could not be run, naming the SECTION.
+
+    A constant naming `## Evidence Status` told an author their status section
+    was unchecked when the note was about `## Mergeability` -- the one seam
+    whose note reached this path is the seeder's (#1773, round 11).
+    """
+    return f"**A check on your `## {heading}` section could not be run.**"
 
 # What GitHub stores for one issue comment. A body past it is refused whole,
 # so the notes are chunked under it rather than posted and lost (#1740,
@@ -577,13 +596,23 @@ def compose_uncarried_notes_comment(
     would be worse than none.
     """
     stood_down = [note for note in notes if is_stood_down_announcement(note)]
-    uncarried = [note for note in notes if not is_stood_down_announcement(note)]
+    unverified = [note for note in notes if is_unverified_announcement(note)]
+    uncarried = [
+        note
+        for note in notes
+        if not is_stood_down_announcement(note) and not is_unverified_announcement(note)
+    ]
     if stood_down and uncarried:
         headline = MIXED_NOTES_HEADLINE
     elif stood_down:
         headline = STOOD_DOWN_NOTES_HEADLINE
-    else:
+    elif uncarried:
         headline = UNCARRIED_NOTES_HEADLINE
+    else:
+        # The section the notes are about, read out of the notes rather than
+        # assumed: they carry their heading for exactly this (#1773, round 11).
+        headings = [one for note in unverified if (one := unverified_heading(note))]
+        headline = unverified_notes_headline(headings[0] if headings else EVIDENCE_STATUS_HEADING)
     parts: list[str] = [*([f"*{persona}*", ""] if persona else []), headline, ""]
     if uncarried:
         parts += [
@@ -604,6 +633,16 @@ def compose_uncarried_notes_comment(
             "\n".join(f"- {note}" for note in stood_down),
             "",
             "Closing the block named above lets the next run write the section.",
+            "",
+        ]
+    if unverified:
+        parts += [
+            "One check on this write could not run, so what it would have refused went "
+            "unasked. Nothing here says anything was lost:",
+            "",
+            "\n".join(f"- {note}" for note in unverified),
+            "",
+            "A later run that reaches the renderer decides the question this one could not.",
             "",
         ]
     return "\n".join([*parts, uncarried_notes_checked_line(head_sha)]) + "\n"
@@ -674,6 +713,109 @@ def _as_the_page_shows_it(text: str) -> str:
 COLLAPSED_BLOCK_RE = re.compile(r"(?is)<details\b.*</details>|<details\b.*\Z")
 
 
+def _inline_block_bounds(text: str) -> list[tuple[int, int]]:
+    """Where each block with inline content begins and ends, in this text's own offsets.
+
+    Taken from the parser the repo already reads markdown with, rather than
+    modelled here. A code span is an inline construct, so it lives inside one
+    block -- and "one block" is CommonMark's answer, not "a run of non-blank
+    lines". A heading, an HTML block, a fence and a list each INTERRUPT a
+    paragraph with no blank line between them, so splitting on blank lines
+    alone let two stray backticks either side of an interrupter pair into a
+    span, blank a real `<details` lying between them, and record a note the
+    page folds away as one a reader was shown (#1773, round 8). Every
+    hand-rolled model of this parser in this repository has been wrong in the
+    same direction; this one asks it.
+
+    `inline` tokens carry their parent block's line map, which is what puts a
+    heading's own span and a list item's own span each in their own block.
+    """
+    starts, offset = [], 0
+    for line in text.split("\n"):
+        starts.append(offset)
+        offset += len(line) + 1
+    bounds: list[tuple[int, int]] = []
+    cursor = 0
+    for token in MARKDOWN.parse(text):
+        if token.type != "inline" or not token.map:
+            continue
+        first, last = token.map
+        if first >= len(starts):
+            continue
+        stop = min(starts[last] - 1 if last < len(starts) else len(text), len(text))
+        start = starts[first]
+        # A table ROW gives every one of its cells the row's map, so three
+        # cells come back as three copies of one span -- and two backticks in
+        # cells 1 and 3 then pair across cell 2 and blank a real `<details`
+        # between them. The token knows its own source, so each cell is
+        # narrowed to where its content sits, searching forward so two cells
+        # holding the same text keep their order (#1773, round 9).
+        content = token.content
+        if content:
+            found = text.find(content, max(start, cursor), stop)
+            if found != -1:
+                start, stop = found, found + len(content)
+        cursor = stop
+        bounds.append((start, stop))
+    return bounds
+
+
+def _code_spans_blanked(text: str) -> str:
+    """The text with every code span replaced by spaces, length for length.
+
+    Length-preserving on purpose: the offsets of what the scan below finds are
+    used against the ORIGINAL text, so a note keeps the characters it was
+    written with while the scan sees no tag inside a span.
+
+    Read by `code_span_ranges`, which walks left to right by CommonMark's own
+    rules. A regex pairing backticks has no model of which ones are
+    delimiters, so it blanked a real `<details` lying between two backticks
+    that open no span -- and a folded note nobody was shown was then recorded
+    as shown, which silences the next run about a note the write dropped.
+    Anyone who can comment could plant it (#1773, round 5).
+
+    Per BLOCK as the PARSER reads a block, because that is the span a code
+    span can occupy: it is an inline construct, so it lives inside one block,
+    and inside a paragraph it crosses soft line breaks freely. Scanning the whole comment as one string
+    called two backticks either side of a blank line a span; scanning it a
+    line at a time called a span's continuation on the next line a span of its
+    own, and the harm ran the other way -- `start ``open` / `here ``<details>``
+    more`` end` is one span and then literal text to the page, which folds the
+    note, while the per-line read blanked the `<details` as if it were inside
+    a span, left the block unstripped, and recorded a note nobody was shown as
+    shown. Anyone who can comment could plant either (#1773, rounds 5 and 6).
+    """
+    chars = list(text)
+    for start, stop in _inline_block_bounds(text):
+        for open_at, close_at in code_span_ranges(text[start:stop]):
+            chars[start + open_at : start + close_at] = " " * (close_at - open_at)
+    return "".join(chars)
+
+
+def _without_collapsed_blocks(comment: str) -> str:
+    """The comment with every folded block gone, reading a quoted tag as the text it is.
+
+    Line endings are normalised HERE, once, at the boundary a comment from
+    GitHub enters this module -- the way `pr-readiness.py` normalises before
+    either of its views reads a body. Everything below works in LF offsets
+    after this: `_inline_block_bounds` builds its offset table with
+    `split("\n")`, so a comment with bare CR endings collapsed to ONE inline
+    span covering the whole comment, and two backticks anywhere in it then
+    paired across a real `<details` between them. Measured at `9a5db027`: the
+    same comment reads as 4 blocks with LF or CRLF endings and 1 with CR
+    (#1773, round 11).
+    """
+    comment = MARKDOWN_LINE_ENDING_RE.sub("\n", comment)
+    masked = _code_spans_blanked(comment)
+    kept: list[str] = []
+    last = 0
+    for match in COLLAPSED_BLOCK_RE.finditer(masked):
+        kept.append(comment[last : match.start()])
+        last = match.end()
+    kept.append(comment[last:])
+    return "".join(kept)
+
+
 def _notes_a_reader_has_been_shown(comment: str, checked: str) -> set[str]:
     """Which of this runtime's notes this comment actually said to a reader.
 
@@ -690,7 +832,7 @@ def _notes_a_reader_has_been_shown(comment: str, checked: str) -> set[str]:
     this say the note again, which is the direction a guard on advice is
     allowed to fail in.
     """
-    lines = _rendered_lines(COLLAPSED_BLOCK_RE.sub("", comment))
+    lines = _rendered_lines(_without_collapsed_blocks(comment))
     if not any(line.strip() == checked for line in lines):
         return set()
     return {_as_the_page_shows_it(line[2:]) for line in lines if line.startswith("- ")}
@@ -945,7 +1087,23 @@ def _changed_surface_files(env: dict[str, str]) -> list[str]:
     return files
 
 
-def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) -> str:
+class SeededSection(NamedTuple):
+    """A seeded body and what the seeding had to say about it.
+
+    The same shape `SectionWrite` has, for the same reason. Round 9 made the
+    announcement channel a required parameter so no caller could forget it,
+    and a required parameter can still be handed a list that goes nowhere:
+    the note then reaches a real, non-default list that nobody posts, and
+    every seam test passes because each hands the seam a list of its own.
+    Carrying the note back is what removes the choice -- there is no list to
+    pass, so there is none to drop (#1773, round 10).
+    """
+
+    body: str
+    announcements: tuple[str, ...] = ()
+
+
+def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) -> SeededSection:
     """Seed the `## Mergeability` block scripts/pr-readiness.py requires when
     the agent omitted it.
 
@@ -975,7 +1133,7 @@ def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) ->
     # readers find and an empty section, so seeding is skipped and the gate
     # reports the section missing -- main's behaviour, unchanged here.
     if has_markdown_section(summary_body, "Mergeability"):
-        return summary_body
+        return SeededSection(summary_body)
 
     what_line = _mergeability_clip(_first_content_line(what_section(summary_body)))
     validation_line = _mergeability_clip(_first_content_line(markdown_section(summary_body, "Validation")))
@@ -1008,7 +1166,29 @@ def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) ->
     content = "\n".join(
         f"- {label}: {seeded.get(label, 'n/a')}" for label in mergeability_field_labels()
     )
-    return insert_markdown_section(summary_body, "Mergeability", content)
+    # Through the back-compat wrapper this insert's refusal reached a step log
+    # alone: at a 503 the section was appended below an unclosed `<details>`,
+    # into the fold, and the body came back looking written. Every insert
+    # takes the write's answer now (#1773, round 8). A refusal here loses
+    # nobody's words -- the section is simply not seeded, and the readiness
+    # gate fails the body loudly for it -- so the body stands and the reason
+    # is said.
+    placed = inserted_markdown_section(summary_body, "Mergeability", content)
+    # Carried, not handed over. Round 8 left the note's delivery to a caller
+    # remembering to pass a list and the production caller passed none; round
+    # 9 made the list required and a required parameter can still be given one
+    # that goes nowhere. What the seeding said comes back with the body it
+    # seeded, so the caller that has a comment to post is the only one that
+    # decides anything (#1773, round 10).
+    said: list[str] = []
+    if placed.unverified is not None:
+        said.append(placed.unverified)
+    if placed.refusal is not None:
+        note = f"`## Mergeability` not seeded: {placed.refusal}"
+        log(note)
+        said.append(note)
+        return SeededSection(summary_body, tuple(said))
+    return SeededSection(placed.body, tuple(said))
 
 
 def build_body(data: dict[str, object]) -> str:
@@ -1750,10 +1930,14 @@ def route_execution_action(
         )
         log(json.dumps({"error_class": "evidence_validation", "detail": "; ".join(evidence_errors), "issue": issue_number}))
         return 1
-    summary_body = seed_mergeability_section(
-        summary_body,
-        changed_files=_changed_surface_files(env),
+    seeded = seed_mergeability_section(
+        summary_body, changed_files=_changed_surface_files(env)
     )
+    summary_body = seeded.body
+    # Into the list this turn posts on the pull request. Extending from the
+    # return is what makes the note's delivery unforgettable rather than
+    # remembered (#1773, round 10).
+    uncarried.extend(seeded.announcements)
     pr_body = compose_pr_body(issue_number, persona, summary_body)
     author_label = author_label_for_persona(persona)
     ensure_label_exists(
