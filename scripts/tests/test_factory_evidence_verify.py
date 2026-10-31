@@ -1394,6 +1394,42 @@ class AStoodDownWriteDecidesTheLabelOnTheLiveBodyTests(unittest.TestCase):
             proof_url="https://example.invalid/run/1",
         )
 
+    def test_a_head_that_moved_mid_run_decides_nothing(self) -> None:
+        # What this run verified belongs to the head it read, so it says
+        # nothing about a body that a newer head holds.
+        settled = body_with_entries([self.settled_entry()])
+        forged = body_with_entries([dict(self.settled_entry(), detail="forged on the new head")])
+        first = pr_payload(settled, labels=["blocked:evidence"])
+        moved = pr_payload(forged, head_sha=OTHER_HEAD, labels=["blocked:evidence"])
+        reads = {"n": 0}
+        gh_calls: list[list[str]] = []
+        written: list[str] = []
+
+        def fake_gh_json(args, env):
+            if not any("pulls/321" in arg for arg in args):
+                return None
+            reads["n"] += 1
+            return first if reads["n"] == 1 else moved
+
+        with (
+            mock.patch.object(verify, "_gh_json", side_effect=fake_gh_json),
+            mock.patch.object(verify, "check_runs_for", return_value=self.GREEN),
+            mock.patch.object(
+                verify, "_write_pr_body", side_effect=lambda n, b, e: written.append(b) or True
+            ),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(
+                verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True
+            ),
+        ):
+            verify.process_pr(321, {})
+
+        self.assertGreater(reads["n"], 1, "the live PR was never read")
+        self.assertEqual(written, [])
+        self.assertNotIn(
+            ["pr", "edit", "321", "--remove-label", "blocked:evidence"], gh_calls, gh_calls
+        )
+
     def test_a_requirement_added_mid_run_keeps_the_label(self) -> None:
         settled = body_with_entries([self.settled_entry()])
         # What the owner has since added, live on the PR.

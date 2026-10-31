@@ -424,9 +424,13 @@ def _apply_ci_updates(
         current = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
         current_head = current.get("head") if isinstance(current, dict) else None
         current_sha = str(current_head.get("sha", "")) if isinstance(current_head, dict) else ""
-        # Above both early returns, because a stand-down hands back the body the
-        # caller decides the label on, and that has to be what the PR holds now
-        # (#1786).
+        # Before anything else this function decides: what this run verified
+        # belongs to `head_sha`, so a newer head's body takes no decision here.
+        if current_sha != head_sha:
+            log(f"PR #{pr_number} advanced during verification; skipping write")
+            return None
+        # Above the stand-down, which hands back the body the caller decides
+        # the label on, and that has to be what the PR holds now (#1786).
         current_body = str(current.get("body") or "") if isinstance(current, dict) else ""
         if new_body == body:
             # Same reason as the review-time completion: the write stands down
@@ -434,18 +438,10 @@ def _apply_ci_updates(
             # byte-identical, and returning here said it on stderr alone. A
             # stand-down is the case the author most needs telling about --
             # the section stands AND the status this run resolved is unwritten
-            # (#1740, round 3). Read the live PR before saying so, the way the
-            # writing path below does: a push in between would file the note
-            # under a head the author has already left (#1740, round 4).
-            if current_sha == head_sha:
-                post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
-            else:
-                log(f"PR #{pr_number} advanced during verification; leaving the stand-down unsaid")
+            # (#1740, round 3).
+            post_uncarried_notes(pr_number, None, uncarried, head_sha, env)
             # A read that told us nothing leaves the body we have.
             return current_body or body
-        if current_sha != head_sha:
-            log(f"PR #{pr_number} advanced during verification; skipping write")
-            return None
         if current_body != body:
             log(
                 f"PR #{pr_number} body changed during verification "
