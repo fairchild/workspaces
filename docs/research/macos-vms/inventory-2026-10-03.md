@@ -1,7 +1,8 @@
 # macOS VM inventory and refresh, 2026-10-03
 
 Scope: what tart and lume are on this Mac, what each one holds on disk, what
-each upstream has shipped since our installed versions, and which tool to keep.
+each upstream has shipped since our installed versions, and what was tested.
+No decision about which tool to keep is recorded here.
 The note is in time order: the inventory first, then the boot tests, then the
 lume upgrade. Where a later section changed what an earlier line says, the
 earlier line is marked **superseded** and points to the section that replaced
@@ -39,8 +40,9 @@ estimate of about 54 GB. Re-check before any download.
 ## Refresh status (as of 18:12 UTC)
 
 - tart: the brew route is blocked. The cirruslabs/cli tap is stale (its formula
-  is 2.32.1 and it fails on brew 7 with `depends_on macos:` disabled). Its
-  source is untrusted. Upstream now ships through `openai/tools` (tart 2.40.1 plus
+  is 2.32.1 and it fails on brew 7 with `depends_on macos:` disabled). That
+  failure establishes a Homebrew compatibility problem; this note records no
+  supply-chain finding. Upstream now ships through `openai/tools` (tart 2.40.1 plus
   softnet 0.24.0). The 2.40.1 release
   (<https://github.com/openai/tart/releases/tag/2.40.1>) was downloaded with
   `gh release download 2.40.1 -R openai/tart -p tart.tar.gz -p tart_2.40.1_checksums.txt`
