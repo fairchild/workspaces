@@ -189,6 +189,7 @@ class CheckRunResolutionTests(unittest.TestCase):
 
 
 class VerificationSelectionTests(unittest.TestCase):
+    # intent: fix
     def test_every_ci_entry_needs_verification_whatever_it_records(self) -> None:
         # Entry 3 is the one this changed: `complete` and bound to the current
         # head used to be skipped, which is how a completion typed into the
@@ -426,6 +427,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         }
     ]
 
+    # intent: fix
     def test_a_forged_completion_whose_live_run_failed_is_returned_to_pending(self) -> None:
         # The headline. On `016d94ba` this body's entry is skipped, the label
         # is cleared, and the forged `[complete]` line survives the run.
@@ -437,6 +439,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertIn("https://example.invalid/run/9", body)
         self.assertFalse(self.cleared(gh_calls), gh_calls)
 
+    # intent: fix
     def test_a_forged_completion_naming_a_check_that_does_not_exist_is_undone(self) -> None:
         # The other way a forgery shows: an item naming a check nobody runs.
         # An answered query that came back empty is the case that says the
@@ -446,6 +449,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertIn("may not match a check on this repository", body)
         self.assertFalse(self.cleared(gh_calls), gh_calls)
 
+    # intent: fix
     def test_a_run_that_has_not_finished_says_nothing_and_writes_nothing(self) -> None:
         # An indefinite answer -- a check mid-re-run -- cannot unsay a
         # completion, so the entry keeps what it records and the body is not
@@ -458,6 +462,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertIsNone(body, "an indefinite answer rewrote the body")
         self.assertFalse(self.cleared(gh_calls), gh_calls)
 
+    # intent: fix
     def test_a_genuine_completion_stays_complete_and_still_clears_the_label(self) -> None:
         # The control, and the property that says the change costs an honest
         # body nothing: the same recorded entry, a green live run.
@@ -467,6 +472,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertIn("https://example.invalid/run/1", body)
         self.assertTrue(self.cleared(gh_calls), gh_calls)
 
+    # intent: guard
     def test_an_honest_body_the_run_confirms_is_returned_byte_for_byte(self) -> None:
         """"Unchanged" asserted as BYTES, not as logical completion.
 
@@ -519,6 +525,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
             source,
         )
 
+    # intent: fix
     def test_a_completion_is_re_read_even_when_the_recorded_sha_matches(self) -> None:
         # The condition that was doing the skipping, asserted directly rather
         # than only through the seam.
@@ -535,6 +542,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
             [],
         )
 
+    # intent: fix
     def test_the_clear_counts_what_this_run_verified_and_not_what_the_body_says(self) -> None:
         # The second half of the hole. Even with the entries re-verified, a
         # clear computed from the recorded entries would pass a body whose
@@ -574,6 +582,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
             )
         )
 
+    # intent: fix
     def test_a_lookup_failure_leaves_the_body_and_the_label_alone(self) -> None:
         # `check_runs_for` returning None is a failed query, which says
         # nothing about the check -- so it neither clears the label nor
@@ -584,6 +593,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertIsNone(body, "a failed lookup rewrote the body")
         self.assertFalse(self.cleared(gh_calls), gh_calls)
 
+    # intent: guard
     def test_an_entry_with_no_recorded_completion_is_still_written_on_an_indefinite_answer(
         self,
     ) -> None:
@@ -597,6 +607,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertIn("waiting for checks", body)
         self.assertFalse(self.cleared(gh_calls), gh_calls)
 
+    # intent: fix
     def test_an_older_success_beside_an_unfinished_run_completes_nothing(self) -> None:
         # Two apps publishing one check name reach this shape. The unfinished
         # run is replacing the older verdict, so that verdict neither reaches
@@ -615,6 +626,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
         self.assertNotIn("run/1", body)
         self.assertFalse(self.cleared(gh_calls), gh_calls)
 
+    # intent: fix
     def test_a_correction_the_body_refuses_still_holds_the_label(self) -> None:
         """The case that makes the second half of the fix load-bearing.
 
@@ -668,6 +680,7 @@ class AForgedCompletionIsUndoneByTheNextRunTests(unittest.TestCase):
             verify._recorded_contract_is_complete(verify.evidence_entries(unwritable), HEAD)
         )
 
+    # intent: fix
     def test_one_check_run_read_per_ci_entry_per_run(self) -> None:
         # The cost, measured rather than asserted. Three `ci` entries, three
         # reads -- and the non-ci entry beside them costs nothing, because the
@@ -790,6 +803,7 @@ class TheSuiteCanExpressASequenceTests(unittest.TestCase):
         body, second_calls = self.one_run(body, second, labels=carried, reviews=reviews or [])
         return body, first_calls, second_calls
 
+    # intent: guard
     def test_the_second_run_sees_the_label_the_first_removed(self) -> None:
         # The fixture's own property, asserted so it cannot quietly stop
         # carrying: run 1 clears the label, run 2 is not asked to clear it
@@ -802,6 +816,7 @@ class TheSuiteCanExpressASequenceTests(unittest.TestCase):
         self.assertTrue(self.cleared(first), first)
         self.assertFalse(self.cleared(second), "run 2 cleared a label run 1 had removed")
 
+    # intent: guard
     def test_a_transient_failure_does_not_make_the_next_run_see_a_transition(self) -> None:
         """A transient lookup failure does not demote a genuine completion (#1778).
 
@@ -831,6 +846,7 @@ class TheSuiteCanExpressASequenceTests(unittest.TestCase):
             self.dispatched(second), "the second run saw a transition the first invented"
         )
 
+    # intent: guard
     def test_a_genuine_completion_re_verified_twice_stays_put(self) -> None:
         # The control on the same axis: two runs, both green, nothing moves
         # and no review is asked for.
@@ -852,6 +868,7 @@ class TheSuiteCanExpressASequenceTests(unittest.TestCase):
         self.assertFalse(self.dispatched(first), first)
         self.assertFalse(self.dispatched(second), second)
 
+    # intent: fix
     def test_a_definite_failure_still_undoes_a_forged_completion_across_two_runs(self) -> None:
         # The gap this pull request closes, on the time axis: the forged entry
         # is undone by the first definite answer and stays undone.
@@ -910,6 +927,7 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
             },
         ]
 
+    # intent: fix
     def test_the_decoy_contract_neither_verifies_nor_clears(self) -> None:
         body = body_with_entries(self.entries())
         pr = pr_payload(body, labels=["blocked:evidence"])
@@ -956,6 +974,7 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
         self.assertEqual(reads, [], "a contract it cannot read was verified anyway")
         self.assertNotIn("body", written)
 
+    # intent: fix
     def test_a_collision_of_any_kinds_is_named_rather_than_resolved(self) -> None:
         """Any kinds collide: what is ambiguous is which entry a verdict belongs to (#1784)."""
         self.assertEqual(verify.colliding_indexes(self.entries()), [1])
@@ -981,6 +1000,7 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
             [],
         )
 
+    # intent: fix
     def test_all_three_readers_take_one_definition_of_an_index(self) -> None:
         # The mechanism, asserted directly: the guard, the write's narrowing
         # and the clear read the same grouping, so none of them can be right
@@ -1014,6 +1034,7 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
         self.assertIsNone(verify.entry_index({"index": "1e9999"}))
         self.assertEqual(verify.colliding_indexes([{"item": CI_ITEM}, {"item": CI_ITEM}]), [])
 
+    # intent: fix
     def test_a_verdict_for_another_check_never_counts(self) -> None:
         # The comparison on its own, since the duplicate guard stops the seam
         # test short of it: a verdict is the entry's only if it names the
@@ -1036,6 +1057,7 @@ class TwoEntriesAtOneIndexAreNotActedOnTests(unittest.TestCase):
                     clears,
                 )
 
+    # intent: guard
     def test_the_clear_takes_the_same_narrowed_map_the_write_takes(self) -> None:
         # An update whose target index no longer names the check it was
         # computed for does not land in the body, so it may not count toward
@@ -1104,6 +1126,7 @@ class AMixedKindIndexManufacturesACompletionTests(unittest.TestCase):
     def ordered(self, first: str, second: str) -> list[dict[str, object]]:
         return [getattr(self, first), getattr(self, second)]
 
+    # intent: fix
     def test_neither_order_makes_a_check_run_read(self) -> None:
         """The pre-write guard's own signature, and the only one it owns.
 
@@ -1120,6 +1143,7 @@ class AMixedKindIndexManufacturesACompletionTests(unittest.TestCase):
                 _, _, reads = self.run_over(self.ordered(first, second))
                 self.assertEqual(reads, [], f"{label}: a check run was read for a contract it cannot read")
 
+    # intent: fix
     def test_neither_order_writes_or_clears(self) -> None:
         # The outcome, which two guards hold between them: the pre-write one
         # stops the reads and the narrowing stops the write. Neither mutant
@@ -1135,6 +1159,7 @@ class AMixedKindIndexManufacturesACompletionTests(unittest.TestCase):
                     f"{label}: the label was cleared",
                 )
 
+    # intent: fix
     def test_the_order_that_used_to_manufacture_one_is_the_ci_last_order(self) -> None:
         # Named so the record says which half was live: with the `ci` entry
         # last the narrowing kept the update and the write landed it on both
@@ -1143,6 +1168,7 @@ class AMixedKindIndexManufacturesACompletionTests(unittest.TestCase):
         self.assertEqual(verify.colliding_indexes([self.DIFF, self.CI]), [1])
         self.assertEqual(verify.colliding_indexes([self.CI, self.DIFF]), [1])
 
+    # intent: guard
     def test_an_honest_mixed_contract_at_distinct_indexes_is_untouched(self) -> None:
         # The control: two kinds are perfectly ordinary as long as each entry
         # has its own index.
@@ -1182,6 +1208,7 @@ class TheNarrowingRefusesACollisionOnTheRetryReadTests(unittest.TestCase):
         }
     ]
 
+    # intent: fix
     def test_the_narrowing_drops_every_update_aimed_at_the_injected_index(self) -> None:
         clean = body_with_entries([ci_entry(index=1)])
         injected = body_with_entries(
@@ -1219,6 +1246,7 @@ class TheNarrowingRefusesACollisionOnTheRetryReadTests(unittest.TestCase):
             ["pr", "edit", "321", "--remove-label", "blocked:evidence"], gh_calls, gh_calls
         )
 
+    # intent: guard
     def test_an_unchanged_body_on_the_retry_read_still_writes(self) -> None:
         # The control: the guard re-running must not stop an ordinary write.
         clean = body_with_entries([ci_entry(index=1)])
@@ -1311,6 +1339,7 @@ class TheInLoopGuardCoversWhatTheNarrowingCannotSeeTests(unittest.TestCase):
             verify.process_pr(321, {})
         return written, gh_calls, said.getvalue()
 
+    # intent: fix
     def test_a_collision_at_an_index_this_run_holds_no_update_for_is_not_written(self) -> None:
         """The outcome, which `update_evidence_entries` now holds on its own.
 
@@ -1331,6 +1360,7 @@ class TheInLoopGuardCoversWhatTheNarrowingCannotSeeTests(unittest.TestCase):
             ["pr", "edit", "321", "--remove-label", "blocked:evidence"], gh_calls, gh_calls
         )
 
+    # intent: fix
     def test_the_lane_names_the_collision_in_its_own_voice(self) -> None:
         """The in-loop guard's own signature, which is diagnosis (#1778).
 
@@ -1349,6 +1379,7 @@ class TheInLoopGuardCoversWhatTheNarrowingCannotSeeTests(unittest.TestCase):
         )
         self.assertIn("PR #321: evidence entries share index(es) 2", said)
 
+    # intent: guard
     def test_the_same_body_without_the_twin_is_written_as_before(self) -> None:
         # The control: the guard re-running refuses collisions, not edits.
         written, _, _ = self.run_with_injection(
@@ -1394,6 +1425,7 @@ class AStoodDownWriteDecidesTheLabelOnTheLiveBodyTests(unittest.TestCase):
             proof_url="https://example.invalid/run/1",
         )
 
+    # intent: fix
     def test_a_head_that_moved_mid_run_decides_nothing(self) -> None:
         # What this run verified belongs to the head it read, so it says
         # nothing about a body that a newer head holds.
@@ -1430,6 +1462,7 @@ class AStoodDownWriteDecidesTheLabelOnTheLiveBodyTests(unittest.TestCase):
             ["pr", "edit", "321", "--remove-label", "blocked:evidence"], gh_calls, gh_calls
         )
 
+    # intent: fix
     def test_a_requirement_added_mid_run_keeps_the_label(self) -> None:
         settled = body_with_entries([self.settled_entry()])
         # What the owner has since added, live on the PR.
@@ -1478,6 +1511,7 @@ class AStoodDownWriteDecidesTheLabelOnTheLiveBodyTests(unittest.TestCase):
             "the label was cleared against a live body recording an unmet requirement",
         )
 
+    # intent: guard
     def test_a_live_body_that_still_says_complete_still_clears(self) -> None:
         # The control: reading the live body is not a reason to stop clearing.
         settled = body_with_entries([self.settled_entry()])
@@ -1517,11 +1551,13 @@ class TheClearRefusesACollidingIndexTooTests(unittest.TestCase):
         "kind": "diff",
     }
 
+    # intent: fix
     def test_two_complete_non_ci_entries_at_one_index_keep_the_label(self) -> None:
         entries = [dict(self.TWIN), dict(self.TWIN, detail="and the owner said so again")]
         self.assertEqual(verify.colliding_indexes(entries), [1])
         self.assertFalse(verify.should_clear_blocked_label(entries, HEAD, verified={}))
 
+    # intent: fix
     def test_the_same_two_entries_at_distinct_indexes_still_clear(self) -> None:
         entries = [dict(self.TWIN), dict(self.TWIN, index=2)]
         self.assertEqual(verify.colliding_indexes(entries), [])
@@ -1531,6 +1567,7 @@ class TheClearRefusesACollidingIndexTooTests(unittest.TestCase):
 class VerdictDefinitenessTests(unittest.TestCase):
     """Which lookups say something about a check, and which fail to (#1778)."""
 
+    # intent: fix
     def test_a_completed_run_and_an_empty_answer_are_definite(self) -> None:
         self.assertTrue(
             verify.verdict_is_definite(
@@ -1541,12 +1578,14 @@ class VerdictDefinitenessTests(unittest.TestCase):
         self.assertTrue(verdict := verify.verdict_is_definite([]))
         self.assertTrue(verdict)
 
+    # intent: fix
     def test_a_failed_lookup_and_an_unfinished_run_are_not(self) -> None:
         self.assertFalse(verify.verdict_is_definite(None))
         self.assertFalse(
             verify.verdict_is_definite([{"status": "in_progress", "conclusion": None}])
         )
 
+    # intent: fix
     def test_a_completed_run_beside_an_unfinished_one_is_not_definite(self) -> None:
         completed = {"status": "completed", "conclusion": "success", "completed_at": "x"}
         running = {"status": "in_progress", "conclusion": None}
@@ -1554,6 +1593,7 @@ class VerdictDefinitenessTests(unittest.TestCase):
             with self.subTest(order=[run["status"] for run in order]):
                 self.assertFalse(verify.verdict_is_definite(order))
 
+    # intent: fix
     def test_two_finished_runs_are_definite_whatever_they_concluded(self) -> None:
         failed = {"status": "completed", "conclusion": "failure", "completed_at": "a"}
         passed = {"status": "completed", "conclusion": "success", "completed_at": "b"}

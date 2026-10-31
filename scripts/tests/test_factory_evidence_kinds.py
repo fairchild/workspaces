@@ -11333,6 +11333,7 @@ class TheWriterRefusesACollidingIndexItself(unittest.TestCase):
             )
         return source, written, said, stderr.getvalue()
 
+    # intent: fix
     def test_a_colliding_index_leaves_the_body_byte_identical(self) -> None:
         source, written, said, stderr = self.write(
             [self.entry(1), self.entry(1, item="a second requirement at the same index")]
@@ -11342,6 +11343,7 @@ class TheWriterRefusesACollidingIndexItself(unittest.TestCase):
         self.assertIn("share index(es) 1", said[0])
         self.assertIn("share index(es) 1", stderr)
 
+    # intent: fix
     def test_the_collision_need_not_be_at_the_updated_index(self) -> None:
         # What the verifier's narrowing structurally cannot see: it drops
         # updates it HOLDS, and it holds none for index 2.
@@ -11351,12 +11353,14 @@ class TheWriterRefusesACollidingIndexItself(unittest.TestCase):
         self.assertEqual(written, source)
         self.assertIn("share index(es) 2", said[0])
 
+    # intent: guard
     def test_entries_at_distinct_indexes_are_written_as_before(self) -> None:
         source, written, said, _ = self.write([self.entry(1), self.entry(2, kind="diff")])
         self.assertNotEqual(written, source)
         self.assertIn("- [complete] ", written)
         self.assertEqual(said, [])
 
+    # intent: fix
     def test_an_index_no_reader_can_take_is_not_a_collision(self) -> None:
         evidence = self.evidence()
         self.assertEqual(
