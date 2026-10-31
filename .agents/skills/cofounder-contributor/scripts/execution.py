@@ -58,6 +58,7 @@ from evidence import (
     _rendered_lines,
     _rendered_status_lines,
     classify_evidence_errors,
+    entry_index,
     is_stood_down_announcement,
     is_unverified_announcement,
     unverified_heading,
@@ -1527,11 +1528,8 @@ def _complete_diff_evidence_after_approval(pr_number: int, env: dict[str, str]) 
     link = f" — {review_url}" if review_url else ""
     updates: dict[int, dict[str, object]] = {}
     for entry in pending_diff:
-        try:
-            index = int(entry["index"])
-        # OverflowError too: `1e9999` in the PR-editable metadata parses as
-        # infinity, and `int()` of that raises a class the others do not cover.
-        except (KeyError, TypeError, ValueError, OverflowError):
+        index = entry_index(entry)
+        if index is None:
             continue
         updates[index] = {
             "status": "complete",
