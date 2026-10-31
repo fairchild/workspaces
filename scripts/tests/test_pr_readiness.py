@@ -3454,7 +3454,7 @@ class RecordedRendererResponseTests(unittest.TestCase):
     # passed -- every one of them ITERATES the corpus, and iterating nothing
     # scores nothing (#1771, round 18). The count moves when a recording is
     # added, which is a line of this file somebody writes deliberately.
-    RECORDINGS = 73
+    RECORDINGS = 134
 
     def assertTheCorpusWasRead(self, index: dict) -> None:
         """The corpus this test read is the corpus this file declares.
