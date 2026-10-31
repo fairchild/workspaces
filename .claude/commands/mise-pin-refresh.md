@@ -9,12 +9,14 @@ Claude routine, or manually as `/mise-pin-refresh` whenever wanted.
 2. Create or reset the branch `auto/mise-pin-refresh` onto the latest
    `origin/main` (never work on `main` directly), then run
    `uv run --script scripts/mise-pin-refresh.py --apply`
-   (rewrites the pin version + linux-x64 sha256 across the three pin sites,
-   sha taken from upstream SHASUMS256.txt). Then run the guard suite:
+   (rewrites every site registered in `PIN_SITES` in that script, including
+   the `mise-action` versions in `ci.yml` and `release.yml`; the linux-x64
+   sha256 comes from upstream SHASUMS256.txt). Then run the guard suite:
    `uv run --script scripts/tests/test_security_hardening.py` — must pass.
-3. Commit exactly the three changed files with message
+3. Check the diff against `PIN_SITES`, then commit exactly those changed files
+   with message
    `chore(security): bump sandbox mise pin to <new version> (weekly refresh)`.
-   Force-push: `git push -f origin auto/mise-pin-refresh`.
+   Push with a lease: `git push --force-with-lease origin auto/mise-pin-refresh`.
 4. If an open PR with head branch auto/mise-pin-refresh already exists
    (`gh pr list --state open --head auto/mise-pin-refresh`), the push updated
    it — add a comment noting the new version and stop. Otherwise create the
@@ -28,7 +30,7 @@ Claude routine, or manually as `/mise-pin-refresh` whenever wanted.
    upstream SHASUMS256.txt. Blockers: None. Apply the label
    author:mise-pin-refresh (create it first with
    `gh label create author:mise-pin-refresh --color 5319e7 2>/dev/null || true`).
-5. Touch nothing beyond the three pin sites. On any surprise (apply fails,
+5. Touch nothing beyond the registered pin sites. On any surprise (apply fails,
    tests fail, upstream release looks wrong), do NOT improvise a fix — open
    an issue titled "mise-pin-refresh needs attention" describing what you
    saw, and stop.
