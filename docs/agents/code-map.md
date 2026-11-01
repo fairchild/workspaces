@@ -54,6 +54,11 @@ Pointers from a task or symbol to the file that answers it — moved out of `AGE
 | Lume image catalog | Sources/WorkspaceManagerCore/Services/LumeImageCatalog.swift |
 | Lume VM status normalization | Sources/WorkspaceManagerCore/Services/LumeVMStatus.swift |
 | Lume error heuristics | Sources/WorkspaceManagerCore/Services/LumeErrorHeuristics.swift |
+| Caller identity scrub for launched sessions | Sources/WorkspaceManagerCore/Services/AgentSessionEnvironment.swift |
+| Launch record store (conversation, requested model/effort) | Sources/WorkspaceManagerCore/Services/AgentLaunchRecord.swift |
+| `ws check` verdict and pane reads | Sources/WorkspaceManagerCore/Services/AgentSessionInspection.swift |
+| Launch command planning and resume command | Sources/WorkspaceManagerCore/Services/AgentLaunchCommand.swift |
+| App side of launch records (row adoption, tile rejoin) | Sources/WorkspaceManager/Services/AgentLaunchRecordWatcher.swift, ContentView.swift |
 | Main layout | Sources/WorkspaceManager/Views/MainWindow/ContentView.swift |
 | Terminal wrapper | Sources/WorkspaceManager/Views/Components/TerminalView.swift |
 | Sidebar (repos/workspaces) | Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift |

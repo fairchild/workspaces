@@ -415,6 +415,42 @@ Targeted integration suites:
 
 Perf suites remain opt-in with `WORKSPACES_PERF_RUN=1`.
 
+## Starting a Session from a Script
+
+An agent or script that starts another agent calls these verbs in order. Each result is JSON with `--json`, and the handle comes from the launch result.
+
+```bash
+workspaces ws new <repo> <name> --from-ref origin/main --json
+workspaces ws launch <repo>/<name> --cmd "claude --model <model> --effort <effort> --name <label> '<prompt>'" --json
+workspaces ws check <handle> --wait 120 --json
+```
+
+The launch sheds the caller's agent identity, refuses a handle that is already running, and records the conversation id with the requested model and effort. The app adds a row for the workspace without selecting it, and clicking the row attaches to the running agent when terminals run in tmux-per-session mode.
+
+`ws check` exits 0 for `verified`. Any other verdict exits 2, so a script reads `verdict` and `blocker` from the JSON:
+
+| Verdict | Meaning |
+|---|---|
+| `verified` | One process holds the conversation, nothing blocks it, and a turn of its own used the requested model and effort. |
+| `ready` | One process, input box up, no turn yet. Normal for a launch with no prompt, or after a resume. Exits 0 with `--ready`. |
+| `waiting` | One process, no turn yet, and the input box is not up. |
+| `blocked` | A prompt is in the way. `blocker` names it, for example `trust-folder`. |
+| `mismatch` | A turn ran with a model or effort other than the one requested. |
+| `duplicate` | More than one process holds the conversation. |
+| `not-running` | The session or the agent is gone. `ws resume` is the next step. |
+| `unverifiable` | No conversation was recorded, because the command was not a plain `claude` invocation. |
+
+After the agent quits, the tmux server dies, or the machine restarts, one verb brings the conversation back, and it does nothing if the agent is already running:
+
+```bash
+workspaces ws resume <handle> --json
+workspaces ws check <handle> --wait 60 --ready
+workspaces ws send <handle> --text "<next instruction>" --enter
+workspaces ws check <handle> --wait 60
+```
+
+Resume restores identity, never authority: it passes the conversation id and the last effort, and no permission flag. The design is in [`docs/decisions/agent-launch-record.md`](../decisions/agent-launch-record.md).
+
 ## Deferred Ideas
 
 - Programmatic/headless Claude execution:
