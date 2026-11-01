@@ -425,7 +425,7 @@ workspaces ws launch <repo>/<name> --cmd "claude --model <model> --effort <effor
 workspaces ws check <handle> --wait 120 --json
 ```
 
-The launch sheds the caller's agent identity, refuses a handle that is already running, and records the conversation id with the requested model and effort. The app adds a row for the workspace without selecting it, and clicking the row attaches to the running agent when terminals run in tmux-per-session mode.
+The launch sheds the caller's agent identity, refuses a handle or a conversation that is already running, and records the conversation id with the requested model and effort. Single-quote the prompt: a double-quoted expansion at the start of a word could become a flag, so that launch goes unnamed and `ws check` reports `unverifiable`. The app adds a row for the workspace without selecting it, and clicking the row attaches to the running agent when terminals run in tmux-per-session mode.
 
 `ws check` exits 0 for `verified`. Any other verdict exits 2, so a script reads `verdict` and `blocker` from the JSON:
 
@@ -440,7 +440,7 @@ The launch sheds the caller's agent identity, refuses a handle that is already r
 | `not-running` | The session or the agent is gone. `ws resume` is the next step. |
 | `unverifiable` | No conversation was recorded, because the command was not a plain `claude` invocation. |
 
-After the agent quits, the tmux server dies, or the machine restarts, one verb brings the conversation back, and it does nothing if the agent is already running:
+After the agent quits, the tmux server dies, or the machine restarts, one verb brings the conversation back. It does nothing if the agent is already running, and concurrent calls start one agent:
 
 ```bash
 workspaces ws resume <handle> --json
@@ -449,7 +449,7 @@ workspaces ws send <handle> --text "<next instruction>" --enter
 workspaces ws check <handle> --wait 60
 ```
 
-Resume restores identity, never authority: it passes the conversation id and the last effort, and no permission flag. The design is in [`docs/decisions/agent-launch-record.md`](../decisions/agent-launch-record.md).
+Resume restores identity, never authority: it passes the conversation id and the last effort, and no permission flag. It refuses a record from an earlier workspace at the same path. If a terminal is attached to a shell under the handle, it presses Return on a resume command already prefilled there and otherwise types nothing, because that prompt may hold someone's work; the error prints the command to run there. The design is in [`docs/decisions/agent-launch-record.md`](../decisions/agent-launch-record.md).
 
 ## Deferred Ideas
 

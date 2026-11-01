@@ -1039,9 +1039,13 @@ struct ContentView: View {
             .task {
                 prewarmPerfTerminalSurfacesIfNeeded()
                 await performDeferredStartupWorkspaceStatusSync()
+                guard !Task.isCancelled else { return }
+                startWatchingLaunchRecords()
+                await adoptLaunchedWorkspaces()
             }
             .onDisappear {
                 agentLaunchRecordWatcher?.stop()
+                agentLaunchRecordWatcher = nil
                 lifecycleController.runTeardown(teardownActions)
             }
             .onChange(of: deepLinkState.pendingRequest) { _, _ in
@@ -2044,7 +2048,6 @@ struct ContentView: View {
 
         await syncWorkspaceStatuses(trigger: "launch_deferred")
         await refreshWorkspaceOrphans(trigger: "launch_deferred")
-        await adoptLaunchedWorkspaces()
         startWatchingLaunchRecords()
         await purgeExpiredArchivedWorkspaces(trigger: "launch_deferred")
     }
@@ -2075,9 +2078,10 @@ struct ContentView: View {
         let surfaceStore = tileTreeStore.surfaceStore
         let exited = surfaceStore.exitedTmuxSessionNames()
         guard !exited.isEmpty else { return }
-        let recorded = Set(
-            AgentLaunchRecordStore().all(socketLabel: TmuxSessionProbe.socketLabel).map(\.handle)
-        )
+        let socketLabel = TmuxSessionProbe.socketLabel
+        let recorded = await Task.detached {
+            Set(AgentLaunchRecordStore().all(socketLabel: socketLabel).map(\.handle))
+        }.value
         let probe = TmuxSessionProbe()
         for name in exited.intersection(recorded) where await probe.isSessionAlive(name) {
             surfaceStore.reviveExitedTmuxClients(where: { $0.effectiveTmuxSessionName == name })
@@ -2093,14 +2097,25 @@ struct ContentView: View {
     /// that outlives the view value that created it.
     @MainActor
     private func adoptLaunchedWorkspaces() async {
-        guard UIFixtureOrphanBannerBootstrap.fixtureScanResult() == nil,
-            let repos = try? modelContext.fetch(FetchDescriptor<Repo>())
-        else { return }
+        await Self.launchAdoptionPasses.run { await runLaunchAdoptionPass() }
+    }
+
+    /// One at a time across every window: a pass reads the ledger, suspends over a scan and
+    /// writes it back, and an overlapping one would write back a ledger missing what the
+    /// other added, which is how a row someone removed returns.
+    private static let launchAdoptionPasses = SerialPassRunner()
+
+    @MainActor
+    private func runLaunchAdoptionPass() async {
+        guard UIFixtureOrphanBannerBootstrap.fixtureScanResult() == nil else { return }
+        let socketLabel = TmuxSessionProbe.socketLabel
+        let records = await Task.detached { AgentLaunchRecordStore().all(socketLabel: socketLabel) }.value
+        guard let repos = try? modelContext.fetch(FetchDescriptor<Repo>()) else { return }
 
         let defaults = LaunchPreferences.defaults
         let ledgerKey = "agentLaunches.adoptedKeys.v1"
         let pass = workspaceOrphanController.launchAdoptionPass(
-            records: AgentLaunchRecordStore().all(socketLabel: TmuxSessionProbe.socketLabel),
+            records: records,
             repos: repos,
             handledKeys: Set(defaults.stringArray(forKey: ledgerKey) ?? [])
         )
@@ -2986,6 +3001,7 @@ struct ContentView: View {
             liveResumeLaunchNames.insert(sessionName)
         }
 
+        let lastEfforts = await restoreController.lastEfforts(in: plan)
         var activatedByHostSessionID: [UUID: HostTerminalSession] = [:]
         for surface in plan.surfaces {
             if surface.launchDirectoryFellBack {
@@ -2994,7 +3010,7 @@ struct ContentView: View {
                 )
             }
             let initialCommand = restoreController.initialCommand(
-                for: surface, liveSessionNames: liveResumeLaunchNames)
+                for: surface, liveSessionNames: liveResumeLaunchNames, lastEfforts: lastEfforts)
             if initialCommand == nil, case .resumeClaude = surface.action {
                 restoreLog.notice(
                     "[Restore] surface \(surface.hostSessionID.uuidString, privacy: .public) resume target is a live session; attaching without the resume command"

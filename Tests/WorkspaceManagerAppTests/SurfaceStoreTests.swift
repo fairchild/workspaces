@@ -77,6 +77,30 @@ struct SurfaceStoreTests {
         #expect(ledger.ownership(forHostSessionID: session.id) == nil)
     }
 
+    @Test("A revived tile redoes its launch work, without its initial command")
+    func revivingKeepsTheInitialCommandSpent() {
+        let store = SurfaceStore()
+        let tile = TileID()
+        let session = makeSession(delivery: .execute)
+        _ = store.terminalSurface(for: tile, session: session)
+
+        store.reviveExitedTmuxClients(where: { _ in true }, isExited: { _ in true })
+
+        #expect(!store.launchWorkDeliveredSessionIDs.contains(session.id))
+        #expect(store.initialCommandSpentSessionIDs.contains(session.id))
+    }
+
+    @Test("A revived tile with no initial command has nothing to keep spent")
+    func revivingWithoutAnInitialCommand() {
+        let store = SurfaceStore()
+        let session = makeSession()
+        _ = store.terminalSurface(for: TileID(), session: session)
+
+        store.reviveExitedTmuxClients(where: { _ in true }, isExited: { _ in true })
+
+        #expect(!store.initialCommandSpentSessionIDs.contains(session.id))
+    }
+
     @Test("The names of exited tiles come from the sessions they held")
     func exitedNames() {
         let store = SurfaceStore()

@@ -161,6 +161,24 @@ struct MainWindowRestoreController {
         }
     }
 
+    /// The effort each resume surface's conversation last ran at, keyed by agent session id.
+    /// Read up front and off the main actor, since each is the tail of a transcript and a
+    /// restore can hold many.
+    func lastEfforts(
+        in plan: RestorePlan,
+        lastEffort: @escaping @Sendable (String, URL) -> String? = RestoreLaunchCommand.lastEffort
+    ) async -> [String: String] {
+        let targets = plan.surfaces.compactMap { surface -> (id: String, directory: URL)? in
+            guard case .resumeClaude(let agentSessionID) = surface.action else { return nil }
+            return (agentSessionID, surface.directory)
+        }
+        return await Task.detached {
+            targets.reduce(into: [:]) { efforts, target in
+                efforts[target.id] = lastEffort(target.id, target.directory)
+            }
+        }.value
+    }
+
     /// `initialCommand(for:)` guarded by the probe-before-launch check: a resume whose
     /// `-A` target is in `liveSessionNames` attaches to an existing session — one another
     /// surface owns — so injecting the command would type `claude --resume` into that
@@ -169,11 +187,11 @@ struct MainWindowRestoreController {
         for surface: RestoreSurfacePlan,
         liveSessionNames: Set<String>,
         sessionName: (URL) -> String = { GhosttyTerminalConfig.tmuxSessionName(for: $0) },
-        lastEffort: (String, URL) -> String? = RestoreLaunchCommand.lastEffort
+        lastEfforts: [String: String] = [:]
     ) -> String? {
         var effort: String?
         if case .resumeClaude(let agentSessionID) = surface.action {
-            effort = lastEffort(agentSessionID, surface.directory)
+            effort = lastEfforts[agentSessionID]
         }
         guard let command = initialCommand(for: surface.action, effort: effort) else { return nil }
         guard !liveSessionNames.contains(sessionName(surface.directory)) else { return nil }

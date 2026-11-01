@@ -397,21 +397,31 @@ struct MainWindowRestoreControllerTests {
     func resumeCarriesTheLastEffort() {
         let directory = URL(fileURLWithPath: "/Users/dev/code/alpha")
         let resume = surface(action: .resumeClaude(agentSessionID: "a"), directory: directory)
-        var asked: [(String, URL)] = []
 
         let command = controller.initialCommand(
             for: resume,
             liveSessionNames: [],
             sessionName: { _ in "wm-alpha" },
-            lastEffort: { id, url in
-                asked.append((id, url))
-                return "xhigh"
-            }
+            lastEfforts: ["a": "xhigh"]
         )
 
         #expect(command == "claude --resume a --effort xhigh")
-        #expect(asked.map(\.0) == ["a"])
-        #expect(asked.map(\.1) == [directory])
+    }
+
+    @Test("Efforts are read for resume surfaces alone, each from its own directory")
+    func lastEffortsComeFromResumeSurfaces() async {
+        let directory = URL(fileURLWithPath: "/Users/dev/code/alpha")
+        let target = plan([
+            surface(action: .resumeClaude(agentSessionID: "a"), directory: directory),
+            surface(action: .reattachTmux(sessionName: "wm-beta")),
+            surface(action: .resumeClaude(agentSessionID: "unrecorded"), directory: directory),
+        ])
+
+        let efforts = await controller.lastEfforts(in: target) { id, url in
+            id == "a" && url == directory ? "xhigh" : nil
+        }
+
+        #expect(efforts == ["a": "xhigh"])
     }
 
     @Test("A conversation with no recorded effort resumes without the flag")
@@ -422,8 +432,7 @@ struct MainWindowRestoreControllerTests {
         let command = controller.initialCommand(
             for: resume,
             liveSessionNames: [],
-            sessionName: { _ in "wm-alpha" },
-            lastEffort: { _, _ in nil }
+            sessionName: { _ in "wm-alpha" }
         )
         #expect(command == "claude --resume a")
     }

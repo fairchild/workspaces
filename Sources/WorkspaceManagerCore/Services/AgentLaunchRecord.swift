@@ -78,6 +78,7 @@ extension AgentLaunchRecordStore {
     ) -> String? {
         guard let record = load(socketLabel: socketLabel, handle: tmuxSessionName),
             let identity = record.identity,
+            record.isForWorkspaceOnDisk,
             let processListing,
             AgentSessionInspection.conversationHolders(identity.conversationID, processListing: processListing).isEmpty,
             let transcript = resumability.existingTranscriptURL(

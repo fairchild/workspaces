@@ -117,6 +117,23 @@ struct AgentLaunchRecordStoreTests {
         }
     }
 
+    @Test("Nothing is offered for a conversation from an earlier workspace at the same path")
+    func resumeCommandSkipsAnEarlierWorkspace() throws {
+        try withStore { store in
+            let earlier = record()
+            try store.save(
+                AgentLaunchRecord(
+                    handle: earlier.handle,
+                    workspacePath: earlier.workspacePath,
+                    socketLabel: earlier.socketLabel,
+                    launchedAt: Date(timeIntervalSince1970: 0),
+                    identity: earlier.identity
+                )
+            )
+            #expect(resumeCommand(store: store) == nil)
+        }
+    }
+
     @Test("Nothing is offered without a transcript, a record, or a named conversation")
     func resumeCommandNeedsAConversation() throws {
         try withStore { store in

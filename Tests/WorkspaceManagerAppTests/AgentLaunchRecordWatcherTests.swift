@@ -74,6 +74,23 @@ struct AgentLaunchRecordWatcherTests {
         }
     }
 
+    @Test("A directory removed from under it is watched again once it comes back")
+    func survivesTheDirectoryGoing() async throws {
+        try await withWatcher { store, _, passes in
+            try store.save(record(handle: "wm-a-1"))
+            try await waitForPasses(passes, atLeast: 1)
+            let seen = passes.count
+
+            try FileManager.default.removeItem(at: store.directory(socketLabel: "workspaces"))
+            try await waitForPasses(passes, atLeast: seen + 1)
+            let afterRemoval = passes.count
+
+            try store.save(record(handle: "wm-b-2"))
+            try await waitForPasses(passes, atLeast: afterRemoval + 1)
+            #expect(passes.count > afterRemoval)
+        }
+    }
+
     @Test("A stopped watcher stays quiet")
     func stopEndsThePasses() async throws {
         try await withWatcher { store, watcher, passes in

@@ -36,18 +36,18 @@ final class AgentLaunchRecordWatcher {
     func start() {
         guard source == nil else { return }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let descriptor = open(directory.path, O_EVTONLY)
+        let descriptor = open(directory.path, O_EVTONLY | O_CLOEXEC)
         guard descriptor >= 0 else {
             log.notice("Not watching launch records: could not open \(self.directory.path, privacy: .public)")
             return
         }
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor,
-            eventMask: .write,
+            eventMask: [.write, .delete, .rename],
             queue: .main
         )
-        source.setEventHandler { [weak self] in
-            MainActor.assumeIsolated { self?.schedulePass() }
+        source.setEventHandler { [weak self, weak source] in
+            MainActor.assumeIsolated { self?.handle(source?.data ?? []) }
         }
         source.setCancelHandler { close(descriptor) }
         source.resume()
@@ -59,6 +59,17 @@ final class AgentLaunchRecordWatcher {
         pendingPass = nil
         source?.cancel()
         source = nil
+    }
+
+    /// A directory deleted or moved away is no longer where records land, and the descriptor
+    /// would go on watching it, so the watch starts over on the path.
+    private func handle(_ events: DispatchSource.FileSystemEvent) {
+        if !events.isDisjoint(with: [.delete, .rename]) {
+            source?.cancel()
+            source = nil
+            start()
+        }
+        schedulePass()
     }
 
     private func schedulePass() {

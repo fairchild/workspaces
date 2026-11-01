@@ -177,7 +177,7 @@ final class SurfaceStore: ObservableObject {
     /// The launch counts as a new one for everything but an initial command, because what
     /// it lands on is a question this launch has to answer afresh, and the old answer may
     /// be about a session on a server that no longer exists. An initial command stays
-    /// delivered: a respawned shell must not re-run the agent.
+    /// spent: a respawned shell must not re-run the agent.
     @discardableResult
     func reviveExitedTmuxClients(
         where isTarget: (HostTerminalSession) -> Bool,
@@ -188,8 +188,9 @@ final class SurfaceStore: ObservableObject {
             guard let terminal = surface as? TerminalSurface, isTarget(terminal.session), isExited(terminal)
             else { continue }
             tmuxOwnershipLedger?.forget(hostSessionID: terminal.session.id)
-            if terminal.session.initialCommand == nil {
-                launchWorkDeliveredSessionIDs.remove(terminal.session.id)
+            launchWorkDeliveredSessionIDs.remove(terminal.session.id)
+            if terminal.session.initialCommand != nil {
+                initialCommandSpentSessionIDs.insert(terminal.session.id)
             }
             if restartTerminalSurface(for: tileID) {
                 revived += 1
@@ -200,7 +201,10 @@ final class SurfaceStore: ObservableObject {
 
     /// Sessions whose post-creation launch work has run. Once per session, never per
     /// surface: a respawned shell must not re-run the agent.
-    private var launchWorkDeliveredSessionIDs: Set<UUID> = []
+    private(set) var launchWorkDeliveredSessionIDs: Set<UUID> = []
+
+    /// Sessions a revived client is launching again, whose initial command already ran.
+    private(set) var initialCommandSpentSessionIDs: Set<UUID> = []
 
     /// Bring a newly created terminal surface up to its launch contract, then hand it
     /// `session.initialCommand`.
@@ -277,7 +281,8 @@ final class SurfaceStore: ObservableObject {
                 }
             }
 
-            guard let initialCommand = session.initialCommand else {
+            let spent = self?.initialCommandSpentSessionIDs.contains(session.id) ?? false
+            guard let initialCommand = session.initialCommand, !spent else {
                 if tmuxLaunchScript != nil {
                     await self?.prefillRecordedConversation(terminal: terminal, session: session)
                 }
@@ -299,15 +304,21 @@ final class SurfaceStore: ObservableObject {
     /// with no sign of what ran there. Prefilled, because starting an agent spends memory
     /// and tokens: reopening the workspace is not the same as asking for that.
     private func prefillRecordedConversation(terminal: TerminalSurface, session: HostTerminalSession) async {
-        guard tmuxOwnershipLedger?.ownership(forHostSessionID: session.id)?.provenance == .createdByThisLaunch,
-            let command = AgentLaunchRecordStore().resumeCommand(
-                socketLabel: TmuxSessionProbe.socketLabel,
-                tmuxSessionName: session.effectiveTmuxSessionName,
-                processListing: await AgentSessionInspection.processListing(),
-                resumability: ClaudeTranscriptResumability()
-            ),
-            !terminal.surfaceView.hasReceivedUserInput
+        guard tmuxOwnershipLedger?.ownership(forHostSessionID: session.id)?.provenance == .createdByThisLaunch
         else { return }
+        let processListing = await AgentSessionInspection.processListing()
+        let socketLabel = TmuxSessionProbe.socketLabel
+        let sessionName = session.effectiveTmuxSessionName
+        // Off the main actor: this reads the tail of a transcript.
+        let command = await Task.detached {
+            AgentLaunchRecordStore().resumeCommand(
+                socketLabel: socketLabel,
+                tmuxSessionName: sessionName,
+                processListing: processListing,
+                resumability: ClaudeTranscriptResumability()
+            )
+        }.value
+        guard let command, !terminal.surfaceView.hasReceivedUserInput else { return }
         deliverInitialCommand(command, to: terminal, session: session, delivery: .prefill)
     }
 
