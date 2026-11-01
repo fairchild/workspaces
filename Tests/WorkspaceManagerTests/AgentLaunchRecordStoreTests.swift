@@ -23,7 +23,7 @@ struct AgentLaunchRecordStoreTests {
     private func record(handle: String = "wm-a-1", socketLabel: String = "workspaces") -> AgentLaunchRecord {
         AgentLaunchRecord(
             handle: handle,
-            workspacePath: "/tmp/a",
+            workspacePath: FileManager.default.temporaryDirectory.path,
             socketLabel: socketLabel,
             launchedAt: Date(timeIntervalSince1970: 1_800_000_000),
             identity: AgentLaunchIdentity(
@@ -73,6 +73,61 @@ struct AgentLaunchRecordStoreTests {
                 encoding: .utf8
             )
             #expect(store.all(socketLabel: "workspaces").map(\.handle) == ["wm-a-1"])
+        }
+    }
+
+    @Test("A record speaks only for the workspace it launched into")
+    func recordsAreBoundToTheirWorkspace() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("launched-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let created = try #require(
+            FileManager.default.attributesOfItem(atPath: directory.path)[.creationDate] as? Date
+        )
+        func launched(at date: Date, path: String = directory.path) -> AgentLaunchRecord {
+            AgentLaunchRecord(
+                handle: "wm-a-1",
+                workspacePath: path,
+                socketLabel: "workspaces",
+                launchedAt: date,
+                identity: nil
+            )
+        }
+
+        #expect(launched(at: created.addingTimeInterval(60)).isForWorkspaceOnDisk)
+        // A stored time has lost its fraction, so the launch's own second has to pass.
+        #expect(launched(at: created.addingTimeInterval(-0.5)).isForWorkspaceOnDisk)
+        #expect(!launched(at: created.addingTimeInterval(-60)).isForWorkspaceOnDisk)
+        #expect(!launched(at: created, path: directory.path + "-gone").isForWorkspaceOnDisk)
+    }
+
+    @Test("One claim on a conversation at a time, free again once released")
+    func conversationLockExcludes() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("launch-locks-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AgentLaunchRecordStore(directory: directory)
+        let id = "fa08c461-2979-41db-85fb-b5c90c0d2d8b"
+
+        let first = try await store.lockConversation(id)
+        await #expect(throws: AgentLaunchRecordStore.LockError.self) {
+            try await store.lockConversation(id, timeout: .milliseconds(200))
+        }
+        // Another conversation is another lock.
+        try await store.lockConversation("fa08c461-2979-41db-85fb-b5c90c0d2d8c").release()
+        first.release()
+        try await store.lockConversation(id, timeout: .seconds(5)).release()
+    }
+
+    @Test("A lock is only ever taken on something shaped like a conversation id")
+    func conversationLockRefusesAnotherName() async {
+        let store = AgentLaunchRecordStore(
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("launch-locks-\(UUID().uuidString)")
+        )
+        await #expect(throws: CocoaError.self) {
+            try await store.lockConversation("../../escape")
         }
     }
 

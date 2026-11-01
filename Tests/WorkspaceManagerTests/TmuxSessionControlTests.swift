@@ -661,6 +661,33 @@ struct TmuxSessionControlTests {
 
     /// A capture that failed carries no information, so it must not overwrite one that
     /// looked and came back empty-handed.
+    @Test("With nobody watching, a resume types over whatever the prompt holds")
+    func resumeEntryUnattended() {
+        #expect(
+            TmuxSessionControl.resumeEntry(
+                attachedClients: 0,
+                inputLine: "half a command",
+                command: "claude --resume x"
+            ) == .typeCommand
+        )
+    }
+
+    @Test("With a terminal attached, a resume only ever presses Return on its own command")
+    func resumeEntryAttached() {
+        let command = "claude --resume x --effort low"
+        func entry(_ clients: Int?, _ line: String?) -> TmuxSessionControl.ResumeEntry {
+            TmuxSessionControl.resumeEntry(attachedClients: clients, inputLine: line, command: command)
+        }
+        #expect(entry(1, "\u{276f} \(command)   ") == .submitPrefilled)
+        #expect(entry(2, command) == .submitPrefilled)
+        #expect(entry(1, "\u{276f} git rebase --contin") == .refuse)
+        #expect(entry(1, "\u{276f} ") == .refuse)
+        #expect(entry(1, nil) == .refuse)
+        // A count tmux would not give is not a count of zero.
+        #expect(entry(nil, "half a command") == .refuse)
+        #expect(entry(nil, command) == .submitPrefilled)
+    }
+
     @Test("A failed capture after a successful miss leaves the miss standing")
     func failedCaptureDoesNotEraseAMiss() async throws {
         let recorder = RecordingRunner(

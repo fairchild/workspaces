@@ -404,6 +404,15 @@ private final class CLIApp {
 
         let control = tmuxControl()
         let plan = AgentLaunchCommand.plan(command: command)
+        if let conversationID = plan.identity?.conversationID,
+            let listing = await AgentSessionInspection.processListing(),
+            !AgentSessionInspection.conversationHolders(conversationID, processListing: listing).isEmpty
+        {
+            throw CLIError(
+                "Conversation \(conversationID) is already running, and a second agent would be "
+                    + "a second writer on its transcript."
+            )
+        }
         let earlierConversation = launchRecords.load(socketLabel: control.socketLabel, handle: handle)?
             .identity?.conversationID
         do {
@@ -632,8 +641,25 @@ private final class CLIApp {
         guard FileManager.default.fileExists(atPath: directory.path) else {
             throw CLIError("The workspace directory is gone: \(directory.path)")
         }
+        guard record.isForWorkspaceOnDisk else {
+            throw CLIError(
+                "\(directory.path) was made after this launch, so conversation "
+                    + "\(identity.conversationID) belongs to an earlier workspace at that path. "
+                    + "'workspaces ws launch' can name it with --resume if that is the intent."
+            )
+        }
 
         let conversationID = identity.conversationID
+        let lock: AgentConversationLock
+        do {
+            lock = try await launchRecords.lockConversation(conversationID)
+        } catch AgentLaunchRecordStore.LockError.held {
+            throw CLIError("Another resume of conversation \(conversationID) is still running.")
+        } catch {
+            throw CLIError("Could not claim conversation \(conversationID): \(error.localizedDescription)")
+        }
+        defer { lock.release() }
+
         let sessionLive = await control.isLive(handle: handle)
         let holders = try await conversationHolders(conversationID, sessionLive: sessionLive)
         if holders > 0 {
@@ -676,10 +702,27 @@ private final class CLIApp {
                             + "not a shell, so the resume command cannot be typed into it."
                     )
                 }
-                try await control.clearInputLine(handle: handle)
-                let report = try await control.send(handle: handle, text: command, submit: true)
-                if report.verification == .paneMissingText {
-                    writeStderr("warning: the pane did not show the resume command; 'ws check' will say if it ran.")
+                let entry = TmuxSessionControl.resumeEntry(
+                    attachedClients: await control.attachedClients(handle: handle),
+                    inputLine: await control.inputLine(handle: handle),
+                    command: command
+                )
+                switch entry {
+                case .typeCommand:
+                    try await control.clearInputLine(handle: handle)
+                    let report = try await control.send(handle: handle, text: command, submit: true)
+                    if report.verification == .paneMissingText {
+                        writeStderr(
+                            "warning: the pane did not show the resume command; 'ws check' will say if it ran."
+                        )
+                    }
+                case .submitPrefilled:
+                    try await control.submitInputLine(handle: handle)
+                case .refuse:
+                    throw CLIError(
+                        "'\(handle)' is open in a terminal, and its prompt may hold someone's work, "
+                            + "so nothing was typed. To resume it there, run: \(command)"
+                    )
                 }
             } else {
                 try await control.launch(handle: handle, directory: directory, command: command)
@@ -687,6 +730,7 @@ private final class CLIApp {
         } catch let error as TmuxSessionControl.ControlError {
             throw CLIError(error.localizedDescription)
         }
+        await waitForHolder(of: conversationID)
 
         var resumed = record
         resumed.resumedAt = Date()
@@ -729,6 +773,19 @@ private final class CLIApp {
     }
 
     private static let resumeHolderExitWindow: TimeInterval = 15
+
+    /// Until the new agent shows in the process table, so a resume waiting on the lock finds
+    /// it there rather than a conversation that still looks free.
+    private func waitForHolder(of conversationID: String) async {
+        for _ in 0..<50 {
+            if let listing = await AgentSessionInspection.processListing(),
+                !AgentSessionInspection.conversationHolders(conversationID, processListing: listing).isEmpty
+            {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
 
     private func reportResume(_ result: WorkspaceResumeResult, json: Bool) throws -> Int32 {
         if json {

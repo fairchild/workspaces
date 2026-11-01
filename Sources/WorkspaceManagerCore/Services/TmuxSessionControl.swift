@@ -326,6 +326,19 @@ public struct TmuxSessionControl: Sendable {
         ["tmux", "-L", socketLabel, "display-message", "-p", "-t", paneTarget(handle), "#{pane_current_command}"]
     }
 
+    /// How many terminals are showing the session: a tile in the app counts as one.
+    public static func attachedClientsArguments(socketLabel: String, handle: String) -> [String] {
+        ["tmux", "-L", socketLabel, "display-message", "-p", "-t", paneTarget(handle), "#{session_attached}"]
+    }
+
+    public static func cursorRowArguments(socketLabel: String, handle: String) -> [String] {
+        ["tmux", "-L", socketLabel, "display-message", "-p", "-t", paneTarget(handle), "#{cursor_y}"]
+    }
+
+    public static func captureRowArguments(socketLabel: String, handle: String, row: Int) -> [String] {
+        ["tmux", "-L", socketLabel, "capture-pane", "-p", "-t", paneTarget(handle), "-S", "\(row)", "-E", "\(row)"]
+    }
+
     /// Readline's and zle's kill-line, for a prompt that may already hold text.
     public static func clearInputLineArguments(socketLabel: String, handle: String) -> [String] {
         ["tmux", "-L", socketLabel, "send-keys", "-t", paneTarget(handle), "C-u"]
@@ -460,6 +473,72 @@ public struct TmuxSessionControl: Sendable {
         else { return nil }
         let command = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         return command.isEmpty ? nil : command
+    }
+
+    /// How a resume may reach a live shell. With nobody watching, the prompt holds nothing
+    /// worth keeping, so the command is typed over whatever is there. With a terminal
+    /// attached it may hold someone's half-written command, and no read of the pane tells
+    /// that from a blank prompt, so the one thing done there is pressing Return on the
+    /// resume command the app already prefilled. An unknown count is treated as attached.
+    public enum ResumeEntry: Equatable {
+        case typeCommand
+        case submitPrefilled
+        case refuse
+    }
+
+    public static func resumeEntry(attachedClients: Int?, inputLine: String?, command: String) -> ResumeEntry {
+        if attachedClients == 0 { return .typeCommand }
+        let prefilled = inputLine?.trimmingCharacters(in: .whitespaces).hasSuffix(command) == true
+        return prefilled ? .submitPrefilled : .refuse
+    }
+
+    /// How many terminals are showing the session, or `nil` when tmux did not say.
+    public func attachedClients(handle: String) async -> Int? {
+        guard
+            let result = await run(
+                "/usr/bin/env",
+                Self.attachedClientsArguments(socketLabel: socketLabel, handle: handle),
+                environment
+            ),
+            result.success
+        else { return nil }
+        return Int(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// The pane's text on the cursor's row, which at a shell prompt is the line being edited.
+    public func inputLine(handle: String) async -> String? {
+        guard
+            let cursor = await run(
+                "/usr/bin/env",
+                Self.cursorRowArguments(socketLabel: socketLabel, handle: handle),
+                environment
+            ),
+            cursor.success,
+            let row = Int(cursor.stdout.trimmingCharacters(in: .whitespacesAndNewlines)),
+            let line = await run(
+                "/usr/bin/env",
+                Self.captureRowArguments(socketLabel: socketLabel, handle: handle, row: row),
+                environment
+            ),
+            line.success
+        else { return nil }
+        return line.stdout.trimmingCharacters(in: .newlines)
+    }
+
+    /// Presses Return on what the prompt already holds.
+    public func submitInputLine(handle: String) async throws {
+        guard
+            let result = await run(
+                "/usr/bin/env",
+                Self.sendEnterArguments(socketLabel: socketLabel, handle: handle),
+                environment
+            )
+        else {
+            throw ControlError.tmuxUnavailable
+        }
+        guard result.success else {
+            throw ControlError.commandFailed(verb: "send-keys Enter", handle: handle, stderr: result.stderr)
+        }
     }
 
     /// Empties the line at a shell prompt, so what is typed next is the whole command. The

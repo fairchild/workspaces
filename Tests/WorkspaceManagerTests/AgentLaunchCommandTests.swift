@@ -91,6 +91,8 @@ struct AgentLaunchCommandTests {
             "claude; rm -rf x", "claude && echo done", "claude | tee log", "claude > log",
             "(claude)", "claude $FLAGS", "claude `flags`", "claude # note", "claude 'unbalanced",
             "CLAUDE_CONFIG_DIR=/tmp/other claude",
+            "claude \"$MODE\" 'do the work'", "claude \"`mode`\"", "claude --model \"$MODEL\"",
+            "claude \"--resume=$ID\"", "claude --session-id \(id) --resume \(id)",
         ]
     )
     func opaque(command: String) {
@@ -104,11 +106,13 @@ struct AgentLaunchCommandTests {
         #expect(plan(nil) == AgentLaunchCommand.Plan(command: nil, identity: nil))
     }
 
-    @Test("A hash inside a word and a dollar inside double quotes do not make a command compound")
+    @Test("A hash inside a word and a dollar past the start of a prompt do not make a command opaque")
     func notOperators() {
         #expect(plan("claude 'issue #12'").identity != nil)
         #expect(plan("claude fix#12").identity != nil)
         #expect(plan("claude \"fix $PATH handling\"").identity != nil)
+        #expect(plan("claude '$MODE stays literal here'").identity != nil)
+        #expect(plan("claude \"\\$MODE is escaped\"").identity != nil)
     }
 
     @Test("A resume command is built from a validated id and a known effort")

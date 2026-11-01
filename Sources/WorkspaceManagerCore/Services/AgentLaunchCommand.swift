@@ -42,6 +42,9 @@ public enum AgentLaunchCommand {
         "--from-pr", "--cloud", "--desktop",
     ]
 
+    /// Flags that name one conversation.
+    static let conversationFlags: Set<String> = ["--session-id", "--resume", "-r"]
+
     /// Words that make the invocation a management command rather than a session.
     private static let subcommands: Set<String> = [
         "agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install", "logs",
@@ -140,9 +143,10 @@ public enum AgentLaunchCommand {
                 model = value().flatMap(safeToken)
             case "--effort":
                 effort = value().flatMap(safeToken)
-            case "--session-id", "--resume", "-r":
-                // A bare `--resume` opens a picker, and only a UUID names one conversation.
-                guard let id = value(), UUID(uuidString: id) != nil else { return nil }
+            case _ where conversationFlags.contains(flag):
+                // A bare `--resume` opens a picker, only a UUID names one conversation, and
+                // two of them leave claude to pick or refuse.
+                guard conversationID == nil, let id = value(), UUID(uuidString: id) != nil else { return nil }
                 conversationID = id
             default:
                 break
@@ -185,9 +189,9 @@ enum ShellWords {
         let end: String.Index
     }
 
-    /// `nil` for anything a shell would treat as more than one simple command, or for
-    /// unbalanced quoting. Expansion inside double quotes is left alone: it can change a
-    /// word's value but not the command's structure.
+    /// `nil` for anything a shell would treat as more than one simple command, for
+    /// unbalanced quoting, or for a double-quoted expansion that could become an option.
+    /// One further along, as in a prompt, changes a word's value and nothing else.
     static func split(_ command: String) -> [Word]? {
         var words: [Word] = []
         var current = ""
@@ -209,6 +213,8 @@ enum ShellWords {
                     guard next < command.endIndex else { return nil }
                     current.append(command[next])
                     index = next
+                } else if open == "\"", "$`".contains(character), current.isEmpty || current.hasPrefix("-") {
+                    return nil
                 } else {
                     current.append(character)
                 }

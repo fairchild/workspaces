@@ -203,6 +203,38 @@ struct AgentSessionInspectionTests {
         #expect(AgentSessionInspection.conversationHolders(id, processListing: listing) == [300, 3630])
     }
 
+    @Test("A flag joined to its value holds the conversation like one apart from it")
+    func joinedFlags() {
+        let id = Self.id
+        let listing = """
+               00:05 claude --session-id=\(id)
+               00:06 claude --resume=\(id)
+            """
+        #expect(AgentSessionInspection.conversationHolders(id, processListing: listing) == [5, 6])
+    }
+
+    @Test("Claude run by an interpreter is a holder, under either name it installs as")
+    func interpreterLayouts() {
+        let id = Self.id
+        let listing = """
+               00:05 node /opt/homebrew/bin/claude --resume \(id)
+               00:06 node /opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js --resume \(id)
+            """
+        #expect(AgentSessionInspection.conversationHolders(id, processListing: listing) == [5, 6])
+    }
+
+    @Test("A conversation id past `--` is a prompt, and a program merely naming claude holds nothing")
+    func notHolders() {
+        let id = Self.id
+        let listing = """
+               00:05 claude -- --resume \(id)
+               00:06 claude --session-id 00000000-0000-0000-0000-000000000000 -- see --resume=\(id)
+               00:07 tmux -L workspaces new-session -d -s wm-a-1 claude --session-id \(id)
+               00:08 tail -f /tmp/\(id).jsonl
+            """
+        #expect(AgentSessionInspection.conversationHolders(id, processListing: listing).isEmpty)
+    }
+
     @Test("A short flag names a conversation too, and nothing listed means nothing holds it")
     func holderEdges() {
         let id = Self.id

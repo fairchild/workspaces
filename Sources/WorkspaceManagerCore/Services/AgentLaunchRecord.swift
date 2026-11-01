@@ -37,6 +37,32 @@ public struct AgentLaunchRecord: Codable, Sendable, Equatable {
         self.identity = identity
         self.resumedAt = resumedAt
     }
+
+    /// Whether the directory at the recorded path is the one launched into. A workspace can
+    /// be archived and another made at the same path, and its conversation is no part of
+    /// that one. Stored times carry whole seconds, so a workspace made in the launch's own
+    /// second has to count.
+    public var isForWorkspaceOnDisk: Bool {
+        guard
+            let created = (try? FileManager.default.attributesOfItem(atPath: workspacePath))?[.creationDate] as? Date
+        else { return false }
+        return created.timeIntervalSince(launchedAt) < 1
+    }
+}
+
+/// An exclusive claim on one conversation, for the span between seeing that nothing holds it
+/// and a new holder being visible. The kernel drops it when the process ends, so a crashed
+/// resume leaves nothing behind.
+public final class AgentConversationLock: Sendable {
+    private let descriptor: Int32
+
+    fileprivate init(descriptor: Int32) {
+        self.descriptor = descriptor
+    }
+
+    public func release() {
+        close(descriptor)
+    }
 }
 
 /// The directory the CLI keeps its local state in, shared with the app so both read the
@@ -98,6 +124,37 @@ public struct AgentLaunchRecordStore: Sendable {
                 options: [.skipsHiddenFiles]
             )) ?? []
         return urls.filter { $0.pathExtension == "json" }.compactMap(Self.decode(contentsOf:))
+    }
+
+    public enum LockError: Error {
+        case held
+    }
+
+    /// Waits for the conversation to be free, then claims it. Keyed by conversation rather
+    /// than handle, because two handles can name one conversation. The lock files sit
+    /// beside the socket directories, where writing them wakes nothing that watches records.
+    public func lockConversation(
+        _ conversationID: String,
+        timeout: Duration = .seconds(30)
+    ) async throws -> AgentConversationLock {
+        guard UUID(uuidString: conversationID) != nil else { throw CocoaError(.fileWriteInvalidFileName) }
+        let locks = directory.appendingPathComponent(".locks", isDirectory: true)
+        try FileManager.default.createDirectory(at: locks, withIntermediateDirectories: true)
+        let path = locks.appendingPathComponent("\(conversationID).lock").path
+        // Close-on-exec: a lock stays held for as long as anything that inherited the
+        // descriptor runs, and a resume can start a tmux server.
+        let descriptor = open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
+
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            guard errno == EWOULDBLOCK, ContinuousClock.now < deadline else {
+                close(descriptor)
+                throw LockError.held
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        return AgentConversationLock(descriptor: descriptor)
     }
 
     /// A handle becomes a filename, so it has to be one.
