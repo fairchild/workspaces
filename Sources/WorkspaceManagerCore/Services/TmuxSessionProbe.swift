@@ -494,9 +494,13 @@ public struct TmuxSessionProbe: Sendable {
     }
 
     /// Process environment with the common Homebrew/system bin paths prepended so
-    /// `/usr/bin/env tmux` resolves regardless of the launch PATH.
+    /// `/usr/bin/env tmux` resolves regardless of the launch PATH, and with the caller's
+    /// agent identity removed: whichever client starts the server gives it this
+    /// environment, and every pane on the socket inherits from there.
     public static let defaultEnvironment: [String: String] = {
-        var environment = ProcessInfo.processInfo.environment
+        var environment = AgentSessionEnvironment.removingCallerIdentity(
+            from: ProcessInfo.processInfo.environment
+        )
         environment["PATH"] = pathPrependingToolPaths(environment["PATH"])
         return environment
     }()

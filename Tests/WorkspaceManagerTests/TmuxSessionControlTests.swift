@@ -183,18 +183,56 @@ struct TmuxSessionControlTests {
 
     @Test("A free handle launches and comes back as the caller's handle")
     func launchReturnsHandle() async throws {
-        let recorder = RecordingRunner(responses: [RecordingRunner.failure, RecordingRunner.ok])
+        // has-session misses, and no server answers show-environment.
+        let recorder = RecordingRunner(responses: [
+            RecordingRunner.failure, RecordingRunner.failure, RecordingRunner.ok,
+        ])
         let control = TmuxSessionControl(socketLabel: "scratch", run: recorder.runner, environment: [:])
 
         let handle = try await control.launch(handle: "wm-a-1", directory: Self.directory, command: "claude")
         #expect(handle == "wm-a-1")
-        #expect(recorder.calls.count == 2)
-        #expect(recorder.calls[1].contains("new-session"))
+        #expect(recorder.calls.count == 3)
+        #expect(recorder.calls[2].contains("new-session"))
+    }
+
+    @Test("A server holding a caller's identity is cleaned before the pane spawns")
+    func launchCleansTheServerFirst() async throws {
+        let recorder = RecordingRunner(responses: [
+            RecordingRunner.failure,
+            RecordingRunner.output("PATH=/bin\nCLAUDE_PID=1\n-CLAUDE_EFFORT\nAI_AGENT=x\nHOME=/h\n"),
+            RecordingRunner.ok,
+            RecordingRunner.ok,
+        ])
+        let control = TmuxSessionControl(socketLabel: "scratch", run: recorder.runner, environment: [:])
+
+        _ = try await control.launch(handle: "wm-a-1", directory: Self.directory, command: "claude")
+
+        #expect(recorder.calls.count == 4)
+        #expect(
+            recorder.calls[2] == [
+                "tmux", "-L", "scratch",
+                "set-environment", "-g", "-u", "CLAUDE_PID", ";",
+                "set-environment", "-g", "-u", "AI_AGENT",
+            ]
+        )
+        #expect(recorder.calls[3].contains("new-session"))
+    }
+
+    @Test("A clean server is not written to")
+    func launchLeavesACleanServerAlone() async throws {
+        let recorder = RecordingRunner(responses: [
+            RecordingRunner.failure, RecordingRunner.output("PATH=/bin\nHOME=/h\n"), RecordingRunner.ok,
+        ])
+        let control = TmuxSessionControl(socketLabel: "scratch", run: recorder.runner, environment: [:])
+
+        _ = try await control.launch(handle: "wm-a-1", directory: Self.directory, command: "claude")
+
+        #expect(!recorder.calls.contains { $0.contains("set-environment") })
     }
 
     @Test("A tmux that never answers reads as unavailable, not as a failed command")
     func launchWithoutTmux() async {
-        let recorder = RecordingRunner(responses: [RecordingRunner.failure, nil])
+        let recorder = RecordingRunner(responses: [RecordingRunner.failure, nil, nil])
         let control = TmuxSessionControl(socketLabel: "scratch", run: recorder.runner, environment: [:])
 
         await #expect(throws: TmuxSessionControl.ControlError.tmuxUnavailable) {

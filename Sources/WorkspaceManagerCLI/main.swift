@@ -694,6 +694,9 @@ private final class CLIApp {
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-lc", command]
         process.currentDirectoryURL = workspaceURL
+        process.environment = AgentSessionEnvironment.removingCallerIdentity(
+            from: ProcessInfo.processInfo.environment
+        )
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = logHandle
         process.standardError = logHandle
@@ -2175,6 +2178,9 @@ private final class CLIApp {
     private func runInteractiveSession(in directory: URL, command: String?) throws -> Int32 {
         let process = Process()
         process.currentDirectoryURL = directory
+        process.environment = AgentSessionEnvironment.removingCallerIdentity(
+            from: ProcessInfo.processInfo.environment
+        )
         process.standardInput = FileHandle.standardInput
         process.standardOutput = FileHandle.standardOutput
         process.standardError = FileHandle.standardError

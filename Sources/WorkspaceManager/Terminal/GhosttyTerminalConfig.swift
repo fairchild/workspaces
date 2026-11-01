@@ -228,16 +228,8 @@ struct GhosttyTerminalConfig {
     /// whichever tile happened to start it. These keys therefore travel in the
     /// tmux session's own environment instead, so every pane sees its own tile.
     /// Ordered, so a launch command is deterministic.
-    static let tileScopedEnvironmentKeys: [String] = [
-        AutomationAPI.socketEnvironmentKey,
-        AutomationAPI.handleEnvironmentKey,
-        "WORKSPACES_HOOKS_SOCKET",
-        "WORKSPACES_HOST_SESSION_ID",
-        "WORKSPACES_COMMAND_STATUS_ZSH",
-    ]
-
     static func tileScopedEnvironment(from environment: [String: String]) -> [(key: String, value: String)] {
-        tileScopedEnvironmentKeys.compactMap { key in
+        AgentSessionEnvironment.tileScopedKeys.compactMap { key in
             environment[key].map { (key: key, value: $0) }
         }
     }

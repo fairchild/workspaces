@@ -2037,6 +2037,7 @@ struct ContentView: View {
         try? await Task.sleep(for: .seconds(2))
         guard !Task.isCancelled else { return }
 
+        await TmuxSessionControl(socketLabel: TmuxSessionProbe.socketLabel).removeCallerIdentityFromServer()
         await syncWorkspaceStatuses(trigger: "launch_deferred")
         await refreshWorkspaceOrphans(trigger: "launch_deferred")
         await purgeExpiredArchivedWorkspaces(trigger: "launch_deferred")
