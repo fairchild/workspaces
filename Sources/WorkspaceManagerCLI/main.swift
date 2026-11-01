@@ -693,8 +693,7 @@ private final class CLIApp {
                     + "so there is nothing to continue. 'workspaces ws launch' starts a new one."
             )
         }
-        let effort = ClaudeTranscriptTurn.last(in: transcript)?.effort ?? identity.requestedEffort
-        guard let command = AgentLaunchCommand.claudeResume(conversationID: conversationID, effort: effort) else {
+        guard let command = AgentLaunchCommand.claudeResume(identity: identity, transcript: transcript) else {
             throw CLIError("The recorded conversation id is malformed: \(conversationID)")
         }
 

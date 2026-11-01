@@ -152,13 +152,31 @@ struct MainWindowRestoreController {
     /// directory-backed launch — the deterministic tmux name reattaches a surviving session on
     /// its own — while a resume surface gets `claude --resume` as initial input so it runs
     /// through the login shell with the correct PATH and hook env.
-    func initialCommand(for action: RestoreSurfaceAction) -> String? {
+    func initialCommand(for action: RestoreSurfaceAction, effort: String? = nil) -> String? {
         switch action {
         case .reattachTmux, .freshShell:
             return nil
         case .resumeClaude(let agentSessionID):
-            return RestoreLaunchCommand.claudeResume(sessionID: agentSessionID)
+            return RestoreLaunchCommand.claudeResume(sessionID: agentSessionID, effort: effort)
         }
+    }
+
+    /// The effort each resume surface's conversation last ran at, keyed by agent session id.
+    /// Read up front and off the main actor, since each is the tail of a transcript and a
+    /// restore can hold many.
+    func lastEfforts(
+        in plan: RestorePlan,
+        lastEffort: @escaping @Sendable (String, URL) -> String? = RestoreLaunchCommand.lastEffort
+    ) async -> [String: String] {
+        let targets = plan.surfaces.compactMap { surface -> (id: String, directory: URL)? in
+            guard case .resumeClaude(let agentSessionID) = surface.action else { return nil }
+            return (agentSessionID, surface.directory)
+        }
+        return await Task.detached {
+            targets.reduce(into: [:]) { efforts, target in
+                efforts[target.id] = lastEffort(target.id, target.directory)
+            }
+        }.value
     }
 
     /// `initialCommand(for:)` guarded by the probe-before-launch check: a resume whose
@@ -168,9 +186,14 @@ struct MainWindowRestoreController {
     func initialCommand(
         for surface: RestoreSurfacePlan,
         liveSessionNames: Set<String>,
-        sessionName: (URL) -> String = { GhosttyTerminalConfig.tmuxSessionName(for: $0) }
+        sessionName: (URL) -> String = { GhosttyTerminalConfig.tmuxSessionName(for: $0) },
+        lastEfforts: [String: String] = [:]
     ) -> String? {
-        guard let command = initialCommand(for: surface.action) else { return nil }
+        var effort: String?
+        if case .resumeClaude(let agentSessionID) = surface.action {
+            effort = lastEfforts[agentSessionID]
+        }
+        guard let command = initialCommand(for: surface.action, effort: effort) else { return nil }
         guard !liveSessionNames.contains(sessionName(surface.directory)) else { return nil }
         return command
     }

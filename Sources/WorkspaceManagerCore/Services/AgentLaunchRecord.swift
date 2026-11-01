@@ -65,6 +65,31 @@ public final class AgentConversationLock: Sendable {
     }
 }
 
+extension AgentLaunchRecordStore {
+    /// The command that would continue the conversation recorded under this tmux name, or
+    /// `nil` when there is nothing to continue: no record, a command that named no
+    /// conversation, a later workspace at the same path, a conversation still held by a
+    /// process, or one that never took a turn.
+    public func resumeCommand(
+        socketLabel: String,
+        tmuxSessionName: String,
+        processListing: String?,
+        resumability: ClaudeTranscriptResumability
+    ) -> String? {
+        guard let record = load(socketLabel: socketLabel, handle: tmuxSessionName),
+            let identity = record.identity,
+            record.isForWorkspaceOnDisk,
+            let processListing,
+            AgentSessionInspection.conversationHolders(identity.conversationID, processListing: processListing).isEmpty,
+            let transcript = resumability.existingTranscriptURL(
+                agentSessionID: identity.conversationID,
+                launchDirectory: record.workspacePath
+            )
+        else { return nil }
+        return AgentLaunchCommand.claudeResume(identity: identity, transcript: transcript)
+    }
+}
+
 /// The directory the CLI keeps its local state in, shared with the app so both read the
 /// same launch records.
 public enum CLIConfigDirectory {

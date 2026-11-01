@@ -11,4 +11,20 @@ struct RestoreLaunchCommandTests {
     func buildsBareResumeCommand() {
         #expect(RestoreLaunchCommand.claudeResume(sessionID: "sess-123") == "claude --resume sess-123")
     }
+
+    @Test("Carries the conversation's effort, which claude does not restore by itself")
+    func carriesEffort() {
+        #expect(
+            RestoreLaunchCommand.claudeResume(sessionID: "sess-123", effort: "xhigh")
+                == "claude --resume sess-123 --effort xhigh"
+        )
+    }
+
+    @Test("A stored effort that is not a known level never reaches the shell")
+    func rejectsUnknownEffort() {
+        #expect(
+            RestoreLaunchCommand.claudeResume(sessionID: "sess-123", effort: "low; rm -rf ~")
+                == "claude --resume sess-123"
+        )
+    }
 }

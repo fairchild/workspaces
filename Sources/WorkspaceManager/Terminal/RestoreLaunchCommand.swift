@@ -11,10 +11,22 @@
 //
 
 import Foundation
+import WorkspaceManagerCore
 
 enum RestoreLaunchCommand {
-    /// `claude --resume <id>` — run as the restored surface's initial command.
-    static func claudeResume(sessionID: String) -> String {
-        "claude --resume \(sessionID)"
+    /// `claude --resume <id>` — run as the restored surface's initial command. Claude brings
+    /// back the conversation's model and permission mode on its own, but not its effort.
+    static func claudeResume(sessionID: String, effort: String? = nil) -> String {
+        guard let effort, AgentLaunchCommand.isKnownEffort(effort) else {
+            return "claude --resume \(sessionID)"
+        }
+        return "claude --resume \(sessionID) --effort \(effort)"
+    }
+
+    /// The effort a conversation's last turn ran at, read from its transcript.
+    static func lastEffort(agentSessionID: String, directory: URL) -> String? {
+        ClaudeTranscriptResumability()
+            .existingTranscriptURL(agentSessionID: agentSessionID, launchDirectory: directory.path)
+            .flatMap { ClaudeTranscriptTurn.last(in: $0)?.effort }
     }
 }

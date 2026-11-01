@@ -97,6 +97,19 @@ public enum AgentLaunchCommand {
         return "claude --resume \(conversationID) --effort \(effort)"
     }
 
+    /// The resume command for a recorded conversation with a transcript, at the effort its
+    /// last turn ran at, which beats the launch's request after a change made mid-session.
+    public static func claudeResume(identity: AgentLaunchIdentity, transcript: URL) -> String? {
+        claudeResume(
+            conversationID: identity.conversationID,
+            effort: ClaudeTranscriptTurn.last(in: transcript)?.effort ?? identity.requestedEffort
+        )
+    }
+
+    public static func isKnownEffort(_ effort: String) -> Bool {
+        effortLevels.contains(effort)
+    }
+
     // MARK: - Reading
 
     private struct Parsed {

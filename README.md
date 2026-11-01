@@ -102,7 +102,9 @@ holds that conversation, no prompt is in the way, and a turn of its own ran as
 requested. `ws resume` continues the conversation after the agent, the tmux server,
 or the machine went away, and does nothing if it is already running. A resumed agent
 takes no turn until sent something, so `ws check --ready` answers whether it can take
-input yet.
+input yet. The app adds a row for a launched workspace, without selecting it, and a
+click on the row lands in the running agent. The script-facing sequence is in
+[Claude Code Integration](docs/development/claude-code-integration.md#starting-a-session-from-a-script).
 
 ## Configuration
 

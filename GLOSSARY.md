@@ -40,6 +40,10 @@ _Avoid_: Split map, pane list, layout state
 One leaf pane of a **Tile Tree**, identified by a stable tile id. A tile hosts exactly one content unit (today a terminal; the seam also renders web) and keeps its identity across rebinds, so layout changes never recreate live content.
 _Avoid_: Pane (in domain types), slot, cell
 
+**Launch Record**:
+The file `ws launch` writes for one handle, naming the conversation with its requested model and effort. It says what was asked for; the transcript says what ran. The CLI reads it to check and resume, and the app reads it to add a row.
+_Avoid_: Launch state, session file
+
 **Workspace Note**:
 One short line about where a **Workspace**'s work stream stands, written by whoever is driving it — a person through the sidebar row's menu, or an agent through `workspace.note` at a checkpoint. Rendered under the row. Distinct from the workspace's lifecycle **status** (which the app owns) and from the sidebar's transient action message (which is about this moment); a note outlives the action that wrote it.
 _Avoid_: Comment, status text, label, description

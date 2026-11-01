@@ -100,6 +100,7 @@ struct ContentView: View {
     @State private var embeddedWebNext: EmbeddedWebNextActivation?
     @State private var workspaceEnvironmentSheetState = WorkspaceEnvironmentSheetState.empty
     @State private var didScheduleInitialWorkspaceStatusSync = false
+    @State private var agentLaunchRecordWatcher: AgentLaunchRecordWatcher?
     @State private var didPrewarmPerfTerminalSurfaces = false
     @State private var workspaceOrphanState = WorkspaceOrphanReconciliationState()
     @State private var restoreState = MainWindowRestoreState()
@@ -1038,8 +1039,13 @@ struct ContentView: View {
             .task {
                 prewarmPerfTerminalSurfacesIfNeeded()
                 await performDeferredStartupWorkspaceStatusSync()
+                guard !Task.isCancelled else { return }
+                startWatchingLaunchRecords()
+                await adoptLaunchedWorkspaces()
             }
             .onDisappear {
+                agentLaunchRecordWatcher?.stop()
+                agentLaunchRecordWatcher = nil
                 lifecycleController.runTeardown(teardownActions)
             }
             .onChange(of: deepLinkState.pendingRequest) { _, _ in
@@ -2042,7 +2048,100 @@ struct ContentView: View {
 
         await syncWorkspaceStatuses(trigger: "launch_deferred")
         await refreshWorkspaceOrphans(trigger: "launch_deferred")
+        startWatchingLaunchRecords()
         await purgeExpiredArchivedWorkspaces(trigger: "launch_deferred")
+    }
+
+    /// Picks up sessions the CLI starts or resumes while this window is open. The CLI has no
+    /// way to tell a running app anything without the opt-in operator credential, so the
+    /// record it writes anyway is the signal.
+    @MainActor
+    private func startWatchingLaunchRecords() {
+        guard agentLaunchRecordWatcher == nil else { return }
+        let watcher = AgentLaunchRecordWatcher(
+            directory: AgentLaunchRecordStore().directory(socketLabel: TmuxSessionProbe.socketLabel)
+        ) {
+            Task { @MainActor in
+                await adoptLaunchedWorkspaces()
+                await rejoinResumedSessions()
+            }
+        }
+        watcher.start()
+        agentLaunchRecordWatcher = watcher
+    }
+
+    /// Rejoins tiles that watched their session end, now that a recorded session is running
+    /// under that name again. Only a live session counts: a tile with nothing to rejoin stays
+    /// as it is until someone clicks it.
+    @MainActor
+    private func rejoinResumedSessions() async {
+        let surfaceStore = tileTreeStore.surfaceStore
+        let exited = surfaceStore.exitedTmuxSessionNames()
+        guard !exited.isEmpty else { return }
+        let socketLabel = TmuxSessionProbe.socketLabel
+        let recorded = await Task.detached {
+            Set(AgentLaunchRecordStore().all(socketLabel: socketLabel).map(\.handle))
+        }.value
+        let probe = TmuxSessionProbe()
+        for name in exited.intersection(recorded) where await probe.isSessionAlive(name) {
+            surfaceStore.reviveExitedTmuxClients(where: { $0.effectiveTmuxSessionName == name })
+        }
+    }
+
+    /// Adds a sidebar row for each launched workspace that lacks one, so a session started
+    /// from the CLI is one click from the running agent: selecting the row attaches to it,
+    /// because the launch used the name the app derives. Nothing is selected and no terminal
+    /// is attached here, so a launch never moves what the window is showing.
+    ///
+    /// Reads the store rather than the view's `repos`, because this runs from a closure
+    /// that outlives the view value that created it.
+    @MainActor
+    private func adoptLaunchedWorkspaces() async {
+        await Self.launchAdoptionPasses.run { await runLaunchAdoptionPass() }
+    }
+
+    /// One at a time across every window: a pass reads the ledger, suspends over a scan and
+    /// writes it back, and an overlapping one would write back a ledger missing what the
+    /// other added, which is how a row someone removed returns.
+    private static let launchAdoptionPasses = SerialPassRunner()
+
+    @MainActor
+    private func runLaunchAdoptionPass() async {
+        guard UIFixtureOrphanBannerBootstrap.fixtureScanResult() == nil else { return }
+        let socketLabel = TmuxSessionProbe.socketLabel
+        let records = await Task.detached { AgentLaunchRecordStore().all(socketLabel: socketLabel) }.value
+        guard let repos = try? modelContext.fetch(FetchDescriptor<Repo>()) else { return }
+
+        let defaults = LaunchPreferences.defaults
+        let ledgerKey = "agentLaunches.adoptedKeys.v1"
+        let pass = workspaceOrphanController.launchAdoptionPass(
+            records: records,
+            repos: repos,
+            handledKeys: Set(defaults.stringArray(forKey: ledgerKey) ?? [])
+        )
+        var handled = pass.handledKeys
+        defer { defaults.set(handled.sorted(), forKey: ledgerKey) }
+        guard !pass.pending.isEmpty else { return }
+
+        let reconciler = await makeWorkspaceOrphanReconciler()
+        let scan = await reconciler.scan(
+            repositories: workspaceOrphanController.repositorySnapshots(
+                owning: pass.pending,
+                workspacesRoot: await workspaceService.workspacesRoot,
+                repos: repos
+            )
+        )
+        for (record, item) in workspaceOrphanController.adoptableLaunches(pass.pending, in: scan.items) {
+            do {
+                _ = try workspaceOrphanController.adoptGitWorktree(item, in: repos, modelContext: modelContext)
+                workspaceOrphanState.removeCleanedItem(item)
+                handled.insert(workspaceOrphanController.adoptionKey(for: record))
+            } catch {
+                restoreLog.notice(
+                    "[Restore] could not add launched workspace \(record.workspacePath, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
     }
 
     @MainActor
@@ -2902,6 +3001,7 @@ struct ContentView: View {
             liveResumeLaunchNames.insert(sessionName)
         }
 
+        let lastEfforts = await restoreController.lastEfforts(in: plan)
         var activatedByHostSessionID: [UUID: HostTerminalSession] = [:]
         for surface in plan.surfaces {
             if surface.launchDirectoryFellBack {
@@ -2910,7 +3010,7 @@ struct ContentView: View {
                 )
             }
             let initialCommand = restoreController.initialCommand(
-                for: surface, liveSessionNames: liveResumeLaunchNames)
+                for: surface, liveSessionNames: liveResumeLaunchNames, lastEfforts: lastEfforts)
             if initialCommand == nil, case .resumeClaude = surface.action {
                 restoreLog.notice(
                     "[Restore] surface \(surface.hostSessionID.uuidString, privacy: .public) resume target is a live session; attaching without the resume command"

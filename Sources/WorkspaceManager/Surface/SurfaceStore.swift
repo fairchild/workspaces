@@ -152,9 +152,60 @@ final class SurfaceStore: ObservableObject {
         return true
     }
 
+    /// Whether this terminal is a tmux client that has gone, leaving a tile that only says
+    /// so. Its session may be running again without it: the session ending and the session
+    /// coming back are separate events, and a client cannot rejoin by itself.
+    static func isExitedTmuxClient(_ terminal: TerminalSurface) -> Bool {
+        terminal.surfaceView.tmuxLaunchScript != nil && terminal.surfaceView.hasProcessExited
+    }
+
+    /// The tmux names of the tiles left behind by a client that has gone.
+    func exitedTmuxSessionNames(
+        isExited: (TerminalSurface) -> Bool = SurfaceStore.isExitedTmuxClient
+    ) -> Set<String> {
+        Set(
+            surfaces.values
+                .compactMap { $0 as? TerminalSurface }
+                .filter(isExited)
+                .map(\.session.effectiveTmuxSessionName)
+        )
+    }
+
+    /// Restarts the matching tiles whose tmux client has gone, so the launch script runs
+    /// again: `new-session -A` joins the session if it is back, and starts one if not.
+    ///
+    /// The launch counts as a new one for everything but an executed initial command, because
+    /// what it lands on is a question this launch has to answer afresh, and the old answer
+    /// may be about a session on a server that no longer exists. An executed command stays
+    /// spent, since a respawned shell must not re-run the agent. A prefilled one is offered
+    /// again: nothing ran it, and the new shell is as empty as the first was.
+    @discardableResult
+    func reviveExitedTmuxClients(
+        where isTarget: (HostTerminalSession) -> Bool,
+        isExited: (TerminalSurface) -> Bool = SurfaceStore.isExitedTmuxClient
+    ) -> Int {
+        var revived = 0
+        for (tileID, surface) in surfaces {
+            guard let terminal = surface as? TerminalSurface, isTarget(terminal.session), isExited(terminal)
+            else { continue }
+            tmuxOwnershipLedger?.forget(hostSessionID: terminal.session.id)
+            launchWorkDeliveredSessionIDs.remove(terminal.session.id)
+            if terminal.session.initialCommand != nil, terminal.session.initialCommandDelivery == .execute {
+                initialCommandSpentSessionIDs.insert(terminal.session.id)
+            }
+            if restartTerminalSurface(for: tileID) {
+                revived += 1
+            }
+        }
+        return revived
+    }
+
     /// Sessions whose post-creation launch work has run. Once per session, never per
     /// surface: a respawned shell must not re-run the agent.
-    private var launchWorkDeliveredSessionIDs: Set<UUID> = []
+    private(set) var launchWorkDeliveredSessionIDs: Set<UUID> = []
+
+    /// Sessions a revived client is launching again, whose initial command already ran.
+    private(set) var initialCommandSpentSessionIDs: Set<UUID> = []
 
     /// Bring a newly created terminal surface up to its launch contract, then hand it
     /// `session.initialCommand`.
@@ -231,7 +282,13 @@ final class SurfaceStore: ObservableObject {
                 }
             }
 
-            guard let initialCommand = session.initialCommand else { return }
+            let spent = self?.initialCommandSpentSessionIDs.contains(session.id) ?? false
+            guard let initialCommand = session.initialCommand, !spent else {
+                if tmuxLaunchScript != nil {
+                    await self?.prefillRecordedConversation(terminal: terminal, session: session)
+                }
+                return
+            }
             self?.deliverInitialCommand(
                 initialCommand,
                 to: terminal,
@@ -240,6 +297,30 @@ final class SurfaceStore: ObservableObject {
                     ?? session.initialCommandDelivery
             )
         }
+    }
+
+    /// Offers the conversation a launch recorded under this surface's tmux name, when this
+    /// launch had to create that session because the old one is gone: the agent quit, or
+    /// the server or the machine went away. The surface would otherwise be an empty shell
+    /// with no sign of what ran there. Prefilled, because starting an agent spends memory
+    /// and tokens: reopening the workspace is not the same as asking for that.
+    private func prefillRecordedConversation(terminal: TerminalSurface, session: HostTerminalSession) async {
+        guard tmuxOwnershipLedger?.ownership(forHostSessionID: session.id)?.provenance == .createdByThisLaunch
+        else { return }
+        let processListing = await AgentSessionInspection.processListing()
+        let socketLabel = TmuxSessionProbe.socketLabel
+        let sessionName = session.effectiveTmuxSessionName
+        // Off the main actor: this reads the tail of a transcript.
+        let command = await Task.detached {
+            AgentLaunchRecordStore().resumeCommand(
+                socketLabel: socketLabel,
+                tmuxSessionName: sessionName,
+                processListing: processListing,
+                resumability: ClaudeTranscriptResumability()
+            )
+        }.value
+        guard let command, !terminal.surfaceView.hasReceivedUserInput else { return }
+        deliverInitialCommand(command, to: terminal, session: session, delivery: .prefill)
     }
 
     /// Record which tmux session this surface's launch landed on, and whether the

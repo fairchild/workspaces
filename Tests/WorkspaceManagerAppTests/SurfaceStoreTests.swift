@@ -36,6 +36,96 @@ struct SurfaceStoreTests {
         #expect(store.surface(for: tile) == nil)
     }
 
+    @Test("A tile whose tmux client has gone is restarted, and only the tile that matches")
+    func revivesExitedClients() throws {
+        let store = SurfaceStore()
+        let (exitedTile, liveTile, otherTile) = (TileID(), TileID(), TileID())
+        let exited = makeSession()
+        let live = makeSession()
+        let other = makeSession()
+        let exitedSurface = store.terminalSurface(for: exitedTile, session: exited)
+        _ = store.terminalSurface(for: liveTile, session: live)
+        _ = store.terminalSurface(for: otherTile, session: other)
+        let isExited: (TerminalSurface) -> Bool = { $0.session.id != live.id }
+
+        let revived = store.reviveExitedTmuxClients(where: { $0.id != other.id }, isExited: isExited)
+
+        #expect(revived == 1)
+        #expect(store.surface(for: exitedTile) == nil)
+        #expect(store.terminalRenderGeneration(for: exitedTile) == 1)
+        #expect(store.surface(for: liveTile) != nil)
+        #expect(store.surface(for: otherTile) != nil)
+        _ = exitedSurface
+    }
+
+    @Test("A revived tile forgets which tmux session it held, since the next one may be another")
+    func revivingForgetsOwnership() throws {
+        let store = SurfaceStore()
+        let ledger = TmuxSessionOwnershipLedger()
+        store.tmuxOwnershipLedger = ledger
+        let tile = TileID()
+        let session = makeSession()
+        _ = store.terminalSurface(for: tile, session: session)
+        ledger.record(
+            hostSessionID: session.id,
+            identity: TmuxLiveSession(sessionID: "$0", name: "wm-a-1", createdAt: Date()),
+            launchedAt: Date()
+        )
+
+        store.reviveExitedTmuxClients(where: { _ in true }, isExited: { _ in true })
+
+        #expect(ledger.ownership(forHostSessionID: session.id) == nil)
+    }
+
+    @Test("A revived tile redoes its launch work, without its initial command")
+    func revivingKeepsTheInitialCommandSpent() {
+        let store = SurfaceStore()
+        let tile = TileID()
+        let session = makeSession(delivery: .execute)
+        _ = store.terminalSurface(for: tile, session: session)
+
+        store.reviveExitedTmuxClients(where: { _ in true }, isExited: { _ in true })
+
+        #expect(!store.launchWorkDeliveredSessionIDs.contains(session.id))
+        #expect(store.initialCommandSpentSessionIDs.contains(session.id))
+    }
+
+    @Test("A revived tile offers a prefilled command again, since nothing ran it")
+    func revivingLeavesAPrefillOffered() {
+        let store = SurfaceStore()
+        let session = makeSession(delivery: .prefill)
+        _ = store.terminalSurface(for: TileID(), session: session)
+
+        store.reviveExitedTmuxClients(where: { _ in true }, isExited: { _ in true })
+
+        #expect(!store.launchWorkDeliveredSessionIDs.contains(session.id))
+        #expect(!store.initialCommandSpentSessionIDs.contains(session.id))
+    }
+
+    @Test("A revived tile with no initial command has nothing to keep spent")
+    func revivingWithoutAnInitialCommand() {
+        let store = SurfaceStore()
+        let session = makeSession()
+        _ = store.terminalSurface(for: TileID(), session: session)
+
+        store.reviveExitedTmuxClients(where: { _ in true }, isExited: { _ in true })
+
+        #expect(!store.initialCommandSpentSessionIDs.contains(session.id))
+    }
+
+    @Test("The names of exited tiles come from the sessions they held")
+    func exitedNames() {
+        let store = SurfaceStore()
+        let exited = makeSession(path: "/Users/test/exited")
+        let live = makeSession(path: "/Users/test/live")
+        _ = store.terminalSurface(for: TileID(), session: exited)
+        _ = store.terminalSurface(for: TileID(), session: live)
+
+        let names = store.exitedTmuxSessionNames(isExited: { $0.session.id == exited.id })
+
+        #expect(names == [exited.effectiveTmuxSessionName])
+    }
+
     @Test("Creating a terminal surface retains it by tile and fires onSurfaceCreated once")
     func createTerminalSurfaceRetainsAndNotifies() {
         let store = SurfaceStore()
