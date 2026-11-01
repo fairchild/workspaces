@@ -98,15 +98,17 @@ struct WorkspaceOrphanReconciliationBanner: View {
 
             if isExpanded {
                 Divider()
-                VStack(spacing: 0) {
-                    ForEach(items) { item in
-                        cleanupRow(for: item)
-                        if item.id != items.last?.id {
-                            Divider()
-                                .padding(.leading, 42)
-                        }
+                // A long leftover list (a dozen stale worktrees is common) must not outgrow the
+                // window: an unbounded list pushes this banner's own header — the collapse
+                // chevron and dismiss button — up under the title bar, out of reach. Short lists
+                // keep their natural height; longer ones scroll inside a capped region.
+                ViewThatFits(in: .vertical) {
+                    cleanupRows
+                    ScrollView(.vertical) {
+                        cleanupRows
                     }
                 }
+                .frame(maxHeight: Self.expandedListMaxHeight)
             }
         }
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.72))
@@ -114,6 +116,22 @@ struct WorkspaceOrphanReconciliationBanner: View {
             Divider()
         }
         .accessibilityIdentifier("workspace-orphan-reconciliation.banner")
+    }
+
+    /// Tallest the expanded list may grow before it scrolls — about six rows, leaving the
+    /// terminal visible beneath the banner even in a short window.
+    static let expandedListMaxHeight: CGFloat = 260
+
+    private var cleanupRows: some View {
+        VStack(spacing: 0) {
+            ForEach(items) { item in
+                cleanupRow(for: item)
+                if item.id != items.last?.id {
+                    Divider()
+                        .padding(.leading, 42)
+                }
+            }
+        }
     }
 
     private var summaryText: String {
