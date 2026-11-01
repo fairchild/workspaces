@@ -82,7 +82,7 @@ struct GhosttyTerminalConfig {
         self.fontSize = fontSize
         self.workingDirectory = workingDirectory.path
 
-        var environment = environment
+        var environment = AgentSessionEnvironment.removingAgentIdentity(from: environment)
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
         environment["LANG"] = "en_US.UTF-8"

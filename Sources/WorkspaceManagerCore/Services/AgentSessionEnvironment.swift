@@ -32,14 +32,22 @@ public enum AgentSessionEnvironment {
         "WORKSPACES_COMMAND_STATUS_ZSH",
     ]
 
+    public static func isAgentIdentity(_ key: String) -> Bool {
+        callerKeys.contains(key) || callerPrefixes.contains { key.hasPrefix($0) }
+    }
+
     public static func belongsToCaller(_ key: String) -> Bool {
-        callerKeys.contains(key)
-            || tileScopedKeys.contains(key)
-            || callerPrefixes.contains { key.hasPrefix($0) }
+        isAgentIdentity(key) || tileScopedKeys.contains(key)
     }
 
     public static func removingCallerIdentity(from environment: [String: String]) -> [String: String] {
         environment.filter { !belongsToCaller($0.key) }
+    }
+
+    /// For composing a tile's own environment, which is where tile-scoped keys get their
+    /// values and so the one place they stay.
+    public static func removingAgentIdentity(from environment: [String: String]) -> [String: String] {
+        environment.filter { !isAgentIdentity($0.key) }
     }
 
     /// The pane a process was started from. Only a process that outlives that pane has any

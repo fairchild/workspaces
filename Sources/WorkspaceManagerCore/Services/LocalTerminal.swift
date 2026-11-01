@@ -37,7 +37,7 @@ public class LocalTerminal {
         process.currentDirectoryURL = workingDirectory
 
         // Set up environment
-        var env = ProcessInfo.processInfo.environment
+        var env = AgentSessionEnvironment.removingCallerIdentity(from: ProcessInfo.processInfo.environment)
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         process.environment = env

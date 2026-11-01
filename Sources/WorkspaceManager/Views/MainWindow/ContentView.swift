@@ -2033,11 +2033,13 @@ struct ContentView: View {
         guard !didScheduleInitialWorkspaceStatusSync else { return }
         didScheduleInitialWorkspaceStatusSync = true
 
+        // Ahead of the delay: a tile opening now takes the server's environment as it stands.
+        await TmuxSessionControl(socketLabel: TmuxSessionProbe.socketLabel).removeCallerIdentityFromServer()
+
         // Give the first window render a head start before remote status sync begins.
         try? await Task.sleep(for: .seconds(2))
         guard !Task.isCancelled else { return }
 
-        await TmuxSessionControl(socketLabel: TmuxSessionProbe.socketLabel).removeCallerIdentityFromServer()
         await syncWorkspaceStatuses(trigger: "launch_deferred")
         await refreshWorkspaceOrphans(trigger: "launch_deferred")
         await purgeExpiredArchivedWorkspaces(trigger: "launch_deferred")
