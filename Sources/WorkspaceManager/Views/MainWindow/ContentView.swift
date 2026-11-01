@@ -2049,19 +2049,39 @@ struct ContentView: View {
         await purgeExpiredArchivedWorkspaces(trigger: "launch_deferred")
     }
 
-    /// Picks up sessions the CLI starts while this window is open. The CLI has no way to tell
-    /// a running app anything without the opt-in operator credential, so the record it
-    /// writes anyway is the signal.
+    /// Picks up sessions the CLI starts or resumes while this window is open. The CLI has no
+    /// way to tell a running app anything without the opt-in operator credential, so the
+    /// record it writes anyway is the signal.
     @MainActor
     private func startWatchingLaunchRecords() {
         guard agentLaunchRecordWatcher == nil else { return }
         let watcher = AgentLaunchRecordWatcher(
             directory: AgentLaunchRecordStore().directory(socketLabel: TmuxSessionProbe.socketLabel)
         ) {
-            Task { @MainActor in await adoptLaunchedWorkspaces() }
+            Task { @MainActor in
+                await adoptLaunchedWorkspaces()
+                await rejoinResumedSessions()
+            }
         }
         watcher.start()
         agentLaunchRecordWatcher = watcher
+    }
+
+    /// Rejoins tiles that watched their session end, now that a recorded session is running
+    /// under that name again. Only a live session counts: a tile with nothing to rejoin stays
+    /// as it is until someone clicks it.
+    @MainActor
+    private func rejoinResumedSessions() async {
+        let surfaceStore = tileTreeStore.surfaceStore
+        let exited = surfaceStore.exitedTmuxSessionNames()
+        guard !exited.isEmpty else { return }
+        let recorded = Set(
+            AgentLaunchRecordStore().all(socketLabel: TmuxSessionProbe.socketLabel).map(\.handle)
+        )
+        let probe = TmuxSessionProbe()
+        for name in exited.intersection(recorded) where await probe.isSessionAlive(name) {
+            surfaceStore.reviveExitedTmuxClients(where: { $0.effectiveTmuxSessionName == name })
+        }
     }
 
     /// Adds a sidebar row for each launched workspace that lacks one, so a session started

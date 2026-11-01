@@ -232,6 +232,10 @@ struct MainWindowSelectionController {
         workspaceDirectory: URL,
         launchDirectory: URL
     ) {
+        // A row whose agent quit or whose server died still holds the tile that watched that
+        // happen. Without this, reusing the session lands on that tile's exit message, even
+        // with the conversation running again under the same tmux name.
+        dependencies.tileTreeStore.surfaceStore.reviveExitedTmuxClients(where: { $0.id == session.id })
         dependencies.focusCoordinator.beginWorkspaceClickMeasurement(
             sessionID: session.id,
             workspacePath: workspaceDirectory.path

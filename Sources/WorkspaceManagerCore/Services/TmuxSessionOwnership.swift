@@ -82,11 +82,12 @@ public struct TmuxSessionOwnership: Sendable, Equatable {
 /// conservative direction: the cost of forgetting is a session left running, and the
 /// cost of guessing is someone else's shell.
 ///
-/// Entries are never removed. A host session id is a UUID that is never reissued, so a
-/// record for a retired surface can only ever be consulted by a caller naming that same
+/// Entries outlive their surfaces. A host session id is a UUID that is never reissued, so
+/// a record for a retired surface can only ever be consulted by a caller naming that same
 /// retired surface — and the kill it would authorize is re-checked against a fresh read
 /// of the socket anyway. Growth is one small value per tmux-backed surface opened in a
-/// run, which is bounded by what a person does in a sitting.
+/// run, which is bounded by what a person does in a sitting. The one removal is a surface
+/// launching again, whose next session is a new fact about it.
 @MainActor
 public final class TmuxSessionOwnershipLedger {
     private var ownershipByHostSessionID: [UUID: TmuxSessionOwnership] = [:]
@@ -120,6 +121,12 @@ public final class TmuxSessionOwnershipLedger {
 
     public func ownership(forHostSessionID hostSessionID: UUID) -> TmuxSessionOwnership? {
         ownershipByHostSessionID[hostSessionID]
+    }
+
+    /// Drops what is known about a surface that is about to launch again, so its next launch
+    /// records what it actually landed on.
+    public func forget(hostSessionID: UUID) {
+        ownershipByHostSessionID[hostSessionID] = nil
     }
 
     /// The session id a kill for `hostSessionID` may target, or `nil` when the app

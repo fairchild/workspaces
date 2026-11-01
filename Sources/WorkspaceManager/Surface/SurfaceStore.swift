@@ -152,6 +152,52 @@ final class SurfaceStore: ObservableObject {
         return true
     }
 
+    /// Whether this terminal is a tmux client that has gone, leaving a tile that only says
+    /// so. Its session may be running again without it: the session ending and the session
+    /// coming back are separate events, and a client cannot rejoin by itself.
+    static func isExitedTmuxClient(_ terminal: TerminalSurface) -> Bool {
+        terminal.surfaceView.tmuxLaunchScript != nil && terminal.surfaceView.hasProcessExited
+    }
+
+    /// The tmux names of the tiles left behind by a client that has gone.
+    func exitedTmuxSessionNames(
+        isExited: (TerminalSurface) -> Bool = SurfaceStore.isExitedTmuxClient
+    ) -> Set<String> {
+        Set(
+            surfaces.values
+                .compactMap { $0 as? TerminalSurface }
+                .filter(isExited)
+                .map(\.session.effectiveTmuxSessionName)
+        )
+    }
+
+    /// Restarts the matching tiles whose tmux client has gone, so the launch script runs
+    /// again: `new-session -A` joins the session if it is back, and starts one if not.
+    ///
+    /// The launch counts as a new one for everything but an initial command, because what
+    /// it lands on is a question this launch has to answer afresh, and the old answer may
+    /// be about a session on a server that no longer exists. An initial command stays
+    /// delivered: a respawned shell must not re-run the agent.
+    @discardableResult
+    func reviveExitedTmuxClients(
+        where isTarget: (HostTerminalSession) -> Bool,
+        isExited: (TerminalSurface) -> Bool = SurfaceStore.isExitedTmuxClient
+    ) -> Int {
+        var revived = 0
+        for (tileID, surface) in surfaces {
+            guard let terminal = surface as? TerminalSurface, isTarget(terminal.session), isExited(terminal)
+            else { continue }
+            tmuxOwnershipLedger?.forget(hostSessionID: terminal.session.id)
+            if terminal.session.initialCommand == nil {
+                launchWorkDeliveredSessionIDs.remove(terminal.session.id)
+            }
+            if restartTerminalSurface(for: tileID) {
+                revived += 1
+            }
+        }
+        return revived
+    }
+
     /// Sessions whose post-creation launch work has run. Once per session, never per
     /// surface: a respawned shell must not re-run the agent.
     private var launchWorkDeliveredSessionIDs: Set<UUID> = []
