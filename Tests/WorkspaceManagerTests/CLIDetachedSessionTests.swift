@@ -54,13 +54,33 @@ struct CLIDetachedSessionTests {
         }
 
         @discardableResult
-        func run(_ arguments: [String]) throws -> CLIBinary.Invocation {
+        func run(
+            _ arguments: [String],
+            extraEnvironment: [String: String] = [:]
+        ) throws -> CLIBinary.Invocation {
             try CLIBinary.run(
                 binary,
                 arguments: arguments,
                 currentDirectory: root,
-                environment: environment
+                environment: environment.merging(extraEnvironment) { _, new in new }
             )
+        }
+
+        /// The tmux server's global environment on this fixture's socket, as `KEY=value` lines.
+        func serverGlobalEnvironment() throws -> String {
+            let process = Process()
+            let output = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["tmux", "-L", socketLabel, "show-environment", "-g"]
+            process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in
+                new
+            }
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return String(decoding: data, as: UTF8.self)
         }
 
         func teardown() {
@@ -280,6 +300,130 @@ struct CLIDetachedSessionTests {
             .decode(WorkspaceLaunchResult.self, from: Data(sibling.stdout.utf8))
         #expect(!siblingResult.canonicalForWorkspace)
         #expect(siblingResult.handle.hasSuffix("-review"))
+    }
+
+    /// What an agent session hands its children, plus one ordinary variable as the control
+    /// showing the launcher's environment reached the server at all.
+    private static let callerEnvironment = [
+        "CLAUDECODE": "1",
+        "CLAUDE_CODE_CHILD_SESSION": "1",
+        "CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/cc-socks/1.sock",
+        "CLAUDE_CODE_SESSION_ID": "00000000-0000-0000-0000-000000000000",
+        "CLAUDE_EFFORT": "xhigh",
+        "CLAUDE_PID": "1",
+        "AI_AGENT": "claude-code",
+        "CODEX_THREAD_ID": "thread",
+        "CODEX_SANDBOX_NETWORK_DISABLED": "1",
+        "WORKSPACES_HOST_SESSION_ID": "00000000-0000-0000-0000-000000000000",
+        "WORKSPACES_AUTOMATION_HANDLE": "caller-tile",
+        "WS_DETACHED_CONTROL": "ordinary",
+    ]
+
+    private static func callerKeys(in environmentLines: String) -> [String] {
+        environmentLines.split(separator: "\n").compactMap { line in
+            let key = String(line.prefix { $0 != "=" })
+            return AgentSessionEnvironment.belongsToCaller(key) ? key : nil
+        }
+    }
+
+    /// Waits for a file a launched command writes, past the moment it starts existing.
+    private func contentsOnceWritten(_ url: URL) async throws -> String {
+        let deadline = Date().addingTimeInterval(
+            await LaunchBudget.deadline(launches: 6, floor: 5, ceiling: 120)
+        )
+        while Date() < deadline {
+            if let text = try? String(contentsOf: url, encoding: .utf8), text.contains("__done__") {
+                return text
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    }
+
+    @Test(
+        "A launch from inside an agent session carries none of its identity, in the pane or on the server",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func launchShedsTheCallersIdentity() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+
+        let captured = fixture.root.appendingPathComponent("pane-env.txt")
+        let launch = try fixture.run(
+            [
+                "ws", "launch", fixture.workspaceSelector,
+                "--cmd", "env > \(captured.path); echo __done__ >> \(captured.path); exec sleep 120",
+            ],
+            extraEnvironment: Self.callerEnvironment
+        )
+        #expect(launch.status == 0)
+
+        let paneEnvironment = try await contentsOnceWritten(captured)
+        #expect(paneEnvironment.contains("__done__"))
+        #expect(Self.callerKeys(in: paneEnvironment).isEmpty)
+
+        let serverEnvironment = try fixture.serverGlobalEnvironment()
+        #expect(serverEnvironment.contains("WS_DETACHED_CONTROL=ordinary"))
+        #expect(Self.callerKeys(in: serverEnvironment).isEmpty)
+    }
+
+    @Test(
+        "A launch onto a server an agent session started does not inherit from it, and cleans it",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func launchCleansAPollutedServer() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+
+        // A plain tmux client stands in for an older launcher: nothing scrubs its
+        // environment, so the server keeps all of it for its whole life.
+        let polluter = Process()
+        polluter.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        polluter.arguments = ["tmux", "-L", fixture.socketLabel, "new-session", "-d", "-s", "polluted"]
+        polluter.environment = ProcessInfo.processInfo.environment
+            .merging(fixture.environment) { _, new in new }
+            .merging(Self.callerEnvironment) { _, new in new }
+        polluter.standardOutput = FileHandle.nullDevice
+        polluter.standardError = FileHandle.nullDevice
+        try polluter.run()
+        polluter.waitUntilExit()
+        #expect(polluter.terminationStatus == 0)
+        #expect(!Self.callerKeys(in: try fixture.serverGlobalEnvironment()).isEmpty)
+
+        let captured = fixture.root.appendingPathComponent("pane-env.txt")
+        let launch = try fixture.run([
+            "ws", "launch", fixture.workspaceSelector,
+            "--cmd", "env > \(captured.path); echo __done__ >> \(captured.path); exec sleep 120",
+        ])
+        #expect(launch.status == 0)
+
+        let paneEnvironment = try await contentsOnceWritten(captured)
+        #expect(paneEnvironment.contains("__done__"))
+        #expect(Self.callerKeys(in: paneEnvironment).isEmpty)
+        #expect(Self.callerKeys(in: try fixture.serverGlobalEnvironment()).isEmpty)
+    }
+
+    @Test("A race agent started from inside an agent session carries none of its identity")
+    func raceShedsTheCallersIdentity() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+
+        let captured = fixture.root.appendingPathComponent("race-env.txt")
+        // `race` appends ` -p '<prompt>'`, which `true` ignores.
+        let race = try fixture.run(
+            [
+                "ws", "race", "repo", "--n", "2", "--name", "leak",
+                "--cmd", "env > \(captured.path); echo __done__ >> \(captured.path); true",
+                "say something",
+            ],
+            extraEnvironment: Self.callerEnvironment
+        )
+        #expect(race.status == 0)
+
+        let agentEnvironment = try await contentsOnceWritten(captured)
+        #expect(agentEnvironment.contains("__done__"))
+        #expect(agentEnvironment.contains("WS_DETACHED_CONTROL=ordinary"))
+        #expect(Self.callerKeys(in: agentEnvironment).isEmpty)
     }
 
     @Test(

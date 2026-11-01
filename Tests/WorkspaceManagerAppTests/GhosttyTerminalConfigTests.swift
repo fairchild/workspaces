@@ -28,6 +28,31 @@ struct GhosttyTerminalConfigTests {
         #expect(config.tmuxLaunchScript == nil)
     }
 
+    @Test("A pane's environment drops what the launcher's agent session left in it")
+    func paneEnvironmentShedsCallerIdentity() {
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: [
+                "SHELL": "/bin/zsh",
+                "PATH": "/usr/bin:/bin",
+                "CLAUDE_CODE_CHILD_SESSION": "1",
+                "CLAUDE_EFFORT": "xhigh",
+                "AI_AGENT": "claude-code",
+                "CODEX_THREAD_ID": "abc",
+                "HOME": "/Users/test",
+            ],
+            terminalMultiplexingMode: .ghosttyManagedSplits,
+            isTmuxAvailableOverride: true
+        )
+
+        #expect(!config.environmentVariables.keys.contains { $0.hasPrefix("CLAUDE") || $0.hasPrefix("CODEX_") })
+        #expect(config.environmentVariables["AI_AGENT"] == nil)
+        #expect(config.environmentVariables["HOME"] == "/Users/test")
+        #expect(config.environmentVariables["TERM"] == "xterm-256color")
+        #expect(config.environmentVariables["COLORTERM"] == "truecolor")
+        #expect(config.environmentVariables["PATH"]?.contains("/usr/bin") == true)
+    }
+
     @Test("tmux mode exposes the bare attach script for launch-contract repair")
     func tmuxModeExposesBareLaunchScript() throws {
         let config = GhosttyTerminalConfig(

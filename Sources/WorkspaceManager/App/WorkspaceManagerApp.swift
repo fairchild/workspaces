@@ -47,6 +47,16 @@ struct WorkspaceManagerApp: App {
         // UserDefaults, so as a stored-property default it would have observed the
         // pre-wipe suite. It is constructed below instead.
         LaunchPreferences.bootstrapForApplicationLaunch()
+
+        // An app started from inside an agent session carries that session's variables
+        // for its whole run, and every pane it opens would inherit them.
+        let callerIdentity = AgentSessionEnvironment.removeCallerIdentityFromProcess()
+        if !callerIdentity.isEmpty {
+            log.notice(
+                "launched from an agent session; removed \(callerIdentity.joined(separator: ","), privacy: .public) from the environment panes inherit"
+            )
+        }
+
         self.appRuntimeDependencies = AppRuntimeDependencies.resolved()
 
         let schema = Schema([Repo.self, Workspace.self, WebSource.self])

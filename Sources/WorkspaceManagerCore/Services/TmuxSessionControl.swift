@@ -324,6 +324,33 @@ public struct TmuxSessionControl: Sendable {
         ["tmux", "-L", socketLabel, "has-session", "-t", "=\(handle)"]
     }
 
+    public static func showGlobalEnvironmentArguments(socketLabel: String) -> [String] {
+        ["tmux", "-L", socketLabel, "show-environment", "-g"]
+    }
+
+    /// One tmux command sequence, so a server sees every key removed or none: a bare `;`
+    /// argument is tmux's own command separator.
+    public static func unsetGlobalEnvironmentArguments(socketLabel: String, keys: [String]) -> [String] {
+        var arguments = ["tmux", "-L", socketLabel]
+        for (index, key) in keys.enumerated() {
+            if index > 0 {
+                arguments.append(";")
+            }
+            arguments.append(contentsOf: ["set-environment", "-g", "-u", key])
+        }
+        return arguments
+    }
+
+    /// The caller-identity keys set in `show-environment -g` output. tmux prints a removed
+    /// variable as `-KEY`, which has nothing left to clear.
+    static func callerIdentityKeys(inGlobalEnvironment output: String) -> [String] {
+        output.split(separator: "\n").compactMap { line in
+            guard !line.hasPrefix("-"), let separator = line.firstIndex(of: "=") else { return nil }
+            let key = String(line[..<separator])
+            return AgentSessionEnvironment.belongsToCaller(key) ? key : nil
+        }
+    }
+
     /// The pane every session verb addresses: the active pane of the exactly-named
     /// session's current window. `=` forces the exact session match `has-session`
     /// already uses; the trailing colon is what makes the string a *pane* target —
@@ -366,6 +393,7 @@ public struct TmuxSessionControl: Sendable {
         if await isLive(handle: handle) {
             throw ControlError.handleAlreadyLive(handle: handle)
         }
+        await removeCallerIdentityFromServer()
         guard
             let result = await run(
                 "/usr/bin/env",
@@ -384,6 +412,29 @@ public struct TmuxSessionControl: Sendable {
             throw ControlError.commandFailed(verb: "new-session", handle: handle, stderr: result.stderr)
         }
         return handle
+    }
+
+    /// Clears agent identity a running server already holds, so a pane spawned after this
+    /// starts without it. A scrubbed client keeps a new server clean, but a server started
+    /// by an agent session keeps that session's variables for its whole life, and any pane
+    /// on the socket would inherit them. Best effort: no server means nothing to clear, and
+    /// a failure here is no reason to refuse a launch.
+    public func removeCallerIdentityFromServer() async {
+        guard
+            let shown = await run(
+                "/usr/bin/env",
+                Self.showGlobalEnvironmentArguments(socketLabel: socketLabel),
+                environment
+            ),
+            shown.success
+        else { return }
+        let keys = Self.callerIdentityKeys(inGlobalEnvironment: shown.stdout)
+        guard !keys.isEmpty else { return }
+        _ = await run(
+            "/usr/bin/env",
+            Self.unsetGlobalEnvironmentArguments(socketLabel: socketLabel, keys: keys),
+            environment
+        )
     }
 
     /// The session's scrollback, newest content last — the shape a person reading a
