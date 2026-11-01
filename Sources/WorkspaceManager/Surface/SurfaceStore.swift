@@ -174,10 +174,11 @@ final class SurfaceStore: ObservableObject {
     /// Restarts the matching tiles whose tmux client has gone, so the launch script runs
     /// again: `new-session -A` joins the session if it is back, and starts one if not.
     ///
-    /// The launch counts as a new one for everything but an initial command, because what
-    /// it lands on is a question this launch has to answer afresh, and the old answer may
-    /// be about a session on a server that no longer exists. An initial command stays
-    /// spent: a respawned shell must not re-run the agent.
+    /// The launch counts as a new one for everything but an executed initial command, because
+    /// what it lands on is a question this launch has to answer afresh, and the old answer
+    /// may be about a session on a server that no longer exists. An executed command stays
+    /// spent, since a respawned shell must not re-run the agent. A prefilled one is offered
+    /// again: nothing ran it, and the new shell is as empty as the first was.
     @discardableResult
     func reviveExitedTmuxClients(
         where isTarget: (HostTerminalSession) -> Bool,
@@ -189,7 +190,7 @@ final class SurfaceStore: ObservableObject {
             else { continue }
             tmuxOwnershipLedger?.forget(hostSessionID: terminal.session.id)
             launchWorkDeliveredSessionIDs.remove(terminal.session.id)
-            if terminal.session.initialCommand != nil {
+            if terminal.session.initialCommand != nil, terminal.session.initialCommandDelivery == .execute {
                 initialCommandSpentSessionIDs.insert(terminal.session.id)
             }
             if restartTerminalSurface(for: tileID) {

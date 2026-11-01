@@ -449,7 +449,7 @@ workspaces ws send <handle> --text "<next instruction>" --enter
 workspaces ws check <handle> --wait 60
 ```
 
-Resume restores identity, never authority: it passes the conversation id and the last effort, and no permission flag. It refuses a record from an earlier workspace at the same path. If a terminal is attached to a shell under the handle, it presses Return on a resume command already prefilled there and otherwise types nothing, because that prompt may hold someone's work; the error prints the command to run there. The design is in [`docs/decisions/agent-launch-record.md`](../decisions/agent-launch-record.md).
+Resume restores identity, never authority: it passes the conversation id and the last effort, and no permission flag. It refuses a directory made after the launch, which may be a later workspace at the same path, and the error prints how to continue anyway. It exits non-zero if no agent takes up the conversation. If a terminal is attached to a shell under the handle it types nothing, because that prompt may hold someone's work, and the error says to press Return on the prefilled command there. The design is in [`docs/decisions/agent-launch-record.md`](../decisions/agent-launch-record.md).
 
 ## Deferred Ideas
 

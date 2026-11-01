@@ -90,6 +90,18 @@ struct SurfaceStoreTests {
         #expect(store.initialCommandSpentSessionIDs.contains(session.id))
     }
 
+    @Test("A revived tile offers a prefilled command again, since nothing ran it")
+    func revivingLeavesAPrefillOffered() {
+        let store = SurfaceStore()
+        let session = makeSession(delivery: .prefill)
+        _ = store.terminalSurface(for: TileID(), session: session)
+
+        store.reviveExitedTmuxClients(where: { _ in true }, isExited: { _ in true })
+
+        #expect(!store.launchWorkDeliveredSessionIDs.contains(session.id))
+        #expect(!store.initialCommandSpentSessionIDs.contains(session.id))
+    }
+
     @Test("A revived tile with no initial command has nothing to keep spent")
     func revivingWithoutAnInitialCommand() {
         let store = SurfaceStore()
