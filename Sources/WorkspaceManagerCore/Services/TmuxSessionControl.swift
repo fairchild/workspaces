@@ -769,6 +769,34 @@ extension TmuxSessionControl {
 
 // MARK: - Verb results
 
+/// `workspaces ws new --json`. `baseCommit` is what the workspace actually started from,
+/// which is the fact a caller asking for a fresh base wants to check; it is `nil` when git
+/// could not say, not when the workspace has no commit.
+public struct WorkspaceNewResult: Codable, Sendable, Equatable {
+    public let workspace: String
+    public let workspaceID: UUID
+    public let path: String
+    public let branch: String
+    public let fromRef: String?
+    public let baseCommit: String?
+
+    public init(
+        workspace: String,
+        workspaceID: UUID,
+        path: String,
+        branch: String,
+        fromRef: String?,
+        baseCommit: String?
+    ) {
+        self.workspace = workspace
+        self.workspaceID = workspaceID
+        self.path = path
+        self.branch = branch
+        self.fromRef = fromRef
+        self.baseCommit = baseCommit
+    }
+}
+
 /// `workspaces ws launch --json`. `canonicalForWorkspace` distinguishes the
 /// workspace's own session name — the one the app's workspace terminal attaches to
 /// when it runs in tmux-per-session mode — from a `--name` sibling, which nothing

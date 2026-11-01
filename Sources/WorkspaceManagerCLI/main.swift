@@ -198,47 +198,7 @@ private final class CLIApp {
 
         switch subcommand {
         case "new":
-            guard arguments.count >= 3 else {
-                throw CLIError("Usage: workspaces ws new <repo> <name>")
-            }
-
-            let repoToken = arguments[1]
-            let workspaceName = arguments.dropFirst(2).joined(separator: " ").trimmingCharacters(
-                in: .whitespacesAndNewlines
-            )
-            guard !workspaceName.isEmpty else {
-                throw CLIError("Workspace name cannot be empty.")
-            }
-
-            let repo = try resolveLocalRepoOrExplain(token: repoToken, state: state)
-
-            let info = try await workspaceService.createWorkspace(
-                repoName: repo.name,
-                repoLocalURL: URL(fileURLWithPath: repo.path),
-                name: workspaceName
-            )
-
-            let localConfig = loadWorkspaceLocalConfig(at: info.path)
-            let workspace = WorkspaceRecord(
-                id: UUID(),
-                name: info.name,
-                repoName: repo.name,
-                repoPath: repo.path,
-                path: info.path.path,
-                gitBranch: info.gitBranch,
-                createdAt: Date(),
-                lastAccessedAt: Date(),
-                defaultCommand: localConfig.defaultCommand
-            )
-
-            state.workspaces.removeAll { $0.path == workspace.path }
-            state.workspaces.append(workspace)
-            try stateStore.save(state)
-
-            print("Created workspace: \(workspaceDisplayName(workspace))")
-            print("Path: \(workspace.path)")
-            print("Branch: \(workspace.gitBranch)")
-            return 0
+            return try await runWorkspaceNew(arguments: Array(arguments.dropFirst()), state: &state)
 
         case "list":
             let localRows = state.workspaces
@@ -274,6 +234,98 @@ private final class CLIApp {
                 "Unknown ws subcommand '\(subcommand)'. Expected: new, list, path, race, launch, read, send"
             )
         }
+    }
+
+    /// `workspaces ws new <repo> <name> [--from-ref <ref>] [--json]`. Without `--from-ref` a
+    /// workspace branches from the base clone's HEAD, which is wherever that checkout was
+    /// last left. `--from-ref` fetches first and branches from the ref, as the app's own
+    /// create route does, so `--from-ref origin/main` means what the remote has now.
+    private func runWorkspaceNew(arguments: [String], state: inout CLIState) async throws -> Int32 {
+        let usage = "workspaces ws new <repo> <name> [--from-ref <ref>] [--json]"
+
+        var positional: [String] = []
+        var rawFromRef: String?
+        var json = false
+
+        var index = 0
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--from-ref":
+                index += 1
+                guard index < arguments.count else { throw CLIError("Missing value for --from-ref") }
+                rawFromRef = arguments[index]
+            case "--json":
+                json = true
+            default:
+                positional.append(arguments[index])
+            }
+            index += 1
+        }
+
+        guard positional.count >= 2 else {
+            throw CLIError("Usage: \(usage)")
+        }
+        let repoToken = positional[0]
+        let workspaceName = positional.dropFirst().joined(separator: " ").trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard !workspaceName.isEmpty else {
+            throw CLIError("Workspace name cannot be empty.")
+        }
+        let fromRef: String?
+        switch WorkspaceCreationRefValidator.normalize(rawFromRef) {
+        case .success(let normalized):
+            fromRef = normalized
+        case .failure(let error):
+            throw CLIError(error.message.replacingOccurrences(of: "fromRef", with: "--from-ref"))
+        }
+
+        let repo = try resolveLocalRepoOrExplain(token: repoToken, state: state)
+
+        let info = try await workspaceService.createWorkspace(
+            repoName: repo.name,
+            repoLocalURL: URL(fileURLWithPath: repo.path),
+            name: workspaceName,
+            fromRef: fromRef
+        )
+
+        let localConfig = loadWorkspaceLocalConfig(at: info.path)
+        let workspace = WorkspaceRecord(
+            id: UUID(),
+            name: info.name,
+            repoName: repo.name,
+            repoPath: repo.path,
+            path: info.path.path,
+            gitBranch: info.gitBranch,
+            createdAt: Date(),
+            lastAccessedAt: Date(),
+            defaultCommand: localConfig.defaultCommand
+        )
+
+        state.workspaces.removeAll { $0.path == workspace.path }
+        state.workspaces.append(workspace)
+        try stateStore.save(state)
+
+        let result = WorkspaceNewResult(
+            workspace: workspaceDisplayName(workspace),
+            workspaceID: workspace.id,
+            path: workspace.path,
+            branch: workspace.gitBranch,
+            fromRef: fromRef,
+            baseCommit: try? await gitService.getHeadCommit(at: info.path)
+        )
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+            return 0
+        }
+
+        print("Created workspace: \(result.workspace)")
+        print("Path: \(result.path)")
+        print("Branch: \(result.branch)")
+        if let fromRef {
+            print("Base: \(fromRef) (\(result.baseCommit ?? "commit unavailable"))")
+        }
+        return 0
     }
 
     /// The tmux plane's control seam, on the socket this launch resolves to. One

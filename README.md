@@ -67,13 +67,16 @@ Postgres service.
 swift run workspaces
 swift run workspaces .
 swift run workspaces repo add ~/code/my-repo
-swift run workspaces ws new my-repo feature-auth
+swift run workspaces ws new my-repo feature-auth --from-ref origin/main
 swift run workspaces open my-repo/feature-auth --cmd "claude"
 swift run workspaces ws race my-repo "add a health endpoint" --n 3 --cmd "claude"
 swift run workspaces ws launch my-repo/feature-auth --cmd "claude" --json
 swift run workspaces ws read my-repo/feature-auth --lines 50
 swift run workspaces ws send my-repo/feature-auth --text "run the tests" --enter
 ```
+
+`ws new` branches from the base clone's HEAD unless `--from-ref <ref>` names a
+start point, in which case it fetches first, as the app's create route does.
 
 `ws race` fans one prompt across N fresh worktree workspaces (`race-<slug>-1..N`)
 and runs the agent headlessly in each (`<cmd> -p '<prompt>'`, output in the
