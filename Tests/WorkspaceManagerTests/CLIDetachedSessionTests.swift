@@ -833,28 +833,6 @@ struct CLIDetachedSessionTests {
     }
 
     @Test(
-        "Resume presses Return on a command the app prefilled at an attached prompt",
-        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
-    )
-    func resumeSubmitsAPrefilledPrompt() async throws {
-        let fixture = try makeFixture()
-        defer { fixture.teardown() }
-        let environment = try installStubClaude(in: fixture)
-        let (handle, conversationID) = try await quitIntoAShell(fixture: fixture, environment: environment)
-        let client = try await attachClient(to: handle, fixture: fixture, environment: environment)
-        defer { client.terminate() }
-
-        let prefill = "claude --resume \(conversationID) --effort low"
-        #expect(try fixture.run(["ws", "send", handle, "--text", prefill], extraEnvironment: environment).status == 0)
-        let resume = try resumeResult(
-            fixture.run(["ws", "resume", handle, "--json"], extraEnvironment: environment)
-        )
-        #expect(resume.resumed)
-        let text = try await readUntil(fixture, selector: handle) { $0.contains("stub-started id=\(conversationID)") }
-        #expect(text.contains("stub-started id=\(conversationID)"))
-    }
-
-    @Test(
         "Two resumes at once start one agent",
         .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
     )
@@ -949,6 +927,32 @@ struct CLIDetachedSessionTests {
         let resume = try fixture.run(["ws", "resume", launch.handle], extraEnvironment: environment)
         #expect(resume.status == 1)
         #expect(resume.stderr.contains("earlier workspace"))
+    }
+
+    @Test(
+        "A resume that starts nothing says so",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func resumeReportsAFailedStart() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let launch = try launchResult(
+            fixture.run(
+                ["ws", "launch", fixture.workspaceSelector, "--cmd", "claude --stub-quit", "--json"],
+                extraEnvironment: environment
+            )
+        )
+        try await waitUntilGone(launch.handle, fixture: fixture, environment: environment)
+
+        // Found on PATH and never becomes a process, so no listing can catch it in passing.
+        let bin = fixture.root.appendingPathComponent("bin/claude")
+        try "#!/nonexistent/interpreter\n".write(to: bin, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bin.path)
+
+        let resume = try fixture.run(["ws", "resume", launch.handle], extraEnvironment: environment)
+        #expect(resume.status == 1)
+        #expect(resume.stderr.contains("nothing took up conversation"))
     }
 
     @Test("Resuming a handle nothing was launched under says so")

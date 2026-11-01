@@ -199,8 +199,10 @@ enum ShellWords {
         var quote: Character?
         var index = command.startIndex
 
+        // Braces and globs count: a shell expands them before claude sees a word, so an
+        // unquoted one can hide a flag.
         func isOperator(_ character: Character) -> Bool {
-            ";&|<>()`\n#$".contains(character)
+            ";&|<>()`\n#${}*?[]".contains(character)
         }
 
         while index < command.endIndex {

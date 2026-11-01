@@ -152,7 +152,12 @@ public struct AgentLaunchRecordStore: Sendable {
                 close(descriptor)
                 throw LockError.held
             }
-            try await Task.sleep(for: .milliseconds(100))
+            do {
+                try await Task.sleep(for: .milliseconds(100))
+            } catch {
+                close(descriptor)
+                throw error
+            }
         }
         return AgentConversationLock(descriptor: descriptor)
     }

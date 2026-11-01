@@ -93,6 +93,7 @@ struct AgentLaunchCommandTests {
             "CLAUDE_CONFIG_DIR=/tmp/other claude",
             "claude \"$MODE\" 'do the work'", "claude \"`mode`\"", "claude --model \"$MODEL\"",
             "claude \"--resume=$ID\"", "claude --session-id \(id) --resume \(id)",
+            "claude {--resume,\(id)}", "claude --res*", "claude --resum?", "claude [-]-resume",
         ]
     )
     func opaque(command: String) {
@@ -112,6 +113,7 @@ struct AgentLaunchCommandTests {
         #expect(plan("claude fix#12").identity != nil)
         #expect(plan("claude \"fix $PATH handling\"").identity != nil)
         #expect(plan("claude '$MODE stays literal here'").identity != nil)
+        #expect(plan("claude 'what is {this} [really] about?'").identity != nil)
         #expect(plan("claude \"\\$MODE is escaped\"").identity != nil)
     }
 

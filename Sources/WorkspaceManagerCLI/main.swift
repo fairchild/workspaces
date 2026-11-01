@@ -404,14 +404,22 @@ private final class CLIApp {
 
         let control = tmuxControl()
         let plan = AgentLaunchCommand.plan(command: command)
-        if let conversationID = plan.identity?.conversationID,
-            let listing = await AgentSessionInspection.processListing(),
-            !AgentSessionInspection.conversationHolders(conversationID, processListing: listing).isEmpty
-        {
-            throw CLIError(
-                "Conversation \(conversationID) is already running, and a second agent would be "
-                    + "a second writer on its transcript."
-            )
+        // A conversation this launch just named cannot be held by anything yet. One the
+        // caller named can be, so it goes through the same claim as a resume.
+        let continuing = plan.identity.flatMap { plan.command == command ? $0.conversationID : nil }
+        var lock: AgentConversationLock?
+        defer { lock?.release() }
+        if let continuing {
+            lock = try await claimConversation(continuing)
+            guard let listing = await AgentSessionInspection.processListing() else {
+                throw CLIError("Could not read the process table, so a second agent cannot be ruled out.")
+            }
+            guard AgentSessionInspection.conversationHolders(continuing, processListing: listing).isEmpty else {
+                throw CLIError(
+                    "Conversation \(continuing) is already running, and a second agent would be "
+                        + "a second writer on its transcript."
+                )
+            }
         }
         let earlierConversation = launchRecords.load(socketLabel: control.socketLabel, handle: handle)?
             .identity?.conversationID
@@ -419,6 +427,9 @@ private final class CLIApp {
             try await control.launch(handle: handle, directory: workspaceURL, command: plan.command)
         } catch let error as TmuxSessionControl.ControlError {
             throw CLIError(error.localizedDescription)
+        }
+        if let continuing {
+            await waitForHolder(of: continuing)
         }
 
         do {
@@ -644,20 +655,14 @@ private final class CLIApp {
         guard record.isForWorkspaceOnDisk else {
             throw CLIError(
                 "\(directory.path) was made after this launch, so conversation "
-                    + "\(identity.conversationID) belongs to an earlier workspace at that path. "
-                    + "'workspaces ws launch' can name it with --resume if that is the intent."
+                    + "\(identity.conversationID) may belong to an earlier workspace at that path. "
+                    + "To continue it here anyway: workspaces ws launch \(token) --cmd "
+                    + "\"claude --resume \(identity.conversationID)\""
             )
         }
 
         let conversationID = identity.conversationID
-        let lock: AgentConversationLock
-        do {
-            lock = try await launchRecords.lockConversation(conversationID)
-        } catch AgentLaunchRecordStore.LockError.held {
-            throw CLIError("Another resume of conversation \(conversationID) is still running.")
-        } catch {
-            throw CLIError("Could not claim conversation \(conversationID): \(error.localizedDescription)")
-        }
+        let lock = try await claimConversation(conversationID)
         defer { lock.release() }
 
         let sessionLive = await control.isLive(handle: handle)
@@ -702,27 +707,17 @@ private final class CLIApp {
                             + "not a shell, so the resume command cannot be typed into it."
                     )
                 }
-                let entry = TmuxSessionControl.resumeEntry(
-                    attachedClients: await control.attachedClients(handle: handle),
-                    inputLine: await control.inputLine(handle: handle),
-                    command: command
-                )
-                switch entry {
-                case .typeCommand:
-                    try await control.clearInputLine(handle: handle)
-                    let report = try await control.send(handle: handle, text: command, submit: true)
-                    if report.verification == .paneMissingText {
-                        writeStderr(
-                            "warning: the pane did not show the resume command; 'ws check' will say if it ran."
-                        )
-                    }
-                case .submitPrefilled:
-                    try await control.submitInputLine(handle: handle)
-                case .refuse:
+                guard await control.attachedClients(handle: handle) == 0 else {
                     throw CLIError(
-                        "'\(handle)' is open in a terminal, and its prompt may hold someone's work, "
-                            + "so nothing was typed. To resume it there, run: \(command)"
+                        "'\(handle)' is open in a terminal, and its prompt may hold someone's work, so "
+                            + "nothing was typed. To resume it there, press Return on the prefilled "
+                            + "command, or run: \(command)"
                     )
+                }
+                try await control.clearInputLine(handle: handle)
+                let report = try await control.send(handle: handle, text: command, submit: true)
+                if report.verification == .paneMissingText {
+                    writeStderr("warning: the pane did not show the resume command; 'ws check' will say if it ran.")
                 }
             } else {
                 try await control.launch(handle: handle, directory: directory, command: command)
@@ -730,7 +725,12 @@ private final class CLIApp {
         } catch let error as TmuxSessionControl.ControlError {
             throw CLIError(error.localizedDescription)
         }
-        await waitForHolder(of: conversationID)
+        guard await waitForHolder(of: conversationID) else {
+            throw CLIError(
+                "The resume command ran under '\(handle)', but nothing took up conversation "
+                    + "\(conversationID). To see why: workspaces ws read \(handle)"
+            )
+        }
 
         var resumed = record
         resumed.resumedAt = Date()
@@ -774,17 +774,32 @@ private final class CLIApp {
 
     private static let resumeHolderExitWindow: TimeInterval = 15
 
-    /// Until the new agent shows in the process table, so a resume waiting on the lock finds
-    /// it there rather than a conversation that still looks free.
-    private func waitForHolder(of conversationID: String) async {
-        for _ in 0..<50 {
+    /// Claims a conversation for the span of a launch or resume, so two of them cannot both
+    /// find it free.
+    private func claimConversation(_ conversationID: String) async throws -> AgentConversationLock {
+        do {
+            return try await launchRecords.lockConversation(conversationID)
+        } catch AgentLaunchRecordStore.LockError.held {
+            throw CLIError("Another launch or resume of conversation \(conversationID) is still running.")
+        } catch {
+            throw CLIError("Could not claim conversation \(conversationID): \(error.localizedDescription)")
+        }
+    }
+
+    /// Until the new agent shows in the process table, which is what makes it safe to release
+    /// the claim: anyone waiting on it then finds a holder rather than a conversation that
+    /// still looks free. `false` if none appeared, which is a start that failed.
+    @discardableResult
+    private func waitForHolder(of conversationID: String) async -> Bool {
+        for _ in 0..<100 {
             if let listing = await AgentSessionInspection.processListing(),
                 !AgentSessionInspection.conversationHolders(conversationID, processListing: listing).isEmpty
             {
-                return
+                return true
             }
             try? await Task.sleep(for: .milliseconds(100))
         }
+        return false
     }
 
     private func reportResume(_ result: WorkspaceResumeResult, json: Bool) throws -> Int32 {
