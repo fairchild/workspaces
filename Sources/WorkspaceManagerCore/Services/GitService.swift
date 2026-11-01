@@ -69,6 +69,10 @@ public actor GitService: GitServiceProtocol {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    public func getHeadCommit(at path: URL) async throws -> String {
+        try await runGit(["rev-parse", "HEAD"], at: path).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     public func fetchAll(at path: URL) async throws {
         _ = try await runGit(["fetch", "--all", "--prune"], at: path)
     }

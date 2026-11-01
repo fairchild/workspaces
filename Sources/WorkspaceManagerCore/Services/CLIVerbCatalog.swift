@@ -62,7 +62,7 @@ public enum CLIVerbCatalog {
         Local commands (CLI-local state; no running app required):
           workspaces repo add <path>
           workspaces repo list
-          workspaces ws new <repo> <name>
+          workspaces ws new <repo> <name> [--from-ref <ref>] [--json]
           workspaces ws list
           workspaces ws path <workspace>
           workspaces ws race <repo> <prompt...> [--n 3] [--cmd "claude"] [--name <slug>] [--no-launch]
@@ -112,6 +112,11 @@ public enum CLIVerbCatalog {
           read rather than as a whole-call budget. A probe that misses falls
           back to the CLI-local plane, and says which way it missed on an
           interactive terminal (or under WORKSPACES_CLI_VERBOSE=1).
+
+        Fresh base:
+          'ws new' branches from the base clone's HEAD. '--from-ref origin/main'
+          fetches first and branches from that ref instead, the same as the
+          app's create route.
 
         Detached sessions:
           'ws launch' returns a handle instead of attaching. The handle is a tmux
