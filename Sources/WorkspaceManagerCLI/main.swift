@@ -27,6 +27,7 @@ private final class CLIApp {
     private static let reservedCommands = CLIVerbCatalog.reservedCommands
 
     private let stateStore = CLIStateStore()
+    private let launchRecords = AgentLaunchRecordStore()
     private let workspaceService: WorkspaceService = .shared
     private let gitService: GitService = .shared
 
@@ -193,7 +194,7 @@ private final class CLIApp {
 
     private func runWorkspace(arguments: [String], state: inout CLIState) async throws -> Int32 {
         guard let subcommand = arguments.first else {
-            throw CLIError("Missing ws subcommand. Expected: new, list, path, race, launch, read, send")
+            throw CLIError("Missing ws subcommand. Expected: new, list, path, race, launch, check, resume, read, send")
         }
 
         switch subcommand {
@@ -223,6 +224,12 @@ private final class CLIApp {
         case "launch":
             return try await runWorkspaceLaunch(arguments: Array(arguments.dropFirst()), state: &state)
 
+        case "check":
+            return try await runWorkspaceCheck(arguments: Array(arguments.dropFirst()), state: &state)
+
+        case "resume":
+            return try await runWorkspaceResume(arguments: Array(arguments.dropFirst()), state: &state)
+
         case "read":
             return try await runWorkspaceRead(arguments: Array(arguments.dropFirst()), state: &state)
 
@@ -231,7 +238,7 @@ private final class CLIApp {
 
         default:
             throw CLIError(
-                "Unknown ws subcommand '\(subcommand)'. Expected: new, list, path, race, launch, read, send"
+                "Unknown ws subcommand '\(subcommand)'. Expected: new, list, path, race, launch, check, resume, read, send"
             )
         }
     }
@@ -396,12 +403,60 @@ private final class CLIApp {
             ?? TmuxSessionNaming.defaultName(for: workspaceURL)
 
         let control = tmuxControl()
+        let plan = AgentLaunchCommand.plan(command: command)
+        // A conversation this launch just named cannot be held by anything yet. One the
+        // caller named can be, so it goes through the same claim as a resume.
+        let continuing = plan.identity.flatMap { plan.command == command ? $0.conversationID : nil }
+        var lock: AgentConversationLock?
+        defer { lock?.release() }
+        if let continuing {
+            lock = try await claimConversation(continuing)
+            guard let listing = await AgentSessionInspection.processListing() else {
+                throw CLIError("Could not read the process table, so a second agent cannot be ruled out.")
+            }
+            guard AgentSessionInspection.conversationHolders(continuing, processListing: listing).isEmpty else {
+                throw CLIError(
+                    "Conversation \(continuing) is already running, and a second agent would be "
+                        + "a second writer on its transcript."
+                )
+            }
+        }
+        let earlierConversation = launchRecords.load(socketLabel: control.socketLabel, handle: handle)?
+            .identity?.conversationID
         do {
-            try await control.launch(handle: handle, directory: workspaceURL, command: command)
+            try await control.launch(handle: handle, directory: workspaceURL, command: plan.command)
         } catch let error as TmuxSessionControl.ControlError {
             throw CLIError(error.localizedDescription)
         }
+        if let continuing {
+            await waitForHolder(of: continuing)
+        }
 
+        do {
+            try launchRecords.save(
+                AgentLaunchRecord(
+                    handle: handle,
+                    workspacePath: workspace.path,
+                    socketLabel: control.socketLabel,
+                    launchedAt: Date(),
+                    identity: plan.identity
+                )
+            )
+        } catch {
+            writeStderr(
+                "warning: the session is running, but its launch record was not saved: "
+                    + "\(error.localizedDescription). 'ws check' and 'ws resume' will not know it."
+            )
+        }
+        if let earlierConversation, earlierConversation != plan.identity?.conversationID {
+            writeStderr(
+                "note: this is a new conversation. The one recorded before it was \(earlierConversation); "
+                    + "'ws resume' would have continued that one."
+            )
+        }
+
+        // The caller's command, not the planned one: a conversation id is only good for one
+        // start, and `workspaces resume` replays what is stored here.
         markWorkspaceAccess(workspaceID: workspace.id, command: command, state: &state)
         try stateStore.save(state)
 
@@ -410,9 +465,12 @@ private final class CLIApp {
             workspace: workspaceDisplayName(workspace),
             workspaceID: workspace.id,
             path: workspace.path,
-            command: command,
+            command: plan.command,
             socketLabel: control.socketLabel,
-            canonicalForWorkspace: label == nil
+            canonicalForWorkspace: label == nil,
+            conversationID: plan.identity?.conversationID,
+            requestedModel: plan.identity?.requestedModel,
+            requestedEffort: plan.identity?.requestedEffort
         )
         if json {
             print(try AutomationCLIResultPrinter.resultJSON(result))
@@ -421,12 +479,356 @@ private final class CLIApp {
 
         print("Handle: \(handle)")
         print("Workspace: \(result.workspace)")
-        print("Command: \(command ?? "(login shell)")")
+        print("Command: \(plan.command ?? "(login shell)")")
         if result.canonicalForWorkspace {
             print("This is the workspace's own session name — the app attaches to it in tmux-per-session mode.")
         }
         print("Read: workspaces ws read \(handle)")
+        if let conversationID = result.conversationID {
+            print("Conversation: \(conversationID)")
+            print("Check: workspaces ws check \(handle) --wait 60")
+            print("Resume: workspaces ws resume \(handle)")
+        }
         return 0
+    }
+
+    /// `workspaces ws check <handle|workspace> [--wait <seconds>] [--ready] [--json]` —
+    /// whether the launch is what was asked for: one agent, no prompt in the way, and a turn
+    /// of its own that ran on the requested model and effort. Exits 0 only when all of that
+    /// was observed, so a script can gate on the status alone. `--wait` keeps looking while
+    /// more evidence could still arrive, and stops the moment an answer does that waiting
+    /// cannot change.
+    ///
+    /// `--ready` asks the earlier question, whether the agent can take input, for a session
+    /// with no turn coming until something is sent: one that was resumed, or launched
+    /// without a prompt. Text sent before that point is lost.
+    private func runWorkspaceCheck(arguments: [String], state: inout CLIState) async throws -> Int32 {
+        let usage = "workspaces ws check <handle|workspace> [--wait <seconds>] [--ready] [--json]"
+
+        var token: String?
+        var waitSeconds = 0
+        var acceptsReady = false
+        var json = false
+
+        var index = 0
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--wait":
+                index += 1
+                guard index < arguments.count, let parsed = Int(arguments[index]), parsed >= 0 else {
+                    throw CLIError("Missing or invalid value for --wait")
+                }
+                waitSeconds = parsed
+            case "--ready":
+                acceptsReady = true
+            case "--json":
+                json = true
+            default:
+                guard token == nil else { throw CLIError("Usage: \(usage)") }
+                token = arguments[index]
+            }
+            index += 1
+        }
+
+        guard let token else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        let control = tmuxControl()
+        let handle = try await resolveSessionHandle(token: token, control: control, state: &state)
+        let record = launchRecords.load(socketLabel: control.socketLabel, handle: handle)
+        let deadline = Date().addingTimeInterval(TimeInterval(waitSeconds))
+        let accepted: Set<AgentSessionVerdict> = acceptsReady ? [.verified, .ready] : [.verified]
+        let stillArriving: Set<AgentSessionVerdict> = acceptsReady ? [.waiting] : [.waiting, .ready]
+
+        var result = await inspectSession(handle: handle, record: record, control: control)
+        while stillArriving.contains(result.verdict), Date() < deadline {
+            try await Task.sleep(for: .seconds(1))
+            result = await inspectSession(handle: handle, record: record, control: control)
+        }
+        // Asked once, after the wait: it costs a probe of the app, and the app adds the row
+        // moments after a launch.
+        if let record, let inventory = appInventory() {
+            let path = normalizePath(record.workspacePath).resolvingSymlinksInPath().path
+            result.visibleInApp = inventory.workspaces.contains {
+                normalizePath($0.path).resolvingSymlinksInPath().path == path
+            }
+        }
+
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+        } else {
+            print("\(result.verdict.rawValue): \(result.detail)")
+            print("Handle: \(result.handle)")
+            print("Agent processes: \(result.agentProcesses.map(String.init) ?? "unknown")")
+            print("Conversation: \(result.conversationID ?? "none recorded")")
+            print("Model: \(result.observedModel ?? "not seen yet") (requested \(result.requestedModel ?? "default"))")
+            print(
+                "Effort: \(result.observedEffort ?? "not seen yet") "
+                    + "(requested \(result.requestedEffort ?? "default"))"
+            )
+            print("In the app: \(result.visibleInApp.map { $0 ? "yes" : "no" } ?? "unknown")")
+        }
+        return accepted.contains(result.verdict) ? 0 : 2
+    }
+
+    private func inspectSession(
+        handle: String,
+        record: AgentLaunchRecord?,
+        control: TmuxSessionControl
+    ) async -> WorkspaceCheckResult {
+        let identity = record?.identity
+        let sessionLive = await control.isLive(handle: handle)
+        let pane = sessionLive ? try? await control.read(handle: handle, lines: 1) : nil
+        let blocker = pane.flatMap(AgentSessionInspection.blocker(inPane:))
+
+        var holders: [Int]?
+        if let identity, let listing = await AgentSessionInspection.processListing() {
+            holders = AgentSessionInspection.conversationHolders(identity.conversationID, processListing: listing)
+        }
+        let lastTurn = record.flatMap { record in
+            record.identity.flatMap {
+                claudeTranscript(conversationID: $0.conversationID, workspacePath: record.workspacePath)
+            }
+        }.flatMap { ClaudeTranscriptTurn.last(in: $0) }
+
+        let decision = AgentSessionInspection.verdict(
+            sessionLive: sessionLive,
+            identity: identity,
+            agentProcesses: holders?.count,
+            blocker: blocker,
+            inputReady: pane.map(AgentSessionInspection.inputReady(inPane:)) ?? false,
+            lastTurn: lastTurn,
+            agentStartedAt: holders?.max().map { Date().addingTimeInterval(-TimeInterval($0)) }
+        )
+        return WorkspaceCheckResult(
+            handle: handle,
+            socketLabel: control.socketLabel,
+            verdict: decision.verdict,
+            detail: decision.detail,
+            sessionLive: sessionLive,
+            conversationID: identity?.conversationID,
+            agentProcesses: holders?.count,
+            blocker: blocker,
+            requestedModel: identity?.requestedModel,
+            requestedEffort: identity?.requestedEffort,
+            observedModel: lastTurn?.model,
+            observedEffort: lastTurn?.effort
+        )
+    }
+
+    /// `workspaces ws resume <handle|workspace> [--json]` — continues the conversation a
+    /// launch recorded, from whatever is left of its session: nothing at all, or a bare
+    /// shell the app opened under the same name. One holding the conversation already is
+    /// left alone, because a second process would be a second writer on one transcript.
+    private func runWorkspaceResume(arguments: [String], state: inout CLIState) async throws -> Int32 {
+        let usage = "workspaces ws resume <handle|workspace> [--json]"
+
+        var token: String?
+        var json = false
+        for argument in arguments {
+            if argument == "--json" {
+                json = true
+            } else {
+                guard token == nil else { throw CLIError("Usage: \(usage)") }
+                token = argument
+            }
+        }
+        guard let token else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        let control = tmuxControl()
+        let handle = try await resolveSessionHandle(token: token, control: control, state: &state)
+        guard let record = launchRecords.load(socketLabel: control.socketLabel, handle: handle) else {
+            throw CLIError("No launch is recorded for '\(handle)'. 'workspaces ws launch' records one.")
+        }
+        guard let identity = record.identity else {
+            throw CLIError(
+                "'\(handle)' was launched with a command that names no conversation, so there is nothing to resume."
+            )
+        }
+        let directory = URL(fileURLWithPath: record.workspacePath)
+        guard FileManager.default.fileExists(atPath: directory.path) else {
+            throw CLIError("The workspace directory is gone: \(directory.path)")
+        }
+        guard record.isForWorkspaceOnDisk else {
+            throw CLIError(
+                "\(directory.path) was made after this launch, so conversation "
+                    + "\(identity.conversationID) may belong to an earlier workspace at that path. "
+                    + "To continue it here anyway: workspaces ws launch \(token) --cmd "
+                    + "\"claude --resume \(identity.conversationID)\""
+            )
+        }
+
+        let conversationID = identity.conversationID
+        let lock = try await claimConversation(conversationID)
+        defer { lock.release() }
+
+        let sessionLive = await control.isLive(handle: handle)
+        let holders = try await conversationHolders(conversationID, sessionLive: sessionLive)
+        if holders > 0 {
+            guard sessionLive else {
+                throw CLIError(
+                    "Conversation \(conversationID) is held by a process outside any session on this "
+                        + "socket, and a second agent would be a second writer on its transcript."
+                )
+            }
+            return try reportResume(
+                WorkspaceResumeResult(
+                    handle: handle,
+                    socketLabel: control.socketLabel,
+                    conversationID: conversationID,
+                    resumed: false,
+                    command: nil
+                ),
+                json: json
+            )
+        }
+
+        guard let transcript = claudeTranscript(conversationID: conversationID, workspacePath: record.workspacePath)
+        else {
+            throw CLIError(
+                "No transcript exists for conversation \(conversationID): it never took a turn, "
+                    + "so there is nothing to continue. 'workspaces ws launch' starts a new one."
+            )
+        }
+        let effort = ClaudeTranscriptTurn.last(in: transcript)?.effort ?? identity.requestedEffort
+        guard let command = AgentLaunchCommand.claudeResume(conversationID: conversationID, effort: effort) else {
+            throw CLIError("The recorded conversation id is malformed: \(conversationID)")
+        }
+
+        do {
+            if sessionLive {
+                let paneCommand = await control.paneCommand(handle: handle)
+                guard let paneCommand, TmuxSessionControl.isIdleShell(paneCommand: paneCommand) else {
+                    throw CLIError(
+                        "'\(handle)' is running \(paneCommand ?? "something tmux would not name"), "
+                            + "not a shell, so the resume command cannot be typed into it."
+                    )
+                }
+                guard await control.attachedClients(handle: handle) == 0 else {
+                    throw CLIError(
+                        "'\(handle)' is open in a terminal, and its prompt may hold someone's work, so "
+                            + "nothing was typed. To resume it there, press Return on the prefilled "
+                            + "command, or run: \(command)"
+                    )
+                }
+                try await control.clearInputLine(handle: handle)
+                let report = try await control.send(handle: handle, text: command, submit: true)
+                if report.verification == .paneMissingText {
+                    writeStderr("warning: the pane did not show the resume command; 'ws check' will say if it ran.")
+                }
+            } else {
+                try await control.launch(handle: handle, directory: directory, command: command)
+            }
+        } catch let error as TmuxSessionControl.ControlError {
+            throw CLIError(error.localizedDescription)
+        }
+        guard await waitForHolder(of: conversationID) else {
+            throw CLIError(
+                "The resume command ran under '\(handle)', but nothing took up conversation "
+                    + "\(conversationID). To see why: workspaces ws read \(handle)"
+            )
+        }
+
+        var resumed = record
+        resumed.resumedAt = Date()
+        do {
+            try launchRecords.save(resumed)
+        } catch {
+            writeStderr(
+                "warning: the conversation resumed, but its record was not updated: "
+                    + "\(error.localizedDescription). A tile in the app may need a click to rejoin it."
+            )
+        }
+
+        return try reportResume(
+            WorkspaceResumeResult(
+                handle: handle,
+                socketLabel: control.socketLabel,
+                conversationID: conversationID,
+                resumed: true,
+                command: command
+            ),
+            json: json
+        )
+    }
+
+    /// How many processes hold the conversation. When its session is gone, a holder is
+    /// usually an agent on its way out: one outlives a killed tmux server by a few seconds
+    /// while it shuts down, and a resume in that window would be refused for nothing.
+    private func conversationHolders(_ conversationID: String, sessionLive: Bool) async throws -> Int {
+        let deadline = Date().addingTimeInterval(sessionLive ? 0 : Self.resumeHolderExitWindow)
+        while true {
+            guard let listing = await AgentSessionInspection.processListing() else {
+                throw CLIError("Could not read the process table, so a second agent cannot be ruled out.")
+            }
+            let holders = AgentSessionInspection.conversationHolders(conversationID, processListing: listing).count
+            if holders == 0 || Date() >= deadline {
+                return holders
+            }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+    }
+
+    private static let resumeHolderExitWindow: TimeInterval = 15
+
+    /// Claims a conversation for the span of a launch or resume, so two of them cannot both
+    /// find it free.
+    private func claimConversation(_ conversationID: String) async throws -> AgentConversationLock {
+        do {
+            return try await launchRecords.lockConversation(conversationID)
+        } catch AgentLaunchRecordStore.LockError.held {
+            throw CLIError("Another launch or resume of conversation \(conversationID) is still running.")
+        } catch {
+            throw CLIError("Could not claim conversation \(conversationID): \(error.localizedDescription)")
+        }
+    }
+
+    /// Until the new agent shows in the process table, which is what makes it safe to release
+    /// the claim: anyone waiting on it then finds a holder rather than a conversation that
+    /// still looks free. `false` if none appeared, which is a start that failed.
+    @discardableResult
+    private func waitForHolder(of conversationID: String) async -> Bool {
+        for _ in 0..<100 {
+            if let listing = await AgentSessionInspection.processListing(),
+                !AgentSessionInspection.conversationHolders(conversationID, processListing: listing).isEmpty
+            {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return false
+    }
+
+    private func reportResume(_ result: WorkspaceResumeResult, json: Bool) throws -> Int32 {
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+        } else if result.resumed {
+            print("Resumed conversation \(result.conversationID) in \(result.handle)")
+            print("Ready: workspaces ws check \(result.handle) --wait 60 --ready")
+        } else {
+            print("Conversation \(result.conversationID) is already running; nothing was started.")
+        }
+        return 0
+    }
+
+    /// The transcript of a recorded conversation, if it has one yet. A launched session
+    /// sheds the caller's config directory, so the default location comes first; the
+    /// caller's own comes second for a login shell that exports the same one back.
+    private func claudeTranscript(conversationID: String, workspacePath: String) -> URL? {
+        let environment = ProcessInfo.processInfo.environment
+        let home =
+            environment["HOME"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser
+        return [AgentSessionEnvironment.removingCallerIdentity(from: environment), environment]
+            .lazy
+            .compactMap {
+                ClaudeTranscriptResumability(environment: $0, homeDirectory: home)
+                    .existingTranscriptURL(agentSessionID: conversationID, launchDirectory: workspacePath)
+            }
+            .first
     }
 
     /// `workspaces ws read <handle|workspace> [--lines N] [--json]` — the scrollback of a
@@ -2325,12 +2727,7 @@ private struct CLIStateStore {
 
 private enum CLIPaths {
     static var configDirectory: URL {
-        if let xdg = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
-            return URL(fileURLWithPath: xdg).appendingPathComponent("workspaces-cli")
-        }
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config")
-            .appendingPathComponent("workspaces-cli")
+        CLIConfigDirectory.resolved()
     }
 
     static var stateFile: URL {

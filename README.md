@@ -71,6 +71,8 @@ swift run workspaces ws new my-repo feature-auth --from-ref origin/main
 swift run workspaces open my-repo/feature-auth --cmd "claude"
 swift run workspaces ws race my-repo "add a health endpoint" --n 3 --cmd "claude"
 swift run workspaces ws launch my-repo/feature-auth --cmd "claude" --json
+swift run workspaces ws check my-repo/feature-auth --wait 60
+swift run workspaces ws resume my-repo/feature-auth
 swift run workspaces ws read my-repo/feature-auth --lines 50
 swift run workspaces ws send my-repo/feature-auth --text "run the tests" --enter
 ```
@@ -92,6 +94,15 @@ one. `--name <label>` launches a sibling session instead. `ws read` and `ws send
 take either a handle or a workspace selector. `ws send` types the text in chunks
 small enough to stay under the pty input queue's depth and then reads the pane
 back, reporting `delivery unverified` when the pane does not show what it sent.
+
+A launched session starts as itself: the caller's agent identity reaches neither the
+pane nor the tmux server. A plain `claude` command also gets a conversation id, kept
+on disk with the requested model and effort. `ws check` exits 0 only when one agent
+holds that conversation, no prompt is in the way, and a turn of its own ran as
+requested. `ws resume` continues the conversation after the agent, the tmux server,
+or the machine went away, and does nothing if it is already running. A resumed agent
+takes no turn until sent something, so `ws check --ready` answers whether it can take
+input yet.
 
 ## Configuration
 

@@ -320,6 +320,22 @@ public struct TmuxSessionControl: Sendable {
         ["tmux", "-L", socketLabel, "send-keys", "-t", paneTarget(handle), "Enter"]
     }
 
+    /// What the pane's foreground process is, as tmux names it: a shell at its prompt, or
+    /// whatever is running in front of one.
+    public static func paneCommandArguments(socketLabel: String, handle: String) -> [String] {
+        ["tmux", "-L", socketLabel, "display-message", "-p", "-t", paneTarget(handle), "#{pane_current_command}"]
+    }
+
+    /// How many terminals are showing the session: a tile in the app counts as one.
+    public static func attachedClientsArguments(socketLabel: String, handle: String) -> [String] {
+        ["tmux", "-L", socketLabel, "display-message", "-p", "-t", paneTarget(handle), "#{session_attached}"]
+    }
+
+    /// Readline's and zle's kill-line, for a prompt that may already hold text.
+    public static func clearInputLineArguments(socketLabel: String, handle: String) -> [String] {
+        ["tmux", "-L", socketLabel, "send-keys", "-t", paneTarget(handle), "C-u"]
+    }
+
     public static func hasSessionArguments(socketLabel: String, handle: String) -> [String] {
         ["tmux", "-L", socketLabel, "has-session", "-t", "=\(handle)"]
     }
@@ -435,6 +451,59 @@ public struct TmuxSessionControl: Sendable {
             Self.unsetGlobalEnvironmentArguments(socketLabel: socketLabel, keys: keys),
             environment
         )
+    }
+
+    /// The pane's foreground process, or `nil` when tmux did not say.
+    public func paneCommand(handle: String) async -> String? {
+        guard
+            let result = await run(
+                "/usr/bin/env",
+                Self.paneCommandArguments(socketLabel: socketLabel, handle: handle),
+                environment
+            ),
+            result.success
+        else { return nil }
+        let command = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return command.isEmpty ? nil : command
+    }
+
+    /// How many terminals are showing the session, or `nil` when tmux did not say. A shell
+    /// with one attached may hold someone's half-written command, and no read of the pane
+    /// tells that from a blank prompt, so only a count of zero makes it safe to type there.
+    public func attachedClients(handle: String) async -> Int? {
+        guard
+            let result = await run(
+                "/usr/bin/env",
+                Self.attachedClientsArguments(socketLabel: socketLabel, handle: handle),
+                environment
+            ),
+            result.success
+        else { return nil }
+        return Int(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Empties the line at a shell prompt, so what is typed next is the whole command. The
+    /// app prefills a resume command into a fresh shell, and typing another one after it
+    /// would run neither.
+    public func clearInputLine(handle: String) async throws {
+        guard
+            let result = await run(
+                "/usr/bin/env",
+                Self.clearInputLineArguments(socketLabel: socketLabel, handle: handle),
+                environment
+            )
+        else {
+            throw ControlError.tmuxUnavailable
+        }
+        guard result.success else {
+            throw ControlError.commandFailed(verb: "send-keys C-u", handle: handle, stderr: result.stderr)
+        }
+    }
+
+    /// Whether a pane is at a shell prompt, which is the one state text can safely be typed
+    /// into: anything else in the foreground would receive it as its own input.
+    public static func isIdleShell(paneCommand: String) -> Bool {
+        ["zsh", "bash", "sh", "fish"].contains(paneCommand.trimmingCharacters(in: CharacterSet(charactersIn: "-")))
     }
 
     /// The session's scrollback, newest content last — the shape a person reading a
@@ -809,6 +878,11 @@ public struct WorkspaceLaunchResult: Codable, Sendable, Equatable {
     public let command: String?
     public let socketLabel: String
     public let canonicalForWorkspace: Bool
+    /// The conversation this launch started, or `nil` when the command was not a plain
+    /// `claude` invocation. Present means `ws check` and `ws resume` can act on the handle.
+    public let conversationID: String?
+    public let requestedModel: String?
+    public let requestedEffort: String?
 
     public init(
         handle: String,
@@ -817,7 +891,10 @@ public struct WorkspaceLaunchResult: Codable, Sendable, Equatable {
         path: String,
         command: String?,
         socketLabel: String,
-        canonicalForWorkspace: Bool
+        canonicalForWorkspace: Bool,
+        conversationID: String? = nil,
+        requestedModel: String? = nil,
+        requestedEffort: String? = nil
     ) {
         self.handle = handle
         self.workspace = workspace
@@ -826,6 +903,9 @@ public struct WorkspaceLaunchResult: Codable, Sendable, Equatable {
         self.command = command
         self.socketLabel = socketLabel
         self.canonicalForWorkspace = canonicalForWorkspace
+        self.conversationID = conversationID
+        self.requestedModel = requestedModel
+        self.requestedEffort = requestedEffort
     }
 }
 
