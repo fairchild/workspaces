@@ -39,7 +39,7 @@ normal pipeline, and prints the markdown link — then stops the launched app:
 ```
 
 Named scenarios (`phase-1-release`, `m6-status-sliver`, `attention-only`,
-`restore-banner`, `orphan-banner`, `clean`, or `inline:<agent-states>`) come from
+`restore-banner`, `orphan-banner`, `orphan-banner-overflow`, `clean`, or `inline:<agent-states>`) come from
 [`scripts/lib/fixture-scenarios.sh`](../../scripts/lib/fixture-scenarios.sh) and
 match the release-screenshot catalog; the env grammar behind them lives in
 [ui-fixture-mode.md](ui-fixture-mode.md). `--name` defaults to the scenario.

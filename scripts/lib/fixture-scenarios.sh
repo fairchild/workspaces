@@ -66,6 +66,11 @@ fixture_resolve_scenario() {
             # so dev-machine leftovers never leak into any scenario's capture.
             FIXTURE_SEED_ORPHAN_BANNER=1
             ;;
+        orphan-banner-overflow)
+            # The same banner seeded with a long list and opened, so the capture shows the
+            # expanded list scrolling inside its cap with the header still in reach (#1829).
+            FIXTURE_SEED_ORPHAN_BANNER=overflow
+            ;;
         runaway-alert)
             # Stages the sidebar's runaway-process strip via a deterministic synthetic
             # alert (issue #1368). The env var reaches the app by inheritance — the
@@ -144,5 +149,5 @@ fixture_resolve_scenario() {
 
 # fixture_scenario_names — the known scenario ids, one per line.
 fixture_scenario_names() {
-    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner runaway-alert sidebar-recent sidebar-pinned sidebar-pinned-alphabetical sidebar-archived sidebar-active-card file-tree-unavailable file-tree-permission cmd-t-repo-overview cmd-t-repo-terminal clean
+    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner orphan-banner-overflow runaway-alert sidebar-recent sidebar-pinned sidebar-pinned-alphabetical sidebar-archived sidebar-active-card file-tree-unavailable file-tree-permission cmd-t-repo-overview cmd-t-repo-terminal clean
 }

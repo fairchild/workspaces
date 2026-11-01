@@ -189,6 +189,7 @@ struct UIStateGoldenFixtureTests {
     @Test(arguments: [
         ("clean", [AutomationUIBanner]()),
         ("orphan-banner", [AutomationUIBanner.workspaceOrphanCleanup]),
+        ("orphan-banner-overflow", [AutomationUIBanner.workspaceOrphanCleanup]),
     ])
     func goldenMatchesFixturePrediction(scenario: String, banners: [AutomationUIBanner]) throws {
         let document = try goldenDocument(scenario: scenario)
@@ -208,7 +209,7 @@ struct UIStateGoldenFixtureTests {
         #expect(mismatches.allSatisfy { $0.path.hasPrefix("state.banners") })
     }
 
-    @Test(arguments: ["clean", "orphan-banner"])
+    @Test(arguments: ["clean", "orphan-banner", "orphan-banner-overflow"])
     func goldenStateDecodesAsSnapshotSchema(scenario: String) throws {
         // Schema pin: a golden that drifts from AutomationUIStateSnapshot's Codable
         // shape fails here even if the generic tree comparison happens to pass.
