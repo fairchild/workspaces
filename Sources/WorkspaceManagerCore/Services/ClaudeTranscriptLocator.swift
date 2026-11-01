@@ -106,6 +106,22 @@ public struct ClaudeTranscriptResumability: Sendable {
         return fileExists(url.path) ? url : nil
     }
 
+    /// The transcript for a session started in `launchDirectory`, which may be a spelling
+    /// of the directory rather than the one Claude keyed the transcript by: Claude resolves
+    /// its working directory first, so a path through a symlink is looked for under both.
+    /// `realpath` rather than `resolvingSymlinksInPath`, which maps `/private/tmp` back to
+    /// `/tmp` and so undoes the resolution on the one tree that always has a symlink.
+    public func existingTranscriptURL(agentSessionID: String, launchDirectory: String) -> URL? {
+        var candidates = [launchDirectory]
+        if let resolved = realpath(launchDirectory, nil) {
+            candidates.append(String(cString: resolved))
+            free(resolved)
+        }
+        return candidates.lazy
+            .compactMap { existingTranscriptURL(agentSessionID: agentSessionID, cwd: $0) }
+            .first
+    }
+
     /// The newest transcript id recorded for `cwd` that no earlier surface claimed,
     /// or `nil` when the directory holds none. Newest-first is what makes "the
     /// conversation I was just in" the answer.

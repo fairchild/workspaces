@@ -133,6 +133,8 @@ struct CLIVerbCatalogTests {
               workspaces ws path <workspace>
               workspaces ws race <repo> <prompt...> [--n 3] [--cmd "claude"] [--name <slug>] [--no-launch]
               workspaces ws launch <workspace> [--cmd "command"] [--name <label>] [--json]
+              workspaces ws check <handle|workspace> [--wait <seconds>] [--ready] [--json]
+              workspaces ws resume <handle|workspace> [--json]
               workspaces ws read <handle|workspace> [--lines N] [--json]
               workspaces ws send <handle|workspace> --text "text" [--enter] [--json]
               workspaces open <workspace> [--cmd "command"]
@@ -193,6 +195,17 @@ struct CLIVerbCatalogTests {
               session instead. 'ws read' and 'ws send' take either a handle or a
               workspace selector. Set WORKSPACES_TMUX_SOCKET_LABEL to work against a
               server other than the app's.
+
+            Durable sessions:
+              A plain 'claude' command launched this way gets a conversation id, kept
+              on disk with what was asked for. 'ws check' exits 0 only when one agent
+              holds that conversation, no prompt is in the way, and a turn of its own
+              ran on the requested model and effort; '--wait' keeps looking while that
+              can still happen. 'ws resume' continues the conversation after the agent,
+              the session, the tmux server, or the machine went away. A resumed agent
+              takes no turn until sent something, so 'ws check --ready' answers whether
+              it can take input. Text sent before then is lost.
+              Any other command runs as written, and neither verb can speak for it.
 
             Launch behavior:
               - no args: open the WorkSpaces app
