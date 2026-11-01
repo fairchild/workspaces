@@ -76,6 +76,68 @@ struct AgentLaunchRecordStoreTests {
         }
     }
 
+    // MARK: - Resume lookup
+
+    private func resumeCommand(
+        store: AgentLaunchRecordStore,
+        processListing: String? = "",
+        transcriptExists: Bool = true
+    ) -> String? {
+        store.resumeCommand(
+            socketLabel: "workspaces",
+            tmuxSessionName: "wm-a-1",
+            processListing: processListing,
+            resumability: ClaudeTranscriptResumability(
+                environment: [:],
+                homeDirectory: URL(fileURLWithPath: "/tmp/no-such-home"),
+                fileExists: { _ in transcriptExists }
+            )
+        )
+    }
+
+    @Test("A recorded conversation with a transcript and no holder can be continued")
+    func resumeCommandForARecordedConversation() throws {
+        try withStore { store in
+            try store.save(record())
+            #expect(
+                resumeCommand(store: store)
+                    == "claude --resume fa08c461-2979-41db-85fb-b5c90c0d2d8b --effort xhigh"
+            )
+        }
+    }
+
+    @Test("Nothing is offered for a conversation something still holds")
+    func resumeCommandSkipsAHeldConversation() throws {
+        try withStore { store in
+            try store.save(record())
+            let listing = "00:10 claude --resume fa08c461-2979-41db-85fb-b5c90c0d2d8b"
+            #expect(resumeCommand(store: store, processListing: listing) == nil)
+            // No process table means a second writer cannot be ruled out.
+            #expect(resumeCommand(store: store, processListing: nil) == nil)
+        }
+    }
+
+    @Test("Nothing is offered without a transcript, a record, or a named conversation")
+    func resumeCommandNeedsAConversation() throws {
+        try withStore { store in
+            #expect(resumeCommand(store: store) == nil)
+
+            try store.save(record())
+            #expect(resumeCommand(store: store, transcriptExists: false) == nil)
+
+            try store.save(
+                AgentLaunchRecord(
+                    handle: "wm-a-1",
+                    workspacePath: "/tmp/a",
+                    socketLabel: "workspaces",
+                    launchedAt: Date(),
+                    identity: nil
+                )
+            )
+            #expect(resumeCommand(store: store) == nil)
+        }
+    }
+
     @Test("A record speaks only for the workspace it launched into")
     func recordsAreBoundToTheirWorkspace() throws {
         let directory = FileManager.default.temporaryDirectory

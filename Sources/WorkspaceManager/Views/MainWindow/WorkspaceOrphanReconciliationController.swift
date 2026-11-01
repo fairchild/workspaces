@@ -154,6 +154,66 @@ struct WorkspaceOrphanReconciliationController {
         item.kind == .gitWorktreeWithoutRecord && !item.hasPrunableGitMetadata
     }
 
+    /// One launch in the adoption ledger. A launch is adopted once: a person who then removes
+    /// the row has said what they want, and only a new launch brings it back.
+    func adoptionKey(for record: AgentLaunchRecord) -> String {
+        "\(record.handle)@\(Int(record.launchedAt.timeIntervalSince1970))"
+    }
+
+    /// What a pass over the launch records has to do. `handledKeys` is the ledger to keep:
+    /// bounded by the records on disk, and including launches whose workspace already has a
+    /// row, so removing that row later does not read as a launch waiting to be adopted.
+    /// `pending` is what still needs a row.
+    func launchAdoptionPass(
+        records: [AgentLaunchRecord],
+        repos: [Repo],
+        handledKeys: Set<String>
+    ) -> (pending: [AgentLaunchRecord], handledKeys: Set<String>) {
+        let knownPaths = Set(
+            repos.flatMap(\.workspaces).map { MainWindowPathResolution.normalize($0.path) }
+        )
+        var handled = handledKeys.intersection(records.map(adoptionKey))
+        var pending: [AgentLaunchRecord] = []
+        for record in records where !handled.contains(adoptionKey(for: record)) {
+            if knownPaths.contains(MainWindowPathResolution.normalize(record.workspacePath)) {
+                handled.insert(adoptionKey(for: record))
+            } else {
+                pending.append(record)
+            }
+        }
+        return (pending, handled)
+    }
+
+    /// Only the repositories a pending launch could belong to, because a scan runs git in
+    /// every repository it is given and this one runs on every launch the CLI records.
+    func repositorySnapshots(
+        owning pending: [AgentLaunchRecord],
+        workspacesRoot: URL,
+        repos: [Repo]
+    ) -> [WorkspaceOrphanRepositorySnapshot] {
+        let paths = pending.map { MainWindowPathResolution.normalize($0.workspacePath) }
+        return repositorySnapshots(repos: repos).filter { snapshot in
+            let root = workspacesRoot.appendingPathComponent(snapshot.name, isDirectory: true).path
+            let prefix = MainWindowPathResolution.normalize(root) + "/"
+            return paths.contains { $0.hasPrefix(prefix) }
+        }
+    }
+
+    /// The scanned worktrees a pending launch accounts for and that can be adopted as they
+    /// stand, each with the launch that produced it.
+    func adoptableLaunches(
+        _ pending: [AgentLaunchRecord],
+        in items: [WorkspaceOrphanItem]
+    ) -> [(record: AgentLaunchRecord, item: WorkspaceOrphanItem)] {
+        pending.compactMap { record in
+            let path = MainWindowPathResolution.normalize(record.workspacePath)
+            let item = items.first { item in
+                canAdopt(item) && item.path.map(MainWindowPathResolution.normalize) == path
+            }
+            return item.map { (record, $0) }
+        }
+    }
+
     /// Creates the `Workspace` record for an existing worktree the app did not create.
     ///
     /// Marked `isAdopted` so the archived-workspace purge sweep never deletes this directory on

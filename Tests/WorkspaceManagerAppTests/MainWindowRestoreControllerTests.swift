@@ -393,6 +393,41 @@ struct MainWindowRestoreControllerTests {
                 == RestoreLaunchCommand.claudeResume(sessionID: "a"))
     }
 
+    @Test("A resume comes back at the effort the conversation last ran at")
+    func resumeCarriesTheLastEffort() {
+        let directory = URL(fileURLWithPath: "/Users/dev/code/alpha")
+        let resume = surface(action: .resumeClaude(agentSessionID: "a"), directory: directory)
+        var asked: [(String, URL)] = []
+
+        let command = controller.initialCommand(
+            for: resume,
+            liveSessionNames: [],
+            sessionName: { _ in "wm-alpha" },
+            lastEffort: { id, url in
+                asked.append((id, url))
+                return "xhigh"
+            }
+        )
+
+        #expect(command == "claude --resume a --effort xhigh")
+        #expect(asked.map(\.0) == ["a"])
+        #expect(asked.map(\.1) == [directory])
+    }
+
+    @Test("A conversation with no recorded effort resumes without the flag")
+    func resumeWithoutARecordedEffort() {
+        let resume = surface(
+            action: .resumeClaude(agentSessionID: "a"),
+            directory: URL(fileURLWithPath: "/Users/dev/code/alpha"))
+        let command = controller.initialCommand(
+            for: resume,
+            liveSessionNames: [],
+            sessionName: { _ in "wm-alpha" },
+            lastEffort: { _, _ in nil }
+        )
+        #expect(command == "claude --resume a")
+    }
+
     @Test("Only resume surfaces contribute probe-before-launch names")
     func probeNamesAreResumeOnly() {
         let target = plan([

@@ -152,12 +152,12 @@ struct MainWindowRestoreController {
     /// directory-backed launch — the deterministic tmux name reattaches a surviving session on
     /// its own — while a resume surface gets `claude --resume` as initial input so it runs
     /// through the login shell with the correct PATH and hook env.
-    func initialCommand(for action: RestoreSurfaceAction) -> String? {
+    func initialCommand(for action: RestoreSurfaceAction, effort: String? = nil) -> String? {
         switch action {
         case .reattachTmux, .freshShell:
             return nil
         case .resumeClaude(let agentSessionID):
-            return RestoreLaunchCommand.claudeResume(sessionID: agentSessionID)
+            return RestoreLaunchCommand.claudeResume(sessionID: agentSessionID, effort: effort)
         }
     }
 
@@ -168,9 +168,14 @@ struct MainWindowRestoreController {
     func initialCommand(
         for surface: RestoreSurfacePlan,
         liveSessionNames: Set<String>,
-        sessionName: (URL) -> String = { GhosttyTerminalConfig.tmuxSessionName(for: $0) }
+        sessionName: (URL) -> String = { GhosttyTerminalConfig.tmuxSessionName(for: $0) },
+        lastEffort: (String, URL) -> String? = RestoreLaunchCommand.lastEffort
     ) -> String? {
-        guard let command = initialCommand(for: surface.action) else { return nil }
+        var effort: String?
+        if case .resumeClaude(let agentSessionID) = surface.action {
+            effort = lastEffort(agentSessionID, surface.directory)
+        }
+        guard let command = initialCommand(for: surface.action, effort: effort) else { return nil }
         guard !liveSessionNames.contains(sessionName(surface.directory)) else { return nil }
         return command
     }

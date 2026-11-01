@@ -247,6 +247,121 @@ struct WorkspaceOrphanReconciliationControllerTests {
         #expect(!controller.canAdopt(makeItem(id: "lume", kind: .lumeVMWithoutWorkspace)))
     }
 
+    // MARK: - Launched workspaces
+
+    private func launchRecord(
+        handle: String = "wm-launched-1",
+        path: String = "/tmp/alpha/workspaces/launched",
+        launchedAt: Date = Date(timeIntervalSince1970: 1_800_000_000)
+    ) -> AgentLaunchRecord {
+        AgentLaunchRecord(
+            handle: handle,
+            workspacePath: path,
+            socketLabel: "workspaces",
+            launchedAt: launchedAt,
+            identity: nil
+        )
+    }
+
+    @Test("A launch with no row is pending until the ledger holds it")
+    func launchWithNoRowIsPending() throws {
+        let record = launchRecord()
+
+        let first = controller.launchAdoptionPass(records: [record], repos: [], handledKeys: [])
+        #expect(first.pending == [record])
+        #expect(first.handledKeys.isEmpty)
+
+        let key = controller.adoptionKey(for: record)
+        let second = controller.launchAdoptionPass(records: [record], repos: [], handledKeys: [key])
+        #expect(second.pending.isEmpty)
+    }
+
+    /// The row was removed by a person. The record is still on disk, so without the ledger the
+    /// next pass would put the row straight back.
+    @Test("A launch whose workspace already has a row is settled, so removing the row sticks")
+    func existingRowSettlesTheLaunch() throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        context.insert(repo)
+        let record = launchRecord()
+        context.insert(
+            Workspace(
+                name: "launched",
+                path: URL(fileURLWithPath: record.workspacePath, isDirectory: true),
+                sourceRepo: repo,
+                gitBranch: "workspace/launched"
+            )
+        )
+        try context.save()
+
+        let withRow = controller.launchAdoptionPass(records: [record], repos: [repo], handledKeys: [])
+        #expect(withRow.pending.isEmpty)
+        #expect(withRow.handledKeys == [controller.adoptionKey(for: record)])
+
+        let afterRemoval = controller.launchAdoptionPass(
+            records: [record],
+            repos: [],
+            handledKeys: withRow.handledKeys
+        )
+        #expect(afterRemoval.pending.isEmpty)
+    }
+
+    @Test("A new launch of the same handle is a new launch, and brings a removed row back")
+    func relaunchIsPendingAgain() {
+        let first = launchRecord()
+        let second = launchRecord(launchedAt: first.launchedAt.addingTimeInterval(60))
+
+        let pass = controller.launchAdoptionPass(
+            records: [second],
+            repos: [],
+            handledKeys: [controller.adoptionKey(for: first)]
+        )
+        #expect(pass.pending == [second])
+    }
+
+    @Test("The ledger keeps nothing for a record no longer on disk")
+    func ledgerIsBoundedByRecords() {
+        let pass = controller.launchAdoptionPass(records: [], repos: [], handledKeys: ["wm-gone@1"])
+        #expect(pass.handledKeys.isEmpty)
+    }
+
+    @Test("Only the repository a pending launch sits under is scanned")
+    func scanIsNarrowedToOwningRepos() throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let alpha = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/code/alpha"))
+        let alphaBeta = Repo(name: "alpha-beta", localPath: URL(fileURLWithPath: "/tmp/code/alpha-beta"))
+        context.insert(alpha)
+        context.insert(alphaBeta)
+        try context.save()
+
+        let snapshots = controller.repositorySnapshots(
+            owning: [launchRecord(path: "/tmp/workspaces/alpha/launched")],
+            workspacesRoot: URL(fileURLWithPath: "/tmp/workspaces"),
+            repos: [alpha, alphaBeta]
+        )
+        #expect(snapshots.map(\.name) == ["alpha"])
+    }
+
+    @Test("A launch pairs with the worktree at its path, and only when that worktree can be adopted")
+    func adoptableLaunchesMatchByPath() {
+        let live = launchRecord(handle: "wm-live", path: "/tmp/workspaces/alpha/live")
+        let damaged = launchRecord(handle: "wm-damaged", path: "/tmp/workspaces/alpha/damaged")
+        let unscanned = launchRecord(handle: "wm-unscanned", path: "/tmp/workspaces/alpha/unscanned")
+
+        let pairs = controller.adoptableLaunches(
+            [live, damaged, unscanned],
+            in: [
+                makeItem(id: "live", path: live.workspacePath),
+                makeItem(id: "damaged", path: damaged.workspacePath, hasPrunableGitMetadata: true),
+                makeItem(id: "other", path: "/tmp/workspaces/alpha/other"),
+            ]
+        )
+        #expect(pairs.map(\.item.id) == ["live"])
+        #expect(pairs.map(\.record.handle) == ["wm-live"])
+    }
+
     @Test("Adopting persists a workspace record naming the worktree's path and branch, marked adopted")
     func adoptGitWorktreePersistsTheRecord() throws {
         let container = try makeContainer()

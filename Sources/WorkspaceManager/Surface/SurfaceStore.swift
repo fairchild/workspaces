@@ -231,7 +231,12 @@ final class SurfaceStore: ObservableObject {
                 }
             }
 
-            guard let initialCommand = session.initialCommand else { return }
+            guard let initialCommand = session.initialCommand else {
+                if tmuxLaunchScript != nil {
+                    await self?.prefillRecordedConversation(terminal: terminal, session: session)
+                }
+                return
+            }
             self?.deliverInitialCommand(
                 initialCommand,
                 to: terminal,
@@ -240,6 +245,24 @@ final class SurfaceStore: ObservableObject {
                     ?? session.initialCommandDelivery
             )
         }
+    }
+
+    /// Offers the conversation a launch recorded under this surface's tmux name, when this
+    /// launch had to create that session because the old one is gone: the agent quit, or
+    /// the server or the machine went away. The surface would otherwise be an empty shell
+    /// with no sign of what ran there. Prefilled, because starting an agent spends memory
+    /// and tokens: reopening the workspace is not the same as asking for that.
+    private func prefillRecordedConversation(terminal: TerminalSurface, session: HostTerminalSession) async {
+        guard tmuxOwnershipLedger?.ownership(forHostSessionID: session.id)?.provenance == .createdByThisLaunch,
+            let command = AgentLaunchRecordStore().resumeCommand(
+                socketLabel: TmuxSessionProbe.socketLabel,
+                tmuxSessionName: session.effectiveTmuxSessionName,
+                processListing: await AgentSessionInspection.processListing(),
+                resumability: ClaudeTranscriptResumability()
+            ),
+            !terminal.surfaceView.hasReceivedUserInput
+        else { return }
+        deliverInitialCommand(command, to: terminal, session: session, delivery: .prefill)
     }
 
     /// Record which tmux session this surface's launch landed on, and whether the
