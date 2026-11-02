@@ -74,9 +74,9 @@ choose **New environment**, and fill in the dialog:
   uploads, so the real token never enters the VM; the placeholder variable above
   only gets past the `scripts/evidence.sh` token check.
 
-Start sessions on this repository alone. A session with a second repository
-attached skips this repository's `.claude/settings.json`, and with it the
-SessionStart hook.
+Start sessions on this repository alone, outside a Claude Project. A session with
+a second repository attached, or a thread in a Project, skips this repository's
+`.claude/settings.json`, and with it the SessionStart hook.
 
 ## How it fits together
 
@@ -117,8 +117,8 @@ Three constraints shaped this split:
 
 ## Evidence
 
-With the network secret in place, `scripts/evidence.sh --file <path> --no-capture`
-uploads from a session.
+With the network secret in place, `scripts/evidence.sh --pr <N> --name <slug> --file
+<path> --no-capture` uploads from a session.
 
 Without it, a green CI run on the exact branch and commit is acceptable hosted
 evidence: cite it in the PR's Evidence section as

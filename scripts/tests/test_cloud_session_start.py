@@ -118,6 +118,32 @@ class CloudSessionStartTests(unittest.TestCase):
         self.assertIn("web-next dependencies: pnpm install failed", context)
         self.assertIn("ERR_PNPM_OUTDATED_LOCKFILE", context)
 
+    # intent: fix
+    def test_a_huge_log_line_still_reaches_the_session(self) -> None:
+        # Passing the report as argv failed past Linux's 128 KiB per-argument
+        # limit, and the session got no report at all.
+        self.stub("pnpm", "head -c 300000 /dev/zero | tr '\\0' x; echo; exit 1")
+        result, context = self.run_hook()
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("web-next dependencies: pnpm install failed", context)
+        self.assertLess(len(context), 10_000)
+
+    # intent: fix
+    def test_the_web_apps_install_at_the_same_time(self) -> None:
+        # In sequence, two installs at their time limit outlast the hook's own 300 s
+        # timeout, and it dies before printing anything. Each stub waits to see the
+        # other one running, so an install in sequence fails here.
+        self.stub(
+            "pnpm",
+            f'touch "{self.state}/started-$(basename "$PWD")"\n'
+            f'other=web; [ "$(basename "$PWD")" = web ] && other=web-next\n'
+            f'for _ in $(seq 1 50); do [ -e "{self.state}/started-$other" ] && exit 0; sleep 0.1; done\n'
+            f"exit 1",
+        )
+        _, context = self.run_hook()
+        self.assertIn("web-next dependencies: installed", context)
+        self.assertIn("web dependencies: installed", context)
+
     # intent: guard
     def test_a_stale_browser_cache_is_reported(self) -> None:
         self.stub("node", "exit 1")

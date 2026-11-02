@@ -4,7 +4,8 @@
 # snapshot taken afterward serves later sessions (docs/development/remote-sessions.md).
 #
 # Every step is time-boxed and fail-soft: setup must exit 0 or sessions fail to start, and past
-# about five minutes nothing is cached. Each outcome lands in $state, where
+# about five minutes nothing is cached, so these limits leave room for the dotclaude install that
+# follows in the setup script. Each outcome lands in $state, where
 # scripts/cloud-session-start.sh reads it, so a failed step is named in the session.
 set -u
 
@@ -74,7 +75,7 @@ export -f install_mise install_prek install_swift_format install_playwright fetc
 
 step() {
   local name="$1" limit="$2" started=$SECONDS outcome=failed
-  if timeout "$limit" bash -ec "$name" >"$state/$name.log" 2>&1; then
+  if timeout -k 5 "$limit" bash -ec "$name" >"$state/$name.log" 2>&1; then
     outcome=ok
   fi
   echo "$outcome $name $((SECONDS - started))s" >>"$state/status"
@@ -86,8 +87,8 @@ mkdir -p "$state"
 step install_mise 60 &
 step install_prek 60 &
 step install_swift_format 60 &
-step install_playwright 240 &
-step fetch_packages 200 &
+step install_playwright 200 &
+step fetch_packages 180 &
 wait
 
 exit 0
