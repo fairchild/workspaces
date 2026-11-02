@@ -8,6 +8,18 @@
   ]
  },
  "hooks": {
+  "SessionStart": [
+   {
+    "matcher": "startup|resume",
+    "hooks": [
+     {
+      "type": "command",
+      "command": "bash \"$CLAUDE_PROJECT_DIR\"/scripts/cloud-session-start.sh",
+      "timeout": 300
+     }
+    ]
+   }
+  ],
   "PreToolUse": [
    {
     "matcher": "Bash(gh pr create*)",

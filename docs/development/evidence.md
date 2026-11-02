@@ -5,7 +5,7 @@ person can see, numbers for anything measured, and for everything else the named
 tests that ran with the command and its result line. Upload what needs a link;
 a command and its result belong in the PR body.
 
-> **Remote (claude.ai) sessions:** `EVIDENCE_UPLOAD_TOKEN` is not available in those containers. The sanctioned fallback — a green CI run link on the exact branch/commit as hosted evidence, plus session-delivered screenshots for UI changes — is documented in `remote-sessions.md`.
+> **Remote (claude.ai) sessions:** the real `EVIDENCE_UPLOAD_TOKEN` never enters those VMs; a network secret on the environment attaches it to uploads. Where that isn't set up, the sanctioned fallback is a green CI run link on the exact branch/commit as hosted evidence, plus session-delivered screenshots for UI changes. Both are in `remote-sessions.md`.
 
 ## Quick start
 
