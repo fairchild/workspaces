@@ -4,7 +4,8 @@
   "state": {
     "banners": [],
     "selection": {
-      "kind": "none"
+      "kind": "workspace",
+      "name": "feature-auth"
     },
     "sidebar": [
       {
@@ -17,7 +18,7 @@
             "status": "active"
           },
           {
-            "isSelected": false,
+            "isSelected": true,
             "name": "feature-auth",
             "status": "active"
           },
