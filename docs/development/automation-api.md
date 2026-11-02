@@ -1063,10 +1063,10 @@ workspaces automation input write 'echo hi'
 workspaces automation input write 'echo hi' --submit
 ```
 
-`automation window list`, `automation window snapshot`, every `automation
-workspace` subcommand (`list`, `select`, `create`, `archive`, `note`),
-`automation repo terminal`, `automation wait`, and `automation focus` are the
-operator-scope commands. Unlike the tile-scoped commands, they read
+`automation window list`, `automation window snapshot`, `automation ui-state`,
+every `automation workspace` subcommand (`list`, `select`, `create`, `archive`,
+`note`), `automation repo terminal`, `automation wait`, and `automation focus` are
+the operator-scope commands. Unlike the tile-scoped commands, they read
 the per-launch operator credential file (minted next to the socket by an opt-in
 launch) rather than the injected terminal environment, so they work from any
 same-user shell outside a WorkSpaces tile. Absent the credential they fail closed
@@ -1077,6 +1077,7 @@ workspaces automation window list
 workspaces automation window list --json
 workspaces automation window snapshot --out shot.png             # main window, or first if none is main
 workspaces automation window snapshot --out shot.png --window 42 # a specific window.read id
+workspaces automation ui-state --json                            # structural UI state, as the raw result
 workspaces automation workspace list                             # repos + workspaces, human-readable
 workspaces automation workspace list --json                      # same, as the raw result envelope
 workspaces automation workspace select <id>                      # drive the real selection gesture for <id>

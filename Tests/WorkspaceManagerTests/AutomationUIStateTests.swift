@@ -18,14 +18,14 @@ import Testing
 
 /// The structural state a fixture-mode evidence-lane launch renders: `UIFixtureSeeder`'s
 /// six repos with all workspaces active, a terminal attached, and `feature-auth` selected.
-/// A `--clean-data` launch has no saved surface to restore, so it falls back to the most
-/// recently accessed workspace (`MainWindowBootstrapController.fallbackSurface`), and the
-/// seeder dates `feature-auth` ahead of the others so the fallback lands on it. (The shipped
-/// goldens come from a live read through `scripts/ui-state-golden.sh update`; this is the
-/// offline mirror of it.)
+/// A `--clean-data` fixture launch has no prior selection to restore, so the launch fallback
+/// picks the most recently accessed workspace, and the seeder dates `feature-auth` ahead of
+/// the rest for that reason. (The shipped goldens come from that live read through
+/// `scripts/ui-state-golden.sh update`; this is the offline mirror of it.)
 private func fixtureSnapshot(banners: [AutomationUIBanner]) -> AutomationUIStateSnapshot {
-    func row(_ name: String, isSelected: Bool = false) -> AutomationUIStateWorkspaceRow {
-        AutomationUIStateWorkspaceRow(name: name, status: "active", isSelected: isSelected, attention: nil)
+    func row(_ name: String) -> AutomationUIStateWorkspaceRow {
+        AutomationUIStateWorkspaceRow(
+            name: name, status: "active", isSelected: name == "feature-auth", attention: nil)
     }
     return AutomationUIStateProjection.snapshot(
         selection: AutomationUIStateSelection(kind: .workspace, name: "feature-auth"),
@@ -36,7 +36,7 @@ private func fixtureSnapshot(banners: [AutomationUIBanner]) -> AutomationUIState
             AutomationUIStateRepoSection(
                 name: "bertram-chat",
                 isSelected: false,
-                workspaces: [row("feature-auth", isSelected: true), row("bugfix-422"), row("refactor-state")]
+                workspaces: [row("feature-auth"), row("bugfix-422"), row("refactor-state")]
             ),
             AutomationUIStateRepoSection(
                 name: "bread-builder", isSelected: false, workspaces: [row("refactor-runtime")]),

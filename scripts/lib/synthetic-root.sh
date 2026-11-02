@@ -82,8 +82,19 @@ synthetic_root_reject_real_root() {
 # caller-exported value wins, otherwise <default-dir>), require it to be an
 # absolute path that is neither the real workspaces root nor an ancestor of it,
 # create it, and export it for the app launch.
+# synthetic_root_trim — trim the variable the way SyntheticRunRoot.url does. The app
+# treats a whitespace-only value as unset, which means the real roots and the real
+# automation directory, and every check here has to judge the value the app will use.
+synthetic_root_trim() {
+    local value="${WORKSPACES_SYNTHETIC_ROOT:-}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    WORKSPACES_SYNTHETIC_ROOT="$value"
+}
+
 synthetic_root_ensure() {
     local default_dir="${1:-}"
+    synthetic_root_trim
     if [[ -z "${WORKSPACES_SYNTHETIC_ROOT:-}" ]]; then
         WORKSPACES_SYNTHETIC_ROOT="$default_dir"
     fi
@@ -111,6 +122,7 @@ synthetic_root_ensure() {
 # synthetic. Re-checks the real-root rule here as well as in ensure, so a caller
 # that sets the variable by hand still hits the gate.
 synthetic_root_require() {
+    synthetic_root_trim
     if [[ -z "${WORKSPACES_SYNTHETIC_ROOT:-}" ]]; then
         echo "error: WORKSPACES_SYNTHETIC_ROOT must be set (non-empty) before launching a synthetic run." >&2
         echo "       Call synthetic_root_ensure <run-dir>/workspaces-root first (scripts/lib/synthetic-root.sh)." >&2

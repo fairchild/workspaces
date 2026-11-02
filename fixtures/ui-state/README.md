@@ -44,6 +44,7 @@ against an unchanged app rewrites the same bytes and shows no diff.
 Updating a golden is always explicit — a mismatch never regenerates anything:
 
 ```bash
-scripts/ui-state-golden.sh update --scenario clean   # against a running fixture app
-swift test --filter UIStateGolden                    # then re-verify offline
+export WORKSPACES_SYNTHETIC_ROOT=<data-dir>/workspaces-root   # the fixture launch's root
+scripts/ui-state-golden.sh update --scenario clean            # against that running fixture app
+swift test --filter UIStateGolden                             # then re-verify offline
 ```

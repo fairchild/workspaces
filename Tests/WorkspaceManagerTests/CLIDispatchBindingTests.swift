@@ -66,6 +66,13 @@ struct CLIDispatchBindingTests {
         #expect(alias.status == grouped.status)
     }
 
+    @Test("The ui-state verb reaches its handler and takes only --json")
+    func uiStateDispatchesToItsHandler() throws {
+        let result = try runCLI(["automation", "ui-state"])
+        #expect(result.stderr.contains("Usage: workspaces automation ui-state --json"))
+        #expect(result.status == 1)
+    }
+
     @Test("An unclaimed first argument still fails as an unknown command")
     func unknownVerbStaysUnknown() throws {
         let result = try runCLI(["nonsense", "select"])

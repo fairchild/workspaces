@@ -275,6 +275,10 @@ verify_bundle_identity "$APP_BUNDLE"
 # directories would bless exactly that state.
 [[ -f "$APP_BUNDLE/Contents/Resources/terminfo/78/xterm-ghostty" ]] \
     || fail "Missing compiled terminfo entry terminfo/78/xterm-ghostty (the runtime's usability test)"
+# The app icon loads from this catalog. Without it the app falls through to the
+# SwiftPM resource bundle, which the packaged app does not have, and Bundle.module
+# stops the process at launch.
+[[ -f "$APP_BUNDLE/Contents/Resources/Assets.car" ]] || fail "Missing compiled asset catalog Assets.car"
 [[ -f "$APP_BUNDLE/Contents/Resources/HookForwarders/event-forwarder.sh" ]] || fail "Missing Claude hook event forwarder"
 [[ -f "$APP_BUNDLE/Contents/Resources/HookForwarders/statusline.sh" ]] || fail "Missing Claude status-line forwarder"
 for compose_resource in compose.yaml Dockerfile .dockerignore; do

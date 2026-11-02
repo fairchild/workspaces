@@ -66,7 +66,9 @@ done
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 OUTPUT_DIR="/tmp/workspaces-new-workspace-perf-$(date +%Y%m%d-%H%M%S)"
 PERF_DATA_DIR="$OUTPUT_DIR/app-data"
-DEBUG_BINARY="$ROOT_DIR/.build/arm64-apple-macosx/debug/WorkspaceManager"
+# shellcheck source=lib/build-products.sh
+source "$ROOT_DIR/scripts/lib/build-products.sh"
+DEBUG_BINARY="$(build_products_dir "$ROOT_DIR")/WorkspaceManager"
 
 mkdir -p "$OUTPUT_DIR" "$PERF_DATA_DIR"
 

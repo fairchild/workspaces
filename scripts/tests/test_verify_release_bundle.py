@@ -441,6 +441,13 @@ class StructureOnlyOverARealBundleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Verified release bundle structure", result.stdout)
 
+    # intent: fix
+    def test_missing_asset_catalog_fails_because_the_app_would_stop_at_launch(self) -> None:
+        (self.bundle / "Contents" / "Resources" / "Assets.car").unlink()
+        result = run_verifier("--structure-only", str(self.bundle))
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Missing compiled asset catalog Assets.car", result.stderr)
+
     def test_missing_compose_template_fails_before_publication(self) -> None:
         template = self.bundle / "Contents" / "Resources" / "ComposeSandbox" / "compose.yaml"
         template.unlink()
@@ -654,6 +661,7 @@ def build_structurally_valid_bundle(root: Path) -> Path:
     executable.chmod(0o755)
 
     (resources / "terminfo" / "78" / "xterm-ghostty").write_bytes(b"\x1a\x01")
+    (resources / "Assets.car").write_bytes(b"car")
     for forwarder in ("event-forwarder.sh", "statusline.sh"):
         (resources / "HookForwarders" / forwarder).write_text("#!/bin/sh\n", encoding="utf-8")
     for compose_resource in ("compose.yaml", "Dockerfile", ".dockerignore"):

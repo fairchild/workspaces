@@ -29,6 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # (path, prefix) — "v" carries upstream's tag verbatim, "" is a bare version.
 PIN_SITES = (
     ("scripts/verify-mise-security.sh", "v"),
+    ("scripts/cloud-environment.sh", "v"),
     ("web/src/lib/agent-runtime/vercel-sandbox.ts", "v"),
     ("scripts/tests/test_security_hardening.py", "v"),
     (".github/workflows/release.yml", ""),

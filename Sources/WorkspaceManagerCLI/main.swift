@@ -1409,7 +1409,7 @@ private final class CLIApp {
     /// the app's automation socket. The seven gesture/read/wait verbs also keep their historical
     /// top-level spellings as aliases (canonicalized in `run` before dispatch).
     private func runAutomation(arguments: [String]) throws -> Int32 {
-        let expected = "health, context, surface, tile, input, window, workspace, repo, wait, focus"
+        let expected = "health, context, surface, tile, input, window, ui-state, workspace, repo, wait, focus"
         guard let subcommand = arguments.first else {
             throw CLIError("Missing automation subcommand. Expected: \(expected)")
         }
@@ -1423,6 +1423,17 @@ private final class CLIApp {
             } else {
                 print(Self.healthLine(result))
             }
+            return 0
+
+        case "ui-state":
+            _ = try requireJSONFlag(arguments: tail, usage: "workspaces automation ui-state --json")
+            let result: AutomationUIStateResult = try operatorRequest(
+                credential: try loadOperatorCredential(),
+                method: "GET",
+                path: "/v1/ui-state",
+                body: Data()
+            )
+            print(try AutomationCLIResultPrinter.resultJSON(result))
             return 0
 
         case "context":

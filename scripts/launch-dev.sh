@@ -6,7 +6,7 @@
 # Why this script exists:
 # - Avoid stale bundle confusion:
 #   `build/WorkSpaces.app` can be outdated unless explicitly rebuilt/copied.
-#   This script always launches `.build/arm64-apple-macosx/debug/WorkspaceManager`
+#   This script always launches the debug `WorkspaceManager` SwiftPM just built
 #   after an optional `swift build`.
 #
 # - Dogfood isolation design:
@@ -50,10 +50,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=lib/synthetic-root.sh
 source "$SCRIPT_DIR/lib/synthetic-root.sh"
+# shellcheck source=lib/build-products.sh
+source "$SCRIPT_DIR/lib/build-products.sh"
 
 APP_NAME="WorkspaceManager"
 INSTALLED_APP_BUNDLE_NAME="WorkSpaces"
-DEBUG_BINARY="$REPO_ROOT/.build/arm64-apple-macosx/debug/$APP_NAME"
+DEBUG_BINARY=""
 INSTALLED_APP_BINARY="/Applications/$INSTALLED_APP_BUNDLE_NAME.app/Contents/MacOS/$APP_NAME"
 GHOSTTYKIT_FRAMEWORK="$REPO_ROOT/Frameworks/GhosttyKit.xcframework"
 MISE_CONFIG_PATH="$REPO_ROOT/.mise.toml"
@@ -783,6 +785,7 @@ watch_log_if_requested() {
 main() {
     parse_args "$@"
     verify_repo_root
+    DEBUG_BINARY="$(build_products_dir "$REPO_ROOT")/$APP_NAME"
     if [[ "$RUN_IN_BACKGROUND" != true && "$WATCH_LOG" == true ]]; then
         fail "--watch is only supported in background mode"
     fi
