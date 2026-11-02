@@ -92,10 +92,11 @@ or at once if you edit the stub, which is what its `rev` line is for.
 
 Three constraints shaped this split:
 
-- **Setup has no GitHub credentials.** The session's git and API proxies connect
-  after setup, so `git fetch` on the clone can fail there while the same command
-  works in the session. `raw.githubusercontent.com` and release downloads don't
-  need them, which is why everything setup fetches comes from one of those two.
+- **`git` is unreliable during setup.** `git fetch` on the clone has been seen to
+  fail there while the same command worked in the session. The likely cause is that
+  session credentials arrive later: the docs say the agent proxy connects after
+  setup, and the failure itself wasn't recorded. Public release downloads have
+  worked during setup, so setup fetches over plain HTTPS and never uses `git`.
 - **Setup exits 0 or the session fails to start,** so nothing in it may fail
   loudly. Each step records its outcome in `/var/log/workspaces-cloud-setup/`,
   and the hook reads that back into the session.
