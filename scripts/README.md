@@ -57,6 +57,12 @@ Run `mise tasks` from the repo root for the current catalog. Web dashboard tasks
 - Fixture packs live under `./fixtures/ops-report/`.
   - `docs/ops/` remains reserved for real checked-in snapshots from live data.
 
+## Cloud Sessions
+
+- `scripts/cloud-environment.sh` installs the tools a Claude Code cloud environment needs; the environment's setup script fetches it from `main`. Never run it from a checkout: it writes to `/opt`, `/usr/local/bin` and `/var/log` as root.
+- `scripts/cloud-session-start.sh` is the SessionStart hook for those sessions and a no-op everywhere else. It installs web dependencies and reports what setup failed to provide (`uv run --script ./scripts/tests/test_cloud_session_start.py`).
+- Environment settings and limits: [docs/development/remote-sessions.md](../docs/development/remote-sessions.md).
+
 ## Codespaces Claude Worker
 
 - `uv run --script ./scripts/codespaces-claude-launch.py --help`
