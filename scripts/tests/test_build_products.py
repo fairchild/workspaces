@@ -50,12 +50,14 @@ class BuildProductsDirTests(unittest.TestCase):
         swift.chmod(swift.stat().st_mode | stat.S_IXUSR)
         return {**os.environ, "PATH": f"{stub_bin}:{os.environ['PATH']}"}
 
+    # intent: fix
     def test_prints_the_directory_the_toolchain_reports(self) -> None:
         env = self.env_with_swift('echo "/repo/.build/out/Products/Debug"')
         result = run_helper('build_products_dir "$1"', "/repo", env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "/repo/.build/out/Products/Debug\n")
 
+    # intent: fix
     def test_asks_for_the_requested_configuration_of_the_requested_package(self) -> None:
         env = self.env_with_swift('echo "/repo/.build/out/Products/Release"')
         run_helper('build_products_dir "$1" release', "/repo", env=env)
@@ -64,11 +66,13 @@ class BuildProductsDirTests(unittest.TestCase):
         self.assertIn("--configuration release", call)
         self.assertIn("--show-bin-path", call)
 
+    # intent: guard
     def test_keeps_only_the_path_when_the_toolchain_prints_more(self) -> None:
         env = self.env_with_swift('echo "warning: something"\necho "/repo/.build/arm64-apple-macosx/debug"')
         result = run_helper('build_products_dir "$1"', "/repo", env=env)
         self.assertEqual(result.stdout, "/repo/.build/arm64-apple-macosx/debug\n")
 
+    # intent: guard
     def test_a_failed_query_fails_the_caller_instead_of_yielding_a_bare_name(self) -> None:
         """An empty directory would turn `pkill -f "$dir/WorkspaceManager"` into a
         pattern that matches the installed app, so the assignment has to abort."""
@@ -80,6 +84,7 @@ class BuildProductsDirTests(unittest.TestCase):
         self.assertNotIn("reached", result.stdout)
         self.assertIn("build products", result.stderr)
 
+    # intent: guard
     def test_empty_output_counts_as_a_failed_query(self) -> None:
         env = self.env_with_swift("exit 0")
         result = run_helper('dir="$(build_products_dir "$1")"\necho "reached"', "/repo", env=env)
@@ -98,11 +103,13 @@ class ResourceBundleContentsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return Path(result.stdout.strip())
 
+    # intent: control
     def test_a_native_bundle_holds_its_files_at_the_root(self) -> None:
         (self.bundle / "HookForwarders").mkdir(parents=True)
         (self.bundle / "HookForwarders" / "statusline.sh").write_text("#!/bin/sh\n", encoding="utf-8")
         self.assertEqual(self.contents(), self.bundle)
 
+    # intent: fix
     def test_a_swiftbuild_bundle_holds_them_under_contents_resources(self) -> None:
         resources = self.bundle / "Contents" / "Resources"
         (resources / "HookForwarders").mkdir(parents=True)

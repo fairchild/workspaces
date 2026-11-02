@@ -128,24 +128,28 @@ class AppCaptureWindowTests(unittest.TestCase):
         env.update(extra_env or {})
         return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, timeout=60)
 
+    # intent: fix
     def test_captures_once_the_launched_app_reports_its_credential(self) -> None:
         self.stub_cli("launched")
         result = self.capture()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "out.png").is_file())
 
+    # intent: fix
     def test_the_live_credential_survives_a_capture_byte_for_byte(self) -> None:
         self.stub_cli("launched")
         result = self.capture()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.credential.read_bytes(), CREDENTIAL_BYTES)
 
+    # intent: fix
     def test_the_live_credential_survives_a_failed_capture(self) -> None:
         self.stub_cli("launched", credential="mint_failed")
         result = self.capture()
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.credential.read_bytes(), CREDENTIAL_BYTES)
 
+    # intent: fix
     def test_another_app_answering_the_socket_fails_the_lane(self) -> None:
         """Pid 1 is never the debug binary: this is the lane reaching some other app's
         listener, where a snapshot would succeed and show the wrong window."""
@@ -155,6 +159,7 @@ class AppCaptureWindowTests(unittest.TestCase):
         self.assertIn("A snapshot here would capture another app", result.stderr)
         self.assertFalse((self.root / "out.png").exists())
 
+    # intent: fix
     def test_an_earlier_instance_of_the_same_binary_fails_the_lane(self) -> None:
         """A process that outlived its replacement's launch still runs this binary and
         still holds this root's socket, so only the exact pid tells them apart."""
@@ -167,6 +172,7 @@ class AppCaptureWindowTests(unittest.TestCase):
         self.assertIn(f"pid {earlier.pid} answered", result.stderr)
         self.assertFalse((self.root / "out.png").exists())
 
+    # intent: guard
     def test_a_launch_that_reports_no_pid_fails_rather_than_trust_the_listener(self) -> None:
         launcher = self.checkout / "scripts" / "launch-dev.sh"
         launcher.write_text(
@@ -177,6 +183,7 @@ class AppCaptureWindowTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("could not determine the launched app's pid", result.stderr)
 
+    # intent: fix
     def test_a_capture_from_a_workspaces_terminal_ignores_that_terminals_socket(self) -> None:
         """Every WorkSpaces terminal exports the installed app's socket and handle, and
         the CLI's socket verbs prefer them over the synthetic root."""
@@ -190,18 +197,21 @@ class AppCaptureWindowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(set((self.root / "cli-env").read_text().splitlines()), {"unset unset"})
 
+    # intent: guard
     def test_an_app_without_operator_scope_fails_at_once_with_the_reason(self) -> None:
         self.stub_cli("launched", credential="not_opted_in")
         result = self.capture(timeout_seconds=30)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("operatorCredential=not_opted_in", result.stderr)
 
+    # intent: control
     def test_a_listener_that_never_reports_a_credential_times_out(self) -> None:
         self.stub_cli("launched", credential="")
         result = self.capture(timeout_seconds=1)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("did not become ready within 1s", result.stderr)
 
+    # intent: control
     def test_stopping_the_lane_stops_the_launched_app(self) -> None:
         self.stub_cli("launched")
         self.capture()

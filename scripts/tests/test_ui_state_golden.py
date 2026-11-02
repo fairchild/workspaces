@@ -92,6 +92,7 @@ class UIStateGoldenTests(unittest.TestCase):
             env["WORKSPACES_SYNTHETIC_ROOT"] = str(self.root / "workspaces-root")
         return env
 
+    # intent: fix
     def test_a_live_read_without_a_synthetic_root_refuses_rather_than_read_the_installed_app(self) -> None:
         golden = self.write_json("golden.json", {"scenario": "x", "ignore": [], "state": {"banners": []}})
         env = self.stub_live_app([{"banners": []}], env_root=False)
@@ -102,6 +103,7 @@ class UIStateGoldenTests(unittest.TestCase):
         self.assertIn("WORKSPACES_SYNTHETIC_ROOT", result.stderr)
         self.assertFalse((self.root / "cli.calls").exists(), "the CLI must not have been called")
 
+    # intent: fix
     def test_a_whitespace_root_counts_as_no_root_because_the_app_trims_it(self) -> None:
         golden = self.write_json("golden.json", {"scenario": "x", "ignore": [], "state": {"banners": []}})
         env = self.stub_live_app([{"banners": []}], env_root=False)
@@ -113,6 +115,7 @@ class UIStateGoldenTests(unittest.TestCase):
         self.assertIn("WORKSPACES_SYNTHETIC_ROOT is not set", result.stderr)
         self.assertFalse((self.root / "cli.calls").exists(), "the CLI must not have been called")
 
+    # intent: fix
     def test_a_live_read_compares_the_cli_result_as_the_wire_state(self) -> None:
         golden = self.write_json("golden.json", {"scenario": "x", "ignore": [], "state": {"banners": []}})
         env = self.stub_live_app([{"banners": []}])

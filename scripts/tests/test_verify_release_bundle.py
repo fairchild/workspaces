@@ -441,6 +441,7 @@ class StructureOnlyOverARealBundleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Verified release bundle structure", result.stdout)
 
+    # intent: fix
     def test_missing_asset_catalog_fails_because_the_app_would_stop_at_launch(self) -> None:
         (self.bundle / "Contents" / "Resources" / "Assets.car").unlink()
         result = run_verifier("--structure-only", str(self.bundle))
