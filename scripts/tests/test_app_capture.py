@@ -87,6 +87,7 @@ class AppCaptureWindowTests(unittest.TestCase):
             self.products / "workspaces",
             f"""\
             #!/bin/sh
+            echo "${{WORKSPACES_AUTOMATION_SOCKET-unset}} ${{WORKSPACES_AUTOMATION_HANDLE-unset}}" >> "{self.root}/cli-env"
             case "$1 $2" in
                 "automation health")
                     echo '{{"status":"ok","server":{{"pid":'"{pid}"',"operatorCredential":"{credential}"}}}}'
@@ -101,7 +102,9 @@ class AppCaptureWindowTests(unittest.TestCase):
             """,
         )
 
-    def capture(self, timeout_seconds: int = 3) -> subprocess.CompletedProcess[str]:
+    def capture(
+        self, timeout_seconds: int = 3, extra_env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         script = textwrap.dedent(
             f"""\
             set -euo pipefail
@@ -119,7 +122,9 @@ class AppCaptureWindowTests(unittest.TestCase):
             "HOME": str(self.home),
             "PATH": f"{self.stub_bin}:{os.environ['PATH']}",
         }
-        env.pop("WORKSPACES_SYNTHETIC_ROOT", None)
+        for key in ("WORKSPACES_SYNTHETIC_ROOT", "WORKSPACES_AUTOMATION_SOCKET", "WORKSPACES_AUTOMATION_HANDLE"):
+            env.pop(key, None)
+        env.update(extra_env or {})
         return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, timeout=60)
 
     def test_captures_once_the_launched_app_reports_its_credential(self) -> None:
@@ -148,6 +153,19 @@ class AppCaptureWindowTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not the debug app this lane launched", result.stderr)
         self.assertFalse((self.root / "out.png").exists())
+
+    def test_a_capture_from_a_workspaces_terminal_ignores_that_terminals_socket(self) -> None:
+        """Every WorkSpaces terminal exports the installed app's socket and handle, and
+        the CLI's socket verbs prefer them over the synthetic root."""
+        self.stub_cli("launched")
+        result = self.capture(
+            extra_env={
+                "WORKSPACES_AUTOMATION_SOCKET": "/installed/automation.sock",
+                "WORKSPACES_AUTOMATION_HANDLE": "installed-tile-handle",
+            }
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(set((self.root / "cli-env").read_text().splitlines()), {"unset unset"})
 
     def test_an_app_without_operator_scope_fails_at_once_with_the_reason(self) -> None:
         self.stub_cli("launched", credential="not_opted_in")

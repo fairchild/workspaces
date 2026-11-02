@@ -163,6 +163,11 @@ app_capture_window() {
     synthetic_root_ensure "$data_dir/workspaces-root" || return 1
     synthetic_root_require || return 1
 
+    # A WorkSpaces terminal exports these for the installed app that owns it, and the
+    # CLI's socket verbs prefer them over the root, so a capture driven from a tile
+    # would otherwise ask that app whether it is ready.
+    unset WORKSPACES_AUTOMATION_SOCKET WORKSPACES_AUTOMATION_HANDLE
+
     # --coexist: an evidence capture must never kill the operator's installed
     # WorkSpaces.app (or the terminal session driving the capture); only a stale
     # debug instance is replaced. Harmless on CI, where no installed app exists.
