@@ -43,6 +43,8 @@ VERIFY_RELEASE_BUNDLE_SCRIPT="$SCRIPT_DIR/verify-release-bundle.sh"
 VERIFY_GHOSTTY_PIN_SCRIPT="$SCRIPT_DIR/verify-ghostty-pin.sh"
 # shellcheck source=lib/release-signing.sh
 source "$SCRIPT_DIR/lib/release-signing.sh"
+# shellcheck source=lib/build-products.sh
+source "$SCRIPT_DIR/lib/build-products.sh"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
 CLI_BUNDLE_RELATIVE_PATH="Contents/Helpers/$CLI_NAME"
 
@@ -515,7 +517,8 @@ swift build -c release 2>&1 | while read -r line; do
     fi
 done
 
-[[ -f ".build/release/$EXECUTABLE_NAME" ]] || fail "Build failed - executable not found"
+RELEASE_PRODUCTS="$(build_products_dir "$PROJECT_DIR" release)"
+[[ -f "$RELEASE_PRODUCTS/$EXECUTABLE_NAME" ]] || fail "Build failed - executable not found"
 log_success "Build complete"
 
 log_step "Creating app bundle"
@@ -525,11 +528,11 @@ mkdir -p "$APP_BUNDLE/Contents/Frameworks"
 mkdir -p "$APP_BUNDLE/Contents/Helpers"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
-cp ".build/release/$EXECUTABLE_NAME" "$APP_BUNDLE/Contents/MacOS/"
+cp "$RELEASE_PRODUCTS/$EXECUTABLE_NAME" "$APP_BUNDLE/Contents/MacOS/"
 log_success "Copied executable"
 
-if [[ -f ".build/release/$CLI_NAME" ]]; then
-    cp ".build/release/$CLI_NAME" "$APP_BUNDLE/$CLI_BUNDLE_RELATIVE_PATH"
+if [[ -f "$RELEASE_PRODUCTS/$CLI_NAME" ]]; then
+    cp "$RELEASE_PRODUCTS/$CLI_NAME" "$APP_BUNDLE/$CLI_BUNDLE_RELATIVE_PATH"
     log_success "Copied CLI launcher"
 fi
 
@@ -549,7 +552,7 @@ fi
 # release build emits this bundle — its absence is a broken build, not a shape
 # some configuration produces. verify-release-bundle.sh requires the hook
 # forwarders that live in it.
-SPM_RESOURCES=".build/release/WorkspaceManager_WorkspaceManager.bundle"
+SPM_RESOURCES="$(resource_bundle_contents "$RELEASE_PRODUCTS/WorkspaceManager_WorkspaceManager.bundle")"
 copy_tree_or_fail "$SPM_RESOURCES" "$APP_BUNDLE/Contents/Resources" "Copied SPM resources"
 
 # Ship the same reviewed Compose template used by the standalone reference.

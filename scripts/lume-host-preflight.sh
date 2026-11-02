@@ -7,6 +7,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib/build-products.sh
+source "$SCRIPT_DIR/lib/build-products.sh"
+DEBUG_BINARY="$(build_products_dir "$REPO_ROOT")/WorkspaceManager"
 LAUNCH_SCRIPT="$REPO_ROOT/scripts/launch-dev.sh"
 
 MIN_LUME_FREE_GB="${LUME_HOST_SMOKE_MIN_LUME_FREE_GB:-80}"
@@ -169,7 +172,7 @@ launch_debug_app_check() {
         "$LAUNCH_SCRIPT" "${args[@]}"
     )
 
-    pkill -f "$REPO_ROOT/.build/arm64-apple-macosx/debug/WorkspaceManager" >/dev/null 2>&1 || true
+    pkill -f "$DEBUG_BINARY" >/dev/null 2>&1 || true
     sleep 1
 }
 

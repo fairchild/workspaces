@@ -35,7 +35,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=lib/api-smoke-common.sh
 source "$SCRIPT_DIR/lib/api-smoke-common.sh"
 LAUNCH_SCRIPT="$REPO_ROOT/scripts/launch-dev.sh"
-CLI_BIN="$REPO_ROOT/.build/arm64-apple-macosx/debug/workspaces"
+CLI_BIN="$SMOKE_PRODUCTS_DIR/workspaces"
 OUTPUT_ROOT="$REPO_ROOT/output/api-select-smoke"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 RUN_DIR="$OUTPUT_ROOT/$TIMESTAMP"

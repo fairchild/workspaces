@@ -157,6 +157,7 @@ struct CLIVerbCatalogTests {
               workspaces automation input write <text> [--submit]
               workspaces automation window list [--json]
               workspaces automation window snapshot --out <path> [--window <id>]
+              workspaces automation ui-state --json
               workspaces automation workspace list [--json]
               workspaces automation workspace select <workspace-id> [--json]
               workspaces automation workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]

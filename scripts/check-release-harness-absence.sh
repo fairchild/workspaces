@@ -8,7 +8,14 @@
 #
 set -euo pipefail
 
-BINARY="${1:-.build/release/WorkspaceManager}"
+if [[ $# -ge 1 ]]; then
+    BINARY="$1"
+else
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # shellcheck source=lib/build-products.sh
+    source "$SCRIPT_DIR/lib/build-products.sh"
+    BINARY="$(build_products_dir "$SCRIPT_DIR/.." release)/WorkspaceManager"
+fi
 
 # Distinct exit codes so a caller can tell "the harness leaked" from "the scan
 # never happened" — the second is a broken gate, not a clean build.

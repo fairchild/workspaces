@@ -39,6 +39,8 @@ EOF
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/perf-process.sh"
+source "$ROOT_DIR/scripts/lib/build-products.sh"
+DEBUG_BINARY="$(build_products_dir "$ROOT_DIR")/WorkspaceManager"
 # Names the measurement protocol live captures run under. Must match the epoch
 # perf-baseline.sh stamps, so debug and installed rows of the same era compare (#1251).
 CURRENT_PROTOCOL_EPOCH="deterministic-delivery-v1"
@@ -438,7 +440,7 @@ sweep_survivors() {
     local binary
     for binary in \
         "$(normalize_installed_app_path "$APP_PATH")" \
-        "$ROOT_DIR/.build/debug/WorkspaceManager"; do
+        "$DEBUG_BINARY"; do
         perf_assert_clean_exit "$binary" "$label" || status=1
     done
     # After the survivor check, so a lane that failed still drops the scratch suite it

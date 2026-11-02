@@ -27,6 +27,9 @@
 SMOKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=synthetic-root.sh
 source "$SMOKE_LIB_DIR/synthetic-root.sh"
+# shellcheck source=build-products.sh
+source "$SMOKE_LIB_DIR/build-products.sh"
+SMOKE_PRODUCTS_DIR="$(build_products_dir "$REPO_ROOT")"
 
 smoke_log() {
     echo "[$(date +%H:%M:%S)] $*"
@@ -121,7 +124,7 @@ smoke_cleanup_app() {
         kill "$APP_PID" >/dev/null 2>&1 || true
         sleep 1
     fi
-    pkill -f "$REPO_ROOT/.build/arm64-apple-macosx/debug/WorkspaceManager" >/dev/null 2>&1 || true
+    pkill -f "$SMOKE_PRODUCTS_DIR/WorkspaceManager" >/dev/null 2>&1 || true
 }
 
 smoke_cleanup_repo() {

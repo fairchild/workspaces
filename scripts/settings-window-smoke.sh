@@ -20,7 +20,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CAPTURE_SCRIPT="$REPO_ROOT/scripts/capture-window.sh"
-DEBUG_BINARY="$REPO_ROOT/.build/arm64-apple-macosx/debug/WorkspaceManager"
+# shellcheck source=lib/build-products.sh
+source "$SCRIPT_DIR/lib/build-products.sh"
+DEBUG_BINARY="$(build_products_dir "$REPO_ROOT")/WorkspaceManager"
 GHOSTTYKIT_FRAMEWORK="$REPO_ROOT/Frameworks/GhosttyKit.xcframework"
 INSTALLED_BINARY_CANDIDATES=(
     "/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager"

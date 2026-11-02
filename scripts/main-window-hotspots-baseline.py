@@ -336,11 +336,15 @@ def run_workspace_create(output_dir: Path, runs: int, sleep_seconds: int) -> dic
 
 
 def ensure_debug_binary(log_dir: Path) -> Path:
-    binary = REPO_ROOT / ".build" / "arm64-apple-macosx" / "debug" / "WorkspaceManager"
     run_command(
         ["swift", "build", "--disable-sandbox", "--product", "WorkspaceManager"],
         log_path=log_dir / "swift-build.log",
     )
+    bin_path = run_command(
+        ["swift", "build", "--show-bin-path", "--ignore-lock"],
+        log_path=log_dir / "swift-bin-path.log",
+    )
+    binary = Path(bin_path.stdout.strip().splitlines()[-1]) / "WorkspaceManager"
     if not binary.is_file():
         raise SystemExit(f"debug binary not found after build: {binary}")
     return binary

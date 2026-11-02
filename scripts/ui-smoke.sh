@@ -6,6 +6,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/lib/ui-test-common.sh
 source "$SCRIPT_DIR/lib/ui-test-common.sh"
+# shellcheck source=scripts/lib/build-products.sh
+source "$REPO_ROOT/scripts/lib/build-products.sh"
+DEBUG_BINARY="$(build_products_dir "$REPO_ROOT")/WorkspaceManager"
 LAUNCH_SCRIPT="$REPO_ROOT/scripts/launch-dev.sh"
 
 ws_prepare_artifacts "workspaces-ui-smoke"
@@ -23,7 +26,7 @@ ws_build_app
     cd "$REPO_ROOT"
     "$LAUNCH_SCRIPT" --no-build --no-activate --window-timeout 20 >"$APP_LOG" 2>&1
 )
-APP_PID="$(pgrep -f "$REPO_ROOT/.build/arm64-apple-macosx/debug/WorkspaceManager" | head -n 1 || true)"
+APP_PID="$(pgrep -f "$DEBUG_BINARY" | head -n 1 || true)"
 if [[ -z "$APP_PID" ]]; then
     ws_log "ERROR: could not find debug WorkspaceManager pid after launch."
     tail -n 40 "$APP_LOG" || true

@@ -104,7 +104,7 @@ if pgrep -f '/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager' >/dev
   echo "ERROR: /Applications/WorkSpaces.app started unexpectedly during verify-dev"
   exit 1
 fi
-ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'
+ps aux | rg '.build/.*/WorkspaceManager'
 ./scripts/capture-window.sh
 echo "Manual checks:"
 echo "  Cmd+B toggles left sidebar"

@@ -8,7 +8,7 @@ When changing terminal/keyboard/sidebar behavior, run the canonical self-verific
 
 1. `./scripts/build-ghosttykit.sh` (once / after pin changes), then `swift build`.
 2. Launch only the debug binary: `./scripts/launch-dev.sh --no-build` (`--no-activate` on a shared desktop with the user present, `--watch` to keep logs attached); `./scripts/dev-smoke.sh --no-build` is the fastest sanity check. On launch failure, inspect the newest `.dev-data/logs/launch-diagnostics-<timestamp>/` bundle.
-3. Confirm you're testing the debug app (`DEV` Dock badge + persistent toolbar badge), not `/Applications`: `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`; kill `/Applications/WorkSpaces.app` if both are running.
+3. Confirm you're testing the debug app (`DEV` Dock badge + persistent toolbar badge), not `/Applications`: `ps aux | rg '\.build/.*/WorkspaceManager'`; kill `/Applications/WorkSpaces.app` if both are running.
 4. Verify shortcuts (`Cmd+B` sidebar, `Cmd+D` split) via logs — app logging is `os.Logger` (subsystem `com.cloudcompute.workspaces`), which does **not** land in `.dev-data/logs/` (stdout/stderr only). Start `/usr/bin/log stream --predicate 'subsystem == "com.cloudcompute.workspaces"' --level info --style compact` before triggering; expect `"[GhosttyAppManager] action=new_split direction="`.
 5. Capture without forcing activation: `./scripts/capture-window.sh` (capture-only; with `--no-activate`, pause your own input during capture). Activation-driving scripts only when foreground input is acceptable; otherwise Tart/Lume or a separate macOS user/session.
 6. Run `./scripts/desktop-ui-smoke.sh --no-build` (`mise run dev-ui-smoke`) end to end — headless-safe UI lane; gate semantics and milestone details are in the runbook.
