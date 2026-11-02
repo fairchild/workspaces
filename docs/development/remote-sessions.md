@@ -66,7 +66,9 @@ choose **New environment**, and fill in the dialog:
   ```
 
   The second `curl` carries the owner's personal Claude config. Leave it out of
-  anyone else's environment.
+  anyone else's environment. To install only some of its skills, put
+  `DOTCLAUDE_SKILLS="name another"` before that line's `bash`; dotclaude's README
+  has the details.
 
 - **Network secret** (save the environment first, then add it): Bearer, allowed
   website `evidence.cloudcompute.com`, value `EVIDENCE_UPLOAD_TOKEN` from a local
