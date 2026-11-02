@@ -272,7 +272,7 @@ For keyboard/split/sidebar changes, always verify with the debug launcher:
    - launcher-only path: `./scripts/launch-dev.sh --no-build`
    - shared-desktop safe mode: `./scripts/launch-dev.sh --no-build --no-activate`
 4. Confirm debug process path:
-   - `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`
+   - `ps aux | rg '\.build/.*/WorkspaceManager'`
 5. Manually verify:
    - `Cmd+B` toggles sidebar
    - `Cmd+D` creates a visible right split

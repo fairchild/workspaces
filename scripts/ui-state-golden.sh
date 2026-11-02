@@ -28,6 +28,11 @@
 # Only mismatch *messages* sort keys, where stable text matters and file shape
 # does not.
 #
+# Live reads go through the `workspaces` CLI with WORKSPACES_SYNTHETIC_ROOT set, which
+# is what selects the launched fixture app's private automation directory. The evidence
+# lane exports it; by hand, export the --data-dir's `workspaces-root` from the launch.
+# Without it the same call reaches the installed app, so live reads refuse to run.
+#
 # Settle: a golden may declare `"settle": {"timeoutSeconds": N, "pollSeconds": M}`
 # for chrome that cannot exist at first paint (the orphan banner is decided by
 # deferred startup work that runs seconds after the window renders). `verify`
@@ -40,8 +45,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib/build-products.sh
+source "$SCRIPT_DIR/lib/build-products.sh"
+# shellcheck source=lib/synthetic-root.sh
+source "$SCRIPT_DIR/lib/synthetic-root.sh"
 
-CREDENTIAL_PATH="$HOME/Library/Application Support/com.cloudcompute.workspaces/automation-operator.json"
+CLI_BINARY=""
 
 usage() {
   cat <<EOF
@@ -53,7 +62,8 @@ Options:
   --golden <path>     Use this golden file instead of the scenario's path
                       (tests and one-off comparisons).
   --from-file <path>  Use a saved /v1/ui-state response instead of fetching
-                      from the running app's automation socket. A saved
+                      from the running app's automation socket, which needs
+                      WORKSPACES_SYNTHETIC_ROOT set to the launch's root. A saved
                       response cannot change, so any declared settle is skipped.
   -h, --help          Show this help
 EOF
@@ -90,28 +100,26 @@ esac
 
 GOLDEN_PATH="${GOLDEN_OVERRIDE:-$REPO_ROOT/fixtures/ui-state/$SCENARIO.json}"
 
-# fetch_wire_response <out-file> — GET /v1/ui-state through the per-launch operator
-# credential. Requires a running app launched with WORKSPACES_AUTOMATION_API=1 and
-# WORKSPACES_AUTOMATION_OPERATOR=1 (the evidence lane's standard launch shape).
+# fetch_wire_response <out-file> — read /v1/ui-state through the CLI and write it in the
+# wire's envelope, the shape --from-file takes. Requires a running app launched with
+# WORKSPACES_AUTOMATION_API=1 and WORKSPACES_AUTOMATION_OPERATOR=1 (the evidence lane's
+# standard launch shape).
 fetch_wire_response() {
   local out="$1"
-  if [[ ! -f "$CREDENTIAL_PATH" ]]; then
-    echo "error: no operator credential at:" >&2
-    echo "       $CREDENTIAL_PATH" >&2
-    echo "       Launch the app with operator scope first (the evidence lane does), or pass --from-file." >&2
+  synthetic_root_trim
+  if [[ -z "$WORKSPACES_SYNTHETIC_ROOT" ]]; then
+    echo "error: WORKSPACES_SYNTHETIC_ROOT is not set, so this read would reach the installed app." >&2
+    echo "       Export the fixture launch's root (<data-dir>/workspaces-root), or pass --from-file." >&2
     return 1
   fi
-  local socket handle
-  socket="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["socketPath"])' "$CREDENTIAL_PATH")"
-  handle="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["handle"])' "$CREDENTIAL_PATH")"
-  if ! curl --silent --show-error --fail-with-body \
-      --unix-socket "$socket" \
-      --header "x-workspaces-automation-handle: $handle" \
-      "http://localhost/v1/ui-state" > "$out"; then
-    echo "error: GET /v1/ui-state failed; response body (if any):" >&2
-    cat "$out" >&2 || true
-    return 1
-  fi
+  synthetic_root_reject_real_root || return 1
+  [[ -n "$CLI_BINARY" ]] || CLI_BINARY="$(build_products_dir "$REPO_ROOT")/workspaces" || return 1
+  local result
+  result="$("$CLI_BINARY" automation ui-state --json)" || return 1
+  printf '%s' "$result" | python3 -c '
+import json, sys
+json.dump({"ok": True, "result": json.load(sys.stdin)}, open(sys.argv[1], "w"))
+' "$out"
 }
 
 # acquire_wire <out-file> — the saved response when --from-file was given, a live

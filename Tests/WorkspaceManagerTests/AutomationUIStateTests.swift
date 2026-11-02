@@ -17,17 +17,18 @@ import Testing
 // MARK: - Fixture-predicted snapshots
 
 /// The structural state a fixture-mode evidence-lane launch renders: `UIFixtureSeeder`'s
-/// six repos with all workspaces active, a terminal attached, and — verified live against
-/// the debug app on 2026-08-07 — no workspace selected. A `--clean-data` fixture launch has
-/// no prior selection to restore and does not auto-select one, so `selection.kind` is `none`
-/// and no sidebar row is selected. (The shipped goldens were regenerated from that live read
-/// through `scripts/ui-state-golden.sh update`; this is the offline mirror of it.)
+/// six repos with all workspaces active, a terminal attached, and `feature-auth` selected.
+/// A `--clean-data` fixture launch has no prior selection to restore, so the launch fallback
+/// picks the most recently accessed workspace, and the seeder dates `feature-auth` ahead of
+/// the rest for that reason. (The shipped goldens come from that live read through
+/// `scripts/ui-state-golden.sh update`; this is the offline mirror of it.)
 private func fixtureSnapshot(banners: [AutomationUIBanner]) -> AutomationUIStateSnapshot {
     func row(_ name: String) -> AutomationUIStateWorkspaceRow {
-        AutomationUIStateWorkspaceRow(name: name, status: "active", isSelected: false, attention: nil)
+        AutomationUIStateWorkspaceRow(
+            name: name, status: "active", isSelected: name == "feature-auth", attention: nil)
     }
     return AutomationUIStateProjection.snapshot(
-        selection: AutomationUIStateSelection(kind: .none, name: nil),
+        selection: AutomationUIStateSelection(kind: .workspace, name: "feature-auth"),
         banners: banners,
         attentionCount: 0,
         minimalToolbar: false,

@@ -71,7 +71,7 @@ swift build
 swift test
 ./scripts/continuity-evidence.sh --target "$HOME/code/workspaces" --no-build --trust-mise
 ./scripts/launch-dev.sh --no-build --no-activate
-ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'
+ps aux | rg '\.build/.*/WorkspaceManager'
 scripts/tmux-continuity-probe.sh start "$PWD" app-restart
 scripts/tmux-continuity-probe.sh check "$PWD" app-restart
 scripts/tmux-continuity-probe.sh cleanup "$PWD" app-restart

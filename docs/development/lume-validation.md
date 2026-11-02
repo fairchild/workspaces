@@ -432,7 +432,7 @@ swift build
 ### Useful checks
 
 ```bash
-ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'
+ps aux | rg '\.build/.*/WorkspaceManager'
 ls -la output/lume-e2e/latest
 ```
 

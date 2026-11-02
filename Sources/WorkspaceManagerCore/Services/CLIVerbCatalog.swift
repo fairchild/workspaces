@@ -21,7 +21,7 @@ public enum CLIVerbCatalog {
     /// stays the CLI-local registry, and only the explicit `workspaces automation repo` form
     /// reaches the app, so neither spelling shadows the other.
     public static let automationVerbs: Set<String> = [
-        "health", "context", "surface", "tile", "input", "window", "workspace", "repo", "wait", "focus",
+        "health", "context", "surface", "tile", "input", "window", "ui-state", "workspace", "repo", "wait", "focus",
     ]
 
     /// Top-level spellings kept as compatibility aliases for the grouped automation verbs
@@ -91,6 +91,7 @@ public enum CLIVerbCatalog {
           workspaces automation input write <text> [--submit]
           workspaces automation window list [--json]
           workspaces automation window snapshot --out <path> [--window <id>]
+          workspaces automation ui-state --json
           workspaces automation workspace list [--json]
           workspaces automation workspace select <workspace-id> [--json]
           workspaces automation workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]

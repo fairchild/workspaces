@@ -14,8 +14,8 @@ Two properties the live lane depends on and cannot demonstrate itself:
   saved `--from-file` response (which cannot change no matter how long you wait).
 
 Safe to run without network, secrets, UI access, or live GitHub mutations: every case
-runs `--from-file` against a temp golden, so nothing is fetched and nothing under
-fixtures/ is written.
+runs `--from-file` or a stub CLI against a temp golden, so nothing reaches an app and
+nothing under fixtures/ is written.
 """
 
 from __future__ import annotations
@@ -55,44 +55,75 @@ class UIStateGoldenTests(unittest.TestCase):
             [str(SCRIPT_PATH), *args], capture_output=True, text=True, cwd=self.root, env=env
         )
 
-    def stub_live_app(self, states: list[dict]) -> dict[str, str]:
-        """A fake operator credential plus a `curl` that serves `states` in order.
-
-        Redirecting HOME moves the credential path the script reads, so the live fetch
-        path — the only one a settle loop runs — is exercised without an app. The last
-        state repeats once the list is exhausted.
+    def stub_live_app(self, states: list[dict], env_root: bool = True) -> dict[str, str]:
+        """A `swift` that names a products directory, and a `workspaces` CLI there that
+        serves `states` in order, so the live fetch path — the only one a settle loop
+        runs — is exercised without an app. The last state repeats once the list is
+        exhausted.
         """
-        home = self.root / "home"
-        credential = home / "Library/Application Support/com.cloudcompute.workspaces"
-        credential.mkdir(parents=True)
-        (credential / "automation-operator.json").write_text(
-            json.dumps({"socketPath": "/tmp/unused.sock", "handle": "operator"})
-        )
-
         responses = self.root / "responses"
         responses.mkdir()
         for index, state in enumerate(states):
-            (responses / f"{index}.json").write_text(json.dumps(wire_response(state)))
+            (responses / f"{index}.json").write_text(json.dumps(wire_response(state)["result"]))
 
         stub_bin = self.root / "bin"
         stub_bin.mkdir()
-        curl = stub_bin / "curl"
-        curl.write_text(
+        swift = stub_bin / "swift"
+        swift.write_text(f'#!/bin/sh\necho "{stub_bin}"\n')
+        swift.chmod(0o755)
+        cli = stub_bin / "workspaces"
+        cli.write_text(
             "#!/bin/sh\n"
-            f'counter="{self.root}/curl.count"\n'
+            f'echo "$*" >> "{self.root}/cli.calls"\n'
+            f'counter="{self.root}/cli.count"\n'
             'count=$(cat "$counter" 2>/dev/null || echo 0)\n'
             f'next=$((count + 1)); [ "$next" -ge {len(states)} ] && next={len(states) - 1}\n'
             'echo "$next" > "$counter"\n'
             f'cat "{responses}/$count.json" 2>/dev/null || cat "{responses}/{len(states) - 1}.json"\n'
         )
-        curl.chmod(0o755)
+        cli.chmod(0o755)
 
         import os
 
         env = os.environ.copy()
-        env["HOME"] = str(home)
         env["PATH"] = f"{stub_bin}:{env['PATH']}"
+        env.pop("WORKSPACES_SYNTHETIC_ROOT", None)
+        if env_root:
+            env["WORKSPACES_SYNTHETIC_ROOT"] = str(self.root / "workspaces-root")
         return env
+
+    # intent: fix
+    def test_a_live_read_without_a_synthetic_root_refuses_rather_than_read_the_installed_app(self) -> None:
+        golden = self.write_json("golden.json", {"scenario": "x", "ignore": [], "state": {"banners": []}})
+        env = self.stub_live_app([{"banners": []}], env_root=False)
+
+        result = self.run_script("verify", "--golden", str(golden), env=env)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("WORKSPACES_SYNTHETIC_ROOT", result.stderr)
+        self.assertFalse((self.root / "cli.calls").exists(), "the CLI must not have been called")
+
+    # intent: fix
+    def test_a_whitespace_root_counts_as_no_root_because_the_app_trims_it(self) -> None:
+        golden = self.write_json("golden.json", {"scenario": "x", "ignore": [], "state": {"banners": []}})
+        env = self.stub_live_app([{"banners": []}], env_root=False)
+        env["WORKSPACES_SYNTHETIC_ROOT"] = "   "
+
+        result = self.run_script("verify", "--golden", str(golden), env=env)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("WORKSPACES_SYNTHETIC_ROOT is not set", result.stderr)
+        self.assertFalse((self.root / "cli.calls").exists(), "the CLI must not have been called")
+
+    # intent: fix
+    def test_a_live_read_compares_the_cli_result_as_the_wire_state(self) -> None:
+        golden = self.write_json("golden.json", {"scenario": "x", "ignore": [], "state": {"banners": []}})
+        env = self.stub_live_app([{"banners": []}])
+
+        result = self.run_script("verify", "--golden", str(golden), env=env)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("automation ui-state --json", (self.root / "cli.calls").read_text())
 
     def test_shipped_goldens_are_already_in_update_output_form(self) -> None:
         """No churn: re-running update over an unchanged state rewrites the same bytes."""

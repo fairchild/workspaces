@@ -8,6 +8,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$REPO_ROOT/scripts/lib/lume-standalone-common.sh"
+source "$REPO_ROOT/scripts/lib/build-products.sh"
+DEBUG_BINARY="$(build_products_dir "$REPO_ROOT")/WorkspaceManager"
 PREFLIGHT_SCRIPT="$REPO_ROOT/scripts/lume-host-preflight.sh"
 STANDALONE_VALIDATE_SCRIPT="$REPO_ROOT/scripts/lume-standalone-validate.sh"
 LAUNCH_SCRIPT="$REPO_ROOT/scripts/launch-dev.sh"
@@ -104,7 +106,7 @@ cleanup_app() {
         kill "$APP_PID" >/dev/null 2>&1 || true
         sleep 1
     fi
-    pkill -f "$REPO_ROOT/.build/arm64-apple-macosx/debug/WorkspaceManager" >/dev/null 2>&1 || true
+    pkill -f "$DEBUG_BINARY" >/dev/null 2>&1 || true
 }
 
 copy_supporting_logs() {

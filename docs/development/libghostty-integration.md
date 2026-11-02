@@ -341,10 +341,10 @@ Use this exact loop in future sessions to avoid stale-build confusion:
    - fastest startup sanity check: `./scripts/dev-smoke.sh --no-build`
    - keep logs attached while debugging launcher/startup issues: `./scripts/launch-dev.sh --no-build --watch`
    - direct binary fallback if the launcher itself is being debugged:
-     `WORKSPACES_DATA_DIR=.dev-data/workspacemanager WORKSPACES_APP_VARIANT=dev .build/arm64-apple-macosx/debug/WorkspaceManager`
+     `WORKSPACES_DATA_DIR=.dev-data/workspacemanager WORKSPACES_APP_VARIANT=dev "$(swift build --show-bin-path)/WorkspaceManager"`
    - launcher contract: `launch-dev.sh` reports success only once the debug process is alive and a visible window exists; on failure, inspect the latest `.dev-data/logs/launch-diagnostics-<timestamp>/` bundle
 4. Verify process path points to `.build/.../WorkspaceManager`:
-   - `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`
+   - `ps aux | rg '\.build/.*/WorkspaceManager'`
    - debug launches set `WORKSPACES_APP_VARIANT=dev`; the debug app shows a `DEV` Dock badge and a persistent toolbar `DEV` badge (no window subtitle — see `AppBuildIdentityBadge.swift`)
    - if both the debug and installed apps are running, kill `/Applications/WorkSpaces.app` before testing
 5. Shared-desktop-safe capture handshake:

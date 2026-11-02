@@ -130,15 +130,14 @@ surface, not a panel further down it — the tab's later panels are out of frame
 either way. A view's place in its scroll order is therefore a lane decision, and
 the render lane is the answer for anything past the first screenful.
 
-**Bundle-id-keyed scope.** The automation socket and the per-launch operator
-credential share one directory keyed by bundle id
-(`AutomationListener.defaultSocketURL`, with
-`AutomationOperatorCredentialStore.defaultURL` beside it), and the socket is
-flock-guarded — so a second instance of the same bundle id goes dormant and never
-mints the credential the snapshot needs. "An idle machine" means precisely that no
-other instance of that bundle id is running: a debug build cannot take operator
-scope next to an installed WorkSpaces, and quitting the installed app is what
-unblocks the lane.
+**Operator scope beside the installed app.** The lane sets
+`WORKSPACES_SYNTHETIC_ROOT`, which moves the launched app's automation socket, audit
+log, and operator credential to a directory of their own
+(`AutomationSupportDirectory`), so it takes operator scope next to a running
+WorkSpaces and leaves that app's credential alone. The `workspaces` CLI resolves the
+same directory from the same variable, and the lane reaches operator scope only
+through the CLI. Readiness is the launched app reporting its credential over
+`automation health`; the lane fails if any other process answers that socket.
 
 **Filtering the render lane.** Swift Testing's `--filter` matches the *type* name,
 not the suite's display name. A display-name filter is not an error — it exits 0
@@ -547,7 +546,7 @@ Three layers, from gentlest to strongest:
 | `401 unauthorized` on upload | Token mismatch | Rotate token across Worker + GitHub + `.env` |
 | Auth redirect on localhost | Web middleware requires session | Use `DEV_BYPASS_AUTH=1 pnpm dev` |
 | `screencapture` fails | No display (headless/SSH) | Use the `--fixture` app lane, or `--file` with an existing screenshot |
-| `operator credential did not appear` | Fixture launch didn't enable operator scope, or the app failed to start | Check `.dev-data/logs/launch-diagnostics-*`; the lane sets `WORKSPACES_AUTOMATION_API=1` + `WORKSPACES_AUTOMATION_OPERATOR=1` for you |
+| `operator scope did not become ready` | Fixture launch didn't enable operator scope, or the app failed to start | Check `.dev-data/logs/launch-diagnostics-*`; the lane sets `WORKSPACES_AUTOMATION_API=1` + `WORKSPACES_AUTOMATION_OPERATOR=1` for you |
 | Snapshot `unsupported` on a locked screen | Composited capture returns no pixels while locked | Use the local VM fallback lane |
 | URL returns 404 | Upload didn't complete | Re-run `evidence.sh`, check network |
 | Image renders in the PR but the reviewer cannot inspect it | Establish whether delivery, decoding, or image tools are unavailable | Record the failed capability and repair the review route within your authority. Request human help when needed; prose changes or rehosting without a diagnosed cause do not repair access. |
