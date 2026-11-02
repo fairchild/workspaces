@@ -27,6 +27,9 @@ struct WorkspaceOrphanReconciliationBanner: View {
     var initiallyExpanded = false
 
     @State private var isExpanded: Bool
+    /// Natural height of the expanded rows, measured inside the scroll view; nil until the
+    /// first layout reports it.
+    @State private var measuredRowsHeight: CGFloat?
 
     init(
         items: [WorkspaceOrphanItem],
@@ -98,15 +101,22 @@ struct WorkspaceOrphanReconciliationBanner: View {
 
             if isExpanded {
                 Divider()
-                VStack(spacing: 0) {
-                    ForEach(items) { item in
-                        cleanupRow(for: item)
-                        if item.id != items.last?.id {
-                            Divider()
-                                .padding(.leading, 42)
-                        }
-                    }
+                // A long leftover list (a dozen stale worktrees is common) must not outgrow the
+                // window, or it pushes this banner's header (chevron, dismiss) under the title
+                // bar. A fixed-height frame, sized to the measured rows up to the cap, bounds it
+                // whatever the parent proposes; `.frame(maxHeight:)` would pass an ideal-size
+                // (nil) proposal straight through and let the full list render.
+                ScrollView(.vertical) {
+                    cleanupRows
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear.preference(key: CleanupRowsHeightKey.self, value: proxy.size.height)
+                            }
+                        )
                 }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(height: expandedListHeight)
+                .onPreferenceChange(CleanupRowsHeightKey.self) { measuredRowsHeight = $0 }
             }
         }
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.72))
@@ -114,6 +124,26 @@ struct WorkspaceOrphanReconciliationBanner: View {
             Divider()
         }
         .accessibilityIdentifier("workspace-orphan-reconciliation.banner")
+    }
+
+    /// Tallest the expanded list may grow before it scrolls — about six rows, leaving the
+    /// terminal visible beneath the banner even in a short window.
+    static let expandedListMaxHeight: CGFloat = 260
+
+    private var expandedListHeight: CGFloat {
+        min(measuredRowsHeight ?? Self.expandedListMaxHeight, Self.expandedListMaxHeight)
+    }
+
+    private var cleanupRows: some View {
+        VStack(spacing: 0) {
+            ForEach(items) { item in
+                cleanupRow(for: item)
+                if item.id != items.last?.id {
+                    Divider()
+                        .padding(.leading, 42)
+                }
+            }
+        }
     }
 
     private var summaryText: String {
@@ -206,5 +236,15 @@ struct WorkspaceOrphanReconciliationBanner: View {
         case .lumeVMWithoutWorkspace:
             return item.storagePath
         }
+    }
+}
+
+/// Carries the expanded rows' natural height out of the scroll view so the banner can size the
+/// list to its content until it reaches the cap.
+private struct CleanupRowsHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }

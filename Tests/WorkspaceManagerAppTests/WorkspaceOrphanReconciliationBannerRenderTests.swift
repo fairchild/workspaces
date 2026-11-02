@@ -38,10 +38,11 @@ struct WorkspaceOrphanReconciliationBannerRenderTests {
         )
     }
 
+    @discardableResult
     private func render(
         _ state: WorkspaceOrphanReconciliationState,
         to fileName: String
-    ) throws {
+    ) throws -> NSImage {
         let orphanController = WorkspaceOrphanReconciliationController()
         let banner = WorkspaceOrphanReconciliationBanner(
             items: state.visibleItems,
@@ -68,9 +69,10 @@ struct WorkspaceOrphanReconciliationBannerRenderTests {
             let bitmap = NSBitmapImageRep(data: tiff),
             let png = bitmap.representation(using: .png, properties: [:])
         else {
-            return
+            return image
         }
         try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent(fileName))
+        return image
     }
 
     @Test("Banner renders every scanned leftover kind")
@@ -120,5 +122,22 @@ struct WorkspaceOrphanReconciliationBannerRenderTests {
         let orphanController = WorkspaceOrphanReconciliationController()
         #expect(state.visibleItems.map { orphanController.canAdopt($0) } == [true, false, false])
         try render(state, to: "orphan-banner-adopt-offered.png")
+    }
+
+    /// A long leftover list scrolls inside a capped region instead of growing the banner past
+    /// the window, which pushed the header (collapse chevron, dismiss button) under the title
+    /// bar where it could not be reached.
+    @Test("Expanded banner height stays bounded for a long leftover list")
+    func longListStaysBounded() throws {
+        let items = (0..<19).map { index in
+            makeItem(id: "git-\(index)", kind: .gitWorktreeWithoutRecord, resourceName: "gate-\(index)")
+        }
+        var state = WorkspaceOrphanReconciliationState()
+        state.applyScanResult(items)
+
+        #expect(state.visibleItems.count == 19)
+        let image = try render(state, to: "orphan-banner-long-list.png")
+        let maxBannerHeight = WorkspaceOrphanReconciliationBanner.expandedListMaxHeight + 80
+        #expect(image.size.height <= maxBannerHeight)
     }
 }

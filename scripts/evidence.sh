@@ -177,7 +177,7 @@ if [[ -n "$FIXTURE" ]]; then
   # (launch-dev.sh preserves the caller's environment). The banner seeds travel
   # this way so the capture library needs no per-scenario knowledge.
   if fixture_resolve_scenario "$FIXTURE"; then
-    [[ -n "${FIXTURE_SEED_ORPHAN_BANNER:-}" ]] && export WORKSPACES_UI_FIXTURE_SEED_ORPHAN_BANNER=1
+    [[ -n "${FIXTURE_SEED_ORPHAN_BANNER:-}" ]] && export WORKSPACES_UI_FIXTURE_SEED_ORPHAN_BANNER="$FIXTURE_SEED_ORPHAN_BANNER"
     [[ -n "${FIXTURE_SEED_RUNAWAY_ALERT:-}" ]] && export WORKSPACES_UI_FIXTURE_SEED_RUNAWAY_ALERT=1
   fi
   FILE="/tmp/evidence-${NAME}-$(date +%Y%m%d-%H%M%S).png"

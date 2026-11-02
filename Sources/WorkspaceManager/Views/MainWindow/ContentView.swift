@@ -916,7 +916,8 @@ struct ContentView: View {
                     },
                     onDismiss: {
                         workspaceOrphanState.dismissVisibleItems()
-                    }
+                    },
+                    initiallyExpanded: UIFixtureOrphanBannerBootstrap.startsExpanded()
                 )
             }
             if let plan = restoreState.bannerPlan {
