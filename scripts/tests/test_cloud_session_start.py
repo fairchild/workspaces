@@ -41,8 +41,15 @@ class CloudSessionStartTests(unittest.TestCase):
             directory.mkdir(parents=True)
         for directory in ("web-next", "web"):
             (self.project / directory / "pnpm-lock.yaml").write_text("")
-        self.stub("pnpm", f'echo "pnpm $*" >> "{self.calls}"')
-        self.stub("node", "exit 0")
+        self.browser = tmp / "pw-browsers" / "chromium-1228"
+        self.browser.mkdir(parents=True)
+        self.stub_pnpm(f'echo "pnpm $*" >> "{self.calls}"', browser=self.browser)
+
+    def stub_pnpm(self, install: str, browser: Path) -> None:
+        self.stub(
+            "pnpm",
+            f'if [ "$1" = exec ]; then echo "  Install location:    {browser}"; exit 0; fi\n{install}',
+        )
 
     def stub(self, name: str, body: str) -> None:
         path = self.bin / name
@@ -146,9 +153,20 @@ class CloudSessionStartTests(unittest.TestCase):
 
     # intent: guard
     def test_a_stale_browser_cache_is_reported(self) -> None:
-        self.stub("node", "exit 1")
+        self.stub_pnpm("exit 0", browser=self.browser.parent / "chromium-9999")
         _, context = self.run_hook()
         self.assertIn("pinned browser is not installed", context)
+
+    # intent: guard
+    def test_a_failed_browser_lookup_reads_as_not_installed(self) -> None:
+        self.stub("pnpm", "exit 1")
+        _, context = self.run_hook()
+        self.assertIn("pinned browser is not installed", context)
+
+    # intent: guard
+    def test_an_installed_browser_is_reported(self) -> None:
+        _, context = self.run_hook()
+        self.assertIn("pinned browser is installed", context)
 
     # intent: guard
     def test_dotclaude_status_is_relayed_or_reported_absent(self) -> None:

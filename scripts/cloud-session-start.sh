@@ -1,42 +1,47 @@
 #!/usr/bin/env bash
 # SessionStart hook for Claude Code cloud sessions; a no-op anywhere else. Installs the locked web
-# dependencies and git hooks on the fresh clone, then tells the session what is ready, what setup
-# failed to provide, and what this environment cannot do.
-#
-# Synchronous, so tests work from the agent's first command, and it never fails: a problem here
-# belongs in the session's context, not in a session that won't start. Every step has a time
-# limit that keeps the whole hook inside the 300 s timeout in .claude/settings.json, because the
-# report only reaches the session if the hook finishes.
+# dependencies and git hooks on the fresh clone, then reports into the session what is ready,
+# what environment setup failed to provide, and what this Linux VM cannot do. It never fails, and
+# every step is time-boxed so the report lands inside the hook's 300 s timeout.
 set -u
 
 [[ "${CLAUDE_CODE_REMOTE:-}" == "true" ]] || exit 0
 
 root="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-cd "$root" || exit 0
-
 state="${WORKSPACES_CLOUD_STATE:-/var/log/workspaces-cloud-setup}"
 dotclaude_status="$HOME/.claude/cloud-bootstrap.status"
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0 CI=1
 
-work="$(mktemp -d)"
-trap 'rm -rf -- "$work"' EXIT
+main() {
+  cd "$root" || return
+  work="$(mktemp -d)"
+  trap 'rm -rf -- "$work"' EXIT
 
-# A log tail goes by bytes, not lines: one line of a failed install can run to megabytes.
-log_tail() { tail -c 800; }
+  install_web web-next >"$work/web-next" &
+  install_web web >"$work/web" &
+  wait
 
-# pnpm decides what is current: setup's pnpm fetch leaves a node_modules that holds no tools, so
-# its presence says nothing, and an install with nothing to do takes seconds.
+  {
+    cat "$work/web-next" "$work/web"
+    install_git_hooks
+    report_setup_failures
+    report_browser
+    report_dotclaude
+    report_limits
+  } | as_session_context
+}
+
 install_web() {
   local dir="$1" output
   if output="$(cd "$dir" && timeout -k 5 200 pnpm install --frozen-lockfile --prefer-offline 2>&1)"; then
     echo "$dir dependencies: installed from the lockfile."
   else
     echo "$dir dependencies: pnpm install failed; end of its output:"
-    log_tail <<<"$output"
+    last_bytes <<<"$output"
   fi
 }
 
-install_hooks() {
+install_git_hooks() {
   if ! command -v mise >/dev/null 2>&1 || ! command -v prek >/dev/null 2>&1; then
     echo "Git hooks: not installed, because mise or prek is missing."
   elif ! timeout -k 5 30 ./scripts/setup --hooks-only >/dev/null 2>&1; then
@@ -44,7 +49,7 @@ install_hooks() {
   fi
 }
 
-report_setup() {
+report_setup_failures() {
   local outcome name took
   if [[ ! -f "$state/status" ]]; then
     echo "Environment setup: no record at $state/status, so whether its tools installed is unknown. Check that the environment's setup script runs scripts/cloud-environment.sh."
@@ -53,23 +58,32 @@ report_setup() {
   while read -r outcome name took; do
     if [[ "$outcome" == failed ]]; then
       echo "Environment setup: $name failed after $took; end of $state/$name.log:"
-      log_tail <"$state/$name.log" 2>/dev/null
+      last_bytes <"$state/$name.log" 2>/dev/null
     fi
   done <"$state/status"
 }
 
 report_browser() {
-  local check='const fs = require("node:fs"); const { chromium } = require("@playwright/test"); process.exit(fs.existsSync(chromium.executablePath()) ? 0 : 1)'
-  if (cd web-next && timeout -k 5 20 node -e "$check") >/dev/null 2>&1; then
+  if browsers_installed; then
     echo "Playwright: web-next's pinned browser is installed."
   else
     echo "Playwright: web-next's pinned browser is not installed, so e2e tests can't run. Either setup failed or the environment's cache predates the pin; a rebuild fixes both. Don't run playwright install."
   fi
 }
 
+browsers_installed() {
+  local locations location
+  locations="$(cd web-next && timeout -k 5 20 pnpm exec playwright install --dry-run chromium 2>/dev/null \
+    | sed -n 's/^ *Install location: *//p')"
+  [[ -n "$locations" ]] || return 1
+  while read -r location; do
+    [[ -d "$location" ]] || return 1
+  done <<<"$locations"
+}
+
 report_dotclaude() {
   if [[ -f "$dotclaude_status" ]]; then
-    echo "Owner's dotclaude config: $(log_tail <"$dotclaude_status")"
+    echo "Owner's dotclaude config: $(last_bytes <"$dotclaude_status")"
   else
     echo "Owner's dotclaude config: not installed, so personal instructions and skills are absent."
   fi
@@ -81,24 +95,13 @@ report_limits() {
   echo "Details: docs/development/remote-sessions.md."
 }
 
-install_web web-next >"$work/web-next" &
-install_web web >"$work/web" &
-wait
+last_bytes() {
+  tail -c 800
+}
 
-{
-  cat "$work/web-next" "$work/web"
-  install_hooks
-  report_setup
-  report_browser
-  report_dotclaude
-  report_limits
-} | python3 -c '
-import json
-import sys
+as_session_context() {
+  jq -Rsc '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: rtrimstr("\n")}}'
+}
 
-print(json.dumps({"hookSpecificOutput": {
-    "hookEventName": "SessionStart",
-    "additionalContext": sys.stdin.read().strip(),
-}}))
-'
+main
 exit 0
