@@ -341,7 +341,7 @@ def ensure_debug_binary(log_dir: Path) -> Path:
         log_path=log_dir / "swift-build.log",
     )
     bin_path = run_command(
-        ["swift", "build", "--show-bin-path", "--ignore-lock"],
+        ["swift", "build", "--show-bin-path"],
         log_path=log_dir / "swift-bin-path.log",
     )
     binary = Path(bin_path.stdout.strip().splitlines()[-1]) / "WorkspaceManager"

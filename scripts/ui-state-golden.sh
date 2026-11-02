@@ -47,6 +47,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=lib/build-products.sh
 source "$SCRIPT_DIR/lib/build-products.sh"
+# shellcheck source=lib/synthetic-root.sh
+source "$SCRIPT_DIR/lib/synthetic-root.sh"
 
 CLI_BINARY=""
 
@@ -104,18 +106,20 @@ GOLDEN_PATH="${GOLDEN_OVERRIDE:-$REPO_ROOT/fixtures/ui-state/$SCENARIO.json}"
 # standard launch shape).
 fetch_wire_response() {
   local out="$1"
-  if [[ -z "${WORKSPACES_SYNTHETIC_ROOT:-}" ]]; then
+  synthetic_root_trim
+  if [[ -z "$WORKSPACES_SYNTHETIC_ROOT" ]]; then
     echo "error: WORKSPACES_SYNTHETIC_ROOT is not set, so this read would reach the installed app." >&2
     echo "       Export the fixture launch's root (<data-dir>/workspaces-root), or pass --from-file." >&2
     return 1
   fi
+  synthetic_root_reject_real_root || return 1
   [[ -n "$CLI_BINARY" ]] || CLI_BINARY="$(build_products_dir "$REPO_ROOT")/workspaces" || return 1
   local result
   result="$("$CLI_BINARY" automation ui-state --json)" || return 1
-  python3 -c '
+  printf '%s' "$result" | python3 -c '
 import json, sys
-json.dump({"ok": True, "result": json.loads(sys.argv[2])}, open(sys.argv[1], "w"))
-' "$out" "$result"
+json.dump({"ok": True, "result": json.load(sys.stdin)}, open(sys.argv[1], "w"))
+' "$out"
 }
 
 # acquire_wire <out-file> — the saved response when --from-file was given, a live

@@ -102,6 +102,17 @@ class UIStateGoldenTests(unittest.TestCase):
         self.assertIn("WORKSPACES_SYNTHETIC_ROOT", result.stderr)
         self.assertFalse((self.root / "cli.calls").exists(), "the CLI must not have been called")
 
+    def test_a_whitespace_root_counts_as_no_root_because_the_app_trims_it(self) -> None:
+        golden = self.write_json("golden.json", {"scenario": "x", "ignore": [], "state": {"banners": []}})
+        env = self.stub_live_app([{"banners": []}], env_root=False)
+        env["WORKSPACES_SYNTHETIC_ROOT"] = "   "
+
+        result = self.run_script("verify", "--golden", str(golden), env=env)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("WORKSPACES_SYNTHETIC_ROOT is not set", result.stderr)
+        self.assertFalse((self.root / "cli.calls").exists(), "the CLI must not have been called")
+
     def test_a_live_read_compares_the_cli_result_as_the_wire_state(self) -> None:
         golden = self.write_json("golden.json", {"scenario": "x", "ignore": [], "state": {"banners": []}})
         env = self.stub_live_app([{"banners": []}])

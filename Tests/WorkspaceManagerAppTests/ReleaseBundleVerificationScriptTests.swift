@@ -228,6 +228,7 @@ struct ReleaseBundleVerificationScriptTests {
             for name in ["compose.yaml", "Dockerfile", ".dockerignore"] {
                 try Data().write(to: compose.appendingPathComponent(name))
             }
+            try Data().write(to: resources.appendingPathComponent("Assets.car"))
             let macOS = contents.appendingPathComponent("MacOS", isDirectory: true)
             try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
             let executable = macOS.appendingPathComponent("WorkspaceManager")

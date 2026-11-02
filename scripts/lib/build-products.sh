@@ -7,14 +7,15 @@
 # Scripts ask the toolchain and never spell a layout.
 
 # build_products_dir <package-root> [debug|release] — print the products directory.
-# --ignore-lock: this is a read, and without it the query waits on any build
-# running in the same .build.
+# The query takes SwiftPM's .build lock, so it waits for a build running in the same
+# tree: under swiftbuild it writes marker files there, and products mid-build are not
+# ones to launch anyway.
 build_products_dir() {
     local package_root="$1"
     local configuration="${2:-debug}"
     local bin_path
     if ! bin_path="$(swift build --package-path "$package_root" \
-        --configuration "$configuration" --show-bin-path --ignore-lock 2>/dev/null)" \
+        --configuration "$configuration" --show-bin-path 2>/dev/null)" \
         || [[ -z "$bin_path" ]]; then
         echo "error: could not resolve the $configuration build products directory for $package_root (swift build --show-bin-path failed)." >&2
         return 1

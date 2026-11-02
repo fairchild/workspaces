@@ -67,6 +67,7 @@ class AppCaptureWindowTests(unittest.TestCase):
             nohup "{self.binary}" 60 >/dev/null 2>&1 &
             echo $! > "{self.pid_file}"
             sleep 0.2
+            echo "[12:00:00] WorkspaceManager running (pid=$!)"
             """,
         )
 
@@ -151,8 +152,30 @@ class AppCaptureWindowTests(unittest.TestCase):
         self.stub_cli("1")
         result = self.capture()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not the debug app this lane launched", result.stderr)
+        self.assertIn("A snapshot here would capture another app", result.stderr)
         self.assertFalse((self.root / "out.png").exists())
+
+    def test_an_earlier_instance_of_the_same_binary_fails_the_lane(self) -> None:
+        """A process that outlived its replacement's launch still runs this binary and
+        still holds this root's socket, so only the exact pid tells them apart."""
+        earlier = subprocess.Popen([str(self.binary), "60"])
+        self.addCleanup(earlier.wait)
+        self.addCleanup(earlier.kill)
+        self.stub_cli(str(earlier.pid))
+        result = self.capture()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"pid {earlier.pid} answered", result.stderr)
+        self.assertFalse((self.root / "out.png").exists())
+
+    def test_a_launch_that_reports_no_pid_fails_rather_than_trust_the_listener(self) -> None:
+        launcher = self.checkout / "scripts" / "launch-dev.sh"
+        launcher.write_text(
+            launcher.read_text(encoding="utf-8").replace("running (pid=$!)", "running"), encoding="utf-8"
+        )
+        self.stub_cli("launched")
+        result = self.capture()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not determine the launched app's pid", result.stderr)
 
     def test_a_capture_from_a_workspaces_terminal_ignores_that_terminals_socket(self) -> None:
         """Every WorkSpaces terminal exports the installed app's socket and handle, and

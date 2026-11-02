@@ -102,15 +102,6 @@ print(server.get("pid", ""), server.get("operatorCredential", ""))
 ' 2>/dev/null
 }
 
-# app_capture_pid_is_launched_binary <pid> — exit 0 when <pid> runs this checkout's
-# debug binary.
-app_capture_pid_is_launched_binary() {
-    local command binary
-    command="$(ps -o command= -p "$1" 2>/dev/null)" || return 1
-    binary="$(app_capture_debug_binary)"
-    [[ "$command" == "$binary" || "$command" == "$binary "* ]]
-}
-
 # app_capture_stop — stop the launched debug app.
 # Idempotent; safe to wire to an EXIT trap so the app never outlives the lane.
 # No-op until a launch was actually attempted, so a pre-launch validation
@@ -206,25 +197,28 @@ app_capture_window() {
 
     echo "→ launching debug app (fixture=$scenario, operator scope, no-activate)…" >&2
     APP_CAPTURE_LAUNCHED=1
-    if ! "$REPO_ROOT/scripts/launch-dev.sh" "${launch_args[@]}" >&2; then
+    local launch_output
+    if ! launch_output="$("$REPO_ROOT/scripts/launch-dev.sh" "${launch_args[@]}" 2>&1 | tee /dev/stderr)"; then
         echo "error: app failed to launch; inspect the latest .dev-data/logs/launch-diagnostics-* bundle." >&2
         return 1
     fi
-
-    APP_CAPTURE_PID="$(pgrep -f "$(app_capture_debug_binary_pattern)" | head -n1)"
+    APP_CAPTURE_PID="$(printf '%s\n' "$launch_output" | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | tail -n 1)"
+    if [[ -z "$APP_CAPTURE_PID" ]]; then
+        echo "error: could not determine the launched app's pid from launch-dev.sh output." >&2
+        return 1
+    fi
 
     # Readiness asks the running listener rather than watching for a file, so a
-    # credential left by an earlier run cannot pass for this launch's, and the pid
-    # check fails the lane when the socket it resolved belongs to some other app.
+    # credential left by an earlier run cannot pass for this launch's, and comparing
+    # pids fails the lane when anything but this launch answers the socket.
     echo "→ waiting up to ${timeout_seconds}s for operator credential (readiness)…" >&2
     local waited=0 state listener_pid credential
     while :; do
         state="$(app_capture_operator_state)" || state=""
         read -r listener_pid credential <<<"$state" || true
-        if [[ -n "$listener_pid" ]] && ! app_capture_pid_is_launched_binary "$listener_pid"; then
-            echo "error: pid $listener_pid answered the automation socket, and it is not the debug app this lane launched." >&2
-            echo "       The CLI and the launch disagree on WORKSPACES_SYNTHETIC_ROOT ($WORKSPACES_SYNTHETIC_ROOT)," >&2
-            echo "       so a snapshot here would capture another app." >&2
+        if [[ -n "$listener_pid" && "$listener_pid" != "$APP_CAPTURE_PID" ]]; then
+            echo "error: pid $listener_pid answered the automation socket, and this lane launched pid $APP_CAPTURE_PID." >&2
+            echo "       A snapshot here would capture another app (root: $WORKSPACES_SYNTHETIC_ROOT)." >&2
             return 1
         fi
         case "$credential" in
@@ -236,7 +230,7 @@ app_capture_window() {
                 return 1
                 ;;
         esac
-        if [[ -n "$APP_CAPTURE_PID" ]] && ! kill -0 "$APP_CAPTURE_PID" 2>/dev/null; then
+        if ! kill -0 "$APP_CAPTURE_PID" 2>/dev/null; then
             echo "error: app exited before operator scope became ready." >&2
             return 1
         fi

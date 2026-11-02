@@ -64,11 +64,6 @@ class BuildProductsDirTests(unittest.TestCase):
         self.assertIn("--configuration release", call)
         self.assertIn("--show-bin-path", call)
 
-    def test_does_not_wait_on_a_build_running_in_the_same_tree(self) -> None:
-        env = self.env_with_swift('echo "/repo/.build/out/Products/Debug"')
-        run_helper('build_products_dir "$1"', "/repo", env=env)
-        self.assertIn("--ignore-lock", self.calls.read_text(encoding="utf-8"))
-
     def test_keeps_only_the_path_when_the_toolchain_prints_more(self) -> None:
         env = self.env_with_swift('echo "warning: something"\necho "/repo/.build/arm64-apple-macosx/debug"')
         result = run_helper('build_products_dir "$1"', "/repo", env=env)
