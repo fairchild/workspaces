@@ -73,7 +73,7 @@ public final class AgentNotificationPoster {
         // doesn't resolve to a code-signed application) raises an NSInternalInconsistencyException
         // ("bundleProxyForCurrentProcess is nil") that propagates to the runloop and
         // terminates the app. Gate every call behind a bundle-readiness check.
-        guard Self.isUserNotificationsAvailable else { return }
+        guard UserNotificationsAvailability.isAvailable else { return }
         Task { [weak self] in
             await self?.requestAuthorizationIfNeeded()
             await self?.deliverNotification(for: status)
@@ -83,13 +83,13 @@ public final class AgentNotificationPoster {
     private func requestAuthorizationIfNeeded() async {
         guard !requestedAuthorization else { return }
         requestedAuthorization = true
-        guard Self.isUserNotificationsAvailable else { return }
+        guard UserNotificationsAvailability.isAvailable else { return }
         let center = UNUserNotificationCenter.current()
         _ = try? await center.requestAuthorization(options: [.alert, .sound])
     }
 
     private func deliverNotification(for status: AgentSessionStatus) async {
-        guard Self.isUserNotificationsAvailable else { return }
+        guard UserNotificationsAvailability.isAvailable else { return }
         let content = UNMutableNotificationContent()
         content.title = status.kind.displayName + " is awaiting input"
         content.body = "Permission requested in \(status.cwd)"
@@ -102,14 +102,4 @@ public final class AgentNotificationPoster {
         try? await UNUserNotificationCenter.current().add(request)
     }
 
-    /// True only when running inside a real `.app` bundle that the notification
-    /// framework can resolve. Raw `swift run` debug binaries fall through here.
-    private static let isUserNotificationsAvailable: Bool = {
-        guard let bundleID = Bundle.main.bundleIdentifier, !bundleID.isEmpty else {
-            return false
-        }
-        // Bundle.main.bundleURL ends with ".app" inside a real bundle; for raw
-        // `swift run` it points at the executable's parent directory.
-        return Bundle.main.bundleURL.pathExtension == "app"
-    }()
 }
