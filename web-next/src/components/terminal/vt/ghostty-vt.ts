@@ -48,6 +48,7 @@ interface StructLayout {
 }
 interface TypeLayout {
 	library_version: string;
+	abi?: { usize_size: number };
 	types: Record<string, EnumLayout | StructLayout | { kind: string }>;
 }
 
@@ -385,6 +386,12 @@ export class VtTerminal {
 	private graphemeBuffer: number;
 	private graphemeCapacity = 32;
 	private lastSnapshot: TerminalSnapshot | null = null;
+	/**
+	 * Set by every write, which may change mouse modes. Syncing the mouse
+	 * encoder from the terminal also forgets the last reported cell, so it
+	 * syncs only after a write, or motion within one cell would repeat.
+	 */
+	private mouseModesStale = true;
 	/** Bumped whenever this wrapper changes the selection; the clean-frame cache compares it. */
 	private selectionGeneration = 0;
 	private snapshotSelectionGeneration = -1;
@@ -429,6 +436,7 @@ export class VtTerminal {
 			spacerTail: ev("GhosttyCellWide", "SPACER_TAIL"),
 			spacerHead: ev("GhosttyCellWide", "SPACER_HEAD"),
 			dirtyFalse: ev("GhosttyRenderStateDirty", "FALSE"),
+			dirtyFull: ev("GhosttyRenderStateDirty", "FULL"),
 			termScrollbar: ev("GhosttyTerminalData", "SCROLLBAR"),
 			termMode: ev("GhosttyTerminalData", "MODE"),
 			termMouseTracking: ev("GhosttyTerminalData", "MOUSE_TRACKING"),
@@ -436,6 +444,9 @@ export class VtTerminal {
 			termPaletteDefault: ev("GhosttyTerminalData", "COLOR_PALETTE_DEFAULT"),
 			optWritePty: ev("GhosttyTerminalOption", "WRITE_PTY"),
 			optScrollbackLines: ev("GhosttyTerminalOption", "SCROLLBACK_MAX_LINES"),
+			optScrollbackBytes: ev("GhosttyTerminalOption", "SCROLLBACK_MAX_BYTES"),
+			termActiveScreen: ev("GhosttyTerminalData", "ACTIVE_SCREEN"),
+			screenAlternate: ev("GhosttyTerminalScreen", "ALTERNATE"),
 			optFg: ev("GhosttyTerminalOption", "COLOR_FOREGROUND"),
 			optBg: ev("GhosttyTerminalOption", "COLOR_BACKGROUND"),
 			optPalette: ev("GhosttyTerminalOption", "COLOR_PALETTE"),
@@ -473,6 +484,9 @@ export class VtTerminal {
 			["GhosttyMouseEncoderSize", 128],
 			["GhosttySelectionGestureGeometry", 128],
 			["GhosttyString", 16],
+			["GhosttyBuffer", 128],
+			["GhosttyStyle", 128],
+			["GhosttyTerminalScrollViewport", 128],
 			["GhosttyPoint", 32],
 			["GhosttyGridRef", 16],
 			["GhosttySelection", 64],
@@ -512,8 +526,14 @@ export class VtTerminal {
 		this.view().setUint8(value, 1);
 		check("mouse(track_last_cell)", e.ghostty_mouse_encoder_set(this.mouseEncoder, this.k.mouseOptTrackLastCell, value));
 
-		this.view().setUint32(this.scratch + SCRATCH.out, options.scrollbackLines ?? 10_000, true);
-		check("set(scrollback)", e.ghostty_terminal_set(this.terminal, this.k.optScrollbackLines, this.scratch + SCRATCH.out));
+		// The library's default byte cap (10,000 bytes, one page in practice) would end
+		// history after a few hundred rows; lifting it leaves the line limit in charge.
+		const out = this.scratch + SCRATCH.out;
+		this.view().setUint32(out, options.scrollbackLines ?? 10_000, true);
+		check("set(scrollback_lines)", e.ghostty_terminal_set(this.terminal, this.k.optScrollbackLines, out));
+		if ((module.layout.abi?.usize_size ?? 4) === 8) this.view().setBigUint64(out, 0xffff_ffff_ffff_ffffn, true);
+		else this.view().setUint32(out, 0xffff_ffff, true);
+		check("set(scrollback_bytes)", e.ghostty_terminal_set(this.terminal, this.k.optScrollbackBytes, out));
 		this.setColors(options);
 
 		if (options.onReply) {
@@ -573,6 +593,7 @@ export class VtTerminal {
 		this.m.u8().set(bytes, ptr);
 		this.e.ghostty_terminal_vt_write(this.terminal, ptr, bytes.length);
 		this.m.free(ptr, bytes.length);
+		this.mouseModesStale = true;
 		if (this.pendingReplies.length === 0 || !this.onReply) return;
 		const replies = this.pendingReplies;
 		this.pendingReplies = [];
@@ -611,6 +632,14 @@ export class VtTerminal {
 		view.setUint8(p + 2, 0);
 		check("get(mode)", this.e.ghostty_terminal_get(this.terminal, this.k.termMode, p));
 		return this.view().getUint8(p + 2) !== 0;
+	}
+
+	/** Whether the alternate screen (full-screen programs: less, vim, top) is active. */
+	alternateScreen(): boolean {
+		const p = this.scratch + SCRATCH.out;
+		this.view().setUint32(p, 0, true);
+		check("get(active_screen)", this.e.ghostty_terminal_get(this.terminal, this.k.termActiveScreen, p));
+		return this.view().getUint32(p, true) === this.k.screenAlternate;
 	}
 
 	/** Whether the program asked for mouse reports (any of modes 9, 1000, 1002, 1003). */
@@ -687,7 +716,8 @@ export class VtTerminal {
 	/**
 	 * A mouse report in the program's tracking mode and format (X10, normal,
 	 * button, any-event; SGR, UTF-8, urxvt, SGR-pixels), or nothing when the
-	 * program did not ask for this event. Motion within one cell is reported once.
+	 * program did not ask for this event. Motion within one cell is reported once
+	 * (until the next write, which re-reads the program's modes).
 	 */
 	encodeMouse(
 		event: { action: MouseAction; button: MouseButton | null; mods: number; x: number; y: number },
@@ -696,7 +726,10 @@ export class VtTerminal {
 	): Uint8Array {
 		const e = this.e;
 		const m = this.m;
-		check("mouse_encoder_from_terminal", e.ghostty_mouse_encoder_set_from_terminal(this.mouseEncoder, this.terminal));
+		if (this.mouseModesStale) {
+			check("mouse_encoder_from_terminal", e.ghostty_mouse_encoder_set_from_terminal(this.mouseEncoder, this.terminal));
+			this.mouseModesStale = false;
+		}
 		const size = this.scratch + SCRATCH.struct;
 		m.initStruct(size, "GhosttyMouseEncoderSize");
 		m.write(size, "GhosttyMouseEncoderSize", "screen_width", Math.round(surface.width));
@@ -896,18 +929,20 @@ export class VtTerminal {
 			const written = this.scratch + SCRATCH.written;
 			let capacity = 4096;
 			for (;;) {
-				const buf = this.m.alloc(capacity);
+				// ghostty_wasm_free needs the size this block was allocated with, so it is pinned per attempt.
+				const size = capacity;
+				const buf = this.m.alloc(size);
 				try {
-					const result = e.ghostty_formatter_format_buf(formatter, buf, capacity, written);
+					const result = e.ghostty_formatter_format_buf(formatter, buf, size, written);
 					const length = this.view().getUint32(written, true);
 					if (result === OUT_OF_SPACE) {
-						capacity = Math.max(length, capacity * 2);
+						capacity = Math.max(length, size * 2);
 						continue;
 					}
 					check("formatter_format", result);
 					return this.decoder.decode(this.m.u8().subarray(buf, buf + length));
 				} finally {
-					this.m.free(buf, capacity);
+					this.m.free(buf, size);
 				}
 			}
 		} finally {
@@ -950,7 +985,8 @@ export class VtTerminal {
 		check("get(row_iterator)", e.ghostty_render_state_get(this.renderState, this.k.rsRowIterator, p));
 		const lines: TextRun[][] = [];
 		const selection: (RowSelection | null)[] = [];
-		const reuse = geometryHolds && last && last.fg === fg && last.bg === bg;
+		// A FULL frame redraws every row whatever its own flag says (palette change, screen switch).
+		const reuse = dirty !== this.k.dirtyFull && geometryHolds && last && last.fg === fg && last.bg === bg;
 		const builder = new RunBuilder();
 		while (e.ghostty_render_state_row_iterator_next(this.rowIterator)) {
 			const index = lines.length;

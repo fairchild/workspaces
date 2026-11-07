@@ -187,6 +187,11 @@ describe("macOS Option policy", () => {
 		expect(keyInput(optionE, mac("true"))).toEqual({ mods: MODS.alt, text: "e", unshiftedCodepoint: 101 });
 	});
 
+	it("keeps Alt on keys that type nothing even while Option composes", () => {
+		const optionLeft = { ...optionB, key: "ArrowLeft", code: "ArrowLeft" };
+		expect(keyInput(optionLeft, mac("false"))).toEqual({ mods: MODS.alt, text: undefined, unshiftedCodepoint: 0 });
+	});
+
 	it("keeps Alt as Alt off macOS", () => {
 		expect(keyInput({ ...optionB, key: "b" }, { mac: false, optionAsAlt: "false", altSide: "left" })).toEqual({
 			mods: MODS.alt,
@@ -457,6 +462,51 @@ describe.skipIf(!hasWasm)("parity the drawer needs before it leaves ghostty-web"
 		expect(report("motion", null, 6, 2)).toBe("\x1b[<35;7;3M");
 		t.write("\x1b[?1006l");
 		expect(report("press", "left", 2, 1)).toBe("\x1b[M #\"");
+		t.dispose();
+	});
+
+	it("reports motion once per cell, and again after a write re-reads the modes", async () => {
+		const { t } = await terminal(20, 5);
+		const surface = surfaceOf(t);
+		t.write("\x1b[?1003h\x1b[?1006h");
+		const move = (dx: number) => decode(t.encodeMouse({ action: "motion", button: null, mods: 0, ...pointer(4, 2, dx) }, surface, false));
+		expect(move(2)).toBe("\x1b[<35;5;3M");
+		expect(move(7)).toBe("");
+		t.write("x");
+		expect(move(7)).toBe("\x1b[<35;5;3M");
+		t.dispose();
+	});
+
+	it("knows the alternate screen and its alternate-scroll mode", async () => {
+		const { t } = await terminal(20, 5);
+		expect(t.alternateScreen()).toBe(false);
+		t.write("\x1b[?1049h\x1b[?1007h");
+		expect(t.alternateScreen()).toBe(true);
+		expect(t.mode(1007)).toBe(true);
+		t.write("\x1b[?1049l");
+		expect(t.alternateScreen()).toBe(false);
+		t.dispose();
+	});
+
+	it("keeps thousands of scrollback lines, past the library's one-page default byte cap", async () => {
+		const { t } = await terminal(80, 5);
+		const line = `${"x".repeat(70)}\r\n`;
+		t.write(line.repeat(5000));
+		expect(t.snapshot().scrollback.total).toBeGreaterThan(4000);
+		t.dispose();
+	});
+
+	it("copies a selection longer than the formatter's first buffer", async () => {
+		const { t } = await terminal(80, 5);
+		for (let i = 0; i < 200; i++) t.write(`${String(i).padStart(4, "0")} ${"y".repeat(60)}\r\n`);
+		const surface = surfaceOf(t);
+		t.selectionGesture("press", pointer(0, 4, 1), surface, 1000);
+		const above = { column: 0, row: 0, x: 1, y: -30 };
+		t.selectionGesture("drag", above, surface);
+		for (let i = 0; i < 120; i++) t.autoscrollTick(above, surface);
+		const text = t.selectedText();
+		expect(text.length).toBeGreaterThan(4096);
+		expect(text).toContain(`0100 ${"y".repeat(60)}`);
 		t.dispose();
 	});
 

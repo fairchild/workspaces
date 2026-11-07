@@ -101,7 +101,9 @@ export interface KeyInput {
  * What a key press asks the encoder for, with the macOS Option policy applied.
  * Option acting as Alt keeps the Alt modifier and swaps the composed character
  * (∫) for the key's own (b), so the encoder emits ESC b; Option composing drops
- * Alt and passes the composed text through. Elsewhere Alt is always Alt.
+ * Alt from a key that typed text and passes that text through, but keeps it on
+ * keys that type nothing (Option+Left stays ESC[1;3D, as in Ghostty). Elsewhere
+ * Alt is always Alt.
  * Returns null for a dead key Option is composing, which the IME finishes.
  */
 export function keyInput(
@@ -123,7 +125,7 @@ export function keyInput(
 			if (physical) text = event.shiftKey && /[a-z]/.test(physical) ? physical.toUpperCase() : physical;
 		} else {
 			if (event.key === "Dead") return null;
-			mods &= ~(MODS.alt | MODS.altRight);
+			if (text !== undefined) mods &= ~(MODS.alt | MODS.altRight);
 		}
 	} else if (event.key === "Dead") {
 		return null;
@@ -482,7 +484,16 @@ export class CanvasTerminal {
 			// Cmd shortcuts stay the browser's: copy, paste, select-all, tab switching.
 			return;
 		}
-		if (event.ctrlKey && event.shiftKey && (event.code === "KeyC" || event.code === "KeyV")) return;
+		// Ctrl+Shift+C copies, as in Linux terminals; the browser has no copy shortcut there to fall back on.
+		if (event.ctrlKey && event.shiftKey && event.code === "KeyC" && !this.mac) {
+			const text = this.terminal.selectedText();
+			if (text) {
+				event.preventDefault();
+				void navigator.clipboard?.writeText(text).catch(() => undefined);
+			}
+			return;
+		}
+		if (event.ctrlKey && event.shiftKey && event.code === "KeyV") return;
 		// Shift+Insert pastes and Ctrl+Insert copies on Linux and Windows.
 		if (!this.mac && event.code === "Insert" && event.shiftKey !== event.ctrlKey && !event.altKey) return;
 		const input = keyInput(event, {
@@ -658,6 +669,14 @@ export class CanvasTerminal {
 		if (this.reportsMouse(event)) {
 			const button: MouseButton = rows < 0 ? "wheel-up" : "wheel-down";
 			for (let i = 0; i < Math.abs(rows); i++) this.report("press", button, event);
+			return;
+		}
+		// The alternate screen has no scrollback; with mode 1007 the wheel becomes
+		// arrow keys, so less, man and vim scroll the way they do in Ghostty.
+		if (this.terminal.alternateScreen() && this.terminal.mode(1007)) {
+			const key = this.keyCodes.get(rows < 0 ? "ARROW_UP" : "ARROW_DOWN") ?? 0;
+			const arrow = this.terminal.encodeKey({ key, mods: 0 });
+			for (let i = 0; i < Math.abs(rows); i++) this.options.onData(arrow);
 			return;
 		}
 		this.terminal.scrollViewport(rows);
