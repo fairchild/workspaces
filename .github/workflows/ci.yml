@@ -22,6 +22,7 @@ on:
       - "Sources/**"
       - "Tests/**"
       - "examples/compose-agent-sandbox/**"
+      - "ios/Packages/TerminalScreen/**"
       - "scripts/build-ghosttykit.sh"
       - "scripts/build-release.sh"
       - "scripts/check-perf-benchmarks.py"
@@ -65,6 +66,7 @@ on:
       - "Sources/**"
       - "Tests/**"
       - "examples/compose-agent-sandbox/**"
+      - "ios/Packages/TerminalScreen/**"
       - "scripts/build-ghosttykit.sh"
       - "scripts/build-release.sh"
       - "scripts/check-perf-benchmarks.py"
@@ -211,6 +213,11 @@ jobs:
 
       - name: Test
         run: swift test
+
+      # The mobile terminal package links libghostty-vt from Ghostty's release
+      # xcframework (checksum-pinned), separate from GhosttyKit above.
+      - name: Test mobile terminal package (libghostty-vt)
+        run: swift test --package-path ios/Packages/TerminalScreen
 
       # Suites that measure SwiftUI render passes need the main run loop to
       # themselves: a display cycle driven by another suite lands between the

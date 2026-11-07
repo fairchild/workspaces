@@ -60,6 +60,7 @@ CI_RELEVANT_PATH_PATTERNS=(
     "WorkSpacesCloudCI.xcodeproj/*"
     "ci_scripts/*"
     "examples/compose-agent-sandbox/*"
+    "ios/Packages/TerminalScreen/*"
     ".github/workflows/ci.yml"
     ".github/workflows/ci-fallback.yml"
     ".github/workflows/release.yml"

@@ -8,8 +8,15 @@ struct WorkSpacesMobileApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(store)
+            #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-terminal-preview") {
+                    TerminalPreviewView()
+                } else {
+                    ContentView().environmentObject(store)
+                }
+            #else
+                ContentView().environmentObject(store)
+            #endif
         }
     }
 }
