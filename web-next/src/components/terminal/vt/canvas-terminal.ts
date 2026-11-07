@@ -275,15 +275,20 @@ export class CanvasTerminal {
 		this.listen(ta, "compositionstart", () => {
 			this.composing = true;
 		});
+		let committed: string | null = null;
 		this.listen(ta, "compositionend", (event) => {
 			this.composing = false;
-			if (event.data) this.send(encoder.encode(event.data));
+			committed = event.data || null;
+			if (committed) this.send(encoder.encode(committed));
 			ta.value = "";
 		});
 		this.listen(ta, "input", (event) => {
 			const input = event as InputEvent;
 			if (this.composing || input.isComposing) return;
-			if (input.inputType === "insertText" && input.data) this.send(encoder.encode(input.data));
+			// WebKit can follow compositionend with an input carrying the same commit.
+			const echo = committed !== null && input.data === committed;
+			committed = null;
+			if (!echo && input.inputType === "insertText" && input.data) this.send(encoder.encode(input.data));
 			ta.value = "";
 		});
 		this.listen(ta, "paste", (event) => {
