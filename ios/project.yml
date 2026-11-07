@@ -10,6 +10,11 @@ options:
 # Signing identity stays out of the committed spec: export DEVELOPMENT_TEAM
 # before generating (`DEVELOPMENT_TEAM=<team id> xcodegen`). Unset, simulator
 # builds work unsigned and device builds fail at signing with a clear error.
+# libghostty-vt 1.0 arrives through this local package, which pins Ghostty's
+# signed release xcframework by checksum (docs/development/libghostty-vt.md).
+packages:
+  TerminalScreen:
+    path: Packages/TerminalScreen
 settings:
   base:
     DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
@@ -20,6 +25,10 @@ targets:
     platform: iOS
     sources:
       - WorkSpacesMobile
+      - path: Packages/TerminalScreen/Tests/TerminalScreenTests/Fixtures/agent-turn.vt
+        buildPhase: resources
+    dependencies:
+      - package: TerminalScreen
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cloudcompute.workspaces.mobile

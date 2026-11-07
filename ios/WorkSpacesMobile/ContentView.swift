@@ -8,6 +8,7 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var reloadToken = 0
     @State private var tokenRejected = false
+    @State private var showingTerminalPreview = false
 
     var body: some View {
         if let node = store.node {
@@ -24,6 +25,9 @@ struct ContentView: View {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
                             Button("Reload") { reloadToken += 1 }
+                            #if DEBUG
+                                Button("Terminal preview") { showingTerminalPreview = true }
+                            #endif
                             Button("Unpair node", role: .destructive) {
                                 store.unpair()
                             }
@@ -32,6 +36,9 @@ struct ContentView: View {
                         }
                     }
                 }
+                #if DEBUG
+                    .sheet(isPresented: $showingTerminalPreview) { TerminalPreviewView() }
+                #endif
                 .alert("Pairing no longer accepted", isPresented: $tokenRejected) {
                     Button("Unpair", role: .destructive) { store.unpair() }
                     Button("Not now", role: .cancel) {}
