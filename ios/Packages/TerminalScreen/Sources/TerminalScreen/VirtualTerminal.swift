@@ -252,30 +252,32 @@ struct StyleFlags: OptionSet {
 
 /// Coalesces a row's cells into runs and drops trailing blanks that would
 /// draw nothing, so a mostly-empty 80-column row costs one short run. Only
-/// narrow cells merge, and only when the cell stays its own Character —
-/// Swift would fuse "©\u{200D}" and "®" from two cells into one grapheme —
-/// which keeps TextRun's one-column-per-Character invariant. The cursor cell
-/// never merges and is never trimmed.
+/// narrow cells merge, and only when each stays exactly one Character after
+/// joining — Swift would fuse "©\u{200D}" and "®" from two cells into one,
+/// and a cell the terminal clustered may hold several — which keeps
+/// TextRun's one-Character-per-cell invariant for multi-cell runs. The cursor
+/// cell never merges and is never trimmed.
 struct RunBuilder {
     private var runs: [TextRun] = []
 
     mutating func append(_ text: String, width: Int = 1, style: CellStyle, isCursor: Bool = false) {
-        if width == 1, !isCursor, let last = runs.indices.last, runs[last].mergesNarrow(style) {
+        if width == 1, !isCursor, text.count == 1, let last = runs.indices.last, runs[last].mergesNarrow(style) {
             let merged = runs[last].text + text
-            if merged.count == runs[last].columns + 1 {
+            if merged.count == runs[last].cells + 1 {
                 runs[last].text = merged
                 runs[last].columns += 1
+                runs[last].cells += 1
                 return
             }
         }
-        runs.append(TextRun(text, style: style, isCursor: isCursor, columns: width))
+        runs.append(TextRun(text, style: style, isCursor: isCursor, columns: width, cells: 1))
     }
 
     /// The cursor sits on the right half of the wide character just appended,
     /// so that whole character is the cursor cell. Wide runs never merge, so
     /// the last run is exactly that character.
     mutating func markLastCursor() {
-        guard let last = runs.indices.last, runs[last].columns == 2, runs[last].text.count == 1 else { return }
+        guard let last = runs.indices.last, runs[last].cells == 1, runs[last].columns == 2 else { return }
         runs[last].isCursor = true
     }
 
@@ -287,8 +289,10 @@ struct RunBuilder {
                 runs.removeLast()
                 continue
             }
+            guard last.cells > 1 else { break }
             runs[runs.count - 1].text.removeLast(blanks)
             runs[runs.count - 1].columns -= blanks
+            runs[runs.count - 1].cells -= blanks
             break
         }
         return runs
@@ -297,7 +301,7 @@ struct RunBuilder {
 
 extension TextRun {
     fileprivate func mergesNarrow(_ style: CellStyle) -> Bool {
-        !isCursor && columns == text.count && self.style == style
+        !isCursor && columns == cells && text.count == cells && self.style == style
     }
 }
 

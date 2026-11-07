@@ -30,10 +30,14 @@ extension TerminalSnapshot {
             for run in line.runs {
                 var style = run.style
                 if showCursor && run.isCursor { style.inverse.toggle() }
-                let width = run.columns / max(run.text.count, 1)
+                if run.cells == 1 {
+                    cells.append(paint(run.text, row: row, column: column, width: run.columns, style: style))
+                    column += run.columns
+                    continue
+                }
                 for character in run.text {
-                    cells.append(paint(String(character), row: row, column: column, width: width, style: style))
-                    column += width
+                    cells.append(paint(String(character), row: row, column: column, width: 1, style: style))
+                    column += 1
                 }
             }
         }

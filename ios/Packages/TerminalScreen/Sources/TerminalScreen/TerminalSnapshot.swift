@@ -40,22 +40,34 @@ public struct CellStyle: Hashable, Sendable {
     var paintsBlank: Bool { background != nil || inverse || underline || strikethrough }
 }
 
-/// Consecutive cells of one row sharing a style. Either narrow cells, one
-/// Character per column, or a single wide cell spanning two columns — so a
-/// renderer can place every glyph on the grid without measuring it. The
-/// cursor's cell is always a run of its own.
+/// Consecutive cells of one row sharing a style, shaped so a renderer can
+/// place every glyph on the grid without measuring it. A run of several
+/// cells holds narrow cells of exactly one Character each. A run of one cell
+/// holds that cell's whole grapheme, which may be several Swift Characters
+/// when the terminal clusters differently, across `columns` columns (2 for a
+/// wide character). The cursor's cell is always a run of its own.
 public struct TextRun: Hashable, Sendable {
     public var text: String
     public var style: CellStyle
     public var isCursor: Bool
     /// Grid columns the run covers.
     public var columns: Int
+    /// Grid cells the run holds; a wide cell is one cell over two columns.
+    public var cells: Int
 
-    public init(_ text: String, style: CellStyle = .plain, isCursor: Bool = false, columns: Int? = nil) {
+    /// Without `columns`, the text is narrow cells of one Character each.
+    public init(
+        _ text: String,
+        style: CellStyle = .plain,
+        isCursor: Bool = false,
+        columns: Int? = nil,
+        cells: Int? = nil
+    ) {
         self.text = text
         self.style = style
         self.isCursor = isCursor
         self.columns = columns ?? text.count
+        self.cells = cells ?? (columns == nil ? text.count : 1)
     }
 }
 

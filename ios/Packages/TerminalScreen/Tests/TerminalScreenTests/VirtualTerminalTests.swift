@@ -213,6 +213,18 @@ struct TerminalSnapshotPaintingTests {
         #expect(cells.last?.text == "X")
     }
 
+    @Test("A cell the terminal clusters into several Swift Characters paints as one cell")
+    func clusteredCellStaysOneCell() throws {
+        let cells = try screen("\(esc)[?2027hA\u{05C8}X\(esc)[?25l").paintedCells()
+        #expect(cells.map(\.text) == ["A\u{05C8}", "X"])
+        #expect(cells.map(\.column) == [0, 1])
+        #expect(cells.map(\.width) == [1, 1])
+
+        let wide = try screen("\(esc)[?2027h完\u{05C8}\(esc)[1D", columns: 4, rows: 1)
+        #expect(wide.cursor == TerminalCursor(column: 1, row: 0))
+        #expect(wide.lines[0].runs.filter(\.isCursor).map(\.columns) == [2])
+    }
+
     @Test("The cursor cell paints inverted in the default colors; hiding it restores them")
     func cursorPaintsInverted() throws {
         let snapshot = try screen("$ ")
