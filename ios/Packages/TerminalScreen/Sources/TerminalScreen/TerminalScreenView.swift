@@ -65,6 +65,15 @@ extension TerminalSnapshot {
     }
 }
 
+extension PaintedCell {
+    /// Drawn as geometry only when the cell is the line character alone; a
+    /// cell that also carries a combining mark keeps its font glyph.
+    var boxDrawing: BoxDrawing? {
+        guard text.count == 1, let character = text.first else { return nil }
+        return BoxDrawing(character)
+    }
+}
+
 /// A horizontal stretch of one background color.
 public struct BackgroundSpan: Hashable, Sendable {
     public var row: Int
@@ -138,7 +147,7 @@ struct TerminalCanvas: View {
             var boxes: [BoxStroke: (segments: Path, arcs: Path)] = [:]
             for painted in cells where painted.text != " " {
                 let rect = cell.rect(row: painted.row, column: painted.column, width: painted.width)
-                if let box = painted.text.first.flatMap(BoxDrawing.init) {
+                if let box = painted.boxDrawing {
                     let stroke = BoxStroke(painted)
                     boxes[stroke, default: (Path(), Path())].segments
                         .addPath(box.segments(in: rect, thickness: stroke.lineWidth))

@@ -47,27 +47,30 @@ public struct CellStyle: Hashable, Sendable {
 /// when the terminal clusters differently, across `columns` columns (2 for a
 /// wide character). The cursor's cell is always a run of its own.
 public struct TextRun: Hashable, Sendable {
-    public var text: String
-    public var style: CellStyle
-    public var isCursor: Bool
+    public internal(set) var text: String
+    public internal(set) var style: CellStyle
+    public internal(set) var isCursor: Bool
     /// Grid columns the run covers.
-    public var columns: Int
+    public internal(set) var columns: Int
     /// Grid cells the run holds; a wide cell is one cell over two columns.
-    public var cells: Int
+    public internal(set) var cells: Int
 
-    /// Without `columns`, the text is narrow cells of one Character each.
-    public init(
-        _ text: String,
-        style: CellStyle = .plain,
-        isCursor: Bool = false,
-        columns: Int? = nil,
-        cells: Int? = nil
-    ) {
+    /// Narrow cells of one Character each.
+    public init(_ text: String, style: CellStyle = .plain, isCursor: Bool = false) {
+        self.init(text, style: style, isCursor: isCursor, columns: text.count, cells: text.count)
+    }
+
+    /// One terminal cell holding `text` whole across `columns` columns.
+    init(cell text: String, columns: Int, style: CellStyle, isCursor: Bool) {
+        self.init(text, style: style, isCursor: isCursor, columns: columns, cells: 1)
+    }
+
+    private init(_ text: String, style: CellStyle, isCursor: Bool, columns: Int, cells: Int) {
         self.text = text
         self.style = style
         self.isCursor = isCursor
-        self.columns = columns ?? text.count
-        self.cells = cells ?? (columns == nil ? text.count : 1)
+        self.columns = columns
+        self.cells = cells
     }
 }
 

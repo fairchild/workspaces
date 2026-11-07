@@ -270,7 +270,7 @@ struct RunBuilder {
                 return
             }
         }
-        runs.append(TextRun(text, style: style, isCursor: isCursor, columns: width, cells: 1))
+        runs.append(TextRun(cell: text, columns: width, style: style, isCursor: isCursor))
     }
 
     /// The cursor sits on the right half of the wide character just appended,
