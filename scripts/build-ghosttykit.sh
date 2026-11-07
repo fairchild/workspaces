@@ -25,10 +25,15 @@ set -euo pipefail
 #                     assert_macos_deployment_target below).
 #
 # Optional environment variables:
-#   GHOSTTY_DIR       Existing Ghostty checkout (must already be at pinned commit).
+#   GHOSTTY_DIR       Existing Ghostty checkout or git worktree (must already be
+#                     at pinned commit).
 #   GHOSTTY_CACHE_DIR Cache root for auto-cloned Ghostty checkout.
 #   GHOSTTY_ZIG_BIN   Zig executable to use for building Ghostty.
 #   GHOSTTY_ZIG_CACHE_DIR Zig cache root for building Ghostty.
+#   GHOSTTY_KEEP_SYMBOLS  Set to 1 to keep Zig function names and debug info in
+#                     the archive (no -Dstrip, no post-build strip), so a
+#                     `sample` of a hung test names Ghostty's frames and locks.
+#                     Same ReleaseFast code; the archive grows from ~25 MB to ~170 MB.
 #   GHOSTTY_ARCH_DIAGNOSTICS  Set to 0 to silence the post-build architecture
 #                     report (host arch, zig binary arch, xcframework slice
 #                     info). Defaults to 1. Added to chase down a "no such
@@ -64,6 +69,7 @@ GHOSTTY_PIN_STAMP_NAME=".ghostty-pin"
 HOMEBREW_ZIG_FORMULA="zig"
 HOMEBREW_ZIG_BIN="$ARM64_HOMEBREW_PREFIX/opt/$HOMEBREW_ZIG_FORMULA/bin/zig"
 GHOSTTY_ARCH_DIAGNOSTICS="${GHOSTTY_ARCH_DIAGNOSTICS:-1}"
+GHOSTTY_KEEP_SYMBOLS="${GHOSTTY_KEEP_SYMBOLS:-0}"
 # The app's minimum macOS (Package.swift `.macOS(.v14)`). Objects built for a
 # newer minimum, or for another platform entirely, cannot link into the app.
 MACOS_DEPLOYMENT_TARGET="14.0"
@@ -425,7 +431,9 @@ postprocess_xcframework() {
 
   while IFS= read -r archive; do
     repair_ghostty_archive_if_needed "$archive"
-    xcrun strip -S -x "$archive"
+    if [[ "$GHOSTTY_KEEP_SYMBOLS" != "1" ]]; then
+      xcrun strip -S -x "$archive"
+    fi
   done < <(find "$framework_dir" -type f -name "$GHOSTTY_ARCHIVE_NAME")
 }
 
@@ -557,7 +565,7 @@ resolve_ghostty_dir() {
 }
 
 ensure_ghostty_checkout() {
-  if [[ -d "$GHOSTTY_DIR/.git" ]]; then
+  if [[ -e "$GHOSTTY_DIR/.git" ]]; then
     return
   fi
 
@@ -595,6 +603,10 @@ ensure_pinned_commit() {
 }
 
 build_ghostty_xcframework() {
+  local symbol_args=()
+  if [[ "$GHOSTTY_KEEP_SYMBOLS" == "1" ]]; then
+    symbol_args=(-Dstrip=false)
+  fi
   (
     cd "$GHOSTTY_DIR"
     mkdir -p "$ZIG_CACHE_DIR/local" "$ZIG_CACHE_DIR/global"
@@ -604,7 +616,8 @@ build_ghostty_xcframework() {
       -Demit-xcframework=true \
       -Demit-macos-app=false \
       -Dxcframework-target=native \
-      -Doptimize=ReleaseFast
+      -Doptimize=ReleaseFast \
+      ${symbol_args[@]+"${symbol_args[@]}"}
   )
 }
 
