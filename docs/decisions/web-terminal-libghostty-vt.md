@@ -49,6 +49,15 @@ The data comes from headless Chromium 149 against `next build` output: `node web
 | 128 KB/frame: write p95, render p95 | 7.9 ms, 2.6 ms | 1.4 ms, 3.0 ms (small; every row is dirty, so the snapshot rebuilds the full grid) |
 | Frame interval p95, both loads | 17–19 ms (60 fps) | 17–18 ms (60 fps) |
 
-Screenshots (left ghostty-web, right libghostty-vt):
+Screenshots from the same run:
 
-<!-- evidence links -->
+| | ghostty-web 0.4.0 | libghostty-vt 1.0.0 |
+|---|---|---|
+| Fixture `agent-turn.vt` | ![ghostty-web fixture](https://evidence.cloudcompute.com/workspaces/pr-1853/uOw7TV8MzRBV1ZDel1VrUA/20261107-174655-terminal-vt-fixture-ghostty-web.png) | ![libghostty-vt fixture](https://evidence.cloudcompute.com/workspaces/pr-1853/N2lrzaFlz6g7ga_p4qsVDA/20261107-174656-terminal-vt-fixture-ghostty-vt.png) |
+| Live ttyd shell | ![ghostty-web ttyd](https://evidence.cloudcompute.com/workspaces/pr-1853/1WEWVHeE6JOAw_pDruVQyA/20261107-174658-terminal-vt-ttyd-live-ghostty-web.png) | ![libghostty-vt ttyd](https://evidence.cloudcompute.com/workspaces/pr-1853/db6lOwpIkiA3zlICZ1OzYg/20261107-174659-terminal-vt-ttyd-live-ghostty-vt.png) |
+| Scrollback | ![ghostty-web scrollback](https://evidence.cloudcompute.com/workspaces/pr-1853/7gB8bvGq09KbBPhCIdXUCw/20261107-174659-terminal-vt-ttyd-scrollback-ghostty-web.png) | ![libghostty-vt scrollback](https://evidence.cloudcompute.com/workspaces/pr-1853/jYxpbIqNmXNpoEEUv4Sgzw/20261107-174700-terminal-vt-ttyd-scrollback-ghostty-vt.png) |
+| IME commit (mock PTY) | ![ghostty-web IME](https://evidence.cloudcompute.com/workspaces/pr-1853/thGfsoNJul4GfyrqR5xGiQ/20261107-174657-terminal-vt-ime-mock-ghostty-web.png) | ![libghostty-vt IME](https://evidence.cloudcompute.com/workspaces/pr-1853/mZwpBsnb3mEU6eZFA4oBeA/20261107-174658-terminal-vt-ime-mock-ghostty-vt.png) |
+| Stress stream tail | ![ghostty-web stress](https://evidence.cloudcompute.com/workspaces/pr-1853/lPf4uPOouc9tZ5kWYvcxeQ/20261107-174701-terminal-vt-stress-tail-ghostty-web.png) | ![libghostty-vt stress](https://evidence.cloudcompute.com/workspaces/pr-1853/b3QhrbDSPSU0wXeWlcr-ig/20261107-174702-terminal-vt-stress-tail-ghostty-vt.png) |
+| Selection, then resize | — | ![libghostty-vt selection](https://evidence.cloudcompute.com/workspaces/pr-1853/i8b5SbrpkpuFiHz3nJe07g/20261107-174700-terminal-vt-ttyd-selection-ghostty-vt.png) ![libghostty-vt resize](https://evidence.cloudcompute.com/workspaces/pr-1853/dHiK4Ps8Dv5_VMZ3BUnU4A/20261107-174701-terminal-vt-ttyd-resize-ghostty-vt.png) |
+
+Input matrix, 32 cases, differences highlighted: [input-matrix.png](https://evidence.cloudcompute.com/workspaces/pr-1853/BxRiknI1e6zixPaZtmusww/20261107-174657-terminal-vt-input-matrix.png)
