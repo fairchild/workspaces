@@ -240,6 +240,12 @@ export class VtTerminal {
 	private readonly decoder = new TextDecoder();
 	private readonly encoder = new TextEncoder();
 	private readonly k: Record<string, number>;
+	private onReply: ((bytes: Uint8Array) => void) | null = null;
+	/**
+	 * Replies arrive inside ghostty_terminal_vt_write. They go out after it
+	 * returns, so a transport that echoes synchronously cannot re-enter the parser.
+	 */
+	private pendingReplies: Uint8Array[] = [];
 
 	constructor(module: VtModule, options: VtTerminalOptions) {
 		this.m = module;
@@ -305,9 +311,9 @@ export class VtTerminal {
 		this.setColors(options);
 
 		if (options.onReply) {
-			const onReply = options.onReply;
+			this.onReply = options.onReply;
 			const callback = module.installCallback((_terminal, _userdata, ptr, length) => {
-				onReply(this.m.u8().slice(ptr, ptr + length));
+				this.pendingReplies.push(this.m.u8().slice(ptr, ptr + length));
 			});
 			check("set(write_pty)", this.e.ghostty_terminal_set(this.terminal, this.k.optWritePty, callback));
 		}
@@ -355,6 +361,10 @@ export class VtTerminal {
 		this.m.u8().set(bytes, ptr);
 		this.e.ghostty_terminal_vt_write(this.terminal, ptr, bytes.length);
 		this.m.free(ptr, bytes.length);
+		if (this.pendingReplies.length === 0 || !this.onReply) return;
+		const replies = this.pendingReplies;
+		this.pendingReplies = [];
+		for (const reply of replies) this.onReply(reply);
 	}
 
 	resize(columns: number, rows: number, cellWidthPx = 0, cellHeightPx = 0): void {

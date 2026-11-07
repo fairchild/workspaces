@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { terminalVtSpikeEnabled } from "@/app/(app)/dev/terminal-vt/gate";
 import { ghosttyKeyName } from "./canvas-terminal";
-import { GHOSTTY_VT_RELEASE, instantiateVt, verifySha256, VtTerminal } from "./ghostty-vt";
+import { GHOSTTY_VT_RELEASE, instantiateVt, VtModule, verifySha256, VtTerminal } from "./ghostty-vt";
 import { backgroundSpans, paintedCells } from "./paint";
 import { PLAIN_STYLE, RunBuilder, selectionText, type TerminalSnapshot } from "./snapshot";
 
@@ -150,6 +150,40 @@ describe.skipIf(!existsSync(wasmPath))("libghostty-vt 1.0 release wasm (run `pnp
 		expect(decode(t.encodeKey(up))).toBe("\x1bOA");
 		t.write("\x1b[?2004h");
 		expect(decode(t.encodePaste("ls\x1b[201~id\r"))).toBe("\x1b[200~ls [201~id\r\x1b[201~");
+		t.dispose();
+	});
+});
+
+describe.skipIf(!existsSync(wasmPath))("replies and re-entry", () => {
+	it("sends replies after vt_write returns, so a synchronous echo cannot re-enter the parser", async () => {
+		const bytes = readFileSync(wasmPath);
+		const { instance } = await WebAssembly.instantiate(
+			bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+			{},
+		);
+		const exports = { ...instance.exports } as Record<string, unknown>;
+		const vtWrite = exports.ghostty_terminal_vt_write as (...args: number[]) => void;
+		let inParser = 0;
+		exports.ghostty_terminal_vt_write = (...args: number[]) => {
+			inParser++;
+			try {
+				vtWrite(...args);
+			} finally {
+				inParser--;
+			}
+		};
+		const m = new VtModule({ exports } as unknown as WebAssembly.Instance);
+		const parserDepthAtReply: number[] = [];
+		const t: VtTerminal = new VtTerminal(m, {
+			columns: 20,
+			rows: 3,
+			onReply: () => {
+				parserDepthAtReply.push(inParser);
+				t.write("echo");
+			},
+		});
+		t.write("\x1b[c");
+		expect(parserDepthAtReply).toEqual([0]);
 		t.dispose();
 	});
 });
