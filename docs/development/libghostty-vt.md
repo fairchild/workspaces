@@ -136,6 +136,15 @@ What the wasm build needs beyond the C notes above:
   modifier and sends the key's own character (Option+B → `ESC b`); Option
   composing drops Alt and sends the composed text (`∫`). The default is
   `"false"`, Ghostty's default.
+- `GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES` defaults to 10,000 bytes,
+  which history keeps as one page, a few hundred rows at 80 columns. The
+  binding lifts it to `SIZE_MAX` so `scrollbackLines` (10,000 by default)
+  is the limit.
+- Syncing the mouse encoder from the terminal clears its last-cell state, so
+  the binding syncs only after a write; otherwise motion within one cell
+  would be reported on every pixel.
+- On the alternate screen with mode 1007 on, the wheel sends arrow keys
+  rather than scrolling, which has nothing to scroll there.
 - The library maps mouse pixels to cells with integer cell sizes, and canvas
   cells are fractional CSS pixels, so the front end scales pointer positions
   onto a whole-pixel grid before encoding.
