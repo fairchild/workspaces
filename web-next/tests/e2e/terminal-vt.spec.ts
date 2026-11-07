@@ -109,7 +109,24 @@ test.describe("parity screen", () => {
 
 	test("Ctrl+click opens an OSC 8 link, and hovering with Ctrl shows it", async ({ page }) => {
 		const g = await open(page, "source=parity");
-		const { x, y } = center(g, 9, await rowOf(page, "links:"));
+		const row = await rowOf(page, "links:");
+		const { x, y } = center(g, 9, row);
+		const probe = await page.evaluate(
+			({ x, y, row }) => {
+				const vt = window.__terminalVt!.vt;
+				const s = vt.terminal.snapshot();
+				return {
+					hit: document.elementFromPoint(x, y)?.tagName ?? null,
+					runs: s.lines[row].map((r) => [r.column, r.cells.join(""), r.style.hyperlink] as const),
+					uri: vt.terminal.hyperlinkAt({ row, column: 9 }),
+				};
+			},
+			{ x, y, row },
+		);
+		const detail = JSON.stringify(probe);
+		expect(probe.hit, detail).toBe("CANVAS");
+		expect(probe.uri, detail).toBe("https://ghostty.org/docs");
+		expect(probe.runs.some(([, text, link]) => link && text.includes("ghostty.org/docs")), detail).toBe(true);
 		await page.keyboard.down("Control");
 		await page.mouse.move(x, y);
 		await expect.poll(() => page.evaluate(() => window.__terminalVt!.vt.canvas.style.cursor)).toBe("pointer");
