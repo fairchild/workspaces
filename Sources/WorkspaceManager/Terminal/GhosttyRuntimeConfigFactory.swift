@@ -15,8 +15,7 @@ enum GhosttyRuntimeConfigFactory {
                 GhosttyAppManager.wakeup(userdata)
             },
             action_cb: { app, target, action in
-                guard let app else { return false }
-                return GhosttyAppManager.action(app, target: target, action: action)
+                GhosttyAppManager.action(app, target: target, action: action)
             },
             read_clipboard_cb: { userdata, location, state, mimes, mimeCount, wantsAvailable in
                 GhosttyClipboardBridge.read(

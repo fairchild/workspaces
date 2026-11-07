@@ -50,10 +50,10 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 OUT_DIR="$PROJECT_DIR/Frameworks"
 
 # Pinned versions for reproducible builds.
-GHOSTTY_COMMIT="492300cad104195411d12217dd22f1cd05f31376"
-ZIG_VERSION="0.16.0"
+GHOSTTY_COMMIT="0fa3d577a5614150ff8e2c152de5fb9d5c6d2dec"
+ZIG_VERSION="0.17.0"
 ARM64_HOMEBREW_PREFIX="/opt/homebrew"
-# Homebrew carries 0.16 as the unversioned `zig` formula; no `zig@0.16` keg
+# Homebrew carries 0.17 as the unversioned `zig` formula; no `zig@0.17` keg
 # exists. That formula floats to the next Zig release, so every Homebrew
 # candidate is version-checked against ZIG_VERSION before it is accepted —
 # a floated formula falls through to the version-locked mise runner instead
@@ -618,9 +618,8 @@ build_ghostty_xcframework() {
   (
     cd "$GHOSTTY_DIR"
     mkdir -p "$ZIG_CACHE_DIR/local" "$ZIG_CACHE_DIR/global"
-    "${ZIG_RUNNER[@]}" build \
+    ZIG_GLOBAL_CACHE_DIR="$ZIG_CACHE_DIR/global" "${ZIG_RUNNER[@]}" build \
       --cache-dir "$ZIG_CACHE_DIR/local" \
-      --global-cache-dir "$ZIG_CACHE_DIR/global" \
       -Demit-xcframework=true \
       -Demit-macos-app=false \
       -Dxcframework-target=native \

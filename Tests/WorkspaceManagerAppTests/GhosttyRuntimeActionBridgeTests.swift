@@ -21,20 +21,26 @@ struct GhosttyRuntimeActionBridgeTests {
     func desktopNotificationDispatches() async throws {
         var action = ghostty_action_s()
         action.tag = GHOSTTY_ACTION_DESKTOP_NOTIFICATION
-        // Leave title/body as null cstrings — the bridge tolerates nil and the
-        // resolver below short-circuits before we'd dereference them.
         let target = ghostty_target_s()
         let scheduledCount = LockedCounter()
-        let handled = GhosttyRuntimeActionBridge.handle(
-            target: target,
-            action: action,
-            resolveSurfaceAddress: { _ in 0xDEAD_BEEF },
-            resolveSurfaceView: { _ in nil },
-            runOnMainAsync: { closure in
-                scheduledCount.increment()
-                _ = closure  // Don't actually run; we only assert it was queued.
+        // Ghostty always sends both strings (non-null by the header contract);
+        // an untitled OSC 9 notification arrives as an empty title.
+        let handled = "".withCString { title in
+            "Build finished".withCString { body in
+                action.action.desktop_notification.title = title
+                action.action.desktop_notification.body = body
+                return GhosttyRuntimeActionBridge.handle(
+                    target: target,
+                    action: action,
+                    resolveSurfaceAddress: { _ in 0xDEAD_BEEF },
+                    resolveSurfaceView: { _ in nil },
+                    runOnMainAsync: { closure in
+                        scheduledCount.increment()
+                        _ = closure  // Don't actually run; we only assert it was queued.
+                    }
+                )
             }
-        )
+        }
         #expect(handled == true)
         #expect(scheduledCount.value == 1)
     }
