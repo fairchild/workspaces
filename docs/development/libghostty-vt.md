@@ -1,8 +1,9 @@
 # libghostty-vt in WorkSpaces
 
-Status as of 2026-11-07: the desktop app builds GhosttyKit from the `vt-1.0.0`
-tag, and the mobile variant renders terminal output through libghostty-vt 1.0.0
-in a debug-only preview. Check it still holds:
+Status as of 2026-11-07: the mobile variant renders terminal output through
+libghostty-vt 1.0.0 in a debug-only preview. The desktop app still builds
+GhosttyKit from its earlier pin; moving it to the `vt-1.0.0` cut is tracked
+separately. Check it still holds:
 `swift test --package-path ios/Packages/TerminalScreen` passes, and its
 `Links libghostty-vt 1.x` test reads the library version at runtime.
 
@@ -17,10 +18,10 @@ Ghostty ships two C libraries from the same source tree:
 | How we get it | Built from source by `scripts/build-ghosttykit.sh` | Ghostty's signed release xcframework, pinned by URL and checksum |
 | Who links it | The macOS app | `ios/Packages/TerminalScreen` |
 
-The `vt-1.0.0` tag (`0fa3d57`) is the 1.0 cut of both, so the desktop pin and
-the mobile package now name the same Ghostty commit. They may drift apart
-later: the mobile package only has to follow vt releases, while the desktop pin
-follows whatever GhosttyKit fixes we need.
+The `vt-1.0.0` tag (`0fa3d57`) is the 1.0 cut of both. The two pins are
+independent: the mobile package follows vt releases, and the desktop pin
+(`GHOSTTY_COMMIT` in `scripts/build-ghosttykit.sh`) follows whatever GhosttyKit
+fixes the app needs.
 
 ## Why vt stays out of the desktop app
 
@@ -28,8 +29,9 @@ GhosttyKit already contains a full terminal. Its embedding API exports no
 `ghostty_terminal_*` symbols, and the app reads screen state through the
 surface API, so a second emulator in the app would have no caller. Linking the
 two static archives together also fails outright. Both carry a Zig runtime, so
-the link reports 35 duplicate symbols (the ubsan runtime and `memset`). They
-also share 834 symbols from vendored C libraries (wuffs, simdutf, highway).
+a test link at `vt-1.0.0` reported 35 duplicate symbols (the ubsan runtime and
+`memset`). They also share 834 symbols from vendored C libraries (wuffs,
+simdutf, highway).
 Making that link work would mean building one of them from source without its
 runtime, which costs far more than it returns while nothing on the desktop
 needs a headless emulator.
