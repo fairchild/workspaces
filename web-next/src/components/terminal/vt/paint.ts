@@ -20,6 +20,7 @@ export interface PaintedCell {
 	italic: boolean;
 	underline: boolean;
 	strikethrough: boolean;
+	overline: boolean;
 }
 
 export interface Selection {
@@ -66,6 +67,7 @@ const BLANK: CellStyle = {
 	invisible: false,
 	strikethrough: false,
 	underline: false,
+	overline: false,
 };
 
 function paint(
@@ -93,6 +95,7 @@ function paint(
 		italic: style.italic,
 		underline: style.underline,
 		strikethrough: style.strikethrough,
+		overline: style.overline,
 	};
 }
 
@@ -191,7 +194,7 @@ export function paintSnapshot(
 	ctx.textBaseline = "alphabetic";
 	let font = "";
 	for (const c of cells) {
-		if (c.text === " " && !c.underline && !c.strikethrough) continue;
+		if (c.text === " " && !c.underline && !c.strikethrough && !c.overline) continue;
 		const x = c.column * cw;
 		const y = c.row * ch;
 		ctx.fillStyle = css(c.fg);
@@ -217,6 +220,7 @@ export function paintSnapshot(
 		}
 		if (c.underline) ctx.fillRect(x, y + cell.baseline + 2, c.width * cw, 1);
 		if (c.strikethrough) ctx.fillRect(x, y + Math.round(ch / 2), c.width * cw, 1);
+		if (c.overline) ctx.fillRect(x, y, c.width * cw, 1);
 	}
 	ctx.globalAlpha = 1;
 

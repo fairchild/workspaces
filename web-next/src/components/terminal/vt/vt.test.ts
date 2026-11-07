@@ -152,6 +152,29 @@ describe.skipIf(!existsSync(wasmPath))("libghostty-vt 1.0 release wasm (run `pnp
 		expect(decode(t.encodePaste("ls\x1b[201~id\r"))).toBe("\x1b[200~ls [201~id\r\x1b[201~");
 		t.dispose();
 	});
+
+	it("carries overline into the snapshot", async () => {
+		const { t } = await terminal(20, 2);
+		t.write("\x1b[53mX\x1b[55mY");
+		const [x, y] = t.snapshot().lines[0];
+		expect(x).toMatchObject({ cells: ["X"], style: { overline: true } });
+		expect(y).toMatchObject({ cells: ["Y"], style: { overline: false } });
+		t.dispose();
+	});
+
+	it("ignores writes after dispose and reuses the freed reply slot", async () => {
+		const { m, t, replies } = await terminal(20, 2);
+		const table = m.exports.__indirect_function_table;
+		const size = table.length;
+		t.dispose();
+		t.write("\x1b[c");
+		expect(replies).toEqual([]);
+		const next = new VtTerminal(m, { columns: 20, rows: 2, onReply: (b) => replies.push(new TextDecoder().decode(b)) });
+		expect(table.length).toBe(size);
+		next.write("\x1b[c");
+		expect(replies).toEqual(["\x1b[?62;22c"]);
+		next.dispose();
+	});
 });
 
 describe.skipIf(!existsSync(wasmPath))("replies and re-entry", () => {

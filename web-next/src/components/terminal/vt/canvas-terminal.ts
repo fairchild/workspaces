@@ -157,7 +157,7 @@ export class CanvasTerminal {
 	}
 
 	write(data: Uint8Array | string): void {
-		if (!this.terminal) return;
+		if (!this.terminal || this.disposed) return;
 		this.terminal.write(data);
 		this.requestFrame();
 	}
@@ -351,6 +351,8 @@ export class CanvasTerminal {
 			return;
 		}
 		if (event.ctrlKey && event.shiftKey && (event.code === "KeyC" || event.code === "KeyV")) return;
+		// Shift+Insert pastes and Ctrl+Insert copies on Linux and Windows.
+		if (!mac && event.code === "Insert" && event.shiftKey !== event.ctrlKey && !event.altKey) return;
 		const key = this.keyCodes.get(ghosttyKeyName(event.code)) ?? 0;
 		const mods =
 			(event.shiftKey ? MODS.shift : 0) |

@@ -20,6 +20,7 @@ export interface CellStyle {
 	invisible: boolean;
 	strikethrough: boolean;
 	underline: boolean;
+	overline: boolean;
 }
 
 export interface TextRun {
@@ -60,6 +61,7 @@ export const PLAIN_STYLE: CellStyle = {
 	invisible: false,
 	strikethrough: false,
 	underline: false,
+	overline: false,
 };
 
 export function sameStyle(a: CellStyle, b: CellStyle): boolean {
@@ -72,13 +74,14 @@ export function sameStyle(a: CellStyle, b: CellStyle): boolean {
 		a.inverse === b.inverse &&
 		a.invisible === b.invisible &&
 		a.strikethrough === b.strikethrough &&
-		a.underline === b.underline
+		a.underline === b.underline &&
+		a.overline === b.overline
 	);
 }
 
 /** A blank in this style still paints something: a background, or a line through it. */
 export function paintsBlank(style: CellStyle): boolean {
-	return style.bg !== null || style.inverse || style.underline || style.strikethrough;
+	return style.bg !== null || style.inverse || style.underline || style.strikethrough || style.overline;
 }
 
 /**

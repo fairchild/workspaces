@@ -148,12 +148,20 @@ export class VtModule {
 		}
 	}
 
+	private freeCallbackSlots: number[] = [];
+
 	/** Installs a JS function in the module's table; returns its C function pointer. */
 	installCallback(fn: (a: number, b: number, c: number, d: number) => void): number {
 		const table = this.exports.__indirect_function_table;
-		const index = table.grow(1);
+		const index = this.freeCallbackSlots.pop() ?? table.grow(1);
 		table.set(index, callbackTrampoline(fn));
 		return index;
+	}
+
+	/** Empties a slot from installCallback so the next terminal reuses it. */
+	releaseCallback(index: number): void {
+		this.exports.__indirect_function_table.set(index, null);
+		this.freeCallbackSlots.push(index);
 	}
 }
 
@@ -213,6 +221,7 @@ const FAINT = 1 << 2;
 const INVERSE = 1 << 4;
 const INVISIBLE = 1 << 5;
 const STRIKETHROUGH = 1 << 6;
+const OVERLINE = 1 << 7;
 const UNDERLINE_MASK = 0b111 << 8;
 
 /**
@@ -246,6 +255,8 @@ export class VtTerminal {
 	 * returns, so a transport that echoes synchronously cannot re-enter the parser.
 	 */
 	private pendingReplies: Uint8Array[] = [];
+	private replyCallback: number | null = null;
+	private disposed = false;
 
 	constructor(module: VtModule, options: VtTerminalOptions) {
 		this.m = module;
@@ -312,10 +323,10 @@ export class VtTerminal {
 
 		if (options.onReply) {
 			this.onReply = options.onReply;
-			const callback = module.installCallback((_terminal, _userdata, ptr, length) => {
+			this.replyCallback = module.installCallback((_terminal, _userdata, ptr, length) => {
 				this.pendingReplies.push(this.m.u8().slice(ptr, ptr + length));
 			});
-			check("set(write_pty)", this.e.ghostty_terminal_set(this.terminal, this.k.optWritePty, callback));
+			check("set(write_pty)", this.e.ghostty_terminal_set(this.terminal, this.k.optWritePty, this.replyCallback));
 		}
 	}
 
@@ -355,6 +366,7 @@ export class VtTerminal {
 
 	/** Never fails: partial sequences wait for the next write. */
 	write(data: Uint8Array | string): void {
+		if (this.disposed) return;
 		const bytes = typeof data === "string" ? this.encoder.encode(data) : data;
 		if (bytes.length === 0) return;
 		const ptr = this.m.alloc(bytes.length);
@@ -595,6 +607,7 @@ export class VtTerminal {
 			invisible: (flags & INVISIBLE) !== 0,
 			strikethrough: (flags & STRIKETHROUGH) !== 0,
 			underline: (flags & UNDERLINE_MASK) !== 0,
+			overline: (flags & OVERLINE) !== 0,
 		};
 	}
 
@@ -642,7 +655,10 @@ export class VtTerminal {
 		};
 	}
 
+	/** Frees every handle; later writes are ignored. */
 	dispose(): void {
+		if (this.disposed) return;
+		this.disposed = true;
 		const e = this.e;
 		e.ghostty_key_event_free(this.keyEvent);
 		e.ghostty_key_encoder_free(this.keyEncoder);
@@ -652,6 +668,7 @@ export class VtTerminal {
 		e.ghostty_terminal_free(this.terminal);
 		this.m.free(this.graphemeBuffer, this.graphemeCapacity);
 		this.m.free(this.scratch, this.scratchSize);
+		if (this.replyCallback !== null) this.m.releaseCallback(this.replyCallback);
 	}
 }
 
