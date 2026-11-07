@@ -1,27 +1,28 @@
 "use client";
 
 /*
- * The #1846 spike harness. Two panes of equal size — ghostty-web 0.4.0 (the
- * drawer's renderer today) and a canvas over Ghostty's release
- * libghostty-vt 1.0 wasm — fed identical bytes from one source: the recorded
- * agent-turn fixture, the mock PTY, a live ttyd WebSocket, or a synthetic
- * stress stream. It records per-frame cost, replays a fixed matrix of
- * synthetic key, IME and paste events into both input layers, and publishes
- * everything as JSON in #spike-metrics for the evidence run to read.
+ * The terminal-vt comparison harness (#1846, #1847). Two panes of equal size —
+ * ghostty-web 0.4.0 (the drawer's renderer until #1848) and the canvas over
+ * Ghostty's release libghostty-vt 1.0 wasm — fed identical bytes from one
+ * source: the recorded agent-turn fixture, the mock PTY, a live ttyd
+ * WebSocket, a synthetic stress stream, or the parity screen (scrollback, an
+ * OSC 8 link, a blinking bar cursor) the e2e spec drives. It records
+ * per-frame cost, replays a fixed matrix of synthetic key, IME and paste
+ * events into both input layers, and publishes everything as JSON in
+ * #spike-metrics for the evidence run to read.
  *
- * URL: ?source=fixture|mock|ttyd|stress &pane=both|web|vt &build=fast|small
- *      &ws=ws://127.0.0.1:7681/ws &mb=2
+ * URL: ?source=fixture|mock|ttyd|stress|parity &pane=both|web|vt
+ *      &optionAsAlt=false|true|left|right &ws=ws://127.0.0.1:7681/ws &mb=2
  */
 import { useEffect, useRef, useState } from "react";
 import { openMockPty } from "@/components/terminal/mock-pty";
 import { TERMINAL_THEMES } from "@/components/terminal/terminal-drawer";
 import type { TerminalConnection } from "@/components/terminal/transport";
 import { openTtydSocket } from "@/components/terminal/ttyd-transport";
-import { CanvasTerminal } from "@/components/terminal/vt/canvas-terminal";
-import type { VtBuild } from "@/components/terminal/vt/ghostty-vt";
+import { CanvasTerminal, type MacOptionAsAlt } from "@/components/terminal/vt/canvas-terminal";
 
 type GhosttyTerminal = import("ghostty-web").Terminal;
-type Source = "fixture" | "mock" | "ttyd" | "stress";
+type Source = "fixture" | "mock" | "ttyd" | "stress" | "parity";
 type Pane = "both" | "web" | "vt";
 
 interface Sink {
@@ -42,12 +43,20 @@ function params() {
 	return {
 		source: (q.get("source") ?? "fixture") as Source,
 		pane: (q.get("pane") ?? "both") as Pane,
-		build: (q.get("build") ?? "fast") as VtBuild,
+		optionAsAlt: (q.get("optionAsAlt") ?? "false") as MacOptionAsAlt,
 		ws: q.get("ws") ?? "ws://127.0.0.1:7681/ws",
 		mb: Number(q.get("mb") ?? "2"),
 		chunk: Number(q.get("chunk") ?? "16384"),
 	};
 }
+
+/** What the parity e2e drives: scrollback to select across, an OSC 8 link, a blinking bar cursor. */
+export const PARITY_SCREEN = [
+	...Array.from({ length: 40 }, (_, i) => `history ${String(i).padStart(2, "0")}\r\n`),
+	"links: \x1b]8;;https://ghostty.org/docs\x1b\\ghostty.org/docs\x1b]8;;\x1b\\ and plain text\r\n",
+	"\x1b[1mparity\x1b[0m selection · mouse · focus · links · cursor · IME\r\n",
+	"\x1b[5 q$ ",
+].join("");
 
 /** Deterministic agent-ish output: colored log lines, a redrawn progress bar, wide text. */
 export function stressStream(totalBytes: number): Uint8Array {
@@ -130,23 +139,44 @@ async function mountGhosttyWeb(host: HTMLElement, onData: (d: string) => void): 
 	};
 }
 
+/** What the vt pane sent and which links it opened, for the e2e spec to read. */
+export interface TerminalVtProbe {
+	vt: CanvasTerminal;
+	sent: string[];
+	links: string[];
+}
+
+declare global {
+	interface Window {
+		__terminalVt?: TerminalVtProbe;
+	}
+}
+
 async function mountGhosttyVt(
 	host: HTMLElement,
-	build: VtBuild,
+	optionAsAlt: MacOptionAsAlt,
 	onData: (d: string) => void,
 	onResize: (columns: number, rows: number) => void,
 ): Promise<Sink & { vt: CanvasTerminal }> {
 	const decoder = new TextDecoder();
 	let handler = onData;
+	const sent: string[] = [];
+	const links: string[] = [];
 	const vt = new CanvasTerminal(host, {
-		build,
+		macOptionAsAlt: optionAsAlt,
+		onOpenLink: (uri) => links.push(uri),
 		fontSize: 13,
 		fontFamily: FONT_FAMILY,
 		theme,
-		onData: (bytes) => handler(decoder.decode(bytes)),
+		onData: (bytes) => {
+			const data = decoder.decode(bytes);
+			sent.push(data);
+			handler(data);
+		},
 		onResize,
 	});
 	await vt.open();
+	window.__terminalVt = { vt, sent, links };
 	return {
 		name: "ghostty-vt",
 		vt,
@@ -267,7 +297,7 @@ export function TerminalVtSpike() {
 			try {
 				if (p.pane !== "vt" && webHost.current) sinks.push(await mountGhosttyWeb(webHost.current, send));
 				if (p.pane !== "web" && vtHost.current) sinks.push(
-						await mountGhosttyVt(vtHost.current, p.build, send, (columns, rows) => connRef.current?.resize(columns, rows)),
+						await mountGhosttyVt(vtHost.current, p.optionAsAlt, send, (columns, rows) => connRef.current?.resize(columns, rows)),
 					);
 			} catch (error) {
 				setMetrics({ phase: "error", error: String(error) });
@@ -283,7 +313,7 @@ export function TerminalVtSpike() {
 			const base = {
 				source: p.source,
 				pane: p.pane,
-				build: p.build,
+				optionAsAlt: p.optionAsAlt,
 				vtVersion: vtSink?.vt.version ?? null,
 				sizes: Object.fromEntries(sinks.map((s) => [s.name, s.size()])),
 			};
@@ -296,6 +326,10 @@ export function TerminalVtSpike() {
 				}
 				await new Promise((r) => setTimeout(r, 200));
 				setMetrics({ ...base, phase: "done", bytes: bytes.length, text: Object.fromEntries(sinks.map((s) => [s.name, s.text()])) });
+			} else if (p.source === "parity") {
+				fanOut(encoder.encode(PARITY_SCREEN));
+				await new Promise((r) => setTimeout(r, 200));
+				setMetrics({ ...base, phase: "done", bytes: PARITY_SCREEN.length });
 			} else if (p.source === "stress") {
 				const bytes = stressStream(p.mb * 1024 * 1024);
 				const intervals: number[] = [];
@@ -359,14 +393,14 @@ export function TerminalVtSpike() {
 	const paneClass = "relative h-[380px] w-[620px] overflow-hidden rounded border border-line-strong p-1";
 	return (
 		<main className="space-y-4 p-6 font-mono text-caption" style={{ background: theme.background, color: theme.foreground }}>
-			<h1 className="text-body">terminal-vt spike (#1846)</h1>
+			<h1 className="text-body">terminal-vt harness (#1846, #1847)</h1>
 			<div className="flex flex-wrap gap-6">
 				<section>
 					<h2 className="mb-1 text-hint">ghostty-web 0.4.0 (Ghostty 5714ed07 + wasm patch)</h2>
 					<div data-testid="pane-web" ref={webHost} className={paneClass} style={{ background: theme.background }} />
 				</section>
 				<section>
-					<h2 className="mb-1 text-hint">libghostty-vt {String(metrics.vtVersion ?? "1.0.0")} release wasm + spike canvas</h2>
+					<h2 className="mb-1 text-hint">libghostty-vt {String(metrics.vtVersion ?? "1.0.0")} release wasm + canvas</h2>
 					<div data-testid="pane-vt" ref={vtHost} className={paneClass} style={{ background: theme.background }} />
 				</section>
 			</div>

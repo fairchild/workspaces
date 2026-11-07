@@ -44,6 +44,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The wasm-backed unit tests and the terminal-vt e2e need Ghostty's
+      # pinned release wasm; the script downloads it and refuses any file
+      # whose SHA-256 differs from the pin in ghostty-vt.ts.
+      - name: Fetch pinned libghostty-vt wasm
+        run: pnpm ghostty-vt:fetch
+
       - name: Lint
         run: pnpm run lint
 
@@ -102,6 +108,14 @@ jobs:
         with:
           name: web-next-evidence
           path: web-next/output/evidence/
+          if-no-files-found: ignore
+
+      - name: Upload terminal-vt evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: terminal-vt-evidence
+          path: web-next/output/terminal-vt/
           if-no-files-found: ignore
 
       - name: Upload Folio install artifact

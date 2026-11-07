@@ -1,7 +1,9 @@
 # libghostty-vt in WorkSpaces
 
 Status as of 2026-11-07: the mobile variant renders terminal output through
-libghostty-vt 1.0.0 in a debug-only preview. The desktop app still builds
+libghostty-vt 1.0.0 in a debug-only preview, and web-next has a canvas
+terminal on the release wasm at `/dev/terminal-vt`, waiting for the drawer to
+cut over in #1848. The desktop app still builds
 GhosttyKit from its earlier pin; moving it to the `vt-1.0.0` cut is tracked
 separately. Check it still holds:
 `swift test --package-path ios/Packages/TerminalScreen` passes, and its
@@ -87,6 +89,62 @@ The preview has no live data source yet. Host-compute nodes expose no terminal
 byte stream, and the web terminal's ttyd stream exists only for sandbox
 providers. A live mobile terminal needs that stream first.
 
+## The web binding
+
+`web-next/src/components/terminal/vt/` is the web counterpart of the mobile
+package, on Ghostty's signed `ghostty-vt-<version>-small.wasm`
+(`docs/decisions/web-terminal-libghostty-vt.md`). `GHOSTTY_VT_RELEASE` in
+`ghostty-vt.ts` is the one pin: version, file, SHA-256 and the minisign key it
+was verified against. `pnpm ghostty-vt:fetch` downloads the file into
+`public/dev/terminal-vt/` (gitignored) and refuses a digest that differs; CI
+runs it before the unit tests, so the wasm-backed tests in `vt.test.ts` run on
+every PR, and with `CI=true` a missing file fails the suite instead of
+skipping it. The release host sends no CORS headers, so the page loads the
+file same-origin and checks the digest again before instantiating it.
+
+The layers match the mobile package: `VtTerminal` (`ghostty-vt.ts`) owns the
+handles and produces a `TerminalSnapshot` (`snapshot.ts`), `paint.ts` holds
+the pure paint rules and the canvas painter, and `CanvasTerminal`
+(`canvas-terminal.ts`) is the front end: textarea input, pointer, wheel and
+the accessibility mirror. Input goes through the library's encoders: keys,
+paste, mouse reports (modes 9, 1000, 1002, 1003 in X10, UTF-8, SGR, urxvt
+and SGR-pixels formats) and focus reports (mode 1004). Selection is Ghostty's
+gesture API (one click a cell, two a word, three a line), installed on the
+terminal with `GHOSTTY_TERMINAL_OPT_SELECTION`, so the terminal tracks it
+through scrollback and new output; copy goes through the formatter. A drag
+held past the top or bottom edge ticks `AUTOSCROLL_TICK` to select into
+history. The snapshot also carries the cursor's shape and blink, OSC 8 link
+cells (`hyperlinkAt` resolves the URI), and each row's selected columns.
+
+What the wasm build needs beyond the C notes above:
+
+- Struct offsets, field widths and enum values come from `ghostty_type_json()`
+  at runtime; `VtModule.write` and `read` pick the encoding from each field's
+  `type`. Nothing is copied out of headers.
+- By-value struct arguments (`GhosttyPoint`, `GhosttyMousePosition`,
+  `GhosttyTerminalScrollViewport`) are passed by pointer in the wasm32 C ABI.
+  `GhosttyCell` and `GhosttyRow` are `u64`, so they cross as `BigInt`.
+- The module has no imports. `WRITE_PTY` is a hand-built trampoline module
+  installed in `__indirect_function_table`. Replies are queued and sent after
+  `ghostty_terminal_vt_write` returns, or a transport that echoes
+  synchronously re-enters the parser.
+- `GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT` does nothing in the wasm
+  build. Every use of it in `src/input/key_encode.zig` sits behind
+  `builtin.target.os.tag == .macos`, which is false for wasm32-freestanding,
+  so Alt in the event's mods always means Alt. `keyInput()` in
+  `canvas-terminal.ts` applies the policy instead: Option as Alt keeps the Alt
+  modifier and sends the key's own character (Option+B → `ESC b`); Option
+  composing drops Alt and sends the composed text (`∫`). The default is
+  `"false"`, Ghostty's default.
+- The library maps mouse pixels to cells with integer cell sizes, and canvas
+  cells are fractional CSS pixels, so the front end scales pointer positions
+  onto a whole-pixel grid before encoding.
+
+`/dev/terminal-vt` is the comparison harness against ghostty-web until #1848
+removes it. `?source=parity` writes the screen `tests/e2e/terminal-vt.spec.ts`
+drives with real pointer, keyboard, focus and IME events; its screenshots land
+in `web-next/output/terminal-vt/`, uploaded by CI as `terminal-vt-evidence`.
+
 ## Updating the vt pin
 
 1. Find the release zip under `https://release.files.ghostty.org/libghostty-vt/<version>/`.
@@ -99,5 +157,10 @@ providers. A live mobile terminal needs that stream first.
 5. Regenerate the mobile project (`xcodegen` in `ios/`), build it, and open
    the terminal preview.
 
-Within 1.x the ABI promise means the update needs no Swift changes. A new
+For the web binding, verify the new `ghostty-vt-<version>-small.wasm` with
+`minisign -Vm <file> -P <key>`, then update `version`, `file`, `sha256` and
+`origin` in `GHOSTTY_VT_RELEASE` and run `pnpm ghostty-vt:fetch && pnpm test`
+in `web-next/`.
+
+Within 1.x the ABI promise means the update needs no Swift or TypeScript changes. A new
 major version means rereading `ghostty/vt.h`.

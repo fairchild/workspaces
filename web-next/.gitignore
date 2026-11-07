@@ -20,5 +20,5 @@ perf/results-deployed.md
 .data/
 .vercel
 
-# libghostty-vt release wasm for the terminal-vt spike (scripts/fetch-ghostty-vt.mjs)
+# libghostty-vt release wasm, fetched and checksum-verified by scripts/fetch-ghostty-vt.mjs
 public/dev/terminal-vt/*.wasm
