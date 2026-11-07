@@ -19,6 +19,8 @@ settings:
   base:
     DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
     SWIFT_VERSION: "6.0"
+    # libghostty-vt's release xcframework ships an arm64-only simulator slice.
+    EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
 targets:
   WorkSpacesMobile:
     type: application

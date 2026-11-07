@@ -89,20 +89,28 @@ public final class VirtualTerminal {
     }
 
     /// The current viewport. Cheap when nothing changed since the last call:
-    /// the render state tracks dirtiness, and a clean frame returns the cached
-    /// snapshot without walking a single cell.
+    /// a clean frame returns the cached snapshot without walking a single
+    /// cell. The render state's dirty flag tracks rows only, so the cursor and
+    /// default colors are compared separately — a bare cursor move or
+    /// `ESC[?25l` changes no row.
     public func snapshot() throws(TerminalError) -> TerminalSnapshot {
         try check("render_state_update", ghostty_render_state_update(renderState, terminal))
         var dirty = GHOSTTY_RENDER_STATE_DIRTY_FALSE
         ghostty_render_state_get(renderState, GHOSTTY_RENDER_STATE_DATA_DIRTY, &dirty)
-        if dirty == GHOSTTY_RENDER_STATE_DIRTY_FALSE, let lastSnapshot { return lastSnapshot }
-
         let cursor = cursor()
+        let foreground = renderColor(GHOSTTY_RENDER_STATE_DATA_COLOR_FOREGROUND)
+        let background = renderColor(GHOSTTY_RENDER_STATE_DATA_COLOR_BACKGROUND)
+        if dirty == GHOSTTY_RENDER_STATE_DIRTY_FALSE, let lastSnapshot, lastSnapshot.cursor == cursor,
+            lastSnapshot.foreground == foreground, lastSnapshot.background == background
+        {
+            return lastSnapshot
+        }
+
         let snapshot = TerminalSnapshot(
             columns: columns,
             rows: rows,
-            foreground: renderColor(GHOSTTY_RENDER_STATE_DATA_COLOR_FOREGROUND),
-            background: renderColor(GHOSTTY_RENDER_STATE_DATA_COLOR_BACKGROUND),
+            foreground: foreground,
+            background: background,
             cursor: cursor,
             lines: try lines(cursor: cursor)
         )
@@ -128,23 +136,40 @@ public final class VirtualTerminal {
             var column = 0
             while ghostty_render_state_row_cells_next(rowCells) {
                 defer { column += 1 }
-                guard let (text, width) = cellText() else { continue }
-                runs.append(text, width: width, style: cellStyle(), isCursor: column == cursorColumn)
+                let isCursor = column == cursorColumn
+                switch cell() {
+                case .text(let text, let width):
+                    runs.append(text, width: width, style: cellStyle(), isCursor: isCursor)
+                case .spacerTail where isCursor:
+                    runs.markLastCursor()
+                case .spacerHead where isCursor:
+                    runs.append(" ", style: cellStyle(), isCursor: true)
+                case .spacerTail, .spacerHead:
+                    break
+                }
             }
             lines.append(TerminalLine(runs: runs.finish()))
         }
         return lines
     }
 
-    /// The cell's grapheme and how many columns it spans. nil for the spacer
-    /// half of a wide character, which the wide cell's width already covers;
-    /// a single space for an unwritten cell.
-    private func cellText() -> (String, width: Int)? {
+    /// What one grid cell holds. A wide character is its `.text` cell (width
+    /// 2) plus a `.spacerTail`; a wide character that wrapped leaves a
+    /// `.spacerHead` in the last column of the line it left.
+    private enum Cell {
+        case text(String, width: Int)
+        case spacerTail
+        case spacerHead
+    }
+
+    /// An unwritten cell reads as a single space.
+    private func cell() -> Cell {
         var raw: GhosttyCell = 0
         ghostty_render_state_row_cells_get(rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw)
         var wide = GHOSTTY_CELL_WIDE_NARROW
         ghostty_cell_get(raw, GHOSTTY_CELL_DATA_WIDE, &wide)
-        if wide == GHOSTTY_CELL_WIDE_SPACER_TAIL || wide == GHOSTTY_CELL_WIDE_SPACER_HEAD { return nil }
+        if wide == GHOSTTY_CELL_WIDE_SPACER_TAIL { return .spacerTail }
+        if wide == GHOSTTY_CELL_WIDE_SPACER_HEAD { return .spacerHead }
         let width = wide == GHOSTTY_CELL_WIDE_WIDE ? 2 : 1
 
         while true {
@@ -159,8 +184,8 @@ public final class VirtualTerminal {
                 graphemeBuffer = [UInt8](repeating: 0, count: max(length, graphemeBuffer.count * 2))
                 continue
             }
-            guard result == GHOSTTY_SUCCESS, length > 0 else { return (" ", width) }
-            return (String(decoding: graphemeBuffer[..<length], as: UTF8.self), width)
+            guard result == GHOSTTY_SUCCESS, length > 0 else { return .text(" ", width: width) }
+            return .text(String(decoding: graphemeBuffer[..<length], as: UTF8.self), width: width)
         }
     }
 
@@ -227,18 +252,31 @@ struct StyleFlags: OptionSet {
 
 /// Coalesces a row's cells into runs and drops trailing blanks that would
 /// draw nothing, so a mostly-empty 80-column row costs one short run. Only
-/// narrow cells merge, which keeps TextRun's one-column-per-Character
-/// invariant; the cursor cell never merges and is never trimmed.
+/// narrow cells merge, and only when the cell stays its own Character —
+/// Swift would fuse "©\u{200D}" and "®" from two cells into one grapheme —
+/// which keeps TextRun's one-column-per-Character invariant. The cursor cell
+/// never merges and is never trimmed.
 struct RunBuilder {
     private var runs: [TextRun] = []
 
     mutating func append(_ text: String, width: Int = 1, style: CellStyle, isCursor: Bool = false) {
         if width == 1, !isCursor, let last = runs.indices.last, runs[last].mergesNarrow(style) {
-            runs[last].text += text
-            runs[last].columns += 1
-        } else {
-            runs.append(TextRun(text, style: style, isCursor: isCursor, columns: width))
+            let merged = runs[last].text + text
+            if merged.count == runs[last].columns + 1 {
+                runs[last].text = merged
+                runs[last].columns += 1
+                return
+            }
         }
+        runs.append(TextRun(text, style: style, isCursor: isCursor, columns: width))
+    }
+
+    /// The cursor sits on the right half of the wide character just appended,
+    /// so that whole character is the cursor cell. Wide runs never merge, so
+    /// the last run is exactly that character.
+    mutating func markLastCursor() {
+        guard let last = runs.indices.last, runs[last].columns == 2, runs[last].text.count == 1 else { return }
+        runs[last].isCursor = true
     }
 
     consuming func finish() -> [TextRun] {

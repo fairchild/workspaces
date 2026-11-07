@@ -133,6 +133,37 @@ struct VirtualTerminalTests {
         #expect(try terminal.snapshot().lines[0].text == "one two")
     }
 
+    @Test("A cursor-only change is not hidden behind the clean-frame cache")
+    func cursorOnlyChanges() throws {
+        let terminal = try VirtualTerminal(columns: 20, rows: 2)
+        terminal.write("abc")
+        #expect(try terminal.snapshot().cursor == TerminalCursor(column: 3, row: 0))
+        terminal.write("\(esc)[2D")
+        let moved = try terminal.snapshot()
+        #expect(moved.cursor == TerminalCursor(column: 1, row: 0))
+        #expect(moved.lines[0].runs.first { $0.isCursor }?.text == "b")
+        terminal.write("\(esc)[?25l")
+        #expect(try terminal.snapshot().cursor == nil)
+    }
+
+    @Test("A cursor on the right half of a wide character marks the whole character")
+    func cursorOnSpacerTail() throws {
+        let snapshot = try screen("完\(esc)[1D", columns: 4, rows: 1)
+        #expect(snapshot.cursor == TerminalCursor(column: 1, row: 0))
+        let cursor = try #require(snapshot.paintedCells().first { $0.text == "完" })
+        #expect(cursor.column == 0 && cursor.width == 2)
+        #expect(cursor.background == snapshot.foreground)
+    }
+
+    @Test("A cursor on the cell a wrapped wide character left behind still shows")
+    func cursorOnSpacerHead() throws {
+        let snapshot = try screen("abc完\(esc)[1;4H", columns: 4, rows: 2)
+        #expect(snapshot.cursor == TerminalCursor(column: 3, row: 0))
+        let runs = snapshot.lines[0].runs
+        #expect(runs.filter(\.isCursor).count == 1)
+        #expect(runs.last == TextRun(" ", isCursor: true))
+    }
+
     @Test("Resize reflows the viewport to the new geometry")
     func resize() throws {
         let terminal = try VirtualTerminal(columns: 20, rows: 4)
@@ -172,6 +203,14 @@ struct TerminalSnapshotPaintingTests {
         #expect(cells.map(\.text) == ["完", "成", "|", "o", "k"])
         #expect(cells.map(\.column) == [0, 2, 4, 5, 6])
         #expect(cells.map(\.width) == [2, 2, 1, 1, 1])
+    }
+
+    @Test("Cells Swift would fuse into one grapheme stay in their own columns")
+    func adjacentCellsDoNotFuse() throws {
+        let cells = try screen("©\u{200D}®X\(esc)[?25l").paintedCells()
+        #expect(cells.map(\.column) == [0, 1, 2])
+        #expect(cells.map(\.width) == [1, 1, 1])
+        #expect(cells.last?.text == "X")
     }
 
     @Test("The cursor cell paints inverted in the default colors; hiding it restores them")

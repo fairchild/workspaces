@@ -43,8 +43,10 @@ three layers:
 
 - **`VirtualTerminal`** owns the vt handles. `write(_:)` feeds bytes to the
   parser; it is fine for an escape sequence to span two writes. `snapshot()`
-  walks Ghostty's render state into plain Swift values. When the render state
-  reports no change since the last call, it returns the cached snapshot.
+  walks Ghostty's render state into plain Swift values. It returns the cached
+  snapshot only when no row, the cursor, or the default colors changed. The
+  render state's dirty flag tracks rows only, so a bare cursor move would
+  otherwise go unseen.
 - **`TerminalSnapshot`** is the screen as values: lines of `TextRun`s with a
   resolved `CellStyle`, the cursor, and the default colors. A run is either
   narrow cells (one `Character` per column) or a single wide cell, so a
@@ -65,6 +67,8 @@ Things the vt C API needs that are easy to miss:
 - A wide character is a `WIDE` cell followed by a `SPACER_TAIL` cell, and a
   wide character that wraps leaves a `SPACER_HEAD` cell. Skip the spacer
   cells, but still count their columns.
+- The release xcframework's simulator slice is arm64 only, so the mobile
+  project excludes x86_64 for the simulator SDK.
 - The style flag bits are frozen in the 1.0 ABI, and `StyleFlags` mirrors them:
   bold=0, italic=1, faint=2, blink=3, inverse=4, invisible=5, strikethrough=6,
   overline=7, and underline in bits 8–10.

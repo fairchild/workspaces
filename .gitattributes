@@ -1,0 +1,2 @@
+# Raw PTY recordings: carriage returns and escape bytes are the content.
+*.vt binary
