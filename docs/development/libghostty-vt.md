@@ -140,9 +140,10 @@ What the wasm build needs beyond the C notes above:
   which history keeps as one page, a few hundred rows at 80 columns. The
   binding lifts it to `SIZE_MAX` so `scrollbackLines` (10,000 by default)
   is the limit.
-- Syncing the mouse encoder from the terminal clears its last-cell state, so
-  the binding syncs only after a write; otherwise motion within one cell
-  would be reported on every pixel.
+- Syncing the mouse encoder from the terminal, and setting its size, both
+  clear its last-cell state, so the binding syncs only after a write and sets
+  the size only when it changes; otherwise motion within one cell would be
+  reported on every pixel.
 - On the alternate screen with mode 1007 on, the wheel sends arrow keys
   rather than scrolling, which has nothing to scroll there.
 - The library maps mouse pixels to cells with integer cell sizes, and canvas

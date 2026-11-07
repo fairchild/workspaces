@@ -392,6 +392,8 @@ export class VtTerminal {
 	 * syncs only after a write, or motion within one cell would repeat.
 	 */
 	private mouseModesStale = true;
+	/** The geometry last given to the mouse encoder; setting it also forgets the last cell, so it is set only on change. */
+	private mouseSize = "";
 	/** Bumped whenever this wrapper changes the selection; the clean-frame cache compares it. */
 	private selectionGeneration = 0;
 	private snapshotSelectionGeneration = -1;
@@ -730,13 +732,18 @@ export class VtTerminal {
 			check("mouse_encoder_from_terminal", e.ghostty_mouse_encoder_set_from_terminal(this.mouseEncoder, this.terminal));
 			this.mouseModesStale = false;
 		}
-		const size = this.scratch + SCRATCH.struct;
-		m.initStruct(size, "GhosttyMouseEncoderSize");
-		m.write(size, "GhosttyMouseEncoderSize", "screen_width", Math.round(surface.width));
-		m.write(size, "GhosttyMouseEncoderSize", "screen_height", Math.round(surface.height));
-		m.write(size, "GhosttyMouseEncoderSize", "cell_width", Math.max(1, Math.round(surface.cellWidth)));
-		m.write(size, "GhosttyMouseEncoderSize", "cell_height", Math.max(1, Math.round(surface.cellHeight)));
-		check("mouse(size)", e.ghostty_mouse_encoder_set(this.mouseEncoder, this.k.mouseOptSize, size));
+		const geometry = [surface.width, surface.height, surface.cellWidth, surface.cellHeight].map(Math.round);
+		if (geometry.join() !== this.mouseSize) {
+			const [width, height, cellWidth, cellHeight] = geometry;
+			const size = this.scratch + SCRATCH.struct;
+			m.initStruct(size, "GhosttyMouseEncoderSize");
+			m.write(size, "GhosttyMouseEncoderSize", "screen_width", width);
+			m.write(size, "GhosttyMouseEncoderSize", "screen_height", height);
+			m.write(size, "GhosttyMouseEncoderSize", "cell_width", Math.max(1, cellWidth));
+			m.write(size, "GhosttyMouseEncoderSize", "cell_height", Math.max(1, cellHeight));
+			check("mouse(size)", e.ghostty_mouse_encoder_set(this.mouseEncoder, this.k.mouseOptSize, size));
+			this.mouseSize = geometry.join();
+		}
 		const value = this.scratch + SCRATCH.value;
 		this.view().setUint8(value, anyButtonPressed ? 1 : 0);
 		check("mouse(any_pressed)", e.ghostty_mouse_encoder_set(this.mouseEncoder, this.k.mouseOptAnyPressed, value));
