@@ -315,7 +315,7 @@ class SecurityHardeningTests(unittest.TestCase):
         zig_entries = lock["tools"]["zig"]
         self.assertEqual(len(zig_entries), 1)
         zig = zig_entries[0]
-        self.assertEqual(zig["version"], "0.16.0")
+        self.assertEqual(zig["version"], "0.17.0")
         self.assertEqual(zig["backend"], "core:zig")
         for platform in ("linux-x64", "macos-arm64"):
             entry = zig[f"platforms.{platform}"]
@@ -355,7 +355,7 @@ class SecurityHardeningTests(unittest.TestCase):
         setup = (REPO_ROOT / "scripts/setup").read_text()
         self.assertIn('"$REPO_ROOT/.mise.toml"|"$REPO_ROOT/web/.mise.toml"', setup)
         self.assertIn('if [[ "$FAST" == "1" ]]', setup)
-        self.assertIn("mise install --locked zig@0.16.0", setup)
+        self.assertIn("mise install --locked zig@0.17.0", setup)
         self.assertIn("MISE_IGNORED_CONFIG_PATHS=", setup)
         self.assertIn('-path "*/.pnpm-store" -prune', setup)
         self.assertNotIn("trust every checked-in project config", setup)

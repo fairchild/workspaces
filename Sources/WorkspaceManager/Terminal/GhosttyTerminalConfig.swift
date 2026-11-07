@@ -391,12 +391,12 @@ extension Optional where Wrapped == String {
 }
 
 extension Array where Element == String {
-    fileprivate func withCStrings<T>(_ body: ([UnsafePointer<CChar>?]) throws -> T) rethrows -> T {
+    fileprivate func withCStrings<T>(_ body: ([UnsafePointer<CChar>]) throws -> T) rethrows -> T {
         if isEmpty {
             return try body([])
         }
 
-        func recurse(index: Int, pointers: [UnsafePointer<CChar>?]) throws -> T {
+        func recurse(index: Int, pointers: [UnsafePointer<CChar>]) throws -> T {
             if index == count {
                 return try body(pointers)
             }

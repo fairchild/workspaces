@@ -19,9 +19,8 @@ enum GhosttyClipboardBridge {
 
         for index in 0..<count {
             let item = content[index]
-            guard let dataPointer = item.data else { continue }
             let data = String(
-                decoding: UnsafeRawBufferPointer(start: dataPointer, count: item.len),
+                decoding: UnsafeRawBufferPointer(start: item.data, count: item.len),
                 as: UTF8.self
             )
 
@@ -29,9 +28,7 @@ enum GhosttyClipboardBridge {
                 fallbackText = data
             }
 
-            if let mimePointer = item.mime,
-                String(cString: mimePointer) == textMIME
-            {
+            if String(cString: item.mime) == textMIME {
                 preferredText = data
                 break
             }
@@ -47,8 +44,8 @@ enum GhosttyClipboardBridge {
     static func read(
         userdata: UnsafeMutableRawPointer?,
         location: ghostty_clipboard_e,
-        state: UnsafeMutableRawPointer?,
-        requestedMIMEs: UnsafePointer<UnsafePointer<CChar>?>?,
+        state: UnsafeMutableRawPointer,
+        requestedMIMEs: UnsafePointer<UnsafePointer<CChar>>,
         requestedMIMECount: Int,
         includeAvailableMIMEs: Bool
     ) -> ghostty_clipboard_read_result_e {
@@ -104,7 +101,7 @@ enum GhosttyClipboardBridge {
     }
 
     static func plan(
-        requestedMIMEs: UnsafePointer<UnsafePointer<CChar>?>?,
+        requestedMIMEs: UnsafePointer<UnsafePointer<CChar>>?,
         count: Int,
         includeAvailableMIMEs: Bool,
         hasText: Bool
@@ -118,27 +115,22 @@ enum GhosttyClipboardBridge {
     }
 
     static func requestsText(
-        _ requestedMIMEs: UnsafePointer<UnsafePointer<CChar>?>?,
+        _ requestedMIMEs: UnsafePointer<UnsafePointer<CChar>>?,
         count: Int
     ) -> Bool {
         guard let requestedMIMEs, count > 0 else { return false }
-
-        for index in 0..<count {
-            guard let mimePointer = requestedMIMEs[index] else { continue }
-            if String(cString: mimePointer) == textMIME { return true }
-        }
-
-        return false
+        return UnsafeBufferPointer(start: requestedMIMEs, count: count)
+            .contains { String(cString: $0) == textMIME }
     }
 
     private static func complete(
         surface: ghostty_surface_t,
-        state: UnsafeMutableRawPointer?,
+        state: UnsafeMutableRawPointer,
         text: String?,
         listAvailable: Bool
     ) {
         textMIME.withCString { mimePointer in
-            let available: [UnsafePointer<CChar>?] = listAvailable ? [mimePointer] : []
+            let available: [UnsafePointer<CChar>] = listAvailable ? [mimePointer] : []
 
             available.withUnsafeBufferPointer { availableBuffer in
                 guard let text else {
@@ -182,7 +174,7 @@ enum GhosttyClipboardBridge {
     /// request is denied and nothing reaches the terminal.
     static func confirmRead(
         userdata: UnsafeMutableRawPointer?,
-        state: UnsafeMutableRawPointer?
+        state: UnsafeMutableRawPointer
     ) {
         let userdataAddress = GhosttyCallbackUserdata.address(from: userdata)
         let surfaceAddress = GhosttyThreadingBridge.runOnMainSync {
