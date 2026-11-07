@@ -19,3 +19,6 @@ perf/results-deployed.md
 # Local libSQL database files (dev default + e2e)
 .data/
 .vercel
+
+# libghostty-vt release wasm for the terminal-vt spike (scripts/fetch-ghostty-vt.mjs)
+public/dev/terminal-vt/*.wasm

@@ -1,0 +1,11 @@
+^D[1;34m~/project[0m [32m❯[0m swift test
+[K[2m[1/42][0m Compiling TerminalScreen[K[2m[7/42][0m Compiling TerminalScreen[K[2m[15/42][0m Compiling TerminalScreen[K[2m[23/42][0m Compiling TerminalScreen[K[2m[31/42][0m Compiling TerminalScreen[K[2m[38/42][0m Compiling TerminalScreen[K[2m[42/42][0m Compiling TerminalScreen[K[1mBuild complete![0m (3.21s)
+[33m⠋[0m running 6 tests
+[1A[K[32m✔[0m 6 tests passed
+[32m✔[0m wraps a [1mbold[0m, [3mitalic[0m, [4munderlined[0m run
+[31m✘[0m [9mflaky[0m quarantined
+[1m╭────────────── summary ──────────────╮[0m
+[1m│[0m wide: 完成 ✅  [38;5;208m256-color[0m  [38;2;120;200;255mtruecolor[0m [1m│[0m
+[1m╰─────────────────────────────────────╯[0m
+[7m inverse [0m [44m on blue [0m
+[1;34m~/project[0m [32m❯[0m 

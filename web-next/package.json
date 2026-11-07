@@ -22,7 +22,8 @@
 		"evidence:upload": "bash scripts/upload-evidence.sh",
 		"demo:scroll-turn": "playwright test --config=playwright.scroll-turn.config.ts",
 		"perf": "node perf/run.mjs",
-		"validate": "tsx scripts/validate.mjs"
+		"validate": "tsx scripts/validate.mjs",
+		"spike:ghostty-vt": "node scripts/fetch-ghostty-vt.mjs"
 	},
 	"dependencies": {
 		"@ai-sdk/harness": "1.0.18",
