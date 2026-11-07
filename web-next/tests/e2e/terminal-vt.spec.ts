@@ -14,6 +14,9 @@ const WASM = path.resolve("public/dev/terminal-vt/ghostty-vt-1.0.0-small.wasm");
 const OUT = path.resolve("output/terminal-vt");
 
 test.skip(!existsSync(WASM) && process.env.CI !== "true", "run `pnpm ghostty-vt:fetch` first");
+// The harness lays two 620px panes side by side; at the default 1280×720 they
+// wrap and the vt pane's lower rows fall below the fold, out of the pointer's reach.
+test.use({ viewport: { width: 1440, height: 900 } });
 
 interface Geometry {
 	left: number;
