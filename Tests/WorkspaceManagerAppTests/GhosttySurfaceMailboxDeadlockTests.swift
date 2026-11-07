@@ -28,6 +28,8 @@ struct GhosttySurfaceMailboxDeadlockTests {
     )
     func freeWhileMailboxIsFull() throws {
         let count = try #require(Self.surfaceCount)
+        try #require(
+            count >= 24, "fewer than 24 surfaces do not fill the 64-slot mailbox, so the test would prove nothing")
         let log = DeadlockProgressLog(path: Self.environment["WORKSPACES_MAILBOX_DEADLOCK_PROGRESS"])
         let directory = FileManager.default.temporaryDirectory
         var views: [GhosttySurfaceView] = []

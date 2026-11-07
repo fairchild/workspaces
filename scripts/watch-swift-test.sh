@@ -14,31 +14,51 @@ set -uo pipefail
 main() {
   parse_args "$@"
   mkdir -p "$OUT_DIR"
-  local log="$OUT_DIR/test.log" status_file="$OUT_DIR/test.status"
+  LOCK_DIR="$OUT_DIR/.watch-swift-test.lock"
+  if ! mkdir "$LOCK_DIR" 2> /dev/null; then
+    echo "watch-swift-test: $OUT_DIR is in use by another watchdog ($LOCK_DIR exists)" >&2
+    exit 2
+  fi
+  RUNNER=""
+  trap cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  local log="$OUT_DIR/test.log"
+  STATUS_FILE="$OUT_DIR/test.status"
+  rm -f "$STATUS_FILE" "$OUT_DIR/hang.sample.txt" "$OUT_DIR/hang.tree"
   : > "$log"
-  rm -f "$status_file"
   : "${PROGRESS:=$log}"
   touch "$PROGRESS"
   echo "watch-swift-test: log=$log progress=$PROGRESS stall=${STALL}s"
 
   (
     "${COMMAND[@]}"
-    echo "$?" > "$status_file"
+    echo "$?" > "$STATUS_FILE"
   ) > "$log" 2>&1 &
-  local runner=$!
+  RUNNER=$!
 
-  while kill -0 "$runner" 2> /dev/null; do
-    sleep 5
-    if (($(date +%s) - $(stat -f %m "$PROGRESS") >= STALL)); then
-      capture_hang "$runner"
-      kill_tree "$runner"
+  local last_change
+  last_change=$(mtime_or "$PROGRESS" "$(date +%s)")
+  while ! finished; do
+    sleep 1
+    last_change=$(mtime_or "$PROGRESS" "$last_change")
+    if (($(date +%s) - last_change >= STALL)) && ! finished; then
+      capture_hang "$RUNNER"
+      if finished; then
+        break
+      fi
+      kill_tree "$RUNNER"
+      RUNNER=""
       echo "watch-swift-test: no progress for ${STALL}s; sample in $OUT_DIR/hang.sample.txt" >&2
       exit 124
     fi
   done
 
+  wait "$RUNNER" 2> /dev/null
+  RUNNER=""
   tail -n 5 "$log"
-  exit "$(cat "$status_file" 2> /dev/null || echo 1)"
+  exit "$(cat "$STATUS_FILE" 2> /dev/null || echo 1)"
 }
 
 parse_args() {
@@ -47,13 +67,20 @@ parse_args() {
   OUT_DIR="${TMPDIR:-/tmp}/watch-swift-test.$$"
   while (($#)); do
     case "$1" in
-      --stall) STALL="$2"; shift 2 ;;
-      --progress) PROGRESS="$2"; shift 2 ;;
-      --out) OUT_DIR="$2"; shift 2 ;;
+      --stall | --progress | --out)
+        (($# >= 2)) || usage
+        case "$1" in
+          --stall) STALL="$2" ;;
+          --progress) PROGRESS="$2" ;;
+          --out) OUT_DIR="$2" ;;
+        esac
+        shift 2
+        ;;
       --) shift; break ;;
       *) usage ;;
     esac
   done
+  [[ "$STALL" =~ ^[1-9][0-9]*$ ]] || usage
   (($#)) || usage
   COMMAND=("$@")
 }
@@ -61,6 +88,21 @@ parse_args() {
 usage() {
   echo "Usage: $0 [--stall SECONDS] [--progress FILE] [--out DIR] -- <command...>" >&2
   exit 2
+}
+
+finished() {
+  [[ -s "$STATUS_FILE" ]] || ! kill -0 "$RUNNER" 2> /dev/null
+}
+
+mtime_or() {
+  stat -f %m "$1" 2> /dev/null || echo "$2"
+}
+
+cleanup() {
+  if [[ -n "$RUNNER" ]]; then
+    kill_tree "$RUNNER"
+  fi
+  rmdir "$LOCK_DIR" 2> /dev/null
 }
 
 capture_hang() {
@@ -94,6 +136,7 @@ process_tree() {
 
 kill_tree() {
   local root="$1" pid
+  kill -STOP "$root" 2> /dev/null
   for pid in $(pgrep -P "$root"); do
     kill_tree "$pid"
   done

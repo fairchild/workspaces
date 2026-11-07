@@ -34,6 +34,8 @@ set -euo pipefail
 #                     the archive (no -Dstrip, no post-build strip), so a
 #                     `sample` of a hung test names Ghostty's frames and locks.
 #                     Same ReleaseFast code; the archive grows from ~25 MB to ~170 MB.
+#                     Uses its own Zig cache (<commit>-symbols) unless
+#                     GHOSTTY_ZIG_CACHE_DIR is set.
 #   GHOSTTY_ARCH_DIAGNOSTICS  Set to 0 to silence the post-build architecture
 #                     report (host arch, zig binary arch, xcframework slice
 #                     info). Defaults to 1. Added to chase down a "no such
@@ -76,7 +78,13 @@ MACOS_DEPLOYMENT_TARGET="14.0"
 
 GHOSTTY_REPO_URL="https://github.com/ghostty-org/ghostty.git"
 CACHE_DIR="${GHOSTTY_CACHE_DIR:-$HOME/.cache/workspacemanager}"
-ZIG_CACHE_DIR="${GHOSTTY_ZIG_CACHE_DIR:-$CACHE_DIR/zig-cache/$GHOSTTY_COMMIT}"
+# A symbol build gets its own cache: the archive repair sweep collects every cached
+# object, and a stripped copy beside an unstripped one can win at link time.
+ZIG_CACHE_SUFFIX=""
+if [[ "$GHOSTTY_KEEP_SYMBOLS" == "1" ]]; then
+  ZIG_CACHE_SUFFIX="-symbols"
+fi
+ZIG_CACHE_DIR="${GHOSTTY_ZIG_CACHE_DIR:-$CACHE_DIR/zig-cache/$GHOSTTY_COMMIT$ZIG_CACHE_SUFFIX}"
 AUTO_CLONE_DIR="$CACHE_DIR/ghostty"
 EXPLICIT_GHOSTTY_DIR="${GHOSTTY_DIR:-}"
 EXPLICIT_ZIG_BIN="${GHOSTTY_ZIG_BIN:-}"
@@ -565,7 +573,7 @@ resolve_ghostty_dir() {
 }
 
 ensure_ghostty_checkout() {
-  if [[ -e "$GHOSTTY_DIR/.git" ]]; then
+  if [[ -e "$GHOSTTY_DIR/.git" ]] && git -C "$GHOSTTY_DIR" rev-parse --git-dir > /dev/null 2>&1; then
     return
   fi
 
