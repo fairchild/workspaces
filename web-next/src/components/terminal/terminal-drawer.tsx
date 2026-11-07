@@ -30,7 +30,7 @@ type Phase =
 	| "disconnected";
 
 /** Folio-toned ANSI palettes, chosen from globals.css's token values. */
-const TERMINAL_THEMES = {
+export const TERMINAL_THEMES = {
 	light: {
 		background: "#f1ede0",
 		foreground: "#26221a",

@@ -1,0 +1,54 @@
+# web-next renders terminals on Ghostty's release libghostty-vt wasm
+
+**Date**: 2026-11-07
+**Status**: accepted
+**Decided by**: spike for [#1846](https://github.com/fairchild/workspaces/issues/1846), merged by the repo owner
+**Issue**: [#1846](https://github.com/fairchild/workspaces/issues/1846) — milestone G1
+
+## Context
+
+web-next's drawer renders through `ghostty-web` 0.4.0: Ghostty `5714ed07` (December 2025) plus a private wasm patch. Upstream has not released since (0.5.0-rc.0 waits in PR #182), and no maintainer has announced a move to libghostty-vt 1.0; the one upgrade attempt is a community WIP on Ghostty 1.3 (#162). 0.4.0 carries an open memory-corruption bug (#210) and the unpatched paste CVE-2026-26982 (#193).
+
+Fed the same bytes at `/dev/terminal-vt`, the release wasm matched the fixture, parsed heavy output twice as fast, and differed on 9 of 32 input cases, each where ghostty-web lags Ghostty's encoders. It costs bytes and an owned front end.
+
+## Decision
+
+We will render web-next terminals on Ghostty's signed `ghostty-vt-<version>-small.wasm`, pinned by version and SHA-256 and served same-origin. A canvas front end in the repo paints render-state snapshots on a fixed cell grid, following `ios/Packages/TerminalScreen`.
+
+## Consequences
+
+- Input follows Ghostty's encoders: kitty keyboard flags, Shift+Enter as `CSI 27;2;13~`, sanitized paste, device replies through `WRITE_PTY`.
+- A 1.x pin bump is a checksum change, and web and mobile share one snapshot model.
+- **Cost:** about 115 KB more gzip per lazy load (294 KB against 180 KB).
+- **Cost:** we own what ghostty-web mostly provides: selection across scrollback (the library's gesture API), mouse-tracking and focus encoding, OSC 8 links, cursor blink, inline IME preedit, an accessibility mirror. #1847 builds them; #1848 cuts the drawer over.
+- `web/` (maintenance mode) stays on ghostty-web.
+
+## Alternatives considered
+
+- **Stay on ghostty-web 0.4.0.** It has shipped input bugs, the unpatched paste CVE, and no path to the 1.0 ABI.
+- **Fork ghostty-web onto 1.0.** That means maintaining someone else's renderer plus a re-applied wasm patch. The 1.0 API already exposes what the patch added.
+- **The `fast` build.** Its frame cost matched `small` within run-to-run noise, at 67 KB more gzip.
+
+## Evidence
+
+> OVER CAP: kept because the exit test of #1846 requires the comparison table and spike screenshots.
+
+The data comes from headless Chromium 149 against a production build: `node web-next/scripts/terminal-vt-spike.mjs --ws …` with a local ttyd. Stress runs streamed 2.5 MB of synthetic agent output in 16 KB or 128 KB per frame, three runs each; the figures are medians. The grids were 74×24 (ghostty-web) and 77×24 (vt). Wasm digests: fast `7b428fee…`, small `dad8e14c…`. Both verified with minisign against Ghostty's published key.
+
+| | ghostty-web 0.4.0 | libghostty-vt 1.0.0 + spike canvas |
+|---|---|---|
+| Fixture fidelity (`agent-turn.vt`) | Same text; colors, attributes and wide cells all correct; box sides break into dashes | Same text and attributes; box borders join |
+| Keys (26 synthetic cases) | Shift+Tab → `\t`; Shift+Enter → `\r`; kitty flags ignored; macOS Option+B dropped | `ESC[Z`; `CSI 27;2;13~`; `CSI 99;5u`; `ESC ∫` (option-as-alt left for #1847) |
+| IME (CDP composition) | Commits 日本; no inline preedit | Commits 日本; no inline preedit |
+| Paste `ls␛[201~id⏎`, mode 2004 | Passes the bytes through, so the paste escapes the bracket | `␛[200~ls [201~id⏎␛[201~` |
+| Selection and copy | Drag, double and triple click, across scrollback | Drag and double click within the viewport; live ttyd copy returned `select-me-please` |
+| Scrollback and resize | Yes; FitAddon | Yes; `stty size` read `24 52` after a resize |
+| Device replies | Answers CPR; no reply to DA1, which shells such as fish wait on (upstream #101 landed after 0.4.0) | DA1 `ESC[?62;22c`, CPR `ESC[1;1R` |
+| Gzip / brotli | 180 / 146 KB, one chunk with the wasm inlined as a `data:` URI (upstream #188, which `connect-src 'self'` blocks) | wasm 294 / 228 KB (small) or 361 / 270 KB (fast), plus a 12 KB page chunk |
+| 16 KB/frame: write p95, render p50 | 0.7 ms, 1.9 ms | 0.2 ms, 1.8 ms |
+| 128 KB/frame: write p95, render p95 | 10.7 ms, 2.8 ms | 4.9 ms, 4.0 ms (small; every row is dirty, so the snapshot rebuilds the full grid) |
+| Frame interval p95, both loads | 18 ms (60 fps) | 18 ms (60 fps) |
+
+Screenshots (left ghostty-web, right libghostty-vt):
+
+<!-- evidence links -->
