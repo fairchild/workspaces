@@ -92,20 +92,27 @@ async function mountGhosttyWeb(host: HTMLElement, onData: (d: string) => void): 
 	term.onData((d) => handler(d));
 	term.open(host);
 	fit.fit();
+	// ghostty-web renders on every animation frame; only frames after a write
+	// count, matching the canvas pane, which paints only when written to.
 	const renderMs: number[] = [];
+	let wrote = false;
 	const renderer = (term as unknown as { renderer?: { render: (...a: unknown[]) => void } }).renderer;
 	if (renderer) {
 		const original = renderer.render.bind(renderer);
 		renderer.render = (...args: unknown[]) => {
 			const t0 = performance.now();
 			original(...args);
+			if (!wrote) return;
+			wrote = false;
 			renderMs.push(performance.now() - t0);
 		};
 	}
-	const decoder = new TextDecoder();
 	return {
 		name: "ghostty-web",
-		write: (bytes) => term.write(decoder.decode(bytes, { stream: true })),
+		write: (bytes) => {
+			term.write(bytes);
+			wrote = true;
+		},
 		textarea: () => (term as unknown as { textarea?: HTMLElement }).textarea ?? null,
 		setOnData: (fn) => {
 			handler = fn;
