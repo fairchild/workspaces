@@ -7,7 +7,7 @@
 
 ## Context
 
-web-next's drawer uses `ghostty-web` 0.4.0: Ghostty `5714ed07` (December 2025) plus a private wasm patch. Upstream has not released since (0.5.0-rc.0 waits in PR #182), and no maintainer has announced moving to libghostty-vt 1.0; the only upgrade attempt is a community WIP on 1.3 (#162). 0.4.0 carries an open memory-corruption bug (#210) and the unpatched paste CVE-2026-26982 (#193).
+web-next's drawer uses `ghostty-web` 0.4.0: Ghostty `5714ed07` (December 2025) plus a private wasm patch. Upstream has not released since (0.5.0-rc.0 waits in PR #182), and no maintainer has announced moving to libghostty-vt 1.0; the only upgrade attempt is a community WIP on 1.3 (#162). 0.4.0 carries an open memory-corruption bug (#210) and the unpatched paste [CVE-2026-26982](https://github.com/ghostty-org/ghostty/security/advisories/GHSA-4jxv-xgrp-5m3r) (#193).
 
 Fed the same bytes at `/dev/terminal-vt`, the release wasm matched the fixture, parsed heavy output twice as fast, and differed on 9 of 32 input cases: eight are ghostty-web bugs, one a macOS Option policy. It costs bytes and an owned front end.
 
