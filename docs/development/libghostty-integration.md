@@ -21,10 +21,12 @@ semantics aligned.
 - Build script: `scripts/build-ghosttykit.sh`
 - Output path consumed by SPM: `Frameworks/GhosttyKit.xcframework`
 - Pin source of truth: `GHOSTTY_COMMIT` inside the build script
-- Toolchain source of truth: `.mise.toml` (`zig = "0.16.0"`), which tracks
+- Toolchain source of truth: `.mise.toml` (`zig = "0.17.0"`), which tracks
   `minimum_zig_version` in the pinned Ghostty checkout's `build.zig.zon`
-- The pin is a trunk commit; Ghostty's newest release tag (`v1.3.1`, March
-  2026) predates the API this integration compiles against
+- The pin is the `vt-1.0.0` tag (`0fa3d57`, 2026-11-06), the libghostty-vt 1.0
+  release cut from trunk; it contains the `v1.4.0` app release. The 1.0 ABI
+  promise covers `ghostty/vt.h` only — the embedding API in `ghostty.h` that
+  GhosttyKit exposes is still unversioned and can change on any bump
 
 Behavior:
 - If `GHOSTTY_DIR` is set, script verifies that checkout is exactly at pinned commit.
@@ -220,7 +222,7 @@ Treat both as watch items for future Ghostty pin updates.
 
 ### Zig toolchain resolution
 
-The pinned Ghostty commit requires Zig `0.16.0`, and Homebrew carries that
+The pinned Ghostty commit requires Zig `0.17.0`, and Homebrew carries that
 release as the unversioned `zig` formula — which floats to the next Zig
 release. `scripts/build-ghosttykit.sh` therefore version-checks every Homebrew
 candidate against its own `ZIG_VERSION` and prefers, in order:
