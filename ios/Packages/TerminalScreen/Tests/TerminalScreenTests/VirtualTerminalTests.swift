@@ -240,6 +240,29 @@ struct TerminalSnapshotPaintingTests {
         #expect(hidden.background == nil)
     }
 
+    @Test("A cursor over an inverse cell paints in the cursor's colors, as Ghostty's block overlay does")
+    func cursorOverInverse() throws {
+        let snapshot = try screen("\(esc)[2;7;44mabcdefg完\(esc)[1;8H", columns: 8, rows: 3)
+        #expect(snapshot.cursor == TerminalCursor(column: 7, row: 0))
+        let cells = snapshot.paintedCells()
+        let cursor = try #require(cells.first { $0.row == 0 && $0.column == 7 })
+        #expect(cursor.text == " ")
+        #expect(cursor.foreground == snapshot.background)
+        #expect(cursor.background == snapshot.foreground)
+        #expect(cursor.foregroundOpacity == 1)
+        let beside = try #require(cells.first { $0.row == 0 && $0.column == 6 })
+        #expect(beside.foreground != snapshot.background && beside.foregroundOpacity < 1)
+    }
+
+    @Test("Underline and strikethrough lines cover blank cells too, merged per run")
+    func decorationLinesCoverBlanks() throws {
+        let cells = try screen("  \(esc)[4m  \(esc)[0;9m ok\(esc)[0m\(esc)[?25l").paintedCells()
+        let lines = cells.decorationLines()
+        #expect(lines.map(\.kind) == [.underline, .strikethrough])
+        #expect(lines.map(\.column) == [2, 4])
+        #expect(lines.map(\.width) == [2, 3])
+    }
+
     @Test("Inverse swaps resolved colors; faint dims; invisible matches its background")
     func paintTimeAttributes() throws {
         let snapshot = try screen("\(esc)[7;31mI\(esc)[0m\(esc)[2mF\(esc)[0m\(esc)[8;44mH\(esc)[0m\(esc)[?25l")

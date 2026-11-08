@@ -50,8 +50,14 @@ export function cursorKind(snapshot: TerminalSnapshot, focused: boolean, blinkOn
 	return cursor.shape === "block_hollow" ? "hollow" : cursor.shape;
 }
 
-export function paintedCells(snapshot: TerminalSnapshot, cursorBlock: boolean): PaintedCell[] {
+/**
+ * The cells to paint, colors resolved. A block cursor is Ghostty's overlay:
+ * its cell fills with `cursorColor` and its text takes the default
+ * background, whatever the cell's own colors or inverse flag.
+ */
+export function paintedCells(snapshot: TerminalSnapshot, cursorBlock: boolean, cursorColor: Rgb = snapshot.fg): PaintedCell[] {
 	const cells: PaintedCell[] = [];
+	const block = cursorBlock ? cursorColor : null;
 	const cursor = snapshot.cursor;
 	snapshot.lines.forEach((line, row) => {
 		for (const run of line) {
@@ -62,12 +68,12 @@ export function paintedCells(snapshot: TerminalSnapshot, cursorBlock: boolean): 
 				const onCursor =
 					cursorBlock && cursor !== null && cursor.row === row &&
 					(cursor.column === column || (wide && cursor.column === column + 1));
-				cells.push(paint(snapshot, text, row, column, width, run.style, onCursor));
+				cells.push(paint(snapshot, text, row, column, width, run.style, onCursor ? block : null));
 			});
 		}
 	});
 	if (cursorBlock && cursor && !cells.some((c) => c.row === cursor.row && c.column <= cursor.column && cursor.column < c.column + c.width)) {
-		cells.push(paint(snapshot, " ", cursor.row, cursor.wide ? cursor.column - 1 : cursor.column, cursor.wide ? 2 : 1, BLANK, true));
+		cells.push(paint(snapshot, " ", cursor.row, cursor.wide ? cursor.column - 1 : cursor.column, cursor.wide ? 2 : 1, BLANK, block));
 	}
 	return cells;
 }
@@ -81,11 +87,12 @@ function paint(
 	column: number,
 	width: number,
 	style: CellStyle,
-	onCursor: boolean,
+	cursor: Rgb | null,
 ): PaintedCell {
 	let fg = style.fg ?? snapshot.fg;
 	let bg = style.bg;
-	if (style.inverse !== onCursor) [fg, bg] = [bg ?? snapshot.bg, fg];
+	if (style.inverse) [fg, bg] = [bg ?? snapshot.bg, fg];
+	if (cursor !== null) [fg, bg] = [snapshot.bg, cursor];
 	if (style.invisible) fg = bg ?? snapshot.bg;
 	return {
 		row,
@@ -93,7 +100,7 @@ function paint(
 		width,
 		text,
 		fg,
-		faint: style.faint,
+		faint: style.faint && cursor === null,
 		bg,
 		bold: style.bold,
 		italic: style.italic,
@@ -137,7 +144,7 @@ export function preeditCells(snapshot: TerminalSnapshot, graphemes: { text: stri
 	for (const { text, width } of graphemes) {
 		const w = Math.max(1, width);
 		if (column + w > snapshot.columns) break;
-		cells.push({ ...paint(snapshot, text, cursor.row, column, w, BLANK, false), bg: snapshot.bg, underline: true });
+		cells.push({ ...paint(snapshot, text, cursor.row, column, w, BLANK, null), bg: snapshot.bg, underline: true });
 		column += w;
 	}
 	return cells;
@@ -198,7 +205,7 @@ export function paintSnapshot(
 	ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
 	const kind = cursorKind(snapshot, options.focused, options.blinkOn);
-	const cells = paintedCells(snapshot, kind === "block" && !options.preedit);
+	const cells = paintedCells(snapshot, kind === "block" && !options.preedit, options.cursorColor);
 	for (const span of backgroundSpans(cells)) {
 		ctx.fillStyle = css(span.color);
 		ctx.fillRect(Math.floor(span.column * cw), span.row * ch, Math.ceil(span.width * cw), ch);

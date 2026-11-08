@@ -97,9 +97,12 @@ export function sameStyle(a: CellStyle, b: CellStyle): boolean {
 	);
 }
 
-/** A blank in this style still paints something: a background, or a line through it. */
+/**
+ * A blank in this style still paints something: a background, a line through
+ * it, or a link, which Ghostty underlines on hover over every cell it covers.
+ */
 export function paintsBlank(style: CellStyle): boolean {
-	return style.bg !== null || style.inverse || style.underline || style.strikethrough || style.overline;
+	return style.bg !== null || style.inverse || style.underline || style.strikethrough || style.overline || style.hyperlink;
 }
 
 /**
