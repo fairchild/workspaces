@@ -250,7 +250,7 @@ enum GhosttyRuntimeActionBridge {
             return true
 
         case GHOSTTY_ACTION_SET_TITLE:
-            let title = action.action.set_title.title.flatMap { String(cString: $0) } ?? ""
+            let title = String(cString: action.action.set_title.title)
             LaunchWindowProbe.noteShellSignalAction(kind: "set_title")
             runOnMainAsync {
                 guard let surfaceView = resolveSurfaceView(sourceSurfaceAddress) else { return }
@@ -259,7 +259,7 @@ enum GhosttyRuntimeActionBridge {
             return true
 
         case GHOSTTY_ACTION_SET_TAB_TITLE:
-            let title = action.action.set_tab_title.title.flatMap { String(cString: $0) } ?? ""
+            let title = String(cString: action.action.set_tab_title.title)
             postTabAction(
                 kind: .setTabTitle,
                 closeModeRawValue: nil,
@@ -273,7 +273,7 @@ enum GhosttyRuntimeActionBridge {
             return true
 
         case GHOSTTY_ACTION_PWD:
-            let pwd = action.action.pwd.pwd.flatMap { String(cString: $0) }
+            let pwd = String(cString: action.action.pwd.pwd)
             LaunchWindowProbe.noteShellSignalAction(kind: "pwd")
             runOnMainAsync {
                 guard let surfaceView = resolveSurfaceView(sourceSurfaceAddress) else { return }
@@ -282,8 +282,9 @@ enum GhosttyRuntimeActionBridge {
             return true
 
         case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
-            let title = action.action.desktop_notification.title.flatMap { String(cString: $0) }
-            let body = action.action.desktop_notification.body.flatMap { String(cString: $0) } ?? ""
+            let rawTitle = String(cString: action.action.desktop_notification.title)
+            let title = rawTitle.isEmpty ? nil : rawTitle
+            let body = String(cString: action.action.desktop_notification.body)
             runOnMainAsync {
                 guard let surfaceView = resolveSurfaceView(sourceSurfaceAddress) else { return }
                 surfaceView.handleDesktopNotification(
@@ -308,6 +309,11 @@ enum GhosttyRuntimeActionBridge {
                 surfaceView.updateScrollbarState(scrollbarState)
             }
             return true
+
+        case GHOSTTY_ACTION_RESIZE_WINDOW, GHOSTTY_ACTION_SET_WINDOW_THEME:
+            // A tile does not own its window: size and appearance follow the
+            // app, so these are declined and Ghostty leaves both alone.
+            return false
 
         default:
             return false

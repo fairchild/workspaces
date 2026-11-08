@@ -21,10 +21,24 @@ semantics aligned.
 - Build script: `scripts/build-ghosttykit.sh`
 - Output path consumed by SPM: `Frameworks/GhosttyKit.xcframework`
 - Pin source of truth: `GHOSTTY_COMMIT` inside the build script
-- Toolchain source of truth: `.mise.toml` (`zig = "0.16.0"`), which tracks
+- Toolchain source of truth: `.mise.toml` (`zig = "0.17.0"`), which tracks
   `minimum_zig_version` in the pinned Ghostty checkout's `build.zig.zon`
-- The pin is a trunk commit; Ghostty's newest release tag (`v1.3.1`, March
-  2026) predates the API this integration compiles against
+- The pin is the `vt-1.0.0` tag (`0fa3d57`, 2026-11-06), the libghostty-vt 1.0
+  release cut from trunk; it contains the `v1.4.0` app release. The 1.0 ABI
+  promise covers `ghostty/vt.h` only — the embedding API in `ghostty.h` that
+  GhosttyKit exposes is still unversioned and can change on any bump
+
+What `ghostty.h` changed for the app between `492300ca` and `0fa3d57`:
+- Pointers are non-null unless marked `GHOSTTY_NULLABLE` (`clang assume_nonnull`),
+  so action payload strings (`set_title`, `pwd`, `desktop_notification`) and
+  clipboard contents import into Swift as non-optional
+- Two new runtime actions, `RESIZE_WINDOW` (CSI 8 t) and `SET_WINDOW_THEME`;
+  `GhosttyRuntimeActionBridge` declines both because a tile does not own its window
+- `ghostty_surface_paste_text` is new and unused here; text input still goes
+  through `ghostty_surface_text` (adopting it is #1845)
+- `ghostty_surface_request_close` now runs the `close_surface` binding action,
+  which lands in the same `Surface.close()` the old call made
+- Renderers share one Metal device held by the app rather than one per surface
 
 Behavior:
 - If `GHOSTTY_DIR` is set, script verifies that checkout is exactly at pinned commit.
@@ -220,7 +234,7 @@ Treat both as watch items for future Ghostty pin updates.
 
 ### Zig toolchain resolution
 
-The pinned Ghostty commit requires Zig `0.16.0`, and Homebrew carries that
+The pinned Ghostty commit requires Zig `0.17.0`, and Homebrew carries that
 release as the unversioned `zig` formula — which floats to the next Zig
 release. `scripts/build-ghosttykit.sh` therefore version-checks every Homebrew
 candidate against its own `ZIG_VERSION` and prefers, in order:
@@ -236,8 +250,19 @@ candidate against its own `ZIG_VERSION` and prefers, in order:
 Homebrew's formula matters most on hosts where the upstream ziglang.org build
 fails to link its own build runner against the installed Xcode SDK — observed
 with Zig 0.15.2 against Xcode 26.4.1 (`undefined symbol:
-__availability_version_check` plus missing libSystem symbols). Zig 0.16.0 from
-ziglang.org, via the locked mise runner, links cleanly on Tahoe with Xcode 26.4.
+__availability_version_check` plus missing libSystem symbols). Zig 0.17.0 from
+ziglang.org, via the locked mise runner, links cleanly with Xcode 27.2 (the
+`vt-1.0.0` pin build, 2026-11). `zig build` in 0.17 rejects
+`--global-cache-dir` ("unrecognized argument"), though the compiler itself still
+takes it; the script passes the global cache through `ZIG_GLOBAL_CACHE_DIR`,
+which both read.
+
+Xcode Cloud's `ci_post_clone.sh` installs Homebrew's `zig` with
+`HOMEBREW_NO_AUTO_UPDATE=1`, so it gets whatever version the image's formula
+snapshot carries. When that is not `ZIG_VERSION`, the version check above
+rejects it and the build takes the locked mise runner. The
+`GHOSTTY_ARCH_DIAGNOSTICS` block in the build log names which one ran: a
+binary path for Homebrew, a "mise-wrapped invocation" line for mise.
 
 A wrong-arch Homebrew zig (or `GHOSTTY_ZIG_BIN`) is accepted and asked to
 cross-compile. Confirmed on one Xcode Cloud macOS image whose only available
