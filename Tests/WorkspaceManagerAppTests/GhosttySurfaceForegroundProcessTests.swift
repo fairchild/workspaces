@@ -29,7 +29,7 @@ struct GhosttySurfaceForegroundProcessTests {
         let sleeperSurface = try #require(harness.surface(for: sleeper))
         let readerSurface = try #require(harness.surface(for: reader))
 
-        let named = await BareGhosttyApp.poll(timeout: 60) {
+        let named = await BareGhosttyApp.poll(launches: 4) {
             Self.processNames(under: sleeperSurface).contains("sleep")
                 && Self.processNames(under: readerSurface).contains("cat")
         }
@@ -42,6 +42,7 @@ struct GhosttySurfaceForegroundProcessTests {
         let sleeperTTY = Self.ttyName(sleeperSurface)
         let readerTTY = Self.ttyName(readerSurface)
         #expect(sleeperTTY.hasPrefix("/dev/tty"), "\(sleeperTTY)")
+        #expect(readerTTY.hasPrefix("/dev/tty"), "\(readerTTY)")
         #expect(sleeperTTY != readerTTY)
     }
 

@@ -18,7 +18,8 @@ import Testing
 @Suite("Ghostty surface spawn contract", .serialized)
 @MainActor
 struct GhosttySurfaceSpawnContractTests {
-    private static let spawnTimeout: TimeInterval = 60
+    /// Child launches a wait may cost before it is a failure: eight surfaces come up at once.
+    private static let spawnLaunches = 8.0
 
     @Test("Every surface in a burst starts with its own command, environment, directory and input")
     func burstSurfacesEachGetTheirLaunchConfig() async throws {
@@ -30,7 +31,7 @@ struct GhosttySurfaceSpawnContractTests {
         let launches = try (0..<8).map { index in try scratch.launch(index) }
         let views = try launches.map { try harness.makeSurface($0.config) }
 
-        let arrived = await BareGhosttyApp.poll(timeout: Self.spawnTimeout) {
+        let arrived = await BareGhosttyApp.poll(launches: Self.spawnLaunches) {
             launches.allSatisfy { $0.report() != nil }
         }
         let reports = launches.map { ($0, $0.report()) }
@@ -50,12 +51,12 @@ struct GhosttySurfaceSpawnContractTests {
 
         let first = try scratch.launch(0)
         let firstView = try harness.makeSurface(first.config)
-        #expect(await BareGhosttyApp.poll(timeout: Self.spawnTimeout) { first.report() != nil })
+        #expect(await BareGhosttyApp.poll(launches: Self.spawnLaunches) { first.report() != nil })
         harness.free(firstView)
 
         let second = try scratch.launch(1)
         let secondView = try harness.makeSurface(second.config)
-        #expect(await BareGhosttyApp.poll(timeout: Self.spawnTimeout) { second.report() != nil })
+        #expect(await BareGhosttyApp.poll(launches: Self.spawnLaunches) { second.report() != nil })
         #expect(second.report() == second.expected)
         harness.free(secondView)
     }
@@ -66,6 +67,11 @@ struct GhosttySurfaceSpawnContractTests {
         let scratch = try Scratch()
         defer { scratch.remove() }
         let expectedPath = try #require(GhosttyTerminalConfig(customCommand: "true").environmentVariables["PATH"])
+        // The child would inherit this process's PATH if env_vars were dropped, so the check
+        // only discriminates while the two differ.
+        try #require(
+            ProcessInfo.processInfo.environment["PATH"] != expectedPath,
+            "this process's PATH equals the configured one, so a dropped env_vars would pass")
 
         let outputs = (0..<6).map { scratch.root.appendingPathComponent("app-\($0).out") }
         var views: [GhosttySurfaceView] = outputs.map { output in
@@ -73,7 +79,7 @@ struct GhosttySurfaceSpawnContractTests {
         }
         #expect(views.allSatisfy { $0.surface != nil })
 
-        let arrived = await BareGhosttyApp.poll(timeout: Self.spawnTimeout) {
+        let arrived = await BareGhosttyApp.poll(launches: Self.spawnLaunches) {
             outputs.allSatisfy { Scratch.lines(at: $0) != nil }
         }
         #expect(
@@ -141,7 +147,7 @@ private struct Scratch {
         let format = Array(repeating: "%s", count: fields.count).joined(separator: "\\n") + "\\n"
         let values = fields.map { "\"\($0)\"" }.joined(separator: " ")
         let script = "\(read)printf \"\(format)\" \(values) > \"$0.tmp\" && mv \"$0.tmp\" \"$0\""
-        return "/bin/bash --noprofile --norc -c '\(script)' \(output.path)"
+        return "/bin/bash --noprofile --norc -c '\(script)' '\(output.path)'"
     }
 
     /// What `pwd -P` prints: `/private/var/...`, where Foundation's symlink resolution

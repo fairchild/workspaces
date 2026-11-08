@@ -219,9 +219,25 @@ enum ProcessTree {
 }
 
 extension BareGhosttyApp {
-    /// Polls `condition` until it holds or `timeout` passes. The timeout bounds failure
-    /// only; a passing wait returns the moment the state is observed.
-    static func poll(timeout: TimeInterval, _ condition: () -> Bool) async -> Bool {
+    /// Polls `condition` until it holds, within a deadline sized from this machine's
+    /// measured child-launch cost (`LaunchBudget`) and widened once on a miss if the
+    /// machine has slowed. The deadline bounds failure only; a passing wait returns the
+    /// moment the state is observed.
+    static func poll(
+        launches: Double,
+        floor: TimeInterval = 30,
+        ceiling: TimeInterval = 300,
+        _ condition: () -> Bool
+    ) async -> Bool {
+        let budget = await LaunchBudget.deadline(launches: launches, floor: floor, ceiling: ceiling)
+        if await poll(timeout: budget, condition) { return true }
+        let refreshed = await LaunchBudget.deadline(
+            launches: launches, floor: floor, ceiling: ceiling, refreshing: true)
+        guard refreshed > budget else { return false }
+        return await poll(timeout: refreshed - budget, condition)
+    }
+
+    private static func poll(timeout: TimeInterval, _ condition: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if condition() { return true }

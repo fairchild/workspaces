@@ -22,15 +22,13 @@ import Testing
 )
 @MainActor
 struct GhosttyWakeupCoalescingProbeTests {
-    private static let timeout: TimeInterval = 60
-
     @Test("Heavy output: 300,000 lines through one surface")
     func heavyOutput() async throws {
         let harness = try BareGhosttyApp()
         defer { harness.shutdown() }
 
         let view = try harness.makeSurface(BareSurfaceConfig(command: "/usr/bin/seq 1 300000"))
-        #expect(await BareGhosttyApp.poll(timeout: Self.timeout) { harness.hasProcessExited(view) })
+        #expect(await BareGhosttyApp.poll(launches: 4) { harness.hasProcessExited(view) })
         await Self.settle(harness)
         Self.report("output", harness.ledger.snapshot)
         harness.free(view)
@@ -72,7 +70,7 @@ struct GhosttyWakeupCoalescingProbeTests {
 
     /// Lets every queued tick run, so each wakeup counted has had its tick.
     private static func settle(_ harness: BareGhosttyApp) async {
-        _ = await BareGhosttyApp.poll(timeout: timeout) {
+        _ = await BareGhosttyApp.poll(launches: 4) {
             let counts = harness.ledger.snapshot
             return counts.ticks == counts.wakeups
         }

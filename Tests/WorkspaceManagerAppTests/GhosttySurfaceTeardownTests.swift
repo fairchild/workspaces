@@ -11,6 +11,7 @@
 import AppKit
 import Darwin
 import Foundation
+import GhosttyKit
 import Testing
 
 @testable import WorkspaceManager
@@ -18,53 +19,44 @@ import Testing
 @Suite("Ghostty surface teardown", .serialized)
 @MainActor
 struct GhosttySurfaceTeardownTests {
-    private static let timeout: TimeInterval = 60
+    private static let launches = 4.0
     private static let command = "/bin/bash --noprofile --norc -c 'sleep 600 & exec sleep 601'"
 
     @Test("Freeing a surface ends login, its command and the command's background job")
     func freeEndsTheChildChain() async throws {
         let harness = try BareGhosttyApp()
         defer { harness.shutdown() }
-        let before = ProcessTree.descendants()
-
         let view = try harness.makeSurface(BareSurfaceConfig(command: Self.command))
-        let chain = await Self.awaitChain(excluding: before)
+        let chain = await Self.awaitChain(of: try #require(harness.surface(for: view)))
         #expect(chain.map(ProcessTree.name).sorted() == ["login", "sleep", "sleep"], "chain: \(Self.describe(chain))")
 
         harness.free(view)
-        let ended = await BareGhosttyApp.poll(timeout: Self.timeout) { chain.allSatisfy { !ProcessTree.exists($0) } }
+        let ended = await BareGhosttyApp.poll(launches: Self.launches) { chain.allSatisfy { !ProcessTree.exists($0) } }
         #expect(ended, "survivors: \(Self.describe(chain.filter(ProcessTree.exists)))")
     }
 
     @Test("Releasing an app surface view ends its whole child chain")
     func releasedViewEndsTheChildChain() async throws {
         BareGhosttyApp.prepareProcess()
-        let before = ProcessTree.descendants()
         var view: GhosttySurfaceView? = GhosttySurfaceView(customCommand: Self.command)
-        #expect(view?.surface != nil)
-
-        let chain = await Self.awaitChain(excluding: before)
+        let chain = await Self.awaitChain(of: try #require(view?.surface))
         #expect(chain.map(ProcessTree.name).sorted() == ["login", "sleep", "sleep"], "chain: \(Self.describe(chain))")
 
         view = nil
-        let ended = await BareGhosttyApp.poll(timeout: Self.timeout) { chain.allSatisfy { !ProcessTree.exists($0) } }
+        let ended = await BareGhosttyApp.poll(launches: Self.launches) { chain.allSatisfy { !ProcessTree.exists($0) } }
         #expect(ended, "survivors: \(Self.describe(chain.filter(ProcessTree.exists)))")
     }
 
-    /// A new `login` and its subtree, once both sleeps are up under it. Rooting the chain at
-    /// its `login` keeps children other suites spawn meanwhile out of it.
-    private static func awaitChain(excluding before: Set<pid_t>) async -> Set<pid_t> {
+    /// The surface's foreground process group leader — `login`, which stays as the parent of
+    /// the command — and its subtree, once both sleeps are up under it. Starting from the
+    /// surface's own process group keeps children other suites spawn out of the chain.
+    private static func awaitChain(of surface: ghostty_surface_t) async -> Set<pid_t> {
         var chain = Set<pid_t>()
-        _ = await BareGhosttyApp.poll(timeout: timeout) {
-            let logins = ProcessTree.descendants().subtracting(before).filter { ProcessTree.name($0) == "login" }
-            for login in logins {
-                let subtree = ProcessTree.descendants(of: login)
-                if subtree.filter({ ProcessTree.name($0) == "sleep" }).count == 2 {
-                    chain = subtree.union([login])
-                    return true
-                }
-            }
-            return false
+        _ = await BareGhosttyApp.poll(launches: launches) {
+            let leader = pid_t(truncatingIfNeeded: ghostty_surface_foreground_pid(surface))
+            guard leader > 0 else { return false }
+            chain = ProcessTree.descendants(of: leader).union([leader])
+            return chain.filter { ProcessTree.name($0) == "sleep" }.count == 2
         }
         return chain
     }
