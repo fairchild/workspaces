@@ -42,6 +42,15 @@ final class GhosttyAppManager: NSObject {
     /// and an attempt fails only when the mailbox is full, so 64 wakeups with no tick in between
     /// prove the 64-slot mailbox filled.
     nonisolated static let wakeupCount = OSAllocatedUnfairLock(initialState: 0)
+
+    /// While true, wakeups leave the app mailbox undrained, which is how a test holds it full
+    /// without blocking the main thread under every other test. Frees still tick first.
+    var wakeupTicksSuspended = false {
+        didSet {
+            guard oldValue, !wakeupTicksSuspended else { return }
+            GhosttyThreadingBridge.enqueueOnMain { self.tick() }
+        }
+    }
     private var config: ghostty_config_t?
     private var initialized = false
     private var currentColorScheme: ghostty_color_scheme_e?
@@ -237,7 +246,9 @@ final class GhosttyAppManager: NSObject {
         let probeToken = LaunchWindowProbe.noteWakeup()
         GhosttyThreadingBridge.enqueueOnMain {
             LaunchWindowProbe.noteTickStart(token: probeToken)
-            guard let manager = GhosttyCallbackUserdata.manager(from: userdataAddress) else { return }
+            guard let manager = GhosttyCallbackUserdata.manager(from: userdataAddress),
+                !manager.wakeupTicksSuspended
+            else { return }
             manager.tick()
         }
     }
