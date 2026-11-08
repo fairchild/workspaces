@@ -1,0 +1,55 @@
+{
+	"fixtures": [
+		{
+			"name": "agent-turn",
+			"columns": 60,
+			"rows": 14,
+			"chunk": 24,
+			"about": "A recorded agent turn: in-place redraws, cursor-up rewrites, wide characters, 256-color and truecolor text"
+		},
+		{
+			"name": "wide-cursor-left",
+			"columns": 8,
+			"rows": 3,
+			"about": "The cursor on the left half of a wide character"
+		},
+		{
+			"name": "wide-cursor-right",
+			"columns": 8,
+			"rows": 3,
+			"about": "The cursor on the right half of a wide character"
+		},
+		{
+			"name": "wide-cursor-spacer-head",
+			"columns": 8,
+			"rows": 3,
+			"about": "The cursor on the spacer head a wrapped wide character left behind"
+		},
+		{
+			"name": "graphemes",
+			"columns": 40,
+			"rows": 3,
+			"about": "Combining marks, ZWJ, flag, skin tone, VS16 and Indic clusters with mode 2027 off, then on"
+		},
+		{
+			"name": "split-escape",
+			"columns": 30,
+			"rows": 4,
+			"chunk": 1,
+			"about": "CSI, OSC, OSC 8, DCS, save and restore, and UTF-8, one byte per write"
+		},
+		{
+			"name": "scrollback",
+			"columns": 20,
+			"rows": 5,
+			"chunk": 64,
+			"about": "Forty lines through a five-row screen"
+		},
+		{
+			"name": "sgr-colors",
+			"columns": 48,
+			"rows": 15,
+			"about": "Every SGR attribute, the 16 named colors, 256-color and truecolor, and which trailing blanks survive"
+		}
+	]
+}

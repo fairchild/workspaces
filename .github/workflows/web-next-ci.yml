@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - "web-next/**"
+      - "fixtures/terminal-vt/**"
       - ".github/workflows/web-next-ci.yml"
   pull_request:
     paths:
       - "web-next/**"
+      - "fixtures/terminal-vt/**"
       - "!web-next/docs/**"
       - "!web-next/**.md"
       - ".github/workflows/web-next-ci.yml"

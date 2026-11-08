@@ -177,11 +177,8 @@ struct VirtualTerminalTests {
 
     @Test("A recorded agent turn renders as the final screen, with no escape bytes left")
     func recordedTurn() throws {
-        let url = try #require(
-            Bundle.module.url(forResource: "agent-turn", withExtension: "vt", subdirectory: "Fixtures")
-        )
         let terminal = try VirtualTerminal(columns: 60, rows: 14)
-        terminal.write(try Data(contentsOf: url))
+        terminal.write(try FixtureCorpus.stream("agent-turn"))
         let snapshot = try terminal.snapshot()
         let text = snapshot.text
 

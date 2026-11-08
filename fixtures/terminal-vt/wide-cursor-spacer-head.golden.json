@@ -1,0 +1,20 @@
+{
+  "columns": 8,
+  "rows": 3,
+  "fg": "#ffffff",
+  "bg": "#000000",
+  "cursor": {"column":7,"row":1,"wide":false},
+  "lines": [
+    [
+      {"column":0,"text":"完","columns":2},
+      {"column":2,"text":"成","columns":2},
+      {"column":4,"text":"x","columns":1}
+    ],
+    [
+      {"column":0,"text":"abcdefg","columns":7}
+    ],
+    [
+      {"column":0,"text":"完","columns":2}
+    ]
+  ]
+}

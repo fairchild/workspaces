@@ -25,8 +25,7 @@ let package = Package(
         ),
         .testTarget(
             name: "TerminalScreenTests",
-            dependencies: ["TerminalScreen"],
-            resources: [.copy("Fixtures")]
+            dependencies: ["TerminalScreen"]
         ),
     ]
 )

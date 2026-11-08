@@ -1,0 +1,25 @@
+{
+  "columns": 30,
+  "rows": 4,
+  "fg": "#ffffff",
+  "bg": "#000000",
+  "cursor": {"column":4,"row":2,"wide":false},
+  "lines": [
+    [
+      {"column":0,"text":"red","columns":3,"style":{"fg":"#cc6666","bold":true}},
+      {"column":3,"text":" ","columns":1},
+      {"column":4,"text":"tc","columns":2,"style":{"fg":"#010203"}},
+      {"column":6,"text":" link ","columns":6},
+      {"column":12,"text":"完","columns":2},
+      {"column":14,"text":"✅","columns":2}
+    ],
+    [
+      {"column":0,"text":"Saved              ","columns":19},
+      {"column":19,"text":"  ","columns":2,"style":{"bg":"#005fff"}}
+    ],
+    [
+      {"column":0,"text":"tail","columns":4}
+    ],
+    []
+  ]
+}
