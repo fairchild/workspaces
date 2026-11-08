@@ -253,7 +253,8 @@ struct CellMetrics {
     let baseline: CGFloat
 
     @MainActor init(fontSize: CGFloat) {
-        let font = Self.font(ofSize: fontSize)
+        let font = PlatformFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        Self.familyAnchor = Self.familyAnchor ?? font
         width = ("M" as NSString).size(withAttributes: [.font: font]).width
         #if canImport(UIKit)
             height = font.lineHeight.rounded(.up)
@@ -270,18 +271,11 @@ struct CellMetrics {
         typealias PlatformFont = NSFont
     #endif
 
-    /// The system monospaced font at each size, held for the life of the process.
-    /// Holding them keeps the font family resident: after a process frees its last
-    /// font of the family, AppKit can return nil for the next one while the family
-    /// is torn down, and measuring with that nil raises.
-    @MainActor private static var fonts: [CGFloat: PlatformFont] = [:]
-
-    @MainActor private static func font(ofSize size: CGFloat) -> PlatformFont {
-        if let font = fonts[size] { return font }
-        let font = PlatformFont.monospacedSystemFont(ofSize: size, weight: .regular)
-        fonts[size] = font
-        return font
-    }
+    /// The first font measured, held for the life of the process. After a process
+    /// frees its last system monospaced font, the next request for one has come
+    /// back nil in parallel test runs despite its nonnull signature, and measuring
+    /// with nil raises. Holding one font of the family has kept that from happening.
+    @MainActor private static var familyAnchor: PlatformFont?
 
     /// A one-point line: an underline just under the baseline, a strikethrough
     /// through the middle, as web-next's painter draws them. A cell too short
