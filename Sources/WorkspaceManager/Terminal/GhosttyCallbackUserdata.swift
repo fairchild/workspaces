@@ -6,6 +6,14 @@
 import Foundation
 import GhosttyKit
 
+/// What a surface's libghostty userdata points at. A surface is freed on a later main-actor
+/// turn than its view's `deinit` (`GhosttyAppManager.retireSurface`), so callbacks in between
+/// must resolve to no view rather than a freed one, and the address must not be reused by a
+/// new view while the old surface can still call back. Retained until after the surface's free.
+final class GhosttySurfaceCallbackTarget: @unchecked Sendable {
+    weak var view: GhosttySurfaceView?
+}
+
 enum GhosttyCallbackUserdata {
     static func address(from userdata: UnsafeMutableRawPointer?) -> UInt? {
         userdata.map { UInt(bitPattern: $0) }
@@ -26,7 +34,7 @@ enum GhosttyCallbackUserdata {
 
     static func surfaceView(from userdata: UnsafeMutableRawPointer?) -> GhosttySurfaceView? {
         guard let userdata else { return nil }
-        return Unmanaged<GhosttySurfaceView>.fromOpaque(userdata).takeUnretainedValue()
+        return Unmanaged<GhosttySurfaceCallbackTarget>.fromOpaque(userdata).takeUnretainedValue().view
     }
 
     static func surfaceUserdata(from target: ghostty_target_s) -> UnsafeMutableRawPointer? {
