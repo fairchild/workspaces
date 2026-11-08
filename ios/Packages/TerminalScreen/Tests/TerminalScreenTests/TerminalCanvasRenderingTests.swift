@@ -1,5 +1,6 @@
 // Renders TerminalCanvas offscreen and reads back which grid columns received
-// ink, so paint rules the pure tests cannot see, such as whether a decoration
+// ink (pixels at least half covered, so anti-aliased edges stay in their own
+// column), so paint rules the pure tests cannot see, such as whether a decoration
 // on a blank cell is drawn at all, are checked against real pixels.
 import CoreGraphics
 import SwiftUI
@@ -14,7 +15,8 @@ struct TerminalCanvasRenderingTests {
     func decorationsOnBlanks() throws {
         let terminal = try VirtualTerminal(columns: 6, rows: 1)
         terminal.write("  \u{1B}[4m  \u{1B}[0;9m  \u{1B}[0m\u{1B}[?25l")
-        #expect(try inkedColumns(terminal.snapshot()) == [2, 3, 4, 5])
+        let inked = try inkedColumns(terminal.snapshot())
+        #expect(inked == [2, 3, 4, 5])
     }
 
     private func inkedColumns(_ snapshot: TerminalSnapshot) throws -> Set<Int> {
@@ -37,7 +39,7 @@ struct TerminalCanvasRenderingTests {
         let columnWidth = Double(width) / Double(snapshot.columns)
         var columns: Set<Int> = []
         for y in 0..<height {
-            for x in 0..<width where pixels[(y * width + x) * 4 + 3] > 0 {
+            for x in 0..<width where pixels[(y * width + x) * 4 + 3] > 127 {
                 columns.insert(min(snapshot.columns - 1, Int((Double(x) + 0.5) / columnWidth)))
             }
         }
