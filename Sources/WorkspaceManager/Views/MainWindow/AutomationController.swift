@@ -884,11 +884,11 @@ final class AutomationController: AutomationControlling {
         case .noSurface:
             throw AutomationServiceError(.staleHandle, "The terminal surface is not ready to receive input.")
         case .heldByPasteProtection:
-            // The text would have reached the program unframed, where each newline runs a
-            // command; `input.write` never executes without `submit`, so it fails closed.
+            // Delivered, the text could run commands (unframed newlines, or an end-of-paste
+            // marker escaping the frame); `input.write` never executes without `submit`.
             throw AutomationServiceError(
                 .invalidRequest,
-                "Paste protection held the text: it spans lines and the program in this terminal has not enabled bracketed paste, so each line would run as a command. Nothing was written. Send one line per request, or retry once the program accepts bracketed paste (a shell does at its prompt)."
+                "Paste protection held the text, so nothing was written. Either it spans lines while the program in this terminal has not enabled bracketed paste, so each line would run as a command (send one line per request, or retry once the program accepts bracketed paste, as a shell does at its prompt), or it contains an end-of-paste marker (ESC [ 201 ~), which is never accepted."
             )
         }
         // Submit goes through the key-event path, not an appended "\r": the text lands as a paste,
