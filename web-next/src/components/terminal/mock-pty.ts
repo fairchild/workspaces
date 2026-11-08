@@ -3,8 +3,9 @@
  * under AUTH_BYPASS, so Playwright e2e and the perf gate exercise the real
  * drawer + terminal rendering with no sandbox. Local echo, line editing
  * (backspace), and a tiny fixed command set — no clock, no randomness, so
- * every run paints identical bytes. `evalMockCommand` is pure and exported
- * for unit tests.
+ * every run paints identical bytes. It speaks bytes like the real PTY:
+ * input decodes as a stream, output encodes as UTF-8. `evalMockCommand` is
+ * pure and exported for unit tests.
  */
 import type {
 	TerminalConnection,
@@ -44,8 +45,10 @@ export function openMockPty(
 ): TerminalConnection {
 	let line = "";
 	let closed = false;
+	const encoder = new TextEncoder();
+	const decoder = new TextDecoder();
 	const write = (text: string) => {
-		if (!closed) handlers.onData(text);
+		if (!closed) handlers.onData(encoder.encode(text));
 	};
 
 	// The first paint: banner + prompt, synchronously on open.
@@ -64,8 +67,8 @@ export function openMockPty(
 	};
 
 	return {
-		send(data: string) {
-			for (const ch of data) {
+		send(bytes: Uint8Array) {
+			for (const ch of decoder.decode(bytes, { stream: true })) {
 				if (ch === "\r" || ch === "\n") {
 					run();
 				} else if (ch === "\x7f" || ch === "\b") {

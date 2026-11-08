@@ -20,8 +20,10 @@ import {
 
 /**
  * The one pin. Ghostty's release artifact, verified with minisign against the
- * key below before its digest was recorded; scripts/fetch-ghostty-vt.mjs
- * downloads and re-checks it, and loadGhosttyVt checks it again in the page.
+ * key below before its digest was recorded. `pnpm build` runs
+ * scripts/fetch-ghostty-vt.mjs, which downloads and re-checks it into
+ * public/<servedFrom>, so every deploy serves it same-origin; loadGhosttyVt
+ * checks it again in the page.
  */
 export const GHOSTTY_VT_RELEASE = {
 	version: "1.0.0",
@@ -29,7 +31,7 @@ export const GHOSTTY_VT_RELEASE = {
 	sha256: "dad8e14ce8da57db3864f66ae36caf66a17c4e2691ad0a0110e05c746de047a4",
 	minisignKey: "RWQlAjJC23149WL2sEpT/l0QKy7hMIFhYdQOFy0Z7z7PbneUgvlsnYcV",
 	origin: "https://release.files.ghostty.org/libghostty-vt/1.0.0/",
-	servedFrom: "/dev/terminal-vt/",
+	servedFrom: "/ghostty-vt/",
 } as const;
 
 interface EnumLayout {

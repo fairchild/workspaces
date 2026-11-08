@@ -213,7 +213,7 @@ async function captureSessionTurn(page, shot) {
 
 /**
  * The terminal drawer (#752), on the session the turn just ran in: Ctrl+`
- * opens it (lazy ghostty-web init + the ticket mint/redeem exchange over the
+ * opens it (lazy libghostty-vt wasm load + the ticket mint/redeem exchange over the
  * mock PTY seam), a command runs in the shell, and the drawer is captured
  * over the transcript.
  */

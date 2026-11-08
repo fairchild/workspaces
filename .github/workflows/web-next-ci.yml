@@ -44,9 +44,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # The wasm-backed unit tests and the terminal-vt e2e need Ghostty's
-      # pinned release wasm; the script downloads it and refuses any file
-      # whose SHA-256 differs from the pin in ghostty-vt.ts.
+      # The wasm-backed unit tests need Ghostty's pinned release wasm before
+      # the build (which fetches it too); the script downloads it and refuses
+      # any file whose SHA-256 differs from the pin in ghostty-vt.ts.
       - name: Fetch pinned libghostty-vt wasm
         run: pnpm ghostty-vt:fetch
 

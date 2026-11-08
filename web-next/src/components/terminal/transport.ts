@@ -7,15 +7,15 @@
  */
 
 export interface TerminalTransportHandlers {
-	/** Bytes/text from the PTY, ready to write to the terminal. */
-	onData(text: string): void;
+	/** PTY output, undecoded: a UTF-8 sequence may span two calls, and the terminal's parser joins it. */
+	onData(bytes: Uint8Array): void;
 	/** The transport ended (socket closed, sandbox gone). */
 	onClose(reason: string): void;
 }
 
 export interface TerminalConnection {
-	/** Keystrokes from the terminal to the PTY. */
-	send(data: string): void;
+	/** Encoded input from the terminal (keys, paste, replies) to the PTY. */
+	send(bytes: Uint8Array): void;
 	resize(cols: number, rows: number): void;
 	close(): void;
 }

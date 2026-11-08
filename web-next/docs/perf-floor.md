@@ -16,7 +16,7 @@ Nine scenarios, defined in `perf/contract.json`:
 | `transcript_render_200` | Cold load of a 200-message session to full paint |
 | `projection_200` | In-process cost of projecting a 200-event log into `UIMessage[]` (the tail/resume read path) |
 | `route_home` / `route_session_empty` / `route_sessions_demo` | LCP, total blocking time, and gzipped first-load JS for the three primary routes |
-| `terminal_drawer_interactive` | Drawer toggle → shell painted interactive (lazy ghostty-web init + ticket exchange), over the mock PTY seam |
+| `terminal_drawer_interactive` | Drawer toggle → shell painted interactive (lazy libghostty-vt wasm load + ticket exchange), over the mock PTY seam |
 | `resume_latency_100` | Reconnect-and-backfill latency for an interrupted 100-event turn |
 
 `perf/projection-bench.mjs` runs `projection_200` in-process (no browser);

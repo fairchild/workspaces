@@ -1,5 +1,5 @@
 /*
- * The terminal front end ghostty-web would otherwise provide: a canvas that
+ * The drawer's terminal front end: a canvas that
  * paints VtTerminal snapshots once per animation frame, a hidden textarea
  * that turns keys, IME composition and paste into the bytes Ghostty's
  * encoders produce, and a screen-reader mirror of the viewport text. Pointer

@@ -152,11 +152,16 @@ export function localModeServerEnv(dbDirName) {
 	};
 }
 
-/** Fails fast when `next build` hasn't produced a servable build. */
+/**
+ * Fails fast when `next build` hasn't produced a servable build, and puts the
+ * terminal's pinned wasm in public/ (a cached, checksum-verified no-op when
+ * it is already there), since a restored .next says nothing about it.
+ */
 export function assertProductionBuild() {
 	if (!existsSync(path.join(WEB_NEXT_ROOT, ".next", "BUILD_ID"))) {
 		throw new Error("No production build found — run `pnpm build` first.");
 	}
+	execFileSync(process.execPath, [path.join(WEB_NEXT_ROOT, "scripts", "fetch-ghostty-vt.mjs")], { stdio: "inherit" });
 }
 
 async function waitForServer(url, timeoutMs = 60_000) {

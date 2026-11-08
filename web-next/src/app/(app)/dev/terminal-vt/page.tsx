@@ -1,13 +1,14 @@
 /*
- * /dev/terminal-vt — the #1846 spike harness: ghostty-web 0.4.0 and Ghostty's
- * release libghostty-vt 1.0 wasm side by side, fed the same bytes. Gated by
- * terminalVtSpikeEnabled; a 404 everywhere else.
+ * /dev/terminal-vt — the bench for the drawer's terminal: the canvas over
+ * Ghostty's release libghostty-vt wasm, fed a recorded fixture, the mock
+ * PTY, a live ttyd WebSocket, a stress stream, or the parity screen the e2e
+ * spec drives. Gated by terminalVtBenchEnabled; a 404 everywhere else.
  */
 import { notFound } from "next/navigation";
-import { terminalVtSpikeEnabled } from "./gate";
-import { TerminalVtSpike } from "./terminal-vt-spike";
+import { terminalVtBenchEnabled } from "./gate";
+import { TerminalVtBench } from "./terminal-vt-bench";
 
-export default function TerminalVtSpikePage() {
-	if (!terminalVtSpikeEnabled()) notFound();
-	return <TerminalVtSpike />;
+export default function TerminalVtBenchPage() {
+	if (!terminalVtBenchEnabled()) notFound();
+	return <TerminalVtBench />;
 }

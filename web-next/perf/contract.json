@@ -128,7 +128,7 @@
 		{
 			"id": "terminal_drawer_interactive",
 			"status": "measured",
-			"description": "On a real empty session at /sessions/[id], toggle the terminal drawer (Ctrl+`): time from the toggle keypress to the drawer's shell painted interactive - lazy ghostty-web WASM load + init, the ticket mint/redeem exchange, and the first PTY bytes in a painted frame (data-ready). Runs against the mock PTY seam (AUTH_BYPASS), so it needs no sandbox credentials in CI; the real ttyd path adds sandbox + network time on top. One fresh seeded session per run, cold context each run.",
+			"description": "On a real empty session at /sessions/[id], toggle the terminal drawer (Ctrl+`): time from the toggle keypress to the drawer's shell painted interactive - lazy libghostty-vt binding chunk + pinned wasm fetch, checksum and instantiate, the ticket mint/redeem exchange, and the first PTY bytes in a painted frame (data-ready). Runs against the mock PTY seam (AUTH_BYPASS), so it needs no sandbox credentials in CI; the real ttyd path adds sandbox + network time on top. One fresh seeded session per run, cold context each run.",
 			"runs": 10,
 			"metrics": {
 				"drawer_interactive_ms": {

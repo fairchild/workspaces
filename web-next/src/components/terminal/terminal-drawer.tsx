@@ -4,9 +4,10 @@
  * The terminal drawer (#752): a collapsible bottom drawer on /sessions/[id]
  * holding a real shell into the session's live sandbox. Quiet affordances —
  * Ctrl+` and a small `>_` control above the status line — not persistent
- * chrome. ghostty-web renders the PTY; the transport behind it is the ticket
- * exchange's verdict (ttyd WebSocket, or the deterministic mock under
- * AUTH_BYPASS). The terminal mounts once and survives open/close and
+ * chrome. A canvas over Ghostty's libghostty-vt wasm renders the PTY; the
+ * transport behind it is the ticket exchange's verdict (ttyd WebSocket, or
+ * the deterministic mock under AUTH_BYPASS), and its bytes reach the
+ * terminal undecoded. The terminal mounts once and survives open/close and
  * reconnects, so scrollback and the tmux session read as one continuous
  * shell. A session with no live sandbox gets a calm note, not a fake shell.
  */
@@ -15,11 +16,10 @@ import { openMockPty } from "./mock-pty";
 import {
 	requestTerminalAccess,
 	type TerminalConnection,
+	type TerminalTransportHandlers,
 } from "./transport";
 import { openTtydSocket } from "./ttyd-transport";
-
-type GhosttyTerminal = import("ghostty-web").Terminal;
-type GhosttyFitAddon = import("ghostty-web").FitAddon;
+import type { CanvasTerminal, CanvasTerminalTheme } from "./vt/canvas-terminal";
 
 type Phase =
 	| "idle"
@@ -27,6 +27,7 @@ type Phase =
 	| "ready"
 	| "no-sandbox"
 	| "denied"
+	| "failed"
 	| "disconnected";
 
 /** Folio-toned ANSI palettes, chosen from globals.css's token values. */
@@ -35,7 +36,7 @@ export const TERMINAL_THEMES = {
 		background: "#f1ede0",
 		foreground: "#26221a",
 		cursor: "#a15c31",
-		selectionBackground: "#ebdfc8",
+		selectionBackground: "rgba(161, 92, 49, 0.15)",
 		black: "#26221a",
 		red: "#9a4b33",
 		green: "#3e6b36",
@@ -59,15 +60,10 @@ export const TERMINAL_THEMES = {
 		cyan: "#8fc0b8",
 		white: "#a79e8c",
 	},
-} as const;
+} as const satisfies Record<string, CanvasTerminalTheme>;
 
-/** Cap on the hidden plain-text mirror of PTY output (tests + screen readers). */
-const TRANSCRIPT_CAP = 8_000;
-
-const stripControl = (text: string) =>
-	text
-		.replace(/\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07/g, "")
-		.replace(/[\r\x07]/g, "");
+/** A concrete stack: the canvas can't resolve CSS variables, so next/font's Plex Mono is out of reach. */
+const FONT_FAMILY = 'ui-monospace, "SF Mono", Menlo, monospace';
 
 export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 	const [open, setOpen] = useState(false);
@@ -78,49 +74,50 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 	const [mode, setMode] = useState<"ttyd" | "mock" | null>(null);
 
 	const hostRef = useRef<HTMLDivElement>(null);
-	const transcriptRef = useRef<HTMLDivElement>(null);
-	const termRef = useRef<GhosttyTerminal | null>(null);
-	const fitRef = useRef<GhosttyFitAddon | null>(null);
+	const termRef = useRef<CanvasTerminal | null>(null);
+	const pendingTermRef = useRef<Promise<CanvasTerminal | null> | null>(null);
 	const connRef = useRef<TerminalConnection | null>(null);
 	const connectingRef = useRef(false);
 	const sawDataRef = useRef(false);
+	const unmountedRef = useRef(false);
+	/** The drawer's open state for async continuations, which must not focus a closed drawer. */
+	const openRef = useRef(false);
 
-	/** Create the ghostty-web terminal once, on first open. */
-	const ensureTerminal = useCallback(async (): Promise<GhosttyTerminal | null> => {
-		if (termRef.current) return termRef.current;
-		const host = hostRef.current;
-		if (!host) return null;
-		const { init, Terminal, FitAddon } = await import("ghostty-web");
-		await init();
-		if (termRef.current || !hostRef.current) return termRef.current;
-		const theme =
-			document.documentElement.dataset.theme === "dark"
-				? TERMINAL_THEMES.dark
-				: TERMINAL_THEMES.light;
-		const term = new Terminal({
-			cursorBlink: true,
-			fontSize: 13,
-			// A concrete stack: the canvas renderer can't resolve CSS variables,
-			// so the next/font-registered Plex Mono is out of reach here.
-			fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
-			theme,
-		});
-		const fit = new FitAddon();
-		term.loadAddon(fit);
-		term.onData((data) => connRef.current?.send(data));
-		term.onResize(({ cols, rows }) => connRef.current?.resize(cols, rows));
-		term.open(host);
-		termRef.current = term;
-		fitRef.current = fit;
-		requestAnimationFrame(() => {
+	/** Create the canvas terminal once, on first open; the binding and its wasm load here. */
+	const ensureTerminal = useCallback((): Promise<CanvasTerminal | null> => {
+		if (termRef.current) return Promise.resolve(termRef.current);
+		pendingTermRef.current ??= (async () => {
+			const host = hostRef.current;
+			if (!host) return null;
+			const { CanvasTerminal } = await import("./vt/canvas-terminal");
+			if (unmountedRef.current) return null;
+			const theme =
+				document.documentElement.dataset.theme === "dark"
+					? TERMINAL_THEMES.dark
+					: TERMINAL_THEMES.light;
+			const term = new CanvasTerminal(host, {
+				fontSize: 13,
+				fontFamily: FONT_FAMILY,
+				theme,
+				onData: (bytes) => connRef.current?.send(bytes),
+				onResize: (columns, rows) => connRef.current?.resize(columns, rows),
+			});
 			try {
-				fit.fit();
-				fit.observeResize();
-			} catch {
-				// host not laid out yet; observeResize catches the next pass
+				await term.open();
+			} catch (error) {
+				term.dispose();
+				throw error;
 			}
+			if (unmountedRef.current) {
+				term.dispose();
+				return null;
+			}
+			termRef.current = term;
+			return term;
+		})().finally(() => {
+			pendingTermRef.current = null;
 		});
-		return term;
+		return pendingTermRef.current;
 	}, []);
 
 	const connect = useCallback(async () => {
@@ -128,7 +125,14 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 		connectingRef.current = true;
 		setPhase("connecting");
 		try {
-			const term = await ensureTerminal();
+			let term: CanvasTerminal | null;
+			try {
+				term = await ensureTerminal();
+			} catch (error) {
+				setNote(error instanceof Error ? error.message : "the terminal failed to load");
+				setPhase("failed");
+				return;
+			}
 			if (!term) return;
 			let access: Awaited<ReturnType<typeof requestTerminalAccess>>;
 			try {
@@ -138,6 +142,7 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 				setPhase("denied");
 				return;
 			}
+			if (unmountedRef.current) return;
 			if (access.kind === "no-sandbox") {
 				setNote(access.reason);
 				setPhase("no-sandbox");
@@ -148,22 +153,16 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 				setPhase("denied");
 				return;
 			}
-			const handlers = {
-				onData: (text: string) => {
-					term.write(text);
-					const mirror = transcriptRef.current;
-					if (mirror) {
-						mirror.textContent = (
-							(mirror.textContent ?? "") + stripControl(text)
-						).slice(-TRANSCRIPT_CAP);
-					}
+			const handlers: TerminalTransportHandlers = {
+				onData: (bytes) => {
+					term.write(bytes);
 					if (!sawDataRef.current) {
 						sawDataRef.current = true;
 						// "Interactive" = the first PTY bytes are in a painted frame.
 						requestAnimationFrame(() => setReady(true));
 					}
 				},
-				onClose: (reason: string) => {
+				onClose: (reason) => {
 					connRef.current = null;
 					sawDataRef.current = false;
 					setReady(false);
@@ -176,12 +175,12 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 				access.kind === "mock"
 					? openMockPty(handlers)
 					: openTtydSocket(access.wsUrl, handlers, {
-							cols: term.cols,
+							cols: term.columns,
 							rows: term.rows,
 						});
 			setMode(access.kind);
 			setPhase("ready");
-			term.focus();
+			if (openRef.current) term.focus();
 		} finally {
 			connectingRef.current = false;
 		}
@@ -190,15 +189,11 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 	const toggle = useCallback(() => {
 		setOpen((wasOpen) => {
 			const next = !wasOpen;
+			openRef.current = next;
 			if (next) {
 				void connect();
 				requestAnimationFrame(() => {
-					try {
-						fitRef.current?.fit();
-					} catch {
-						// not laid out yet
-					}
-					termRef.current?.focus();
+					if (openRef.current) termRef.current?.focus();
 				});
 			} else {
 				termRef.current?.blur();
@@ -208,9 +203,9 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 	}, [connect]);
 
 	// Ctrl+` — the conventional terminal toggle. Capture phase, so it works
-	// even while the terminal itself has focus (ghostty's key handler would
-	// otherwise consume the event before a bubbling listener saw it), and
-	// stopPropagation keeps the chord out of the shell.
+	// even while the terminal itself has focus (its textarea's key handler
+	// would otherwise turn the chord into bytes before a bubbling listener saw
+	// it), and stopPropagation keeps the chord out of the shell.
 	useEffect(() => {
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (event.ctrlKey && (event.key === "`" || event.code === "Backquote")) {
@@ -225,7 +220,9 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 
 	// Dispose the terminal + transport with the session surface.
 	useEffect(() => {
+		unmountedRef.current = false;
 		return () => {
+			unmountedRef.current = true;
 			connRef.current?.close();
 			connRef.current = null;
 			termRef.current?.dispose();
@@ -242,7 +239,13 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 				: "attached to the session's sandbox",
 		"no-sandbox": "no live sandbox",
 		denied: "access denied",
+		failed: "failed to load",
 		disconnected: "disconnected",
+	};
+	const retryLabel: Partial<Record<Phase, string>> = {
+		disconnected: "reconnect",
+		"no-sandbox": "check again",
+		failed: "try again",
 	};
 
 	return (
@@ -274,13 +277,13 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 					{phase !== "idle" && (
 						<span data-testid="terminal-status">— {statusLabel[phase]}</span>
 					)}
-					{(phase === "disconnected" || phase === "no-sandbox") && (
+					{retryLabel[phase] && (
 						<button
 							type="button"
 							onClick={() => void connect()}
 							className="rounded-[5px] px-1.5 py-0.5 text-hint underline decoration-dotted underline-offset-2 hover:text-ink"
 						>
-							{phase === "disconnected" ? "reconnect" : "check again"}
+							{retryLabel[phase]}
 						</button>
 					)}
 					<button
@@ -294,8 +297,10 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 					</button>
 				</div>
 				<div className="relative h-[38vh] min-h-[220px]">
-					<div ref={hostRef} className="h-full w-full px-2 py-1" />
-					{(phase === "no-sandbox" || phase === "denied") && (
+					{/* CanvasTerminal mounts its canvas, input textarea and the
+					    screen-reader mirror of the viewport ("Terminal screen") here. */}
+					<div ref={hostRef} data-testid="terminal-host" className="h-full w-full px-2 py-1" />
+					{(phase === "no-sandbox" || phase === "denied" || phase === "failed") && (
 						<div
 							data-testid="terminal-empty"
 							className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 bg-status-bg text-center"
@@ -311,14 +316,6 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 						</div>
 					)}
 				</div>
-				{/* Plain-text mirror of PTY output: assertable by tests, readable by
-				    screen readers; the canvas above is neither. */}
-				<div
-					ref={transcriptRef}
-					data-testid="terminal-transcript"
-					aria-live="off"
-					className="sr-only"
-				/>
 			</section>
 		</>
 	);
