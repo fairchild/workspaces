@@ -38,9 +38,10 @@ final class GhosttyAppManager: NSObject {
 
     private(set) var app: ghostty_app_t?
 
-    /// Wakeups since the last tick began. Ghostty wakes the app once per message it pushes into
-    /// the app mailbox, so while this thread is not ticking the count is the mailbox's occupancy.
-    nonisolated static let wakeupsSinceTick = OSAllocatedUnfairLock(initialState: 0)
+    /// Every wakeup so far. Ghostty wakes the app after each attempt to push into the app mailbox,
+    /// and an attempt fails only when the mailbox is full, so 64 wakeups with no tick in between
+    /// prove the 64-slot mailbox filled.
+    nonisolated static let wakeupCount = OSAllocatedUnfairLock(initialState: 0)
     private var config: ghostty_config_t?
     private var initialized = false
     private var currentColorScheme: ghostty_color_scheme_e?
@@ -225,7 +226,6 @@ final class GhosttyAppManager: NSObject {
 
     private func tick() {
         guard let app else { return }
-        Self.wakeupsSinceTick.withLock { $0 = 0 }
         ghostty_app_tick(app)
     }
 
@@ -233,7 +233,7 @@ final class GhosttyAppManager: NSObject {
 
     nonisolated static func wakeup(_ userdata: UnsafeMutableRawPointer?) {
         let userdataAddress = GhosttyCallbackUserdata.address(from: userdata)
-        wakeupsSinceTick.withLock { $0 += 1 }
+        wakeupCount.withLock { $0 += 1 }
         let probeToken = LaunchWindowProbe.noteWakeup()
         GhosttyThreadingBridge.enqueueOnMain {
             LaunchWindowProbe.noteTickStart(token: probeToken)

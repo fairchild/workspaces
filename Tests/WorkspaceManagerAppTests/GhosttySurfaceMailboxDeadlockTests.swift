@@ -18,30 +18,35 @@ import Testing
 @MainActor
 struct GhosttySurfaceMailboxDeadlockTests {
     nonisolated private static let environment = ProcessInfo.processInfo.environment
-    nonisolated private static let minimumSurfaces =
-        environment["WORKSPACES_MAILBOX_DEADLOCK_SURFACES"].flatMap { Int($0) } ?? 24
     private static let mailboxCapacity = 64
     private static let maximumSurfaces = 96
+    nonisolated private static let minimumSurfaces = min(
+        max(environment["WORKSPACES_MAILBOX_DEADLOCK_SURFACES"].flatMap { Int($0) } ?? 24, 1), 96)
 
     @Test("Releasing surface views while the app mailbox is full and undrained frees every surface")
     func freeWhileMailboxIsFull() async throws {
         let log = DeadlockProgressLog(path: Self.environment["WORKSPACES_MAILBOX_DEADLOCK_PROGRESS"])
         var views: [GhosttySurfaceView] = []
 
-        // The main thread stays blocked from the first surface to the last release, so the app
-        // never ticks and every message the shells send stays in the mailbox. Each shell's
-        // startup sends a few; more surfaces join until 64 are waiting.
+        // The main thread stays blocked from here to the last release, so the app never ticks
+        // and nothing drains the mailbox. Each shell's startup pushes a few messages; more
+        // surfaces join until 64 pushes prove the mailbox filled.
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(10)
+        let wakeupsBefore = GhosttyAppManager.wakeupCount.withLock { $0 }
+        var mailboxFilled: Bool {
+            GhosttyAppManager.wakeupCount.withLock { $0 } - wakeupsBefore >= Self.mailboxCapacity
+        }
         addSurfaces(Self.minimumSurfaces, to: &views)
-        let deadline = Date().addingTimeInterval(10)
-        var lastAdded = Date()
-        while !Self.mailboxIsFull, Date() < deadline {
-            if Date().timeIntervalSince(lastAdded) > 1, views.count < Self.maximumSurfaces {
-                addSurfaces(8, to: &views)
-                lastAdded = Date()
+        var lastAdded = clock.now
+        while !mailboxFilled, clock.now < deadline {
+            if clock.now - lastAdded > .seconds(1), views.count < Self.maximumSurfaces {
+                addSurfaces(min(8, Self.maximumSurfaces - views.count), to: &views)
+                lastAdded = clock.now
             }
             Thread.sleep(forTimeInterval: 0.01)
         }
-        try #require(Self.mailboxIsFull, "the app mailbox never filled, so the test would prove nothing")
+        try #require(mailboxFilled, "the app mailbox never filled, so the test would prove nothing")
         let everyViewHasSurface = views.allSatisfy { $0.isSurfaceAlive }
         try #require(everyViewHasSurface, "every view needs a Ghostty surface for the test to free")
         let count = views.count
@@ -59,10 +64,6 @@ struct GhosttySurfaceMailboxDeadlockTests {
         }
         log.write("end")
         #expect(released.allSatisfy { $0.view == nil })
-    }
-
-    private static var mailboxIsFull: Bool {
-        GhosttyAppManager.wakeupsSinceTick.withLock { $0 } >= mailboxCapacity
     }
 
     private func addSurfaces(_ count: Int, to views: inout [GhosttySurfaceView]) {
