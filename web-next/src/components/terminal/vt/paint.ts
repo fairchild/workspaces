@@ -192,6 +192,9 @@ export function measureCell(ctx: CanvasRenderingContext2D, fontSize: number, fon
 	};
 }
 
+/** Just under the baseline, kept inside a cell too short for the gap. */
+export const underlineY = (cell: CellMetrics) => Math.min(cell.baseline + 2, cell.height - 1);
+
 const css = (rgb: Rgb) => `#${rgb.toString(16).padStart(6, "0")}`;
 
 export function paintSnapshot(
@@ -223,7 +226,7 @@ export function paintSnapshot(
 	if (link) {
 		const fg = cells.find((c) => c.row === link.row && c.column >= link.start)?.fg ?? snapshot.fg;
 		ctx.fillStyle = css(fg);
-		ctx.fillRect(link.start * cw, link.row * ch + cell.baseline + 2, (link.end - link.start + 1) * cw, 1);
+		ctx.fillRect(link.start * cw, link.row * ch + underlineY(cell), (link.end - link.start + 1) * cw, 1);
 	}
 
 	const cursor = snapshot.cursor;
@@ -286,7 +289,7 @@ function paintGlyphs(ctx: CanvasRenderingContext2D, cell: CellMetrics) {
 					ctx.fillText(c.text, x + (slot - glyphWidth) / 2, y + cell.baseline);
 				}
 			}
-			if (c.underline) ctx.fillRect(x, y + cell.baseline + 2, c.width * cw, 1);
+			if (c.underline) ctx.fillRect(x, y + underlineY(cell), c.width * cw, 1);
 			if (c.strikethrough) ctx.fillRect(x, y + Math.round(ch / 2), c.width * cw, 1);
 			if (c.overline) ctx.fillRect(x, y, c.width * cw, 1);
 		}

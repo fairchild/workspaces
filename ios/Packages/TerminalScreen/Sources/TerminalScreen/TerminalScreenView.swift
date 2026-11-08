@@ -267,10 +267,11 @@ struct CellMetrics {
     }
 
     /// A one-point line: an underline just under the baseline, a strikethrough
-    /// through the middle, as web-next's painter draws them.
+    /// through the middle, as web-next's painter draws them. A cell too short
+    /// for the gap under the baseline keeps the underline on its last point.
     func rect(_ line: DecorationLine) -> CGRect {
         let cells = rect(row: line.row, column: line.column, width: line.width)
-        let y = line.kind == .underline ? baseline + 2 : (height / 2).rounded()
+        let y = line.kind == .underline ? min(baseline + 2, height - 1) : (height / 2).rounded()
         return CGRect(x: cells.minX, y: cells.minY + y, width: cells.width, height: 1)
     }
 

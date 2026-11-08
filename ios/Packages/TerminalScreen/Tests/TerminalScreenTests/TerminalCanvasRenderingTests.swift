@@ -19,6 +19,15 @@ struct TerminalCanvasRenderingTests {
         #expect(inked == [2, 3, 4, 5])
     }
 
+    @Test(
+        "An underline stays inside its row at every font size",
+        arguments: [9, 10, 11, 12, 13, 15, 17, 22] as [CGFloat])
+    func underlineInsideRow(fontSize: CGFloat) {
+        let metrics = CellMetrics(fontSize: fontSize)
+        let line = DecorationLine(kind: .underline, row: 0, column: 0, width: 1, color: RGB(0, 0, 0), opacity: 1)
+        #expect(metrics.rect(line).maxY <= metrics.height)
+    }
+
     private func inkedColumns(_ snapshot: TerminalSnapshot) throws -> Set<Int> {
         let renderer = ImageRenderer(content: TerminalCanvas(snapshot: snapshot, fontSize: 11))
         renderer.scale = 2
