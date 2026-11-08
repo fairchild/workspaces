@@ -95,7 +95,13 @@ finished() {
 }
 
 mtime_or() {
-  stat -f %m "$1" 2> /dev/null || echo "$2"
+  local mtime
+  mtime=$(stat -c %Y "$1" 2> /dev/null || stat -f %m "$1" 2> /dev/null)
+  if [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    echo "$mtime"
+  else
+    echo "$2"
+  fi
 }
 
 cleanup() {
