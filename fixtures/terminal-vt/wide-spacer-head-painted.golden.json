@@ -1,0 +1,18 @@
+{
+  "columns": 8,
+  "rows": 3,
+  "fg": "#ffffff",
+  "bg": "#000000",
+  "cursor": {"column":4,"row":2,"wide":false},
+  "lines": [
+    [
+      {"column":0,"text":"abcdefg ","columns":8,"style":{"bg":"#81a2be"}}
+    ],
+    [
+      {"column":0,"text":"完","columns":2,"style":{"bg":"#81a2be"}}
+    ],
+    [
+      {"column":0,"text":"next","columns":4}
+    ]
+  ]
+}

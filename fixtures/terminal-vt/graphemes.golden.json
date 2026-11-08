@@ -1,0 +1,48 @@
+{
+  "columns": 40,
+  "rows": 3,
+  "fg": "#ffffff",
+  "bg": "#000000",
+  "cursor": {"column":0,"row":2,"wide":false},
+  "lines": [
+    [
+      {"column":0,"text":"off ","columns":4},
+      {"column":4,"text":"é","columns":1},
+      {"column":5,"text":" ","columns":1},
+      {"column":6,"text":"ạ̈","columns":1},
+      {"column":7,"text":" ","columns":1},
+      {"column":8,"text":"👨‍","columns":2},
+      {"column":10,"text":"👩‍","columns":2},
+      {"column":12,"text":"👧","columns":2},
+      {"column":14,"text":" ","columns":1},
+      {"column":15,"text":"🇯","columns":2},
+      {"column":17,"text":"🇵","columns":2},
+      {"column":19,"text":" ","columns":1},
+      {"column":20,"text":"👍","columns":2},
+      {"column":22,"text":"🏽","columns":2},
+      {"column":24,"text":" ","columns":1},
+      {"column":25,"text":"❤️","columns":1},
+      {"column":26,"text":" ","columns":1},
+      {"column":27,"text":"क्","columns":1},
+      {"column":28,"text":"षि |","columns":4}
+    ],
+    [
+      {"column":0,"text":"on  ","columns":4},
+      {"column":4,"text":"é","columns":1},
+      {"column":5,"text":" ","columns":1},
+      {"column":6,"text":"ạ̈","columns":1},
+      {"column":7,"text":" ","columns":1},
+      {"column":8,"text":"👨‍👩‍👧","columns":2},
+      {"column":10,"text":" ","columns":1},
+      {"column":11,"text":"🇯🇵","columns":2},
+      {"column":13,"text":" ","columns":1},
+      {"column":14,"text":"👍🏽","columns":2},
+      {"column":16,"text":" ","columns":1},
+      {"column":17,"text":"❤️","columns":2},
+      {"column":19,"text":" ","columns":1},
+      {"column":20,"text":"क्षि","columns":2},
+      {"column":22,"text":" |","columns":2}
+    ],
+    []
+  ]
+}

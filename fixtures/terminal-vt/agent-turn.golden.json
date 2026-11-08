@@ -1,0 +1,73 @@
+{
+  "columns": 60,
+  "rows": 14,
+  "fg": "#ffffff",
+  "bg": "#000000",
+  "cursor": {"column":12,"row":9,"wide":false},
+  "lines": [
+    [
+      {"column":0,"text":"~/project","columns":9,"style":{"fg":"#81a2be","bold":true}},
+      {"column":9,"text":" ","columns":1},
+      {"column":10,"text":"❯","columns":1,"style":{"fg":"#b5bd68"}},
+      {"column":11,"text":" swift test","columns":11}
+    ],
+    [
+      {"column":0,"text":"Build complete!","columns":15,"style":{"bold":true}},
+      {"column":15,"text":" (3.21s)","columns":8}
+    ],
+    [
+      {"column":0,"text":"✔","columns":1,"style":{"fg":"#b5bd68"}},
+      {"column":1,"text":" 6 tests passed","columns":15}
+    ],
+    [
+      {"column":0,"text":"✔","columns":1,"style":{"fg":"#b5bd68"}},
+      {"column":1,"text":" wraps a ","columns":9},
+      {"column":10,"text":"bold","columns":4,"style":{"bold":true}},
+      {"column":14,"text":", ","columns":2},
+      {"column":16,"text":"italic","columns":6,"style":{"italic":true}},
+      {"column":22,"text":", ","columns":2},
+      {"column":24,"text":"underlined","columns":10,"style":{"underline":true}},
+      {"column":34,"text":" run","columns":4}
+    ],
+    [
+      {"column":0,"text":"✘","columns":1,"style":{"fg":"#cc6666"}},
+      {"column":1,"text":" ","columns":1},
+      {"column":2,"text":"flaky","columns":5,"style":{"strikethrough":true}},
+      {"column":7,"text":" quarantined","columns":12}
+    ],
+    [
+      {"column":0,"text":"╭────────────── summary ──────────────╮","columns":39,"style":{"bold":true}}
+    ],
+    [
+      {"column":0,"text":"│","columns":1,"style":{"bold":true}},
+      {"column":1,"text":" wide: ","columns":7},
+      {"column":8,"text":"完","columns":2},
+      {"column":10,"text":"成","columns":2},
+      {"column":12,"text":" ","columns":1},
+      {"column":13,"text":"✅","columns":2},
+      {"column":15,"text":"  ","columns":2},
+      {"column":17,"text":"256-color","columns":9,"style":{"fg":"#ff8700"}},
+      {"column":26,"text":"  ","columns":2},
+      {"column":28,"text":"truecolor","columns":9,"style":{"fg":"#78c8ff"}},
+      {"column":37,"text":" ","columns":1},
+      {"column":38,"text":"│","columns":1,"style":{"bold":true}}
+    ],
+    [
+      {"column":0,"text":"╰─────────────────────────────────────╯","columns":39,"style":{"bold":true}}
+    ],
+    [
+      {"column":0,"text":" inverse ","columns":9,"style":{"inverse":true}},
+      {"column":9,"text":" ","columns":1},
+      {"column":10,"text":" on blue ","columns":9,"style":{"bg":"#81a2be"}}
+    ],
+    [
+      {"column":0,"text":"~/project","columns":9,"style":{"fg":"#81a2be","bold":true}},
+      {"column":9,"text":" ","columns":1},
+      {"column":10,"text":"❯","columns":1,"style":{"fg":"#b5bd68"}}
+    ],
+    [],
+    [],
+    [],
+    []
+  ]
+}

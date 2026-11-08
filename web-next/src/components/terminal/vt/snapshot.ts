@@ -128,7 +128,7 @@ export class RunBuilder {
 		this.column += 1;
 	}
 
-	/** A spacer cell (the tail of a wide character, or a wrapped wide head): counts its column, draws nothing. */
+	/** The spacer tail of a wide character: counts its column, draws nothing. */
 	skip(): void {
 		this.column += 1;
 	}

@@ -1,0 +1,121 @@
+{
+  "columns": 48,
+  "rows": 15,
+  "fg": "#ffffff",
+  "bg": "#000000",
+  "cursor": {"column":15,"row":13,"wide":false},
+  "lines": [
+    [
+      {"column":0,"text":"bold","columns":4,"style":{"bold":true}},
+      {"column":4,"text":" ","columns":1},
+      {"column":5,"text":"faint","columns":5,"style":{"faint":true}},
+      {"column":10,"text":" ","columns":1},
+      {"column":11,"text":"italic","columns":6,"style":{"italic":true}},
+      {"column":17,"text":" ","columns":1},
+      {"column":18,"text":"under","columns":5,"style":{"underline":true}},
+      {"column":23,"text":" ","columns":1},
+      {"column":24,"text":"curly","columns":5,"style":{"underline":true}},
+      {"column":29,"text":" ","columns":1},
+      {"column":30,"text":"double","columns":6,"style":{"underline":true}}
+    ],
+    [
+      {"column":0,"text":"blink ","columns":6},
+      {"column":6,"text":"inverse","columns":7,"style":{"inverse":true}},
+      {"column":13,"text":" ","columns":1},
+      {"column":14,"text":"invisible","columns":9,"style":{"invisible":true}},
+      {"column":23,"text":" ","columns":1},
+      {"column":24,"text":"strike","columns":6,"style":{"strikethrough":true}},
+      {"column":30,"text":" over","columns":5}
+    ],
+    [
+      {"column":0,"text":"all","columns":3,"style":{"bold":true,"italic":true,"underline":true,"strikethrough":true}},
+      {"column":3,"text":" ","columns":1},
+      {"column":4,"text":"bold+faint","columns":10,"style":{"bold":true,"faint":true}},
+      {"column":14,"text":" ","columns":1},
+      {"column":15,"text":"inv-colored","columns":11,"style":{"fg":"#cc6666","bg":"#b5bd68","inverse":true}}
+    ],
+    [
+      {"column":0,"text":"30","columns":2,"style":{"fg":"#1d1f21"}},
+      {"column":2,"text":"31","columns":2,"style":{"fg":"#cc6666"}},
+      {"column":4,"text":"32","columns":2,"style":{"fg":"#b5bd68"}},
+      {"column":6,"text":"33","columns":2,"style":{"fg":"#f0c674"}},
+      {"column":8,"text":"34","columns":2,"style":{"fg":"#81a2be"}},
+      {"column":10,"text":"35","columns":2,"style":{"fg":"#b294bb"}},
+      {"column":12,"text":"36","columns":2,"style":{"fg":"#8abeb7"}},
+      {"column":14,"text":"37","columns":2,"style":{"fg":"#c5c8c6"}}
+    ],
+    [
+      {"column":0,"text":"90","columns":2,"style":{"fg":"#666666"}},
+      {"column":2,"text":"91","columns":2,"style":{"fg":"#d54e53"}},
+      {"column":4,"text":"92","columns":2,"style":{"fg":"#b9ca4a"}},
+      {"column":6,"text":"93","columns":2,"style":{"fg":"#e7c547"}},
+      {"column":8,"text":"94","columns":2,"style":{"fg":"#7aa6da"}},
+      {"column":10,"text":"95","columns":2,"style":{"fg":"#c397d8"}},
+      {"column":12,"text":"96","columns":2,"style":{"fg":"#70c0b1"}},
+      {"column":14,"text":"97","columns":2,"style":{"fg":"#eaeaea"}}
+    ],
+    [
+      {"column":0,"text":"40","columns":2,"style":{"bg":"#1d1f21"}},
+      {"column":2,"text":"41","columns":2,"style":{"bg":"#cc6666"}},
+      {"column":4,"text":"42","columns":2,"style":{"bg":"#b5bd68"}},
+      {"column":6,"text":"43","columns":2,"style":{"bg":"#f0c674"}},
+      {"column":8,"text":"44","columns":2,"style":{"bg":"#81a2be"}},
+      {"column":10,"text":"45","columns":2,"style":{"bg":"#b294bb"}},
+      {"column":12,"text":"46","columns":2,"style":{"bg":"#8abeb7"}},
+      {"column":14,"text":"47","columns":2,"style":{"bg":"#c5c8c6"}}
+    ],
+    [
+      {"column":0,"text":"100","columns":3,"style":{"bg":"#666666"}},
+      {"column":3,"text":"101","columns":3,"style":{"bg":"#d54e53"}},
+      {"column":6,"text":"102","columns":3,"style":{"bg":"#b9ca4a"}},
+      {"column":9,"text":"103","columns":3,"style":{"bg":"#e7c547"}},
+      {"column":12,"text":"104","columns":3,"style":{"bg":"#7aa6da"}},
+      {"column":15,"text":"105","columns":3,"style":{"bg":"#c397d8"}},
+      {"column":18,"text":"106","columns":3,"style":{"bg":"#70c0b1"}},
+      {"column":21,"text":"107","columns":3,"style":{"bg":"#eaeaea"}}
+    ],
+    [
+      {"column":0,"text":"  16","columns":4,"style":{"fg":"#000000"}},
+      {"column":4,"text":"  46","columns":4,"style":{"fg":"#00ff00"}},
+      {"column":8,"text":" 196","columns":4,"style":{"fg":"#ff0000"}},
+      {"column":12,"text":" 208","columns":4,"style":{"fg":"#ff8700"}},
+      {"column":16,"text":" 226","columns":4,"style":{"fg":"#ffff00"}},
+      {"column":20,"text":" 232","columns":4,"style":{"fg":"#080808"}},
+      {"column":24,"text":" 244","columns":4,"style":{"fg":"#808080"}},
+      {"column":28,"text":" 255","columns":4,"style":{"fg":"#eeeeee"}}
+    ],
+    [
+      {"column":0,"text":"  16","columns":4,"style":{"bg":"#000000"}},
+      {"column":4,"text":"  46","columns":4,"style":{"bg":"#00ff00"}},
+      {"column":8,"text":" 196","columns":4,"style":{"bg":"#ff0000"}},
+      {"column":12,"text":" 208","columns":4,"style":{"bg":"#ff8700"}},
+      {"column":16,"text":" 226","columns":4,"style":{"bg":"#ffff00"}},
+      {"column":20,"text":" 232","columns":4,"style":{"bg":"#080808"}},
+      {"column":24,"text":" 244","columns":4,"style":{"bg":"#808080"}},
+      {"column":28,"text":" 255","columns":4,"style":{"bg":"#eeeeee"}}
+    ],
+    [
+      {"column":0,"text":"orange","columns":6,"style":{"fg":"#ff8000"}},
+      {"column":6,"text":" ","columns":1},
+      {"column":7,"text":"navy","columns":4,"style":{"bg":"#004080"}},
+      {"column":11,"text":" ","columns":1},
+      {"column":12,"text":"colon","columns":5,"style":{"fg":"#0a141e"}}
+    ],
+    [
+      {"column":0,"text":"red underline","columns":13,"style":{"underline":true}},
+      {"column":13,"text":" defaults","columns":9}
+    ],
+    [
+      {"column":0,"text":"bg blanks","columns":9},
+      {"column":9,"text":"   ","columns":3,"style":{"bg":"#81a2be"}}
+    ],
+    [
+      {"column":0,"text":"underlined blanks","columns":17},
+      {"column":17,"text":"   ","columns":3,"style":{"underline":true}}
+    ],
+    [
+      {"column":0,"text":"plain blanks","columns":12}
+    ],
+    []
+  ]
+}

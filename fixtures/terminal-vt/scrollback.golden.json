@@ -1,0 +1,24 @@
+{
+  "columns": 20,
+  "rows": 5,
+  "fg": "#ffffff",
+  "bg": "#000000",
+  "cursor": {"column":3,"row":4,"wide":false},
+  "lines": [
+    [
+      {"column":0,"text":"line 37","columns":7,"style":{"fg":"#b294bb"}}
+    ],
+    [
+      {"column":0,"text":"line 38","columns":7,"style":{"fg":"#8abeb7"}}
+    ],
+    [
+      {"column":0,"text":"line 39","columns":7,"style":{"fg":"#c5c8c6"}}
+    ],
+    [
+      {"column":0,"text":"line 40","columns":7,"style":{"fg":"#1d1f21"}}
+    ],
+    [
+      {"column":0,"text":"end","columns":3}
+    ]
+  ]
+}

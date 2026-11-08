@@ -27,7 +27,7 @@ targets:
     platform: iOS
     sources:
       - WorkSpacesMobile
-      - path: Packages/TerminalScreen/Tests/TerminalScreenTests/Fixtures/agent-turn.vt
+      - path: ../fixtures/terminal-vt/agent-turn.vt
         buildPhase: resources
     dependencies:
       - package: TerminalScreen

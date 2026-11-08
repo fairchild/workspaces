@@ -61,6 +61,7 @@ CI_RELEVANT_PATH_PATTERNS=(
     "ci_scripts/*"
     "examples/compose-agent-sandbox/*"
     "ios/Packages/TerminalScreen/*"
+    "fixtures/terminal-vt/*"
     ".github/workflows/ci.yml"
     ".github/workflows/ci-fallback.yml"
     ".github/workflows/release.yml"

@@ -68,9 +68,11 @@ Things the vt C API needs that are easy to miss:
 - `GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8` returns
   `GHOSTTY_OUT_OF_SPACE` when the buffer is too small; grow the buffer and
   retry.
-- A wide character is a `WIDE` cell followed by a `SPACER_TAIL` cell, and a
-  wide character that wraps leaves a `SPACER_HEAD` cell. Skip the spacer
-  cells, but still count their columns.
+- A wide character is a `WIDE` cell followed by a `SPACER_TAIL` cell: skip
+  the tail, but still count its column. A wide character that wraps leaves a
+  `SPACER_HEAD` cell in the last column. Treat it as a blank cell: it keeps
+  the style it was written with, and Ghostty's renderer paints its
+  background and underline like any other cell's.
 - The release xcframework's simulator slice is arm64 only, so the mobile
   project excludes x86_64 for the simulator SDK.
 - The style flag bits are frozen in the 1.0 ABI, and `StyleFlags` mirrors them:
@@ -81,9 +83,9 @@ Things the vt C API needs that are easy to miss:
 
 In a Debug build of the mobile app, launch with `-terminal-preview`, or open
 **Terminal preview** from the paired view's menu. The preview replays
-`Fixtures/agent-turn.vt` through the emulator in 24-byte chunks, so in-place
-redraws happen live. The fixture is a real PTY recording made by
-`ios/Packages/TerminalScreen/scripts/record-fixture.sh`.
+`fixtures/terminal-vt/agent-turn.vt` through the emulator in 24-byte chunks,
+so in-place redraws happen live. The fixture is a real PTY recording made by
+`fixtures/terminal-vt/record-agent-turn.sh`.
 
 The preview has no live data source yet. Host-compute nodes expose no terminal
 byte stream, and the web terminal's ttyd stream exists only for sandbox
@@ -169,6 +171,47 @@ an input matrix. `?source=parity` writes the screen `tests/e2e/terminal-vt.spec.
 drives with real pointer, keyboard, focus and IME events; its screenshots land
 in `web-next/output/terminal-vt/`, uploaded by CI as `terminal-vt-evidence`.
 
+## The shared fixture corpus
+
+`fixtures/terminal-vt/` is the contract both bindings answer to. Each fixture
+is a `.vt` byte stream and a `<name>.golden.json` of the final screen;
+`corpus.json` gives each one's grid size and `chunk`, the bytes per write
+(one write when absent). `FixtureCorpusTests` in the mobile package and
+`fixture-corpus.test.ts` in web-next replay every fixture and compare row by
+row, so a disagreement names the fixture and the row.
+
+A golden holds only what both snapshots expose: the grid, the default colors,
+the cursor's position and whether it sits on the right half of a wide
+character, and per row a list of runs with their column, text, width and
+style. Each test splits its binding's runs back into cells and rebuilds one
+canonical shape: trailing blanks that paint nothing are dropped, and only
+narrow cells holding one code point, in one style, merge. Anything only one
+binding reports stays out: the web snapshot's overline, hyperlink, cursor
+shape and blink, selection and scrollback position. Swift compares text by
+code point, since its `String` equality would pass `e` + U+0301 for `é`.
+
+To add a fixture:
+
+1. Write the stream. Synthetic ones are functions in `synthesize.py`, so a
+   review reads the bytes; run `uv run --script fixtures/terminal-vt/synthesize.py`.
+   A recording from a real program goes in as the `.vt` file it produced.
+2. Add an entry to `corpus.json`. Both suites fail on a stream the manifest
+   does not list.
+3. Write the golden from web-next:
+   `UPDATE_VT_GOLDENS=1 pnpm vitest run src/components/terminal/vt/fixture-corpus.test.ts`.
+   Read it against Ghostty's semantics before committing it; the writer
+   records what the binding did, right or wrong.
+4. Run `swift test --package-path ios/Packages/TerminalScreen`. If Swift
+   disagrees, one binding is wrong: find which against Ghostty, then fix it
+   or record the difference in a test that names it.
+
+To regenerate every golden after a pin bump, run step 3 without adding
+anything, review the diff, and run step 4.
+
+`web-next/public/dev/terminal-vt/agent-turn.vt` is a byte-identical copy that
+the `/dev/terminal-vt` harness serves and `vt.test.ts` reads; the corpus test
+fails if the two drift.
+
 ## Updating the vt pin
 
 1. Find the release zip under `https://release.files.ghostty.org/libghostty-vt/<version>/`.
@@ -177,14 +220,16 @@ in `web-next/output/terminal-vt/`, uploaded by CI as `terminal-vt-evidence`.
 3. Update the `url` and `checksum` of the `GhosttyVt` binary target in
    `ios/Packages/TerminalScreen/Package.swift`.
 4. Run `swift test --package-path ios/Packages/TerminalScreen`. CI runs the
-   same command in `build-and-test`.
+   same command in `build-and-test`. It replays the fixture corpus, so a
+   changed screen shows up as a golden mismatch.
 5. Regenerate the mobile project (`xcodegen` in `ios/`), build it, and open
    the terminal preview.
 
 For the web binding, verify the new `ghostty-vt-<version>-small.wasm` with
 `minisign -Vm <file> -P <key>`, then update `version`, `file`, `sha256` and
 `origin` in `GHOSTTY_VT_RELEASE` and run `pnpm ghostty-vt:fetch && pnpm test`
-in `web-next/`.
+in `web-next/`. When the new release changes a screen on purpose, regenerate
+the goldens (see the corpus section) and run both suites.
 
 Within 1.x the ABI promise means the update needs no Swift or TypeScript changes. A new
 major version means rereading `ghostty/vt.h`.

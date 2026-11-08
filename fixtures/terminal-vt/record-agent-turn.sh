@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Records Tests/TerminalScreenTests/Fixtures/agent-turn.vt: an agent-style turn
+# Records agent-turn.vt beside this script: an agent-style turn
 # (colored prompt, a progress line redrawn in place, a spinner rewritten with
 # cursor-up, wide characters, 256-color and truecolor text) written through a
 # real PTY by script(1), so the bytes carry the CRLF translation and redraw
-# sequences a live terminal stream does.
+# sequences a live terminal stream does. Regenerate agent-turn.golden.json
+# after recording (docs/development/libghostty-vt.md).
 set -euo pipefail
 
 main() {
   local here fixture
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  fixture="$here/../Tests/TerminalScreenTests/Fixtures/agent-turn.vt"
+  fixture="$here/agent-turn.vt"
   if [[ "${1:-}" == "--emit" ]]; then
     emit_turn
     return
