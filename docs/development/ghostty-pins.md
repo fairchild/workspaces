@@ -1,9 +1,8 @@
 # Ghostty pins: desktop, web, mobile
 
 Status as of 2026-11-08: all three surfaces name Ghostty's 1.0 cut (`vt-1.0.0`,
-commit `0fa3d577a5614150ff8e2c152de5fb9d5c6d2dec`). The mobile and web pins are
-in the tree; the desktop pin moves in #1843, and this page describes the desktop
-as it is once that lands. Check it still holds: `scripts/build-ghosttykit.sh
+commit `0fa3d577a5614150ff8e2c152de5fb9d5c6d2dec`); the desktop moved to it in
+#1871. Check it still holds: `scripts/build-ghosttykit.sh
 --print-pin` prints `0fa3d577…`, `GHOSTTY_VT_RELEASE.version` in
 `web-next/src/components/terminal/vt/ghostty-vt.ts` reads `1.0.0`, and the
 `GhosttyVt` target in `ios/Packages/TerminalScreen/Package.swift` points at
@@ -79,26 +78,33 @@ app does not link vt, and `ios/Packages/TerminalScreen` stays out of the root
 `Package.swift` for the same reason. A change that adds libghostty-vt to the
 desktop target, or GhosttyKit to the mobile package, hits this link error.
 
-**Teardown hang guard.** Freeing a surface can deadlock when the app mailbox is
+**Teardown hang guard.** Freeing a surface deadlocks when the app mailbox is
 full: `ghostty_surface_free` on the main thread joins `io`, which joins an
 `io-reader` blocked on a push into the 64-slot app mailbox that only the main
-thread drains (#1842). It reproduces at both `492300ca` and `0fa3d57`, and #1856
-tracks the app-side fix. `scripts/watch-swift-test.sh` runs a `swift test` command
-and, when its log stops changing for `--stall` seconds, samples the test helper
-into `<out>/hang.sample.txt`, kills the process tree and exits 124. Use it for any
-long suite on a pin move. `GhosttySurfaceMailboxDeadlockTests`
+thread drains (#1842). It reproduces at both `492300ca` and `0fa3d57`, and
+`GhosttyAppManager` carries the app-side fix (#1856, #1867): a surface is never
+freed in `GhosttySurfaceView.deinit`, but retired to the manager, which frees it
+right after a `ghostty_app_tick`. A pin move can reopen the deadlock when the
+range touches `Surface.deinit`, termio, the app mailbox or the Zig version.
+
+`GhosttySurfaceMailboxDeadlockTests`
 (`Tests/WorkspaceManagerAppTests/GhosttySurfaceMailboxDeadlockTests.swift`) is the
-deterministic reproducer, opt-in through an environment variable:
+guard, and it runs in every `swift test`. A regression there hangs rather than
+fails, which is what `scripts/watch-swift-test.sh` is for: it runs a `swift test`
+command and, when its log stops changing for `--stall` seconds, samples the test
+helper into `<out>/hang.sample.txt`, kills the process tree and exits 124. Run
+long suites on a pin move under it, and raise the many-shell case with
+`WORKSPACES_MAILBOX_DEADLOCK_SURFACES`:
 
 ```bash
 scripts/watch-swift-test.sh --stall 45 --out /tmp/deadlock -- \
-  env WORKSPACES_MAILBOX_DEADLOCK_SURFACES=32 \
+  env WORKSPACES_MAILBOX_DEADLOCK_SURFACES=48 \
   swift test --skip-build --filter GhosttySurfaceMailboxDeadlock
 ```
 
-The deadlock shows up on the full app suite under CPU load, so build each pin with
-`GHOSTTY_KEEP_SYMBOLS=1` (a hang then names its frames) and compare hang counts
-across several loaded runs, not one.
+The deadlock also showed up on the full app suite under CPU load, so build the new
+pin with `GHOSTTY_KEEP_SYMBOLS=1` (a hang then names its frames) and compare hang
+counts across several loaded runs, not one.
 
 ## Web: libghostty-vt wasm
 

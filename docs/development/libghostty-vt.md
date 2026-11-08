@@ -3,8 +3,8 @@
 Status as of 2026-11-08: the mobile variant renders terminal output through
 libghostty-vt 1.0.0 in a debug-only preview, and web-next's terminal drawer runs
 on the release wasm (the `/dev/terminal-vt` bench stays for the binding). The
-desktop app builds GhosttyKit from source; moving it to the `vt-1.0.0` cut is
-tracked in #1843. [ghostty-pins.md](ghostty-pins.md) lists all three pins and
+desktop app builds GhosttyKit from source, at the same `vt-1.0.0` cut since
+#1871. [ghostty-pins.md](ghostty-pins.md) lists all three pins and
 how to move each. Check this page still holds:
 `swift test --package-path ios/Packages/TerminalScreen` passes, and its
 `Links libghostty-vt 1.x` test reads the library version at runtime.
