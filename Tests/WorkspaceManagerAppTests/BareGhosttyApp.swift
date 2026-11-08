@@ -189,7 +189,7 @@ final class BareGhosttyApp {
 }
 
 enum ProcessTree {
-    /// Every live descendant of `root`, walked breadth-first through the process table.
+    /// Every live descendant of `root`, found by walking the process table by parent pid.
     static func descendants(of root: pid_t = getpid()) -> Set<pid_t> {
         var found = Set<pid_t>()
         var frontier = [root]
