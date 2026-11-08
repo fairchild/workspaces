@@ -318,6 +318,20 @@ cache is a purge via the named entrypoint:
 5. If API changes break compile:
    - patch only the terminal integration files listed above
    - update this guide with concrete API changes
+6. Check surface teardown at both pins when the range touches `Surface.deinit`,
+   termio, the app mailbox, or the Zig version (#1841, #1842). Build each pin with
+   `GHOSTTY_KEEP_SYMBOLS=1` so a hang names its frames, and run long suites under
+   `scripts/watch-swift-test.sh`, which samples the test helper and exits 124 when the
+   log stops moving. The full app suite under CPU load (for example one `yes > /dev/null`
+   per core, plus a few) is the setting where teardown hangs have shown up.
+   `GhosttySurfaceMailboxDeadlockTests` reproduces the known app-mailbox deadlock
+   deterministically and hangs until it is fixed:
+
+   ```bash
+   scripts/watch-swift-test.sh --stall 45 --out /tmp/deadlock -- \
+     env WORKSPACES_MAILBOX_DEADLOCK_SURFACES=32 \
+     swift test --skip-build --filter GhosttySurfaceMailboxDeadlock
+   ```
 
 ## CI Contract
 
