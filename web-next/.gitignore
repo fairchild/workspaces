@@ -21,4 +21,4 @@ perf/results-deployed.md
 .vercel
 
 # libghostty-vt release wasm, fetched and checksum-verified by scripts/fetch-ghostty-vt.mjs
-public/dev/terminal-vt/*.wasm
+public/ghostty-vt/

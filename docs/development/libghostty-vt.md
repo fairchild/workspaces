@@ -96,11 +96,23 @@ package, on Ghostty's signed `ghostty-vt-<version>-small.wasm`
 (`docs/decisions/web-terminal-libghostty-vt.md`). `GHOSTTY_VT_RELEASE` in
 `ghostty-vt.ts` is the one pin: version, file, SHA-256 and the minisign key it
 was verified against. `pnpm ghostty-vt:fetch` downloads the file into
-`public/dev/terminal-vt/` (gitignored) and refuses a digest that differs; CI
-runs it before the unit tests, so the wasm-backed tests in `vt.test.ts` run on
-every PR, and with `CI=true` a missing file fails the suite instead of
-skipping it. The release host sends no CORS headers, so the page loads the
-file same-origin and checks the digest again before instantiating it.
+`public/ghostty-vt/` (gitignored) and refuses a digest that differs. `pnpm
+build` runs it before `next build`, so every deploy serves the verified file
+at `/ghostty-vt/<file>` with an immutable cache header, and a build that
+cannot fetch or verify it fails. CI also runs it before the unit tests, so the
+wasm-backed tests in `vt.test.ts` and `ttyd-transport.test.ts` run on every
+PR, and with `CI=true` a missing file fails the suite instead of skipping it.
+The release host sends no CORS headers, so the page loads the file
+same-origin and checks the digest again before instantiating it. web-next
+sends no Content-Security-Policy today; if one is added it needs
+`connect-src 'self'` (already enough for the fetch) and `'wasm-unsafe-eval'`
+in `script-src` for `WebAssembly.instantiate`.
+
+The terminal drawer (`terminal-drawer.tsx`) imports `CanvasTerminal` on first
+open, so neither the binding's chunk nor the wasm is in the session route's
+first load. Transports hand it PTY output as a `Uint8Array`, undecoded: ttyd
+cuts frames on byte counts, and the terminal's parser joins a UTF-8 sequence
+split across two writes.
 
 The layers match the mobile package: `VtTerminal` (`ghostty-vt.ts`) owns the
 handles and produces a `TerminalSnapshot` (`snapshot.ts`), `paint.ts` holds
@@ -150,8 +162,10 @@ What the wasm build needs beyond the C notes above:
   cells are fractional CSS pixels, so the front end scales pointer positions
   onto a whole-pixel grid before encoding.
 
-`/dev/terminal-vt` is the comparison harness against ghostty-web until #1848
-removes it. `?source=parity` writes the screen `tests/e2e/terminal-vt.spec.ts`
+`/dev/terminal-vt` is the binding's bench (dev server, or a production build
+started with `WEB_NEXT_TERMINAL_VT_BENCH=1`): the fixture, the mock PTY, a
+live ttyd socket (`?source=ttyd&ws=…`), a stress stream with frame costs, and
+an input matrix. `?source=parity` writes the screen `tests/e2e/terminal-vt.spec.ts`
 drives with real pointer, keyboard, focus and IME events; its screenshots land
 in `web-next/output/terminal-vt/`, uploaded by CI as `terminal-vt-evidence`.
 

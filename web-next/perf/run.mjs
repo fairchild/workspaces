@@ -261,7 +261,7 @@ async function runResumeLatency(browser, baseUrl, scenario) {
 }
 
 // Drawer-open → interactive (#752): on a fresh seeded session, press Ctrl+`
-// and time until the drawer reports data-ready — the lazy ghostty-web WASM
+// and time until the drawer reports data-ready — the lazy libghostty-vt wasm
 // load + init, the ticket mint/redeem exchange, and the first PTY bytes of
 // the mock seam in a painted frame (data-ready flips on a rAF after the
 // first onData). Cold context per run, so every run pays the full cost.

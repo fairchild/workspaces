@@ -26,6 +26,16 @@ const nextConfig: NextConfig = {
 		"@ai-sdk/sandbox-vercel",
 		"@vercel/sandbox",
 	],
+	// The terminal's wasm is named by its pinned release version and
+	// checksum-verified on load, so a cached copy never goes stale.
+	async headers() {
+		return [
+			{
+				source: "/ghostty-vt/:file*",
+				headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }],
+			},
+		];
+	},
 };
 
 export default nextConfig;

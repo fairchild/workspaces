@@ -15,13 +15,22 @@ describe("evalMockCommand", () => {
 });
 
 describe("openMockPty", () => {
+	const encoder = new TextEncoder();
+
 	function attach() {
-		const chunks: string[] = [];
-		const conn = openMockPty({
-			onData: (text) => chunks.push(text),
+		const chunks: Uint8Array[] = [];
+		const pty = openMockPty({
+			onData: (bytes) => chunks.push(bytes),
 			onClose: () => {},
 		});
-		return { conn, output: () => chunks.join("") };
+		const conn = {
+			send: (text: string) => pty.send(encoder.encode(text)),
+			sendBytes: (bytes: Uint8Array) => pty.send(bytes),
+			close: () => pty.close(),
+		};
+		const output = () =>
+			new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+		return { conn, output };
 	}
 
 	test("paints a banner and prompt synchronously on open", () => {
@@ -44,6 +53,15 @@ describe("openMockPty", () => {
 		conn.send("\x7f");
 		conn.send("\r");
 		expect(output()).toContain("/vercel/sandbox/workspace");
+	});
+
+	test("joins a character whose UTF-8 bytes arrive in two sends", () => {
+		const { conn, output } = attach();
+		const bytes = encoder.encode("echo 日本\r");
+		conn.sendBytes(bytes.subarray(0, 7));
+		conn.sendBytes(bytes.subarray(7));
+		expect(output()).toContain("echo 日本\r\n日本\r\n");
+		expect(output()).not.toContain("\uFFFD");
 	});
 
 	test("a closed connection emits nothing further", () => {

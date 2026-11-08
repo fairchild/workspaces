@@ -1,8 +1,8 @@
 /*
- * The libghostty-vt canvas terminal at /dev/terminal-vt (#1847), in a real
- * browser over Ghostty's pinned release wasm: the recorded fixture renders,
- * and each behavior the drawer needs before #1848 cuts over works through
- * real pointer, keyboard, focus and IME events. Screenshots land in
+ * The drawer's libghostty-vt canvas terminal on the /dev/terminal-vt bench,
+ * in a real browser over Ghostty's pinned release wasm: the recorded fixture
+ * renders, and each behavior the drawer relies on works through real
+ * pointer, keyboard, focus and IME events. Screenshots land in
  * output/terminal-vt/, which CI uploads as the terminal-vt-evidence artifact
  * (pnpm evidence empties output/evidence/, so they live beside it).
  */
@@ -10,12 +10,12 @@ import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 
-const WASM = path.resolve("public/dev/terminal-vt/ghostty-vt-1.0.0-small.wasm");
+const WASM = path.resolve("public/ghostty-vt/ghostty-vt-1.0.0-small.wasm");
 const OUT = path.resolve("output/terminal-vt");
 
 test.skip(!existsSync(WASM) && process.env.CI !== "true", "run `pnpm ghostty-vt:fetch` first");
-// The harness lays two 620px panes side by side; at the default 1280×720 they
-// wrap and the vt pane's lower rows fall below the fold, out of the pointer's reach.
+// The bench stacks its heading above a 380px pane; at the default 1280×720 the
+// pane's lower rows sit close to the fold, so give the pointer room.
 test.use({ viewport: { width: 1440, height: 900 } });
 
 interface Geometry {
@@ -28,8 +28,8 @@ interface Geometry {
 }
 
 async function open(page: Page, query: string): Promise<Geometry> {
-	await page.goto(`/dev/terminal-vt?pane=vt&${query}`);
-	await expect(page.getByTestId("spike-metrics")).toContainText('"phase": "done"', { timeout: 20_000 });
+	await page.goto(`/dev/terminal-vt?${query}`);
+	await expect(page.getByTestId("bench-metrics")).toContainText('"phase": "done"', { timeout: 20_000 });
 	return page.evaluate(() => {
 		const vt = window.__terminalVt!.vt;
 		const rect = vt.canvas.getBoundingClientRect();
@@ -110,7 +110,7 @@ test.describe("parity screen", () => {
 		await shot(page, "scrollback-selection");
 	});
 
-	test("Ctrl+click opens an OSC 8 link, and hovering with Ctrl shows it", async ({ page }) => {
+	test("Ctrl+click (Cmd+click on macOS) opens an OSC 8 link, and hovering with it held shows it", async ({ page }) => {
 		const g = await open(page, "source=parity");
 		const row = await rowOf(page, "links:");
 		const { x, y } = center(g, 9, row);
@@ -130,12 +130,12 @@ test.describe("parity screen", () => {
 		expect(probe.hit, detail).toBe("CANVAS");
 		expect(probe.uri, detail).toBe("https://ghostty.org/docs");
 		expect(probe.runs.some(([, text, link]) => link && text.includes("ghostty.org/docs")), detail).toBe(true);
-		await page.keyboard.down("Control");
+		await page.keyboard.down("ControlOrMeta");
 		await page.mouse.move(x, y);
 		await expect.poll(() => page.evaluate(() => window.__terminalVt!.vt.canvas.style.cursor)).toBe("pointer");
 		await shot(page, "link-hover");
 		await page.mouse.click(x, y);
-		await page.keyboard.up("Control");
+		await page.keyboard.up("ControlOrMeta");
 		expect(await page.evaluate(() => window.__terminalVt!.links)).toEqual(["https://ghostty.org/docs"]);
 	});
 

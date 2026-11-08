@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { terminalVtSpikeEnabled } from "@/app/(app)/dev/terminal-vt/gate";
+import { terminalVtBenchEnabled } from "@/app/(app)/dev/terminal-vt/gate";
 import { ghosttyKeyName, keyInput, MODS } from "./canvas-terminal";
 import { GHOSTTY_VT_RELEASE, instantiateVt, type SurfaceGeometry, VtModule, verifySha256, VtTerminal } from "./ghostty-vt";
 import { backgroundSpans, cursorKind, paintedCells, preeditCells } from "./paint";
@@ -201,23 +201,29 @@ describe("macOS Option policy", () => {
 	});
 });
 
-describe("spike gate", () => {
+describe("bench gate", () => {
 	it("is on for the dev server and off in production unless asked for", () => {
-		expect(terminalVtSpikeEnabled({ NODE_ENV: "development" } as NodeJS.ProcessEnv)).toBe(true);
-		expect(terminalVtSpikeEnabled({ NODE_ENV: "production" } as NodeJS.ProcessEnv)).toBe(false);
+		expect(terminalVtBenchEnabled({ NODE_ENV: "development" } as NodeJS.ProcessEnv)).toBe(true);
+		expect(terminalVtBenchEnabled({ NODE_ENV: "production" } as NodeJS.ProcessEnv)).toBe(false);
 		expect(
-			terminalVtSpikeEnabled({ NODE_ENV: "production", WEB_NEXT_TERMINAL_VT_SPIKE: "1" } as NodeJS.ProcessEnv),
+			terminalVtBenchEnabled({ NODE_ENV: "production", WEB_NEXT_TERMINAL_VT_BENCH: "1" } as NodeJS.ProcessEnv),
 		).toBe(true);
 	});
 });
 
-const served = join(process.cwd(), "public/dev/terminal-vt");
-const wasmPath = join(served, GHOSTTY_VT_RELEASE.file);
+const fixtures = join(process.cwd(), "public/dev/terminal-vt");
+const wasmPath = join(process.cwd(), "public", GHOSTTY_VT_RELEASE.servedFrom, GHOSTTY_VT_RELEASE.file);
 const hasWasm = existsSync(wasmPath);
 /** CI fetches the pinned wasm before this suite; there, a missing file is a failure, never a skip. */
 const wasmRequired = process.env.CI === "true";
 
 describe("libghostty-vt release wasm", () => {
+	it("is fetched and checksum-verified by every build, before next build", () => {
+		const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));
+		expect(pkg.scripts.build).toMatch(/^node scripts\/fetch-ghostty-vt\.mjs && .*next build$/);
+		expect(pkg.dependencies["ghostty-web"]).toBeUndefined();
+	});
+
 	it.runIf(wasmRequired)("is present, so the wasm-backed tests run", () => {
 		expect(hasWasm, `${wasmPath} missing: CI runs \`pnpm ghostty-vt:fetch\` before the unit tests`).toBe(true);
 	});
@@ -250,7 +256,7 @@ const decode = (b: Uint8Array) => new TextDecoder().decode(b);
 describe.skipIf(!hasWasm)("libghostty-vt 1.0 release wasm (run `pnpm ghostty-vt:fetch` first)", () => {
 	it("renders the recorded agent turn", async () => {
 		const { t } = await terminal();
-		const fixture = readFileSync(join(served, "agent-turn.vt"));
+		const fixture = readFileSync(join(fixtures, "agent-turn.vt"));
 		for (let i = 0; i < fixture.length; i += 24) t.write(fixture.subarray(i, i + 24));
 		const s = t.snapshot();
 		const text = viewportText(s);
@@ -259,6 +265,18 @@ describe.skipIf(!hasWasm)("libghostty-vt 1.0 release wasm (run `pnpm ghostty-vt:
 		expect(s.cursor).toMatchObject({ column: 12, row: 9, wide: false });
 		const truecolor = s.lines[6].find((r) => r.cells.join("") === "truecolor");
 		expect(truecolor?.style.fg).toBe(0x78c8ff);
+		t.dispose();
+	});
+
+	it("joins a UTF-8 sequence split across two writes, as ttyd frames split it", async () => {
+		const { t } = await terminal(40, 3);
+		const bytes = new TextEncoder().encode("日本語 ✅ done");
+		t.write(bytes.subarray(0, 4));
+		t.write(bytes.subarray(4, 11));
+		t.write(bytes.subarray(11));
+		const text = viewportText(t.snapshot());
+		expect(text.split("\n")[0]).toBe("日本語 ✅ done");
+		expect(text).not.toContain("\uFFFD");
 		t.dispose();
 	});
 
@@ -387,7 +405,7 @@ const surfaceOf = (t: VtTerminal): SurfaceGeometry => ({
 });
 const pointer = (column: number, row: number, dx = 5) => ({ column, row, x: column * 10 + dx, y: row * 20 + 10 });
 
-describe.skipIf(!hasWasm)("parity the drawer needs before it leaves ghostty-web", () => {
+describe.skipIf(!hasWasm)("parity the drawer needs", () => {
 	async function history() {
 		const { m, t } = await terminal(20, 5);
 		for (let i = 0; i < 20; i++) t.write(`line ${String(i).padStart(2, "0")}\r\n`);

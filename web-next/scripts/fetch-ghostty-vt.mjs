@@ -1,10 +1,11 @@
 /*
- * Fetches Ghostty's release libghostty-vt wasm into public/dev/terminal-vt/
- * (gitignored), where the canvas terminal loads it same-origin: the release
- * host sends no CORS headers. The file must match the SHA-256 pinned in
- * src/components/terminal/vt/ghostty-vt.ts, recorded after verifying
- * Ghostty's minisign signature on the release. CI runs this before the unit
- * tests so the wasm-backed tests run on every PR.
+ * Fetches Ghostty's release libghostty-vt wasm into public/ghostty-vt/
+ * (gitignored), where the drawer's canvas terminal loads it same-origin: the
+ * release host sends no CORS headers. The file must match the SHA-256 pinned
+ * in src/components/terminal/vt/ghostty-vt.ts, recorded after verifying
+ * Ghostty's minisign signature on the release. `pnpm build` runs this first,
+ * so no build ships without the verified file; CI also runs it before the
+ * unit tests so the wasm-backed tests run on every PR.
  */
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -18,8 +19,8 @@ const pin = (field) => {
 	if (!match) throw new Error(`GHOSTTY_VT_RELEASE.${field} not found in ghostty-vt.ts`);
 	return match[1];
 };
-const [origin, file, sha256] = ["origin", "file", "sha256"].map(pin);
-const target = join(root, "public/dev/terminal-vt", file);
+const [origin, file, sha256, servedFrom] = ["origin", "file", "sha256", "servedFrom"].map(pin);
+const target = join(root, "public", servedFrom, file);
 await mkdir(dirname(target), { recursive: true });
 
 const existing = await readFile(target).catch(() => null);
