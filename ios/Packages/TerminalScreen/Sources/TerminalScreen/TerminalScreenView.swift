@@ -252,18 +252,35 @@ struct CellMetrics {
     /// From the cell's top to the baseline of a glyph centered in it.
     let baseline: CGFloat
 
-    init(fontSize: CGFloat) {
+    @MainActor init(fontSize: CGFloat) {
+        let font = Self.font(ofSize: fontSize)
+        width = ("M" as NSString).size(withAttributes: [.font: font]).width
         #if canImport(UIKit)
-            let font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-            width = ("M" as NSString).size(withAttributes: [.font: font]).width
             height = font.lineHeight.rounded(.up)
             baseline = ((height - (font.ascender - font.descender)) / 2 + font.ascender).rounded()
         #else
-            let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-            width = ("M" as NSString).size(withAttributes: [.font: font]).width
             height = (font.ascender - font.descender + font.leading).rounded(.up)
             baseline = ((height - (font.ascender - font.descender)) / 2 + font.ascender).rounded()
         #endif
+    }
+
+    #if canImport(UIKit)
+        typealias PlatformFont = UIFont
+    #else
+        typealias PlatformFont = NSFont
+    #endif
+
+    /// The system monospaced font at each size, held for the life of the process.
+    /// Holding them keeps the font family resident: after a process frees its last
+    /// font of the family, AppKit can return nil for the next one while the family
+    /// is torn down, and measuring with that nil raises.
+    @MainActor private static var fonts: [CGFloat: PlatformFont] = [:]
+
+    @MainActor private static func font(ofSize size: CGFloat) -> PlatformFont {
+        if let font = fonts[size] { return font }
+        let font = PlatformFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        fonts[size] = font
+        return font
     }
 
     /// A one-point line: an underline just under the baseline, a strikethrough
