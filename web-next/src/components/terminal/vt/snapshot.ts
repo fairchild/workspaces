@@ -1,9 +1,10 @@
 /*
- * The screen as plain values (#1846 spike), the web twin of the mobile
- * package's TerminalSnapshot: lines of styled runs on a fixed cell grid, the
- * cursor, and the default colors. A run is either narrow cells (one grapheme
- * per column) or a single wide cell, so the painter places glyphs on the grid
- * without measuring them. RunBuilder coalesces a row's cells into runs.
+ * The screen as plain values, the web twin of the mobile package's
+ * TerminalSnapshot: lines of styled runs on a fixed cell grid, the cursor with
+ * its shape and blink, the default colors, and the selection as row-local
+ * column ranges. A run is either narrow cells (one grapheme per column) or a
+ * single wide cell, so the painter places glyphs on the grid without
+ * measuring them. RunBuilder coalesces a row's cells into runs.
  */
 
 /** 0xRRGGBB. */
@@ -21,6 +22,8 @@ export interface CellStyle {
 	strikethrough: boolean;
 	underline: boolean;
 	overline: boolean;
+	/** The cell carries an OSC 8 hyperlink; the URI is looked up on demand. */
+	hyperlink: boolean;
 }
 
 export interface TextRun {
@@ -33,11 +36,22 @@ export interface TextRun {
 	style: CellStyle;
 }
 
+/** GhosttyCursorStyle, as the program set it with DECSCUSR. */
+export type CursorShape = "block" | "bar" | "underline" | "block_hollow";
+
 export interface TerminalCursor {
 	column: number;
 	row: number;
-	/** The cursor sits on a wide character. */
+	/** The cursor sits on the right half of a wide character. */
 	wide: boolean;
+	shape: CursorShape;
+	blinking: boolean;
+}
+
+/** Selected columns of one viewport row, inclusive on both ends. */
+export interface RowSelection {
+	start: number;
+	end: number;
 }
 
 export interface TerminalSnapshot {
@@ -47,6 +61,8 @@ export interface TerminalSnapshot {
 	bg: Rgb;
 	cursor: TerminalCursor | null;
 	lines: TextRun[][];
+	/** Per viewport row: the part the terminal's selection covers, or null. */
+	selection: (RowSelection | null)[];
 	/** Scrollback rows above the viewport, and how far the viewport sits from the bottom. */
 	scrollback: { total: number; offset: number; length: number };
 }
@@ -62,6 +78,7 @@ export const PLAIN_STYLE: CellStyle = {
 	strikethrough: false,
 	underline: false,
 	overline: false,
+	hyperlink: false,
 };
 
 export function sameStyle(a: CellStyle, b: CellStyle): boolean {
@@ -75,7 +92,8 @@ export function sameStyle(a: CellStyle, b: CellStyle): boolean {
 		a.invisible === b.invisible &&
 		a.strikethrough === b.strikethrough &&
 		a.underline === b.underline &&
-		a.overline === b.overline
+		a.overline === b.overline &&
+		a.hyperlink === b.hyperlink
 	);
 }
 
@@ -137,39 +155,60 @@ export class RunBuilder {
 	}
 }
 
-/** Plain text of a viewport rectangle, for copy. Rows are trimmed on the right. */
-export function selectionText(
+/** One row's text from `start` through `end` (inclusive), trimmed on the right. */
+export function lineText(line: TextRun[], start = 0, end = Number.POSITIVE_INFINITY): string {
+	let text = "";
+	let column = 0;
+	for (const run of line) {
+		while (column < run.column) {
+			if (column >= start && column <= end) text += " ";
+			column++;
+		}
+		if (run.columns === 2 && run.cells.length === 1) {
+			if (column >= start && column <= end) text += run.cells[0];
+			column += 2;
+			continue;
+		}
+		for (const cell of run.cells) {
+			if (column >= start && column <= end) text += cell;
+			column++;
+		}
+	}
+	return text.replace(/\s+$/, "");
+}
+
+/** Plain text of a viewport range in reading order, one line per row. */
+export function rangeText(
 	snapshot: TerminalSnapshot,
 	from: { row: number; column: number },
 	to: { row: number; column: number },
 ): string {
 	const [a, b] =
-		from.row < to.row || (from.row === to.row && from.column <= to.column)
-			? [from, to]
-			: [to, from];
+		from.row < to.row || (from.row === to.row && from.column <= to.column) ? [from, to] : [to, from];
 	const out: string[] = [];
 	for (let row = a.row; row <= b.row; row++) {
-		const line = snapshot.lines[row] ?? [];
 		const start = row === a.row ? a.column : 0;
 		const end = row === b.row ? b.column : snapshot.columns - 1;
-		let text = "";
-		let column = 0;
-		for (const run of line) {
-			while (column < run.column) {
-				if (column >= start && column <= end) text += " ";
-				column++;
-			}
-			if (run.columns === 2 && run.cells.length === 1) {
-				if (column >= start && column <= end) text += run.cells[0];
-				column += 2;
-				continue;
-			}
-			for (const cell of run.cells) {
-				if (column >= start && column <= end) text += cell;
-				column++;
-			}
-		}
-		out.push(text.replace(/\s+$/, ""));
+		out.push(lineText(snapshot.lines[row] ?? [], start, end));
 	}
 	return out.join("\n");
+}
+
+/** Every viewport row as text: what the accessibility mirror reads out. */
+export function viewportText(snapshot: TerminalSnapshot): string {
+	return snapshot.lines.map((line) => lineText(line)).join("\n").replace(/\n+$/, "");
+}
+
+/** The hyperlink run covering a cell, as a column range, or null. */
+export function hyperlinkRunAt(
+	snapshot: TerminalSnapshot,
+	at: { row: number; column: number },
+): RowSelection | null {
+	for (const run of snapshot.lines[at.row] ?? []) {
+		if (!run.style.hyperlink) continue;
+		if (at.column >= run.column && at.column < run.column + run.columns) {
+			return { start: run.column, end: run.column + run.columns - 1 };
+		}
+	}
+	return null;
 }

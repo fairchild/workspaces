@@ -1,8 +1,10 @@
 /*
- * Fetches Ghostty's release libghostty-vt wasm builds for the terminal-vt
- * spike (#1846) into public/dev/terminal-vt/, gitignored. Each file must match
- * the SHA-256 pinned in src/components/terminal/vt/ghostty-vt.ts, which was
- * recorded after verifying Ghostty's minisign signature on the release.
+ * Fetches Ghostty's release libghostty-vt wasm into public/dev/terminal-vt/
+ * (gitignored), where the canvas terminal loads it same-origin: the release
+ * host sends no CORS headers. The file must match the SHA-256 pinned in
+ * src/components/terminal/vt/ghostty-vt.ts, recorded after verifying
+ * Ghostty's minisign signature on the release. CI runs this before the unit
+ * tests so the wasm-backed tests run on every PR.
  */
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -11,20 +13,21 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const source = await readFile(join(root, "src/components/terminal/vt/ghostty-vt.ts"), "utf8");
-const origin = source.match(/origin: "([^"]+)"/)[1];
-const builds = [...source.matchAll(/file: "([^"]+)",\s*sha256: "([0-9a-f]{64})"/g)];
-const outDir = join(root, "public/dev/terminal-vt");
-await mkdir(outDir, { recursive: true });
+const pin = (field) => {
+	const match = source.match(new RegExp(`\\b${field}: "([^"]+)"`));
+	if (!match) throw new Error(`GHOSTTY_VT_RELEASE.${field} not found in ghostty-vt.ts`);
+	return match[1];
+};
+const [origin, file, sha256] = ["origin", "file", "sha256"].map(pin);
+const target = join(root, "public/dev/terminal-vt", file);
+await mkdir(dirname(target), { recursive: true });
 
-for (const [, file, sha256] of builds) {
-	const target = join(outDir, file);
-	const existing = await readFile(target).catch(() => null);
-	if (existing && digest(existing) === sha256) {
-		console.log(`ok      ${file} (cached)`);
-		continue;
-	}
+const existing = await readFile(target).catch(() => null);
+if (existing && digest(existing) === sha256) {
+	console.log(`ok      ${file} (cached) sha256=${sha256}`);
+} else {
 	const response = await fetch(`${origin}${file}`);
-	if (!response.ok) throw new Error(`${file}: HTTP ${response.status}`);
+	if (!response.ok) throw new Error(`${origin}${file}: HTTP ${response.status}`);
 	const bytes = Buffer.from(await response.arrayBuffer());
 	const actual = digest(bytes);
 	if (actual !== sha256) throw new Error(`${file}: sha256 ${actual}, expected ${sha256}`);
