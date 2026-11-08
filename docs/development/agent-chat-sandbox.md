@@ -186,9 +186,9 @@ Creating a sandbox from scratch (install node, install claude-code) takes minute
 
 ### What tmux DOES give us
 
-**Reattach within the same sandbox across WebSocket reconnects.** When the browser tab reloads, the network blips, or the user switches main tabs, the new ttyd client connects to the still-running tmux server inside the sandbox and gets back the exact same session — same cwd, same env, same command history, same in-flight processes.
+**Reattach within the same sandbox across WebSocket reconnects.** When a ttyd client disconnects and reconnects (network blip, reload), the new ttyd client connects to the still-running tmux server inside the sandbox and gets back the exact same session — same cwd, same env, same command history, same in-flight processes.
 
-Verified live: running `cd /tmp`, closing the browser tab, reopening it, and seeing `pwd` still return `/tmp`.
+Verified live (2026-04, against the since-removed `web/` Terminal tab): running `cd /tmp`, closing the browser tab, reopening it, and seeing `pwd` still return `/tmp`.
 
 ### What tmux does NOT give us
 
@@ -240,7 +240,7 @@ has the same shape before shipping.
 |---|---|---|
 | `/api/chat/messages` | `chat-panel.tsx` | 10s (was 5s, bumped after the incident) |
 | `/api/events` | `activity-feed.tsx` | 10s |
-| `/api/terminal/status` | `use-terminal-sessions.ts` + `chat-panel.tsx` | 10s |
+| `/api/terminal/status` | `chat-panel.tsx` | 10s |
 
 Any new polled endpoint should default to 10s or slower unless
 there's a compelling UX reason. If you need faster refresh, prefer
@@ -352,4 +352,3 @@ case env-var auth ever stops working.
 | Agent stream hangs on "Agent is thinking..." | Base snapshot issue (old CLI version, network policy) | Bump `BASE_SNAPSHOT_VERSION`, recreate base |
 | `Sandbox.create` throws "Missing credentials" | Dev env has no Vercel token | `.env.local` needs `VERCEL_TOKEN` + `VERCEL_TEAM_ID` + `VERCEL_PROJECT_ID`, or run on Vercel |
 | ttyd WebSocket 404s | ttyd started without `-b /<token>` base path | All sandbox creation must go through `startTtyd(sandbox)` helper |
-| Agent sub-tab can't connect to restored sandbox | `restoreSnapshot` didn't re-run `startTtyd` with a new token | Handled in `restoreSnapshot` — verify via `resolveSandboxState` returns a `terminalUrl` with the new sandbox ID's token |

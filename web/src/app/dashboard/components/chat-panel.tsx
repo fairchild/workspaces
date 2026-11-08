@@ -447,7 +447,6 @@ export function ChatPanel({
 				onSelect={(name) => {
 					onSelectAgent?.(name === "all" ? null : name);
 				}}
-				showNew={false}
 			/>
 			<div className={styles.panel}>
 				<MessageList entries={filteredEntries} loading={loading} />

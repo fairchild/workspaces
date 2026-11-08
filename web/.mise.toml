@@ -30,8 +30,8 @@ set -euo pipefail
 PR="${1:?usage: mise run web:evidence -- --pr <N> [--name <slug>]}"
 # Strip --pr flag if present
 [[ "$PR" == "--pr" ]] && PR="${2:?missing PR number}" && shift
-NAME="${3:-terminal-tab}"
-[[ "$NAME" == "--name" ]] && NAME="${4:-terminal-tab}"
+NAME="${3:-dashboard}"
+[[ "$NAME" == "--name" ]] && NAME="${4:-dashboard}"
 
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
@@ -42,10 +42,10 @@ const { chromium } = require('@playwright/test');
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  await page.goto('http://localhost:3000/dashboard/fairchild/workspaces?tab=terminal');
+  await page.goto('http://localhost:3000/dashboard/fairchild/workspaces?tab=chat');
   await page.waitForLoadState('networkidle');
   await page.waitForTimeout(1500);
-  await page.screenshot({ path: '$TMPDIR/terminal.png' });
+  await page.screenshot({ path: '$TMPDIR/chat.png' });
   await page.goto('http://localhost:3000/dashboard/fairchild/workspaces');
   await page.waitForLoadState('networkidle');
   await page.waitForTimeout(1000);
@@ -57,7 +57,7 @@ const { chromium } = require('@playwright/test');
 
 # Upload
 cd "$(git rev-parse --show-toplevel)"
-./scripts/evidence.sh --pr "$PR" --name "${NAME}-terminal" --file "$TMPDIR/terminal.png"
+./scripts/evidence.sh --pr "$PR" --name "${NAME}-chat" --file "$TMPDIR/chat.png"
 ./scripts/evidence.sh --pr "$PR" --name "${NAME}-dashboard" --file "$TMPDIR/dashboard.png"
 """
 

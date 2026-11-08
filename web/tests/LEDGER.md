@@ -85,22 +85,15 @@ Add a `[gap]` row for behaviors you know matter but aren't yet tested. `qa-web-a
 | Second message restores from snapshot | e2e-full | `full/agent-chat.spec.ts :: second message restores from snapshot (same session)` | 2026-04-17 | qa-web-agent |
 | Agent response persists across reload | e2e-full | `full/agent-chat.spec.ts :: agent response persists in timeline after page reload` | 2026-04-17 | qa-web-agent |
 
-### Terminal tab
+### Main tabs and agent sub-tabs
 
 | Behavior | Layer | Test | Verified | Owner |
 |---|---|---|---|---|
-| Terminal tab present in tab bar | e2e-full | `full/terminal.spec.ts :: tab bar shows Terminal tab` | 2026-04-17 | qa-web-agent |
-| Clicking Terminal tab updates URL | e2e-full | `full/terminal.spec.ts :: clicking Terminal tab updates URL` | 2026-04-17 | qa-web-agent |
-| Direct navigation to terminal tab works | e2e-full | `full/terminal.spec.ts :: direct navigation to terminal tab works` | 2026-04-17 | qa-web-agent |
-| Tab-switch round trip preserves state | e2e-full | `full/terminal.spec.ts :: tab switching round-trip preserves state` | 2026-04-17 | qa-web-agent |
-| Cmd+3 switches to Terminal tab | e2e-full | `full/terminal.spec.ts :: Cmd+3 switches to Terminal tab` | 2026-04-17 | qa-web-agent |
-| Start button shown when no sandbox active | e2e-full | `full/terminal.spec.ts :: shows start button when no sandbox active for selected agent` | 2026-04-17 | qa-web-agent |
-| Select-repo message when no repo selected | e2e-full | `full/terminal.spec.ts :: shows select-repo message when no repo selected` | 2026-04-17 | qa-web-agent |
-| Paused session appears as sub-tab with Resume | e2e-full | `full/terminal.spec.ts :: paused session from seed appears as sub-tab with Resume button` | 2026-04-17 | qa-web-agent |
-| Sub-tab click updates `?agent=` URL param | e2e-full | `full/terminal.spec.ts :: clicking sub-tab updates ?agent= URL param` | 2026-04-17 | qa-web-agent |
-| Agent param persists Terminal → Chat | e2e-full | `full/terminal.spec.ts :: agent param persists across Terminal → Chat tab switch` | 2026-04-17 | qa-web-agent |
-| Chat tab shows agent sub-tabs incl. `all` | e2e-full | `full/terminal.spec.ts :: chat tab shows agent sub-tabs and includes 'all'` | 2026-04-17 | qa-web-agent |
-| Chat `all` sub-tab clears agent URL param | e2e-full | `full/terminal.spec.ts :: chat 'all' sub-tab clears the agent URL param` | 2026-04-17 | qa-web-agent |
+| Tab bar offers Dashboard and Chat, no Terminal tab | e2e-full | `full/agent-tabs.spec.ts :: offers Dashboard and Chat, with no Terminal tab` | 2026-11-08 | claude-code |
+| Stale `?tab=terminal&agent=` link lands on Dashboard, params dropped | e2e-full | `full/agent-tabs.spec.ts :: a stale ?tab=terminal&agent= link lands on Dashboard with both params dropped` | 2026-11-08 | claude-code |
+| Chat tab shows agent sub-tabs incl. `all` | e2e-full | `full/agent-tabs.spec.ts :: chat tab shows agent sub-tabs and includes 'all'` | 2026-11-08 | claude-code |
+| Sub-tab click updates `?agent=` URL param | e2e-full | `full/agent-tabs.spec.ts :: clicking a sub-tab updates the ?agent= URL param` | 2026-11-08 | claude-code |
+| Chat `all` sub-tab clears agent URL param | e2e-full | `full/agent-tabs.spec.ts :: chat 'all' sub-tab clears the agent URL param` | 2026-11-08 | claude-code |
 
 ### Unit-level invariants (selected)
 
@@ -119,11 +112,10 @@ Add a `[gap]` row for behaviors you know matter but aren't yet tested. `qa-web-a
 | `[gap]` Accessibility: every primary page has zero axe-critical violations | a11y is user-blocking for AT users; `@axe-core/playwright` can catch ~30–40% automatically | P1 |
 | `[gap]` Dashboard has zero *serious* a11y violations (found 3 color-contrast on 2026-04-18) | color-contrast blocks low-vision users from reading critical instructions; see `output/qa-agent/2026-04-18/dashboard-a11y/finding.md` | P1 |
 | `[gap]` Error states: agent-chat when sandbox provisioning fails | current tests only cover happy path via mock provider | P1 |
-| `[gap]` Error states: terminal when SSE stream disconnects mid-session | reconnection behavior is unverified | P1 |
-| `[gap]` Mobile viewport (375×667) for chat + terminal tabs | dashboard layout is now covered by `full/responsive.spec.ts` (sidebar drawer, activity toggle, no-horizontal-scroll); chat and terminal tab usability at 375px is still unverified | P2 |
+| `[gap]` Mobile viewport (375×667) for the chat tab | dashboard layout is now covered by `full/responsive.spec.ts` (sidebar drawer, activity toggle, no-horizontal-scroll); chat tab usability at 375px is still unverified | P2 |
 | `[gap]` Drawer focus-trap + focus-restore-to-trigger (component-level) | e2e covers open/close/Escape/backdrop, but Tab-cycling and focus restoration would be best asserted in a DOM component test once the `#536` component lane lands | P2 |
 | `[gap]` Slow-network / timeout behavior for chat compose | user expectation unclear when send hangs | P2 |
-| `[gap]` Visual regression baseline for dashboard + chat + terminal | catches accidental CSS regressions; deferred until Explore/Author loop is stable | P3 |
+| `[gap]` Visual regression baseline for dashboard + chat | catches accidental CSS regressions; deferred until Explore/Author loop is stable | P3 |
 | `[gap]` Keyboard navigation end-to-end (Tab, Escape, Enter) on dashboard | a11y-adjacent, not covered | P2 |
 | `[gap]` Empty-state copy is accurate when no repos are connected | copy drift breaks first-run UX | P2 |
 

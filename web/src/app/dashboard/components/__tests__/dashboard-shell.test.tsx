@@ -24,7 +24,6 @@ vi.mock("next/navigation", () => ({
 // DashboardShell's own fetch effect and MainPanel's rendering of it.
 vi.mock("../sidebar", () => ({ Sidebar: () => null }));
 vi.mock("../chat-panel", () => ({ ChatPanel: () => null }));
-vi.mock("../terminal-panel", () => ({ TerminalPanel: () => null }));
 vi.mock("../activity-feed", () => ({ ActivityFeed: () => null }));
 
 function agentResponse(name: string): AgentDiscoveryResponse {

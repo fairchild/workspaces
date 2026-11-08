@@ -21,7 +21,7 @@ We will render web-next terminals on Ghostty's signed `ghostty-vt-<version>-smal
 - A 1.x pin bump is a checksum change, and web and mobile share one snapshot model.
 - **Cost:** about 112 KB more gzip per lazy load (292 KB against 180 KB).
 - **Cost:** we own what ghostty-web mostly provides: selection across scrollback (the library's gesture API), mouse-tracking and focus encoding, OSC 8 links, cursor blink, inline IME preedit, an accessibility mirror. #1847 builds them; #1848 cuts the drawer over.
-- `web/` (maintenance mode) stays on ghostty-web.
+- `web/` (maintenance mode) had its dashboard terminal removed rather than ported (#1858), so no copy of ghostty-web remains in the repo once #1848 lands.
 
 ## Alternatives considered
 

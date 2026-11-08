@@ -57,7 +57,7 @@ It runs **at request time, once per warm serverless instance** — there is no s
 - **Never edit a migration that has shipped.** It's already recorded in `schema_migrations` on production and will not re-run. Add a new migration instead.
 - **Keep `up()` idempotent**: `createTable().ifNotExists()`, `createIndex().ifNotExists()`, introspection-guarded column adds (see `addMissingColumns`), idempotent data `UPDATE`s. The runner records a migration only after `up()` succeeds; a partial failure is re-run from the top on the next request, and overlapping cold starts can run the same pending `up()` at the same time.
 - **Put data migrations** (backfills, renames) in a migration, not in a query module. The `terminal`→`shell` rename and `owner_id` backfill live in `0001_baseline` for exactly this reason.
-- **Add the row type** to the `Database` interface in `db.ts` for typed Kysely access. Two tables — `user_repos` and `terminal_access_tickets` — are instead queried via raw `getTurso()` SQL; their DDL still lives in the baseline so *all* schema stays in one place.
+- **Add the row type** to the `Database` interface in `db.ts` for typed Kysely access. Two tables — `user_repos` and `terminal_access_tickets` — are not queried via Kysely (`user_repos` uses raw `getTurso()` SQL; `terminal_access_tickets` has no remaining query module since #1858); their DDL still lives in the baseline so *all* schema stays in one place.
 
 ## Principles
 

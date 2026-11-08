@@ -1,15 +1,14 @@
 # Spaces Web
 
-> **Maintenance mode since #754 (2026-07-08).** No new development; old chat/terminal are demoted. This app still serves GitHub webhook ingestion. The active session surface is **`web-next/`**, deployed at `folio.cloudcompute.com` and embedded in the macOS app — see `web/AGENTS.md`, `web-next/AGENTS.md`, and `web-next/CONTRIBUTING.md`.
+> **Maintenance mode since #754 (2026-07-08).** No new development; old chat is demoted and its dashboard terminal was removed (#1858). This app still serves GitHub webhook ingestion. The active session surface is **`web-next/`**, deployed at `folio.cloudcompute.com` and embedded in the macOS app — see `web/AGENTS.md`, `web-next/AGENTS.md`, and `web-next/CONTRIBUTING.md`.
 
-Next.js dashboard for the Workspaces app — chat with AI agents, manage sandbox sessions, and access terminal shells directly in the browser.
+Next.js dashboard for the Workspaces app — chat with AI agents and manage sandbox sessions.
 
 ## Stack
 
 - **Next.js 15** with App Router
 - **Better Auth** for GitHub OAuth
 - **LibSQL / Kysely** for persistence
-- **ghostty-web** (WASM-compiled Ghostty) for browser terminal
 - **Compute provider registry** for agent compute (Vercel Sandbox and Anthropic Managed Agents; Daytona/GitHub Actions stubs; mock for tests)
 - **Biome** for linting
 - **Vitest** for unit tests, **Playwright** for E2E
@@ -17,7 +16,7 @@ Next.js dashboard for the Workspaces app — chat with AI agents, manage sandbox
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md) for the full system diagram, agent runtime, and terminal proxy design.
+See [docs/architecture.md](docs/architecture.md) for the full system diagram and agent runtime.
 
 ## Development
 

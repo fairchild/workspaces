@@ -52,18 +52,3 @@
 	background: #ffd93d;
 	opacity: 0.7;
 }
-
-.newButton {
-	padding: 0.4rem 0.75rem;
-	background: none;
-	border: none;
-	color: var(--text-tertiary);
-	font-family: var(--font-mono), ui-monospace, monospace;
-	font-size: 0.875rem;
-	cursor: pointer;
-	transition: color 0.15s ease;
-}
-
-.newButton:hover {
-	color: var(--accent);
-}

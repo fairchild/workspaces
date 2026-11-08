@@ -11,8 +11,8 @@ export const maxDuration = 300;
 
 /**
  * SSE endpoint that streams a Managed Agents session's `agent.tool_use` and
- * `agent.tool_result` events as compact JSON lines, consumed by the
- * `TranscriptTerminal` client component. Read-only: there is no way to
+ * `agent.tool_result` events as compact JSON lines, for scripts and API
+ * clients (the dashboard's transcript view was removed in #1858). Read-only: there is no way to
  * drive the container from this route. Finished sessions get an `end`
  * sentinel instead of a live tail so the client stops reconnecting.
  */

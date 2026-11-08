@@ -2,7 +2,7 @@
 
 `CLAUDE.md` here symlinks to this file — read one, not both.
 
-**Maintenance mode since #754 (2026-07-08):** no new development, old chat/terminal demoted; still serves GitHub webhook ingestion. Its managed PR reviewer was retired separately (`docs/decisions/managed-reviewer-retirement.md`). New web work happens in `web-next/`, not here. Stack + local dev: `web/README.md`.
+**Maintenance mode since #754 (2026-07-08):** no new development, old chat demoted, dashboard terminal removed (#1858); still serves GitHub webhook ingestion. Its managed PR reviewer was retired separately (`docs/decisions/managed-reviewer-retirement.md`). New web work happens in `web-next/`, not here. Stack + local dev: `web/README.md`.
 
 ## Local Dev
 

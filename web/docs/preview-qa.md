@@ -46,7 +46,7 @@ Playwright project with video and trace enabled.
 - Sign-out and sign-in return to the expected dashboard route.
 - Mobile viewport does not overflow or hide primary controls.
 - Browser back/forward does not strand the app on loading or stale state.
-- Chat and terminal tabs render their empty, paused, and unavailable states.
+- The chat tab renders its empty, paused, and unavailable states.
 - Failed network requests are expected and understandable; unexpected 401, 403,
   or 500 responses are findings.
 - Console errors, stuck spinners, layout overlap, and confusing reauth prompts

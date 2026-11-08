@@ -9,14 +9,12 @@ import { ChatPanel } from "./chat-panel";
 import { Drawer } from "./drawer";
 import { MainPanel } from "./main-panel";
 import { Sidebar } from "./sidebar";
-import { TerminalPanel } from "./terminal-panel";
 
-type TabId = "dashboard" | "chat" | "terminal";
+type TabId = "dashboard" | "chat";
 
 const TABS: { id: TabId; label: string }[] = [
 	{ id: "dashboard", label: "Dashboard" },
 	{ id: "chat", label: "Chat" },
-	{ id: "terminal", label: "Terminal" },
 ];
 
 const VALID_TABS = new Set<string>(TABS.map((t) => t.id));
@@ -44,8 +42,8 @@ export function DashboardShell({
 			? initialTab
 			: "dashboard";
 
-	// Shared across Terminal and Chat tabs — which agent's session is focused.
-	// Persisted in the URL so switching main tabs preserves the agent context.
+	// Chat tab — which agent's session is focused. Persisted in the URL so a
+	// reload or shared link preserves the agent context.
 	const selectedAgent = searchParams.get("agent");
 
 	const [unreadChat, setUnreadChat] = useState(false);
@@ -92,6 +90,18 @@ export function DashboardShell({
 		[pathname, router, searchParams],
 	);
 
+	// Links saved while the Terminal tab existed carry `?tab=terminal` and a
+	// terminal-only `?agent=`; drop both so Chat doesn't inherit a filter that
+	// matches no messages.
+	useEffect(() => {
+		if (searchParams.get("tab") !== "terminal") return;
+		const params = new URLSearchParams(searchParams.toString());
+		params.delete("tab");
+		params.delete("agent");
+		const qs = params.toString();
+		router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+	}, [pathname, router, searchParams]);
+
 	// Keyboard shortcuts
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -110,10 +120,6 @@ export function DashboardShell({
 			if (e.metaKey && e.key === "2") {
 				e.preventDefault();
 				setTab("chat");
-			}
-			if (e.metaKey && e.key === "3") {
-				e.preventDefault();
-				setTab("terminal");
 			}
 		};
 		window.addEventListener("keydown", handleKeyDown);
@@ -276,17 +282,11 @@ export function DashboardShell({
 							loading={loading}
 							error={error}
 						/>
-					) : activeTab === "chat" ? (
+					) : (
 						<ChatPanel
 							selectedRepo={selectedRepo}
 							agents={agentData?.agents ?? []}
 							onNewMessage={handleNewChatMessage}
-							selectedAgent={selectedAgent}
-							onSelectAgent={setSelectedAgent}
-						/>
-					) : (
-						<TerminalPanel
-							selectedRepo={selectedRepo}
 							selectedAgent={selectedAgent}
 							onSelectAgent={setSelectedAgent}
 						/>
