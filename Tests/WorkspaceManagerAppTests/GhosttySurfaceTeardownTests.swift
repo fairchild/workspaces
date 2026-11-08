@@ -38,6 +38,7 @@ struct GhosttySurfaceTeardownTests {
 
     @Test("Releasing an app surface view ends its whole child chain")
     func releasedViewEndsTheChildChain() async throws {
+        BareGhosttyApp.prepareProcess()
         let before = ProcessTree.descendants()
         var view: GhosttySurfaceView? = GhosttySurfaceView(customCommand: Self.command)
         #expect(view?.surface != nil)

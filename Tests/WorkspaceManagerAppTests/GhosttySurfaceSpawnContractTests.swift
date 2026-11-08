@@ -62,6 +62,7 @@ struct GhosttySurfaceSpawnContractTests {
 
     @Test("Surfaces built through the app's own marshalling run their command with its environment")
     func appMarshalledSurfacesRunTheirCommand() async throws {
+        BareGhosttyApp.prepareProcess()
         let scratch = try Scratch()
         defer { scratch.remove() }
         let expectedPath = try #require(GhosttyTerminalConfig(customCommand: "true").environmentVariables["PATH"])

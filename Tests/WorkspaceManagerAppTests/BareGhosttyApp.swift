@@ -77,7 +77,7 @@ final class BareGhosttyApp {
     private var surfaces: [ObjectIdentifier: (view: NSView, surface: ghostty_surface_t)] = [:]
 
     init() throws {
-        GhosttyAppManager.shared.initializeIfNeeded()
+        Self.prepareProcess()
 
         guard let config = ghostty_config_new() else { throw HarnessError.config }
         ghostty_config_finalize(config)
@@ -90,6 +90,13 @@ final class BareGhosttyApp {
         }
         self.app = app
         ledger.bind(app: app)
+    }
+
+    /// `GhosttyAppManager` reads `NSApp`, which a test process has only once something has
+    /// asked for the shared application; a filtered run may have nothing else that does.
+    static func prepareProcess() {
+        _ = NSApplication.shared
+        GhosttyAppManager.shared.initializeIfNeeded()
     }
 
     /// Creates one surface. The returned view is the handle: pass it to `free(_:)`.
