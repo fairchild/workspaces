@@ -66,19 +66,23 @@ class WatchSwiftTestTests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="watch-swift-test-"))
         self.out = self.tmp / "out"
 
+    # intent: guard
     def test_success_keeps_exit_zero(self) -> None:
         result = watch("--out", str(self.out), "--", "sh", "-c", "echo hi; exit 0")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("hi", result.stdout)
 
+    # intent: guard
     def test_failure_keeps_its_exit_status(self) -> None:
         result = watch("--out", str(self.out), "--", "sh", "-c", "exit 7")
         self.assertEqual(result.returncode, 7, result.stderr)
 
+    # intent: fix
     def test_quiet_command_that_finishes_inside_the_stall_window_is_not_a_hang(self) -> None:
         result = watch("--stall", "3", "--out", str(self.out), "--", "sh", "-c", "sleep 2; exit 0")
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    # intent: guard
     def test_stall_exits_124_and_kills_the_command(self) -> None:
         pidfile = self.tmp / "pid"
         result = watch(
@@ -89,6 +93,7 @@ class WatchSwiftTestTests(unittest.TestCase):
         self.assertTrue((self.out / "hang.tree").exists())
         self.assertFalse(alive(int(pidfile.read_text())))
 
+    # intent: fix
     def test_removed_progress_file_still_counts_as_a_stall(self) -> None:
         progress = self.tmp / "progress"
         result = watch(
@@ -97,6 +102,7 @@ class WatchSwiftTestTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 124, result.stderr)
 
+    # intent: fix
     def test_second_watchdog_refuses_a_busy_output_directory(self) -> None:
         first = subprocess.Popen(
             ["bash", str(SCRIPT), "--out", str(self.out), "--", "sleep", "5"],
@@ -114,6 +120,7 @@ class WatchSwiftTestTests(unittest.TestCase):
             first.wait(timeout=30)
         self.assertEqual(first.returncode, 0)
 
+    # intent: fix
     def test_terminating_the_watchdog_kills_the_command(self) -> None:
         pidfile = self.tmp / "pid"
         watchdog = subprocess.Popen(
@@ -131,6 +138,7 @@ class WatchSwiftTestTests(unittest.TestCase):
         self.assertFalse(alive(child))
         self.assertFalse((self.out / ".watch-swift-test.lock").exists())
 
+    # intent: guard
     def test_flag_without_value_prints_usage(self) -> None:
         for flag in ("--stall", "--progress", "--out"):
             with self.subTest(flag=flag):
@@ -138,6 +146,7 @@ class WatchSwiftTestTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertIn("Usage:", result.stderr)
 
+    # intent: guard
     def test_missing_command_prints_usage(self) -> None:
         result = watch("--stall", "5", "--")
         self.assertEqual(result.returncode, 2)
