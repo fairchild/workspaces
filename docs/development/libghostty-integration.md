@@ -252,8 +252,10 @@ fails to link its own build runner against the installed Xcode SDK — observed
 with Zig 0.15.2 against Xcode 26.4.1 (`undefined symbol:
 __availability_version_check` plus missing libSystem symbols). Zig 0.17.0 from
 ziglang.org, via the locked mise runner, links cleanly with Xcode 27.2 (the
-`vt-1.0.0` pin build, 2026-11). Zig 0.17 dropped `--global-cache-dir`; the
-script passes the global cache through `ZIG_GLOBAL_CACHE_DIR` instead.
+`vt-1.0.0` pin build, 2026-11). `zig build` in 0.17 rejects
+`--global-cache-dir` ("unrecognized argument"), though the compiler itself still
+takes it; the script passes the global cache through `ZIG_GLOBAL_CACHE_DIR`,
+which both read.
 
 Xcode Cloud's `ci_post_clone.sh` installs Homebrew's `zig` with
 `HOMEBREW_NO_AUTO_UPDATE=1`, so it gets whatever version the image's formula
