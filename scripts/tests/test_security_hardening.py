@@ -473,7 +473,7 @@ class SecurityHardeningTests(unittest.TestCase):
         status_route = (REPO_ROOT / "web/src/app/api/terminal/status/route.ts").read_text()
 
         self.assertNotIn("terminalUrl: state.terminalUrl", status_route)
-        self.assertIn('terminalAccess: state.terminalUrl ? "ticket" : undefined', status_route)
+        self.assertNotIn("terminalAccess", status_route)
 
     def test_sparkle_appcast_verifier_accepts_valid_ed25519_signature(self) -> None:
         if sys.platform != "darwin" or shutil.which("swift") is None:

@@ -90,7 +90,7 @@ Add a `[gap]` row for behaviors you know matter but aren't yet tested. `qa-web-a
 | Behavior | Layer | Test | Verified | Owner |
 |---|---|---|---|---|
 | Tab bar offers Dashboard and Chat, no Terminal tab | e2e-full | `full/agent-tabs.spec.ts :: offers Dashboard and Chat, with no Terminal tab` | 2026-11-08 | claude-code |
-| Stale `?tab=terminal` link falls back to Dashboard | e2e-full | `full/agent-tabs.spec.ts :: a stale ?tab=terminal link falls back to the Dashboard tab` | 2026-11-08 | claude-code |
+| Stale `?tab=terminal&agent=` link lands on Dashboard, params dropped | e2e-full | `full/agent-tabs.spec.ts :: a stale ?tab=terminal&agent= link lands on Dashboard with both params dropped` | 2026-11-08 | claude-code |
 | Chat tab shows agent sub-tabs incl. `all` | e2e-full | `full/agent-tabs.spec.ts :: chat tab shows agent sub-tabs and includes 'all'` | 2026-11-08 | claude-code |
 | Sub-tab click updates `?agent=` URL param | e2e-full | `full/agent-tabs.spec.ts :: clicking a sub-tab updates the ?agent= URL param` | 2026-11-08 | claude-code |
 | Chat `all` sub-tab clears agent URL param | e2e-full | `full/agent-tabs.spec.ts :: chat 'all' sub-tab clears the agent URL param` | 2026-11-08 | claude-code |

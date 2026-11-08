@@ -84,7 +84,6 @@ describe("/api/terminal/status GET", () => {
 				state: "running",
 				sandboxId: "sbx-1",
 				provider: "vercel-sandbox",
-				terminalAccess: "ticket",
 			},
 		]);
 		expect(JSON.stringify(body)).not.toContain("wss://sandbox.example");

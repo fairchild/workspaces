@@ -18,7 +18,6 @@ export interface TerminalSessionInfo {
 	state: TerminalSessionState;
 	sandboxId: string;
 	provider: string;
-	terminalAccess?: "ticket";
 }
 
 async function resolveState(
@@ -81,7 +80,6 @@ async function resolveSession(
 		state: "running",
 		sandboxId: session.computeInstanceId,
 		provider: session.computeBackend,
-		terminalAccess: state.terminalUrl ? "ticket" : undefined,
 	};
 }
 

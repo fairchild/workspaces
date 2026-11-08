@@ -90,6 +90,18 @@ export function DashboardShell({
 		[pathname, router, searchParams],
 	);
 
+	// Links saved while the Terminal tab existed carry `?tab=terminal` and a
+	// terminal-only `?agent=`; drop both so Chat doesn't inherit a filter that
+	// matches no messages.
+	useEffect(() => {
+		if (searchParams.get("tab") !== "terminal") return;
+		const params = new URLSearchParams(searchParams.toString());
+		params.delete("tab");
+		params.delete("agent");
+		const qs = params.toString();
+		router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+	}, [pathname, router, searchParams]);
+
 	// Keyboard shortcuts
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {

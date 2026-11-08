@@ -370,7 +370,7 @@ const baseline: Migration = {
 			.columns(["state", "updated_at"])
 			.execute();
 
-		// --- terminal_access_tickets (queried via raw libsql in terminal-tickets.ts) ---
+		// --- terminal_access_tickets (no query module remains; kept because migrations are append-only) ---
 		await db.schema
 			.createTable("terminal_access_tickets")
 			.ifNotExists()

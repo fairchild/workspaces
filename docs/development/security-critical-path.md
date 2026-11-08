@@ -134,8 +134,6 @@ obstacle rather than an answer.
 
 ## Explicit Follow-Ups
 
-- Consider a true WebSocket proxy for terminal access so the browser never sees
-  the final ttyd URL after ticket redemption.
 - Keep dependency overrides current and remove them when upstream patched
   versions resolve cleanly.
 

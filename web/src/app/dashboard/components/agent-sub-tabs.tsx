@@ -21,7 +21,7 @@ interface AgentSubTabsProps {
  * Horizontal agent sub-tab strip used by the Chat tab.
  * Shows a live/paused dot next to each agent name. The selected tab is
  * persisted via URL param (`?agent=<name>`) at the dashboard-shell level,
- * so switching main tabs preserves the agent context.
+ * so a reload or shared link preserves the agent context.
  */
 export function AgentSubTabs({ tabs, selected, onSelect }: AgentSubTabsProps) {
 	if (tabs.length === 0) return null;

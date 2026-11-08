@@ -234,28 +234,6 @@ export async function getSessionsForRepo(
 	return sessions;
 }
 
-/** Find the most recent live session for a specific (repo, agent). */
-export async function getSessionForAgent(
-	userId: string,
-	repo: string,
-	agentName: string,
-): Promise<AgentSession | null> {
-	await ensureSchema();
-	const db = getDb();
-	const row = await db
-		.selectFrom("agent_sessions")
-		.selectAll()
-		.where("user_id", "=", userId)
-		.where("repo", "=", repo)
-		.where("agent_name", "=", agentName)
-		.where("status", "in", ["active", "streaming", "snapshotted"])
-		.where("compute_instance_id", "is not", null)
-		.orderBy("last_activity_at", "desc")
-		.limit(1)
-		.executeTakeFirst();
-	return row ? rowToSession(row) : null;
-}
-
 /** Find the most recent snapshotted session for a thread (for restore). */
 export async function getSnapshotSessionForThread(
 	userId: string,

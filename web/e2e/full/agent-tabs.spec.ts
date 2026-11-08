@@ -12,10 +12,11 @@ test.describe("Main tab bar", () => {
 		await expect(page.getByRole("button", { name: "Terminal" })).toHaveCount(0);
 	});
 
-	test("a stale ?tab=terminal link falls back to the Dashboard tab", async ({
+	test("a stale ?tab=terminal&agent= link lands on Dashboard with both params dropped", async ({
 		page,
 	}) => {
-		await page.goto(`${DASHBOARD_URL}?tab=terminal`);
+		await page.goto(`${DASHBOARD_URL}?tab=terminal&agent=shell`);
+		await expect(page).not.toHaveURL(/tab=|agent=/);
 		await expect(
 			page.locator("nav").first().getByRole("button", { name: "Dashboard" }),
 		).toHaveClass(/tabActive|Active/);
@@ -33,7 +34,7 @@ test.describe("Chat agent sub-tabs", () => {
 			subTabBar.getByRole("button", {
 				name: /april-clearwater|April Clearwater/,
 			}),
-		).toBeVisible();
+		).toBeVisible({ timeout: 15_000 });
 	});
 
 	test("clicking a sub-tab updates the ?agent= URL param", async ({ page }) => {

@@ -238,35 +238,6 @@ describe("repo session lookups", () => {
 		expect(sessions.map((session) => session.id)).toEqual([userOne.id]);
 	});
 
-	it("finds an agent session only for the current user", async () => {
-		const repo = `owner/repo-${uniqueThread()}`;
-		const userOne = makeSession({
-			userId: "user-1",
-			repo,
-			agentName: "april",
-			status: "active",
-			computeInstanceId: "inst-user-1",
-		});
-		const userTwo = makeSession({
-			userId: "user-2",
-			repo,
-			agentName: "april",
-			status: "active",
-			computeInstanceId: "inst-user-2",
-			lastActivityAt: "2030-01-01T00:00:00Z",
-		});
-		await mod.createSession(userOne);
-		await mod.createSession(userTwo);
-
-		const found = await mod.getSessionForAgent(
-			"user-1",
-			userOne.repo,
-			userOne.agentName,
-		);
-
-		expect(found?.id).toBe(userOne.id);
-	});
-
 	it("finds a transcript session by instance id only for the owner", async () => {
 		const session = makeSession({
 			userId: "user-1",
