@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.29.0] - 2026-11-08
+
+WorkSpaces moves its terminal to Ghostty 1.0. Closing a terminal can no longer hang the app behind a full Ghostty mailbox. Sessions launched from the ws CLI now appear in the sidebar and can be picked back up there. This release also carries everything prepared for 0.28.0, which never shipped: Docker Compose workspace sandboxes, an Agents status row for the Claude integration, and safer handling of Claude settings.
+
+### Added
+- The desktop terminal runs on Ghostty's 1.0 release, and blank-cell underlines, a block cursor over inverse text, and a link's trailing blanks are drawn the way Ghostty draws them. [#1871](https://github.com/fairchild/workspaces/pull/1871), [#1869](https://github.com/fairchild/workspaces/pull/1869)
+- A session launched from the CLI shows up in the sidebar and can be picked back up from it. `ws check` and `ws resume` verify a launched agent and bring it back, and `ws new --from-ref` starts a workspace from what the remote has now. [#1825](https://github.com/fairchild/workspaces/pull/1825), [#1824](https://github.com/fairchild/workspaces/pull/1824), [#1823](https://github.com/fairchild/workspaces/pull/1823)
+- Docker Compose workspace sandboxes: create a sandboxed workspace from a compose file, with default terminal commands and panes that reconnect after Start. [#1620](https://github.com/fairchild/workspaces/pull/1620)
+- The Agents status row in Settings says whether the Claude integration is active, degraded or failed, and the sidebar points at it. [#1673](https://github.com/fairchild/workspaces/pull/1673), [#1528](https://github.com/fairchild/workspaces/pull/1528)
+
+### Fixed
+- Closing a terminal no longer hangs the app when Ghostty's mailbox is full: each surface is freed right after a tick. [#1867](https://github.com/fairchild/workspaces/pull/1867)
+- A launched session starts as itself, not as the agent that launched it, and the expanded cleanup list keeps its header reachable. [#1822](https://github.com/fairchild/workspaces/pull/1822), [#1829](https://github.com/fairchild/workspaces/pull/1829)
+- Malformed Claude settings are an install error, not an empty file to overwrite, and a settings file another writer changed mid-install is not overwritten with the stale read. [4ec46154](https://github.com/fairchild/workspaces/commit/4ec46154), [7563ea74](https://github.com/fairchild/workspaces/commit/7563ea74)
+- Stopping the automation plane while it is still starting leaves no listener or credential behind, and the test suite no longer deletes the running app's operator credential. [#1682](https://github.com/fairchild/workspaces/pull/1682), [#1654](https://github.com/fairchild/workspaces/pull/1654)
+- A truncated `ws send` says so instead of reporting the byte count it was handed. [#1594](https://github.com/fairchild/workspaces/pull/1594)
+
 ## [0.28.0] - 2026-09-14
 
 WorkSpaces adds Docker Compose workspace sandboxes, an Agents status row that
