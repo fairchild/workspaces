@@ -102,7 +102,6 @@ private struct Scratch {
     init() throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("spawn-contract-\(UUID().uuidString)", isDirectory: true)
-            .resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
@@ -126,7 +125,7 @@ private struct Scratch {
                 initialInput: input + "\n"
             ),
             output: output,
-            expected: [input, token, directory.path]
+            expected: [input, token, Self.physicalPath(directory)]
         )
     }
 
@@ -143,6 +142,14 @@ private struct Scratch {
         let values = fields.map { "\"\($0)\"" }.joined(separator: " ")
         let script = "\(read)printf \"\(format)\" \(values) > \"$0.tmp\" && mv \"$0.tmp\" \"$0\""
         return "/bin/bash --noprofile --norc -c '\(script)' \(output.path)"
+    }
+
+    /// What `pwd -P` prints: `/private/var/...`, where Foundation's symlink resolution
+    /// would give `/var/...`.
+    static func physicalPath(_ url: URL) -> String {
+        guard let resolved = realpath(url.path, nil) else { return url.path }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     static func lines(at url: URL) -> [String]? {
