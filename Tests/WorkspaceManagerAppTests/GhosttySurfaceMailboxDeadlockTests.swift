@@ -96,7 +96,7 @@ struct GhosttySurfaceMailboxDeadlockTests {
     private func waitForFullMailbox(addingSurfaces addSurfaces: () -> Void = {}) async throws {
         let manager = GhosttyAppManager.shared
         let clock = ContinuousClock()
-        let deadline = clock.now + .seconds(10)
+        let deadline = clock.now + .seconds(Self.fillBudgetSeconds)
         var lastAdded = clock.now
         var ticksBefore = manager.tickCount
         var wakeupsBefore = GhosttyAppManager.wakeupCount.withLock { $0 }
@@ -117,6 +117,29 @@ struct GhosttySurfaceMailboxDeadlockTests {
         }
         try #require(mailboxFilled, "the app mailbox never filled, so the test would prove nothing")
     }
+
+    /// Deadline for shells to start and fill the mailbox, sized from this machine's measured
+    /// cost of launching a child rather than a fixed wall clock (the policy in
+    /// `WorkspaceManagerTests/Helpers/LaunchBudget`; the two test targets cannot share
+    /// source). Floored so a fast machine still fails fast, capped so a pathological
+    /// baseline cannot hold every other suite's frees for long.
+    nonisolated private static var fillBudgetSeconds: Double {
+        min(120, max(10, launchRoundTripSeconds * 50))
+    }
+
+    /// One trivial launch-to-exit round trip, measured once. A machine the probe cannot
+    /// run on is not evidence of a fast one, so it reads as slow.
+    nonisolated private static let launchRoundTripSeconds: Double = {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "exit 0"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let started = Date()
+        guard (try? process.run()) != nil else { return 2.4 }
+        process.waitUntilExit()
+        return max(Date().timeIntervalSince(started), 0.05)
+    }()
 
     /// A free that deadlocks never returns, so a regression hangs here rather than failing.
     private func waitForRetiredSurfacesToBeFreed() async throws {
