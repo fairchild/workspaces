@@ -21,13 +21,8 @@ struct GhosttySurfaceMailboxDeadlockTests {
     nonisolated private static let surfaceCount =
         environment["WORKSPACES_MAILBOX_DEADLOCK_SURFACES"].flatMap { Int($0) } ?? 24
 
-    /// Blocking main for 3 s lets every shell finish starting and fill the mailbox before the
-    /// first view goes; 0 releases the views while the shells are still sending.
-    @Test(
-        "Releasing surface views while the app mailbox is full and undrained frees every surface",
-        arguments: [3.0, 0]
-    )
-    func freeWhileMailboxIsFull(blockSeconds: Double) async throws {
+    @Test("Releasing surface views while the app mailbox is full and undrained frees every surface")
+    func freeWhileMailboxIsFull() async throws {
         let count = Self.surfaceCount
         try #require(
             count >= 24, "fewer than 24 surfaces do not fill the 64-slot mailbox, so the test would prove nothing")
@@ -37,18 +32,22 @@ struct GhosttySurfaceMailboxDeadlockTests {
         autoreleasepool {
             views = (0..<count).map { _ in GhosttySurfaceView(workingDirectory: directory) }
         }
+        let everyViewHasSurface = views.allSatisfy { $0.isSurfaceAlive }
+        try #require(everyViewHasSurface, "every view needs a Ghostty surface for the test to free")
         let released = views.map { WeakSurfaceView($0) }
 
         // Each shell's startup sends about three messages; blocking main keeps the app from
-        // ticking, so 24 or more surfaces fill the mailbox before the first view goes.
-        log.write("created \(count) surfaces; blocking main for \(blockSeconds)s")
-        Thread.sleep(forTimeInterval: blockSeconds)
+        // ticking, so 24 or more surfaces fill the mailbox before the first view goes. Without
+        // the block the frees race the shells' startup and the mailbox never fills.
+        log.write("created \(count) surfaces; blocking main for 3s")
+        Thread.sleep(forTimeInterval: 3)
 
         for index in 0..<count {
             log.write("releasing \(index)")
             autoreleasepool { _ = views.removeFirst() }
         }
         log.write("released \(count) views; waiting for their surfaces to be freed")
+        #expect(GhosttyAppManager.shared.retiredSurfaceCount >= count)
         while GhosttyAppManager.shared.retiredSurfaceCount > 0 {
             try await Task.sleep(for: .milliseconds(10))
         }
