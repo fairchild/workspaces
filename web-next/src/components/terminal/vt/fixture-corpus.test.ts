@@ -13,8 +13,8 @@ import { GHOSTTY_VT_RELEASE, instantiateVt, VtTerminal, verifySha256 } from "./g
 import type { CellStyle, TerminalSnapshot, TextRun } from "./snapshot";
 
 const corpusDir = join(process.cwd(), "../fixtures/terminal-vt");
-const served = join(process.cwd(), "public/dev/terminal-vt");
-const wasmPath = join(served, GHOSTTY_VT_RELEASE.file);
+const harnessFixture = join(process.cwd(), "public/dev/terminal-vt/agent-turn.vt");
+const wasmPath = join(process.cwd(), "public", GHOSTTY_VT_RELEASE.servedFrom, GHOSTTY_VT_RELEASE.file);
 const hasWasm = existsSync(wasmPath);
 const updating = process.env.UPDATE_VT_GOLDENS === "1";
 
@@ -176,7 +176,7 @@ describe("libghostty-vt fixture corpus", () => {
 	});
 
 	it("keeps the drawer harness's agent turn identical to the corpus copy", () => {
-		expect(readFileSync(join(served, "agent-turn.vt")).equals(readFileSync(join(corpusDir, "agent-turn.vt")))).toBe(true);
+		expect(readFileSync(harnessFixture).equals(readFileSync(join(corpusDir, "agent-turn.vt")))).toBe(true);
 	});
 });
 
