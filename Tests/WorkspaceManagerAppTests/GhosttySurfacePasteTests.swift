@@ -210,9 +210,10 @@ private final class PTYRecorder {
     }
 
     /// Waits on an observable change. The ceiling only bounds a failure: a passing run returns
-    /// as soon as the program has answered.
+    /// as soon as the program has answered. A hosted runner has taken 32 s to bring up the
+    /// suite's first surface, so the ceiling sits well clear of that.
     private static func poll(_ condition: @MainActor () -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(180))
         while ContinuousClock.now < deadline {
             if condition() { return true }
             try? await Task.sleep(for: .milliseconds(20))
