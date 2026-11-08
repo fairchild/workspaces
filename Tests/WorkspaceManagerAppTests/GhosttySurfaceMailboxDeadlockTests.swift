@@ -30,8 +30,10 @@ struct GhosttySurfaceMailboxDeadlockTests {
         let released = try await withMailboxDrainSuspended {
             // The shell sets 70 titles and idles. Its reader fills the mailbox with the first
             // 64 and blocks on the next one, so the free has to drain before it joins.
-            var views = [GhosttySurfaceView(customCommand: script.path)]
-            try await waitForFullMailbox()
+            var views: [GhosttySurfaceView] = []
+            try await waitForFullMailbox(startingWith: {
+                views = [GhosttySurfaceView(customCommand: script.path)]
+            })
             try #require(views[0].isSurfaceAlive, "the view needs a Ghostty surface to free")
             let released = WeakSurfaceView(views[0])
             autoreleasepool { views.removeAll() }
@@ -61,8 +63,9 @@ struct GhosttySurfaceMailboxDeadlockTests {
             // Each shell's startup pushes a few messages; more surfaces join until 64 pushes
             // prove the mailbox filled.
             var views: [GhosttySurfaceView] = []
-            addSurfaces(Self.minimumSurfaces, to: &views)
-            try await waitForFullMailbox {
+            try await waitForFullMailbox(startingWith: {
+                addSurfaces(Self.minimumSurfaces, to: &views)
+            }) {
                 if views.count < Self.maximumSurfaces {
                     addSurfaces(min(8, Self.maximumSurfaces - views.count), to: &views)
                 }
@@ -91,15 +94,22 @@ struct GhosttySurfaceMailboxDeadlockTests {
         return try await body()
     }
 
-    /// 64 wakeups with no tick in between prove the 64-slot mailbox filled. A tick that lands
-    /// anyway, such as one queued just before the drain was suspended, starts the count over.
-    private func waitForFullMailbox(addingSurfaces addSurfaces: () -> Void = {}) async throws {
+    /// 64 wakeups with no tick in between prove the 64-slot mailbox filled. The budget is
+    /// measured and the counts are read before `startProducers` creates a surface, so no push
+    /// lands uncounted. A tick that lands anyway, such as one queued just before the drain was
+    /// suspended, starts the count over.
+    private func waitForFullMailbox(
+        startingWith startProducers: () -> Void,
+        addingSurfaces addSurfaces: () -> Void = {}
+    ) async throws {
         let manager = GhosttyAppManager.shared
         let clock = ContinuousClock()
-        let deadline = clock.now + .seconds(Self.fillBudgetSeconds)
-        var lastAdded = clock.now
+        let budget = Self.fillBudgetSeconds
         var ticksBefore = manager.tickCount
         var wakeupsBefore = GhosttyAppManager.wakeupCount.withLock { $0 }
+        startProducers()
+        let deadline = clock.now + .seconds(budget)
+        var lastAdded = clock.now
         var mailboxFilled: Bool {
             manager.tickCount == ticksBefore
                 && GhosttyAppManager.wakeupCount.withLock { $0 } - wakeupsBefore >= Self.mailboxCapacity
