@@ -471,14 +471,9 @@ class SecurityHardeningTests(unittest.TestCase):
 
     def test_web_terminal_status_does_not_return_direct_ttyd_urls(self) -> None:
         status_route = (REPO_ROOT / "web/src/app/api/terminal/status/route.ts").read_text()
-        ticket_route = (REPO_ROOT / "web/src/app/api/terminal/ticket/route.ts").read_text()
-        terminal_canvas = (REPO_ROOT / "web/src/app/dashboard/components/terminal-canvas.tsx").read_text()
 
         self.assertNotIn("terminalUrl: state.terminalUrl", status_route)
         self.assertIn('terminalAccess: state.terminalUrl ? "ticket" : undefined', status_route)
-        self.assertIn("issueTerminalTicket", ticket_route)
-        self.assertIn("consumeTerminalTicket", ticket_route)
-        self.assertIn('fetch("/api/terminal/ticket"', terminal_canvas)
 
     def test_sparkle_appcast_verifier_accepts_valid_ed25519_signature(self) -> None:
         if sys.platform != "darwin" or shutil.which("swift") is None:

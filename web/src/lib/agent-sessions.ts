@@ -199,7 +199,7 @@ export async function getActiveSessionForRepo(
 /**
  * Find all live sessions for a repo, one per agent. Returns the most
  * recent session (by last_activity_at) for each distinct agent_name.
- * Used by the terminal tab to render agent sub-tabs.
+ * Used by the chat tab to render agent sub-tabs.
  */
 export async function getSessionsForRepo(
 	userId: string,

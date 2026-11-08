@@ -218,8 +218,8 @@ export default async function globalSetup() {
 		});
 	}
 
-	// Seed one paused session so the terminal tab tests have something to
-	// render the Resume / sub-tab states against. We use a fake sandbox ID;
+	// Seed one paused session so the chat tab tests have something to
+	// render the agent sub-tab against. We use a fake sandbox ID;
 	// the status route will report it as paused (no Sandbox.get() needed)
 	// because status='snapshotted' is treated as paused without a liveness
 	// check.

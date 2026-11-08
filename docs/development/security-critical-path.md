@@ -12,9 +12,9 @@ not a broad public security stance.
 - Terminal compute remains allowlisted by GitHub login.
 - User-facing terminal shells do not receive the deployment
   `ANTHROPIC_API_KEY` unless `TERMINAL_ANTHROPIC_API_KEY=1` is set.
-- `/api/terminal/status` does not return direct ttyd WebSocket URLs. The UI
-  requests a short-lived one-time ticket and redeems it through
-  `/api/terminal/ticket` before opening the WebSocket.
+- `/api/terminal/status` does not return direct ttyd WebSocket URLs. The
+  `web/` dashboard has no terminal surface and no ticket-redeeming route, so
+  no browser path in `web/` opens a ttyd WebSocket.
 
 ## Agent Automation
 

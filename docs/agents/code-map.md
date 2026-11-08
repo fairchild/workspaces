@@ -80,6 +80,5 @@ Pointers from a task or symbol to the file that answers it — moved out of `AGE
 | web/ dashboard (maintenance mode) | web/src/app/dashboard/ |
 | web/ agent runtime | web/src/lib/agent-runtime/ |
 | web/ compute providers | web/src/lib/agent-runtime/vercel-sandbox.ts, provider-registry.ts |
-| web/ terminal panel | web/src/app/dashboard/components/terminal-panel.tsx |
-| web/ terminal API | web/src/app/api/terminal/ |
+| web/ session status API (chat sub-tabs) | web/src/app/api/terminal/status/ |
 | web/ API auth helpers | web/src/lib/api-auth.ts |

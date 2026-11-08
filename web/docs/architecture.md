@@ -6,28 +6,26 @@
 ┌──────────────────────────────────────────────────────────────────────┐
 │  Browser                                                             │
 │                                                                      │
-│  ┌───────────────┐  ┌──────────────┐  ┌────────────────────────────┐ │
-│  │  Dashboard    │  │  Chat Panel  │  │  Terminal Panel            │ │
-│  │  (MainPanel)  │  │  (SSE stream │  │  (ghostty-web WASM)        │ │
-│  │               │  │   to agents) │  │                            │ │
-│  │  Stats,       │  │              │  │  WSS → ttyd on sandbox     │ │
-│  │  agents,      │  │  Compose bar │  │   (path is HMAC token,     │ │
-│  │  pipeline     │  │  + @mentions │  │    derived from sandboxId) │ │
-│  └───────────────┘  └──────────────┘  └────────────────────────────┘ │
-└──────────┬──────────────────┬──────────────────┬─────────────────────┘
-           │                  │                  │
-           ▼                  ▼                  ▼
+│  ┌───────────────┐  ┌──────────────┐                                 │
+│  │  Dashboard    │  │  Chat Panel  │                                 │
+│  │  (MainPanel)  │  │  (SSE stream │                                 │
+│  │               │  │   to agents) │                                 │
+│  │  Stats,       │  │              │                                 │
+│  │  agents,      │  │  Compose bar │                                 │
+│  │  pipeline     │  │  + @mentions │                                 │
+│  └───────────────┘  └──────────────┘                                 │
+└──────────┬──────────────────┬────────────────────────────────────────┘
+           │                  │
+           ▼                  ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Next.js API Routes (Vercel)                                        │
 │                                                                     │
 │  /api/chat/messages     — CRUD chat messages, trigger agent sessions│
 │  /api/chat/agent-stream — SSE stream of agent output                │
-│  /api/terminal/status   — list live sessions + per-agent terminalUrl│
-│  /api/terminal/start    — provision a new sandbox for an agent      │
-│  /api/terminal/stop     — stop the sandbox for an agent             │
-│  /api/terminal/resume   — restore a paused (snapshotted) session    │
+│  /api/terminal/status   — list live sessions for the chat sub-tabs  │
 │  /api/repos             — user repo management                      │
 │  /api/events            — webhook event tracking                    │
+│  /api/webhooks/*        — GitHub webhook ingestion (HMAC-verified)  │
 └──────────┬──────────────────┬──────────────────┬────────────────────┘
            │                  │                  │
            ▼                  ▼                  ▼
@@ -57,13 +55,12 @@
 | Auth | Better Auth + GitHub OAuth | User authentication |
 | Database | LibSQL + Kysely | Chat messages, sessions, repos, events |
 | Styling | CSS Modules + CSS custom properties | Dark theme, no Tailwind |
-| Terminal | ghostty-web (WASM) | Browser terminal emulator |
 | Agent runtime | Compute provider registry | Vercel Sandbox and Anthropic Managed Agents sessions |
 | Linting | Biome | Format + lint |
 | Unit tests | Vitest | Fast unit/integration tests |
 | E2E tests | Playwright | Browser tests with video capture |
 | Deployment | Vercel | Hosting, serverless functions |
-| Infrastructure | Cloudflare Workers | Webhook relay, evidence store, terminal proxy |
+| Infrastructure | Cloudflare Workers | Webhook relay, evidence store |
 
 ## Database & Schema
 
@@ -106,33 +103,19 @@ User sends message
 
 Sessions persist across messages via snapshot/restore. The `agent_sessions` table tracks `userId`, `computeBackend`, `computeInstanceId`, `snapshotId`, and `claudeSessionId` per session.
 
-## Terminal Architecture
+## Terminal Removal
 
-The Terminal tab provides shell access to active agent sandboxes. Starting a
-hosted terminal follows the same trusted-operator boundary as hosted agent chat:
-the authenticated user's GitHub login must be present in `ALLOWED_AGENT_LOGINS`
-before the API creates or reuses a terminal-capable sandbox.
+The dashboard's Terminal tab (a ghostty-web canvas attached to ttyd inside the
+sandbox) was removed in #1858. Interactive terminals now live in the macOS app
+and in `web-next/`. In `web/`, `/api/terminal/status` remains because the Chat
+tab polls it to label agent sub-tabs with live and paused sessions. It never
+returns a direct ttyd URL. The start, stop, resume, and ticket routes are gone,
+so nothing in `web/` opens a ttyd WebSocket.
 
-### Direct connection
-
-**ghostty-web** (WASM-compiled Ghostty) renders the terminal canvas. It connects via **WebSocket** directly to **ttyd** running inside the Vercel sandbox on port 7681. The WebSocket endpoint is path-protected: ttyd is started with `--base-path /<token>` where the token is `HMAC-SHA256(secret, sandboxId).hex.slice(0, 24)`. The status API derives the same token from the sandboxId, so the public sandbox URL alone (which can leak via screenshots, browser history, etc.) is not enough to connect — an attacker would need both the URL and the server-side secret.
-
-The ttyd protocol itself uses the `tty` WebSocket subprotocol with binary frames: command-byte prefix (`0`=INPUT/OUTPUT, `1`=RESIZE) plus payload. Auth handshake on open is a JSON `{AuthToken: "", columns, rows}`.
-
-ttyd's target command is `tmux new-session -A -s shell`, not bare bash — the `-A` flag attaches to an existing named session if one exists (so a tab reload reattaches to the same tmux state), otherwise creates a new one. See `docs/development/agent-chat-sandbox.md` § "Session Continuity via tmux".
-
-```
-Browser (ghostty-web canvas)
-  │ WSS /<token>/ws
-  ▼
-Vercel Sandbox ttyd (port 7681)
-  │
-  ▼
-tmux new-session -A -s shell
-  │
-  ▼
-bash in /vercel/sandbox/repo
-```
+The provider layer still starts ttyd inside Vercel sandboxes (see
+`src/lib/agent-runtime/vercel-sandbox.ts` and `docs/development/agent-chat-sandbox.md`);
+the `terminal_access_tickets` table stays in the schema because migrations are
+append-only.
 
 ## Authorization
 
@@ -145,7 +128,7 @@ Every API route that reads or mutates repo-scoped data passes through the two he
 
 The ownership check is backed by `isRepoOwnedByUser` in `src/lib/repos.ts`, which does a pinpoint `SELECT 1 FROM user_repos WHERE user_id=? AND owner=? AND repo=? LIMIT 1` — hits the table's primary key index, one row read per request.
 
-Routes that accept a session or sandbox identifier instead of a repo (e.g. `/api/managed-agents/transcript?sessionId=`) resolve the identifier through `src/lib/agent-sessions.ts` with the authenticated `user_id`, then authorize against the resolved repo. `agent_sessions` stores `user_id`; terminal status, stop, resume, and transcript lookups must include it so one user cannot attach to another user's live sandbox just because both can access the same repo.
+Routes that accept a session or sandbox identifier instead of a repo (e.g. `/api/managed-agents/transcript?sessionId=`) resolve the identifier through `src/lib/agent-sessions.ts` with the authenticated `user_id`, then authorize against the resolved repo. `agent_sessions` stores `user_id`; terminal status and transcript lookups must include it so one user cannot attach to another user's live sandbox just because both can access the same repo.
 
 Webhook intake routes (`/api/webhooks/*`) are intentionally unauthenticated and verify GitHub's HMAC signature instead. The Better Auth handler at `/api/auth/[...all]` owns its own auth flow.
 
@@ -155,7 +138,6 @@ Webhook intake routes (`/api/webhooks/*`) are intentionally unauthenticated and 
 |-----|-----------|----------|---------|
 | Dashboard | `MainPanel` | Cmd+1 | Stats, agents, issue pipeline |
 | Chat | `ChatPanel` | Cmd+2 | Message timeline, @agent mentions, SSE streaming |
-| Terminal | `TerminalPanel` | Cmd+3 | Shell access to active sandbox |
 
 ## Infrastructure
 

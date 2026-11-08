@@ -240,7 +240,7 @@ has the same shape before shipping.
 |---|---|---|
 | `/api/chat/messages` | `chat-panel.tsx` | 10s (was 5s, bumped after the incident) |
 | `/api/events` | `activity-feed.tsx` | 10s |
-| `/api/terminal/status` | `use-terminal-sessions.ts` + `chat-panel.tsx` | 10s |
+| `/api/terminal/status` | `chat-panel.tsx` | 10s |
 
 Any new polled endpoint should default to 10s or slower unless
 there's a compelling UX reason. If you need faster refresh, prefer
