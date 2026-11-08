@@ -101,6 +101,20 @@ Registered callbacks in `ghostty_runtime_config_s`:
 - updates content scale + framebuffer size on backing/frame changes
 - installs minimal local monitor for `.leftMouseDown` and command `.keyUp`
 
+### Text entry points
+
+Text reaches a surface through one of three libghostty calls, chosen by where it came from:
+
+| Input | Call | Bracketed when the program enabled mode 2004 | Paste protection |
+|---|---|---|---|
+| Typed characters (inside `keyDown`) | `ghostty_surface_key` with `text` | no | no |
+| Pastes: the automation input verb, drag and drop | `ghostty_surface_paste_text` | yes | yes |
+| Cmd+V (Ghostty's `paste_from_clipboard` binding) | Ghostty's clipboard read | yes | yes |
+| IME commit, AppKit insertion outside a key event | `ghostty_surface_text` | yes | no |
+| App-composed launch commands (`SurfaceStore`) | `ghostty_surface_text` | yes | no |
+
+Paste protection holds text containing `\r` or `\n` while the program has not enabled bracketed paste, and text containing the end-of-paste marker `ESC [201~` in any mode. Ghostty then calls `confirm_read_clipboard_cb`. The app has no confirmation UI and declines every request. `GhosttySurfaceTextInputBridge.pasteText` reports the decline to its caller as `heldByPasteProtection`. The automation verb turns that into `invalid_request`, and a held drop slides back. `GhosttySurfacePasteTests` pins each row against a real surface by recording the bytes the program reads.
+
 ### Shortcut + split contract (required behavior)
 
 This project depends on the following keyboard behavior:

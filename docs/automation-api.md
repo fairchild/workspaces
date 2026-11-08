@@ -197,8 +197,10 @@ workspaces input write 'echo hello-from-automation' --submit   # type and press 
 
 The text is delivered as a paste; `--submit` then presses Return as a
 synthetic key event (a `\r` inside the paste would be bracketed-paste-wrapped
-and inserted literally instead of executing). Text is limited to 32 KiB UTF-8
-per request. Requests from handles created while
+and inserted literally instead of executing). Text that spans lines fails
+with `invalid_request` and writes nothing while the program in the tile has not
+enabled bracketed paste, because each line would run as a command; a shell
+enables it at its prompt. Text is limited to 32 KiB UTF-8 per request. Requests from handles created while
 the experiment was off, or after it is turned off, fail with
 `capability_denied` — restart WorkSpaces and open a fresh tile after toggling
 it. The audit log records the route and outcome, never the written text.
