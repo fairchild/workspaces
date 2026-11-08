@@ -185,6 +185,7 @@ describe.skipIf(!hasWasm)("libghostty-vt fixture corpus replay (run `pnpm ghostt
 		const actual = golden(await replay(fixture));
 		const path = join(corpusDir, `${name}.golden.json`);
 		if (updating) {
+			expect(process.env.CI, "UPDATE_VT_GOLDENS rewrites goldens instead of checking them; CI must compare").not.toBe("true");
 			writeFileSync(path, formatGolden(actual));
 			return;
 		}

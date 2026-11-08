@@ -26,6 +26,12 @@
 			"about": "The cursor on the spacer head a wrapped wide character left behind"
 		},
 		{
+			"name": "wide-spacer-head-painted",
+			"columns": 8,
+			"rows": 3,
+			"about": "A wide character wraps under a background color: the spacer head it leaves keeps that background"
+		},
+		{
 			"name": "graphemes",
 			"columns": 40,
 			"rows": 3,

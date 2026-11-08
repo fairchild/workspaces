@@ -142,9 +142,7 @@ public final class VirtualTerminal {
                     runs.append(text, width: width, style: cellStyle(), isCursor: isCursor)
                 case .spacerTail where isCursor:
                     runs.markLastCursor()
-                case .spacerHead where isCursor:
-                    runs.append(" ", style: cellStyle(), isCursor: true)
-                case .spacerTail, .spacerHead:
+                case .spacerTail:
                     break
                 }
             }
@@ -154,22 +152,22 @@ public final class VirtualTerminal {
     }
 
     /// What one grid cell holds. A wide character is its `.text` cell (width
-    /// 2) plus a `.spacerTail`; a wide character that wrapped leaves a
-    /// `.spacerHead` in the last column of the line it left.
+    /// 2) plus a `.spacerTail`.
     private enum Cell {
         case text(String, width: Int)
         case spacerTail
-        case spacerHead
     }
 
-    /// An unwritten cell reads as a single space.
+    /// An unwritten cell reads as a single space. So does the spacer head a
+    /// wrapped wide character leaves in the last column: it keeps the style
+    /// it was written with, and Ghostty paints its background.
     private func cell() -> Cell {
         var raw: GhosttyCell = 0
         ghostty_render_state_row_cells_get(rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw)
         var wide = GHOSTTY_CELL_WIDE_NARROW
         ghostty_cell_get(raw, GHOSTTY_CELL_DATA_WIDE, &wide)
         if wide == GHOSTTY_CELL_WIDE_SPACER_TAIL { return .spacerTail }
-        if wide == GHOSTTY_CELL_WIDE_SPACER_HEAD { return .spacerHead }
+        if wide == GHOSTTY_CELL_WIDE_SPACER_HEAD { return .text(" ", width: 1) }
         let width = wide == GHOSTTY_CELL_WIDE_WIDE ? 2 : 1
 
         while true {

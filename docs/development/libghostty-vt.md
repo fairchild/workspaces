@@ -68,9 +68,11 @@ Things the vt C API needs that are easy to miss:
 - `GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8` returns
   `GHOSTTY_OUT_OF_SPACE` when the buffer is too small; grow the buffer and
   retry.
-- A wide character is a `WIDE` cell followed by a `SPACER_TAIL` cell, and a
-  wide character that wraps leaves a `SPACER_HEAD` cell. Skip the spacer
-  cells, but still count their columns.
+- A wide character is a `WIDE` cell followed by a `SPACER_TAIL` cell: skip
+  the tail, but still count its column. A wide character that wraps leaves a
+  `SPACER_HEAD` cell in the last column. Treat it as a blank cell: it keeps
+  the style it was written with, and Ghostty's renderer paints its
+  background and underline like any other cell's.
 - The release xcframework's simulator slice is arm64 only, so the mobile
   project excludes x86_64 for the simulator SDK.
 - The style flag bits are frozen in the 1.0 ABI, and `StyleFlags` mirrors them:

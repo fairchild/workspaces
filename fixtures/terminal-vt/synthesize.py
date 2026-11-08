@@ -45,6 +45,13 @@ def wide_cursor_spacer_head() -> str:
     return wide_screen() + f"{CSI}2;8H"
 
 
+def wide_spacer_head_painted() -> str:
+    """A wide character wraps while a background color is set, then the cursor
+    moves away. The spacer head in row 0's last column carries that
+    background, and Ghostty paints it."""
+    return f"{CSI}44mabcdefg完{CSI}0m" + CRLF + "next"
+
+
 GRAPHEMES = " ".join(
     [
         "é",
@@ -148,6 +155,7 @@ FIXTURES: dict[str, Callable[[], str]] = {
     "wide-cursor-left": wide_cursor_left,
     "wide-cursor-right": wide_cursor_right,
     "wide-cursor-spacer-head": wide_cursor_spacer_head,
+    "wide-spacer-head-painted": wide_spacer_head_painted,
     "graphemes": graphemes,
     "split-escape": split_escape,
     "scrollback": scrollback,

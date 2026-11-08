@@ -1011,7 +1011,8 @@ export class VtTerminal {
 			while (e.ghostty_render_state_row_cells_next(this.rowCells)) {
 				const raw = this.cellRaw();
 				const wide = this.cellData(raw, this.k.cellDataWide);
-				if (wide === this.k.spacerTail || wide === this.k.spacerHead) {
+				// A spacer head is a blank in the style it was written with, and Ghostty paints its background.
+				if (wide === this.k.spacerTail) {
 					builder.skip();
 					continue;
 				}
