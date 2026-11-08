@@ -57,9 +57,13 @@ three layers:
   painter can place glyphs on the grid without measuring them.
 - **`TerminalScreenView`** paints a snapshot on a fixed cell grid in a
   SwiftUI `Canvas`. Paint-time rules are pure functions with tests:
-  `paintedCells()` handles inverse, invisible, faint and the cursor block, and
-  `backgroundSpans()` merges adjacent backgrounds. Light box-drawing characters
-  are drawn as cell geometry rather than font glyphs (`BoxDrawing.swift`).
+  `paintedCells()` handles inverse, invisible, faint and the cursor block,
+  `backgroundSpans()` merges adjacent backgrounds, and `decorationLines()`
+  gives each underlined or struck cell its line, blanks included. The cursor
+  block follows Ghostty's overlay: the cursor color fills the cell and the
+  text takes the default background, whatever the cell's own colors or
+  inverse flag. Light box-drawing characters are drawn as cell geometry
+  rather than font glyphs (`BoxDrawing.swift`).
 
 Things the vt C API needs that are easy to miss:
 

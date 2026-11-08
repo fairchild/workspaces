@@ -67,6 +67,14 @@ describe("RunBuilder", () => {
 		expect(b.finish()).toHaveLength(1);
 	});
 
+	it("keeps a trailing blank that carries only a link, which Ghostty underlines on hover", () => {
+		const b = new RunBuilder();
+		b.append("go", 1, { ...PLAIN_STYLE, hyperlink: true });
+		b.append(" ", 1, { ...PLAIN_STYLE, hyperlink: true });
+		b.append(" ", 1, PLAIN_STYLE);
+		expect(b.finish().map((r) => [r.column, r.cells.join(""), r.columns])).toEqual([[0, "go ", 2]]);
+	});
+
 	it("splits a hyperlink from the plain text beside it", () => {
 		const b = new RunBuilder();
 		for (const c of "go") b.append(c, 1, { ...PLAIN_STYLE, hyperlink: true });
@@ -103,14 +111,24 @@ describe("snapshot text", () => {
 });
 
 describe("paint rules", () => {
-	it("swaps colors for inverse and for the cursor cell, and merges backgrounds", () => {
-		const s = snapshotOf([[{ column: 0, cells: [..."ab"], columns: 2, style: { ...PLAIN_STYLE, inverse: true } }]], at(1, 0));
-		const cells = paintedCells(s, true);
+	it("swaps colors for inverse, and merges backgrounds", () => {
+		const s = snapshotOf([[{ column: 0, cells: [..."ab"], columns: 2, style: { ...PLAIN_STYLE, inverse: true } }]]);
+		const cells = paintedCells(s, false);
 		expect(cells.map((c) => [c.text, c.fg, c.bg])).toEqual([
 			["a", 0xeeeeee, 0x111111],
-			["b", 0x111111, null],
+			["b", 0xeeeeee, 0x111111],
 		]);
-		expect(backgroundSpans(cells)).toEqual([{ row: 0, column: 0, width: 1, color: 0x111111 }]);
+		expect(backgroundSpans(cells)).toEqual([{ row: 0, column: 0, width: 2, color: 0x111111 }]);
+	});
+
+	it("paints a block cursor in the cursor color over an inverse cell, not the cell's own colors", () => {
+		const style = { ...PLAIN_STYLE, fg: 0xcc6666, bg: 0x81a2be, inverse: true, faint: true };
+		const s = snapshotOf([[{ column: 0, cells: [..."ab"], columns: 2, style }]], at(1, 0));
+		expect(paintedCells(s, true).map((c) => [c.text, c.fg, c.bg, c.faint])).toEqual([
+			["a", 0x81a2be, 0xcc6666, true],
+			["b", 0xeeeeee, 0x111111, false],
+		]);
+		expect(paintedCells(s, true, 0xa15c31).at(-1)).toMatchObject({ fg: 0xeeeeee, bg: 0xa15c31 });
 	});
 
 	it("paints a cursor on an empty cell", () => {
@@ -387,6 +405,19 @@ describe.skipIf(!hasWasm)("edge cases the mobile package learned", () => {
 		expect(cells.map((c) => c.column)).toEqual([0, 1, 2]);
 		expect(cells.map((c) => c.width)).toEqual([1, 1, 1]);
 		expect(cells.at(-1)?.text).toBe("X");
+	});
+
+	it("paints a block cursor on an inverse spacer head in the cursor color", async () => {
+		const s = await screen("\x1b[7;44mabcdefg完\x1b[1;8H", 8, 3);
+		expect(s.cursor).toMatchObject({ column: 7, row: 0 });
+		const cursor = paintedCells(s, true).find((c) => c.row === 0 && c.column === 7);
+		expect(cursor).toMatchObject({ text: " ", fg: s.bg, bg: s.fg });
+	});
+
+	it("finds a link over its trailing blank, the way Ghostty's hover does", async () => {
+		const s = await screen("\x1b]8;;https://example.com\x1b\\go \x1b]8;;\x1b\\\x1b[?25l", 8, 1);
+		expect(hyperlinkRunAt(s, { row: 0, column: 2 })).toEqual({ start: 0, end: 2 });
+		expect(hyperlinkRunAt(s, { row: 0, column: 3 })).toBeNull();
 	});
 
 	it("covers both columns of a clustered wide character with the cursor", async () => {
