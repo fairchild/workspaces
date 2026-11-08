@@ -48,14 +48,17 @@ Add `POST /v1/input/write` guarded by a new `input.write` capability.
   exactly what a physical Enter produces. Found by interactive smoke on the
   first implementation, which appended `\r` to the paste payload.
 - **Paste protection fails closed.** The paste goes through Ghostty's paste
-  protection. Text spanning lines, sent while the program has not enabled
+  protection. Text containing a line break, sent while the program has not enabled
   bracketed paste, would reach it unframed, and each line would run as a
   command. `input.write` never executes without `submit`, and the app has no
   confirmation UI for an automation caller, so the request fails
   `invalid_request` and writes nothing. Text carrying an end-of-paste marker
   fails the same way, bracketed or not. Bypassing the protection would let a
   type-only request run commands; holding the paste silently would report a
-  write that never happened.
+  write that never happened. In a tmux-backed tile the protection judges the
+  mode tmux sets on its outer terminal, which is on from client start, not the
+  mode of the program in the pane, so multi-line text still reaches an
+  unbracketed inner program there.
 - **Content-free audit.** The listener's audit log records route-level
   metadata and error codes for every allowed and denied request, and never
   the written text — the same contract the audit stream already documents.

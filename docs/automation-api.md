@@ -197,11 +197,13 @@ workspaces input write 'echo hello-from-automation' --submit   # type and press 
 
 The text is delivered as a paste; `--submit` then presses Return as a
 synthetic key event (a `\r` inside the paste would be bracketed-paste-wrapped
-and inserted literally instead of executing). Text that spans lines fails
+and inserted literally instead of executing). Text containing a line break fails
 with `invalid_request` and writes nothing while the program in the tile has not
 enabled bracketed paste, because each line would run as a command; a shell
 enables it at its prompt. Text containing an end-of-paste marker (`ESC [ 201 ~`)
-always fails the same way. Text is limited to 32 KiB UTF-8 per request. Requests from handles created while
+always fails the same way. In a tile whose terminal runs tmux, the check sees
+tmux rather than the program in the pane, so it does not hold multi-line text
+there. Text is limited to 32 KiB UTF-8 per request. Requests from handles created while
 the experiment was off, or after it is turned off, fail with
 `capability_denied` — restart WorkSpaces and open a fresh tile after toggling
 it. The audit log records the route and outcome, never the written text.

@@ -250,8 +250,8 @@ The remaining five mutation verbs answer in their own shapes:
   and never claims the tile closed.
 - `input.write` returns `accepted`, `byteCount`, and the `surfaceID` it wrote
   into, with no `outcome`: a paste either lands, fails closed on a stale handle, or
-  fails `invalid_request` when Ghostty's paste protection holds it (text spanning
-  lines while the program has not enabled bracketed paste).
+  fails `invalid_request` when Ghostty's paste protection holds it (text containing
+  a line break while the program has not enabled bracketed paste).
 - `workspace.note` returns the stored `note` and `changed`, with no `outcome`.
 
 An id that resolves to no tracked repo or workspace fails `invalid_request` (it is

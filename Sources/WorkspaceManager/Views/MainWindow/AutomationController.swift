@@ -888,7 +888,7 @@ final class AutomationController: AutomationControlling {
             // marker escaping the frame); `input.write` never executes without `submit`.
             throw AutomationServiceError(
                 .invalidRequest,
-                "Paste protection held the text, so nothing was written. Either it spans lines while the program in this terminal has not enabled bracketed paste, so each line would run as a command (send one line per request, or retry once the program accepts bracketed paste, as a shell does at its prompt), or it contains an end-of-paste marker (ESC [ 201 ~), which is never accepted."
+                "Paste protection held the text, so nothing was written. Either it contains a line break while the program in this terminal has not enabled bracketed paste, so each line would run as a command (send one line per request, or retry once the program accepts bracketed paste, as a shell does at its prompt), or it contains an end-of-paste marker (ESC [ 201 ~), which is never accepted."
             )
         }
         // Submit goes through the key-event path, not an appended "\r": the text lands as a paste,
