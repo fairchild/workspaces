@@ -1,11 +1,11 @@
 # libghostty-vt in WorkSpaces
 
-Status as of 2026-11-07: the mobile variant renders terminal output through
-libghostty-vt 1.0.0 in a debug-only preview, and web-next has a canvas
-terminal on the release wasm at `/dev/terminal-vt`, waiting for the drawer to
-cut over in #1848. The desktop app still builds
-GhosttyKit from its earlier pin; moving it to the `vt-1.0.0` cut is tracked
-separately. Check it still holds:
+Status as of 2026-11-08: the mobile variant renders terminal output through
+libghostty-vt 1.0.0 in a debug-only preview, and web-next's terminal drawer runs
+on the release wasm (the `/dev/terminal-vt` bench stays for the binding). The
+desktop app builds GhosttyKit from source; moving it to the `vt-1.0.0` cut is
+tracked in #1843. [ghostty-pins.md](ghostty-pins.md) lists all three pins and
+how to move each. Check this page still holds:
 `swift test --package-path ios/Packages/TerminalScreen` passes, and its
 `Links libghostty-vt 1.x` test reads the library version at runtime.
 
@@ -217,6 +217,9 @@ the `/dev/terminal-vt` harness serves and `vt.test.ts` reads; the corpus test
 fails if the two drift.
 
 ## Updating the vt pin
+
+[ghostty-pins.md](ghostty-pins.md) lists every pin, including the desktop one.
+This section is the vt half of it.
 
 1. Find the release zip under `https://release.files.ghostty.org/libghostty-vt/<version>/`.
 2. Compute its checksum: `swift package compute-checksum <zip>`, or
