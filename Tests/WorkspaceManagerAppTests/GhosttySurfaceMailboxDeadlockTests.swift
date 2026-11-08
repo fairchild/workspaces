@@ -16,19 +16,18 @@ import Testing
 
 @Suite("GhosttySurface mailbox deadlock", .serialized)
 @MainActor
-final class GhosttySurfaceMailboxDeadlockTests {
+struct GhosttySurfaceMailboxDeadlockTests {
     nonisolated private static let environment = ProcessInfo.processInfo.environment
     private static let mailboxCapacity = 64
     private static let maximumSurfaces = 96
     nonisolated private static let minimumSurfaces = min(
         max(environment["WORKSPACES_MAILBOX_DEADLOCK_SURFACES"].flatMap { Int($0) } ?? 24, 1), 96)
-    private var wakeupsBefore = 0
 
     @Test("Freeing a surface whose shell is blocked on the full app mailbox returns")
     func freeWhileItsShellIsBlocked() async throws {
         let script = try Self.titleBurstScript(titles: Self.mailboxCapacity + 6)
         defer { try? FileManager.default.removeItem(at: script) }
-        try await withWakeupTicksSuspended {
+        let released = try await withMailboxDrainSuspended {
             // The shell sets 70 titles and idles. Its reader fills the mailbox with the first
             // 64 and blocks on the next one, so the free has to drain before it joins.
             var views = [GhosttySurfaceView(customCommand: script.path)]
@@ -36,15 +35,29 @@ final class GhosttySurfaceMailboxDeadlockTests {
             try #require(views[0].isSurfaceAlive, "the view needs a Ghostty surface to free")
             let released = WeakSurfaceView(views[0])
             autoreleasepool { views.removeAll() }
-            try await waitForRetiredSurfacesToBeFreed()
-            #expect(released.view == nil)
+            return released
         }
+        try await waitForRetiredSurfacesToBeFreed()
+        #expect(released.view == nil)
+    }
+
+    @Test("Only GhosttyAppManager frees surfaces, so every free runs right after a tick")
+    func onlyTheManagerFreesSurfaces() throws {
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources")
+        let files = try #require(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
+        let freeing = try files.compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" }
+            .filter { try String(contentsOf: $0, encoding: .utf8).contains("ghostty_surface_free(") }
+            .map(\.lastPathComponent)
+        #expect(freeing == ["GhosttyAppManager.swift"])
     }
 
     @Test("Releasing surface views while the app mailbox is full and undrained frees every surface")
     func freeWhileMailboxIsFull() async throws {
         let log = DeadlockProgressLog(path: Self.environment["WORKSPACES_MAILBOX_DEADLOCK_PROGRESS"])
-        try await withWakeupTicksSuspended {
+        let released = try await withMailboxDrainSuspended {
             // Each shell's startup pushes a few messages; more surfaces join until 64 pushes
             // prove the mailbox filled.
             var views: [GhosttySurfaceView] = []
@@ -56,36 +69,46 @@ final class GhosttySurfaceMailboxDeadlockTests {
             }
             let everyViewHasSurface = views.allSatisfy { $0.isSurfaceAlive }
             try #require(everyViewHasSurface, "every view needs a Ghostty surface for the test to free")
-            let count = views.count
             let released = views.map { WeakSurfaceView($0) }
-            log.write("mailbox full with \(count) surfaces")
-
-            for index in 0..<count {
+            log.write("mailbox full with \(released.count) surfaces")
+            for index in released.indices {
                 log.write("releasing \(index)")
                 autoreleasepool { _ = views.removeFirst() }
             }
-            log.write("released \(count) views; waiting for their surfaces to be freed")
-            try await waitForRetiredSurfacesToBeFreed()
-            log.write("end")
-            #expect(released.allSatisfy { $0.view == nil })
+            return released
         }
+        log.write("released \(released.count) views; waiting for their surfaces to be freed")
+        try await waitForRetiredSurfacesToBeFreed()
+        log.write("end")
+        #expect(released.allSatisfy { $0.view == nil })
     }
 
-    /// Wakeups stop ticking for the duration, so nothing drains the mailbox until a free does,
-    /// while the main thread stays free for other suites.
-    private func withWakeupTicksSuspended(_ body: () async throws -> Void) async throws {
-        wakeupsBefore = GhosttyAppManager.wakeupCount.withLock { $0 }
-        GhosttyAppManager.shared.wakeupTicksSuspended = true
-        defer { GhosttyAppManager.shared.wakeupTicksSuspended = false }
-        try await body()
+    /// Nothing drains the mailbox for the duration, so a free inline in the body meets it full;
+    /// views released in the body are freed after it, each right after a tick.
+    private func withMailboxDrainSuspended<T>(_ body: () async throws -> T) async throws -> T {
+        GhosttyAppManager.shared.mailboxDrainSuspended = true
+        defer { GhosttyAppManager.shared.mailboxDrainSuspended = false }
+        return try await body()
     }
 
-    /// 64 wakeups with no tick in between prove the 64-slot mailbox filled.
+    /// 64 wakeups with no tick in between prove the 64-slot mailbox filled. A tick that lands
+    /// anyway, such as one queued just before the drain was suspended, starts the count over.
     private func waitForFullMailbox(addingSurfaces addSurfaces: () -> Void = {}) async throws {
+        let manager = GhosttyAppManager.shared
         let clock = ContinuousClock()
         let deadline = clock.now + .seconds(10)
         var lastAdded = clock.now
+        var ticksBefore = manager.tickCount
+        var wakeupsBefore = GhosttyAppManager.wakeupCount.withLock { $0 }
+        var mailboxFilled: Bool {
+            manager.tickCount == ticksBefore
+                && GhosttyAppManager.wakeupCount.withLock { $0 } - wakeupsBefore >= Self.mailboxCapacity
+        }
         while !mailboxFilled, clock.now < deadline {
+            if manager.tickCount != ticksBefore {
+                ticksBefore = manager.tickCount
+                wakeupsBefore = GhosttyAppManager.wakeupCount.withLock { $0 }
+            }
             if clock.now - lastAdded > .seconds(1) {
                 addSurfaces()
                 lastAdded = clock.now
@@ -93,10 +116,6 @@ final class GhosttySurfaceMailboxDeadlockTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         try #require(mailboxFilled, "the app mailbox never filled, so the test would prove nothing")
-    }
-
-    private var mailboxFilled: Bool {
-        GhosttyAppManager.wakeupCount.withLock { $0 } - wakeupsBefore >= Self.mailboxCapacity
     }
 
     /// A free that deadlocks never returns, so a regression hangs here rather than failing.
@@ -123,8 +142,9 @@ final class GhosttySurfaceMailboxDeadlockTests {
             exec sleep 600
 
             """
-        try script.write(to: url, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        let created = FileManager.default.createFile(
+            atPath: url.path, contents: Data(script.utf8), attributes: [.posixPermissions: 0o755])
+        try #require(created, "the title script could not be written")
         return url
     }
 }

@@ -324,12 +324,13 @@ cache is a purge via the named entrypoint:
    `scripts/watch-swift-test.sh`, which samples the test helper and exits 124 when the
    log stops moving. The full app suite under CPU load (for example one `yes > /dev/null`
    per core, plus a few) is the setting where teardown hangs have shown up.
-   `GhosttySurfaceMailboxDeadlockTests` suspends wakeup ticks, fills the app mailbox,
-   and then releases the views; it runs in every `swift test` and hangs if teardown
-   regresses (#1856). One case frees a surface whose own shell is blocked on the full
-   mailbox, which hangs every time a free skips the tick; the other releases many
-   ordinary shells at once. To push the second harder, raise its surface count under
-   the watchdog:
+   `GhosttySurfaceMailboxDeadlockTests` suspends draining of the app mailbox
+   (`GhosttyAppManager.mailboxDrainSuspended`), fills it, and then releases the views;
+   it runs in every `swift test` and hangs if teardown regresses (#1856). One case
+   frees a surface whose own shell is blocked on the full mailbox, which hangs every
+   time a free skips the tick; another releases many ordinary shells at once; a third
+   fails if `ghostty_surface_free` is called outside `GhosttyAppManager`. To push the
+   many-shell case harder, raise its surface count under the watchdog:
 
    ```bash
    scripts/watch-swift-test.sh --stall 45 --out /tmp/deadlock -- \

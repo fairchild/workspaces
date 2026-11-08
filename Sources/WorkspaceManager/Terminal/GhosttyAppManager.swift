@@ -42,13 +42,19 @@ final class GhosttyAppManager: NSObject {
     /// and an attempt fails only when the mailbox is full, so 64 wakeups with no tick in between
     /// prove the 64-slot mailbox filled.
     nonisolated static let wakeupCount = OSAllocatedUnfairLock(initialState: 0)
+    private(set) var tickCount = 0
 
-    /// While true, wakeups leave the app mailbox undrained, which is how a test holds it full
-    /// without blocking the main thread under every other test. Frees still tick first.
-    var wakeupTicksSuspended = false {
+    /// While true, nothing drains the app mailbox: wakeups skip their tick and retired surfaces
+    /// wait. A test holds the mailbox full this way without blocking the main thread under every
+    /// other suite, then lets the waiting frees run the way they always do, each after a tick.
+    var mailboxDrainSuspended = false {
         didSet {
-            guard oldValue, !wakeupTicksSuspended else { return }
-            GhosttyThreadingBridge.enqueueOnMain { self.tick() }
+            guard oldValue, !mailboxDrainSuspended else { return }
+            if retiredSurfaces.isEmpty {
+                GhosttyThreadingBridge.enqueueOnMain { self.tick() }
+            } else {
+                GhosttyThreadingBridge.enqueueOnMain { self.freeRetiredSurfaces() }
+            }
         }
     }
     private var config: ghostty_config_t?
@@ -165,12 +171,12 @@ final class GhosttyAppManager: NSObject {
 
     func retireSurface(_ surface: ghostty_surface_t, callbackTarget: Unmanaged<GhosttySurfaceCallbackTarget>) {
         retiredSurfaces.append(RetiredSurface(surface: surface, callbackTarget: callbackTarget))
-        guard retiredSurfaces.count == 1 else { return }
+        guard retiredSurfaces.count == 1, !mailboxDrainSuspended else { return }
         GhosttyThreadingBridge.enqueueOnMain { self.freeRetiredSurfaces() }
     }
 
     private func freeRetiredSurfaces() {
-        while !retiredSurfaces.isEmpty {
+        while !retiredSurfaces.isEmpty, !mailboxDrainSuspended {
             let retired = retiredSurfaces.removeFirst()
             tick()
             ghostty_surface_free(retired.surface)
@@ -235,6 +241,7 @@ final class GhosttyAppManager: NSObject {
 
     private func tick() {
         guard let app else { return }
+        tickCount += 1
         ghostty_app_tick(app)
     }
 
@@ -247,7 +254,7 @@ final class GhosttyAppManager: NSObject {
         GhosttyThreadingBridge.enqueueOnMain {
             LaunchWindowProbe.noteTickStart(token: probeToken)
             guard let manager = GhosttyCallbackUserdata.manager(from: userdataAddress),
-                !manager.wakeupTicksSuspended
+                !manager.mailboxDrainSuspended
             else { return }
             manager.tick()
         }
