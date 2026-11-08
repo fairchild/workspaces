@@ -61,6 +61,7 @@ async function main(): Promise<void> {
 
 	assertAuthModeConfig(localEnv);
 
+	await run(process.execPath, [path.join(WEB_NEXT_ROOT, "scripts", "fetch-ghostty-vt.mjs")], process.env);
 	if (!existsSync(path.join(WEB_NEXT_ROOT, ".next", "BUILD_ID"))) {
 		await run("pnpm", ["run", "build"], {
 			...process.env,

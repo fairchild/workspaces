@@ -136,6 +136,33 @@ test("the wasm loads on first open, once, same-origin and immutable", async ({
 	expect(wasm).toHaveLength(1);
 });
 
+test("a drawer closed while it connects is not focused when the shell arrives", async ({
+	page,
+}) => {
+	let release!: () => void;
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	await page.route("**/api/sessions/*/terminal", async (route) => {
+		await held;
+		await route.continue();
+	});
+	await createSession(page);
+	await page.keyboard.press("Control+Backquote");
+	await expect(page.getByTestId("terminal-status")).toContainText("connecting");
+	await page.keyboard.press("Control+Backquote");
+	await expect(drawer(page)).toHaveAttribute("data-open", "false");
+	release();
+	await expect(drawer(page)).toHaveAttribute("data-ready", "true", {
+		timeout: DRAWER_TIMEOUT,
+	});
+	await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+	// The drawer is aria-hidden while closed, so find its input by tag, not role.
+	const input = drawer(page).locator("textarea");
+	await expect(input).toHaveCount(1);
+	await expect(input).not.toBeFocused();
+});
+
 test("a session with no live sandbox gets the calm note, not a shell", async ({
 	page,
 }) => {

@@ -36,7 +36,7 @@ export const TERMINAL_THEMES = {
 		background: "#f1ede0",
 		foreground: "#26221a",
 		cursor: "#a15c31",
-		selectionBackground: "rgba(161, 92, 49, 0.25)",
+		selectionBackground: "rgba(161, 92, 49, 0.15)",
 		black: "#26221a",
 		red: "#9a4b33",
 		green: "#3e6b36",
@@ -80,6 +80,8 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 	const connectingRef = useRef(false);
 	const sawDataRef = useRef(false);
 	const unmountedRef = useRef(false);
+	/** The drawer's open state for async continuations, which must not focus a closed drawer. */
+	const openRef = useRef(false);
 
 	/** Create the canvas terminal once, on first open; the binding and its wasm load here. */
 	const ensureTerminal = useCallback((): Promise<CanvasTerminal | null> => {
@@ -140,6 +142,7 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 				setPhase("denied");
 				return;
 			}
+			if (unmountedRef.current) return;
 			if (access.kind === "no-sandbox") {
 				setNote(access.reason);
 				setPhase("no-sandbox");
@@ -177,7 +180,7 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 						});
 			setMode(access.kind);
 			setPhase("ready");
-			term.focus();
+			if (openRef.current) term.focus();
 		} finally {
 			connectingRef.current = false;
 		}
@@ -186,9 +189,12 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 	const toggle = useCallback(() => {
 		setOpen((wasOpen) => {
 			const next = !wasOpen;
+			openRef.current = next;
 			if (next) {
 				void connect();
-				requestAnimationFrame(() => termRef.current?.focus());
+				requestAnimationFrame(() => {
+					if (openRef.current) termRef.current?.focus();
+				});
 			} else {
 				termRef.current?.blur();
 			}
