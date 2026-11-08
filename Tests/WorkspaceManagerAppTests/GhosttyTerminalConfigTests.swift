@@ -881,7 +881,7 @@ struct GhosttyTerminalConfigTests {
             hooksSocketPath: "/tmp/workspaces-hooks.sock"
         )
 
-        let observed = try config.withCValue(view: NSView()) { cConfig in
+        let observed = try config.withCValue(view: NSView(), userdata: nil) { cConfig in
             // The reported row count, pinned before anything dereferences it.
             // (The count is what a C pointer lets a test check; the allocation's
             // real extent is not discoverable, so a buffer short of a count that
@@ -950,7 +950,7 @@ struct GhosttyTerminalConfigTests {
         )
 
         typealias Observation = (marshalled: String?, present: String?, command: String?)
-        let observed = resume.withCValue(view: NSView()) { cConfig -> Observation in
+        let observed = resume.withCValue(view: NSView(), userdata: nil) { cConfig -> Observation in
             let marshalled = cConfig.initial_input.map { String(cString: $0) }
             let command = cConfig.command.map { String(cString: $0) }
             return initialCommand.withCString { pointer in

@@ -46,6 +46,20 @@ final class GhosttyAppManager: NSObject {
     /// entry can never be visited.
     private let surfaceViews = NSHashTable<GhosttySurfaceView>.weakObjects()
 
+    /// Surfaces whose views are gone, waiting to be freed. `ghostty_surface_free` joins the
+    /// surface's `io` thread, which may be blocked pushing into the app mailbox, and only
+    /// `ghostty_app_tick` on this thread drains that mailbox: a free that starts behind a full
+    /// mailbox never returns. So each free runs right after a tick, on a main-actor turn of its
+    /// own rather than inside whatever released the view, where a tick's callbacks could
+    /// re-enter that caller.
+    private var retiredSurfaces: [RetiredSurface] = []
+    var retiredSurfaceCount: Int { retiredSurfaces.count }
+
+    private struct RetiredSurface {
+        let surface: ghostty_surface_t
+        let callbackTarget: Unmanaged<GhosttySurfaceCallbackTarget>
+    }
+
     private override init() {
         super.init()
     }
@@ -132,6 +146,24 @@ final class GhosttyAppManager: NSObject {
 
     func unregisterSurface(_ view: GhosttySurfaceView) {
         surfaceViews.remove(view)
+    }
+
+    func retireSurface(_ surface: ghostty_surface_t, callbackTarget: Unmanaged<GhosttySurfaceCallbackTarget>) {
+        retiredSurfaces.append(RetiredSurface(surface: surface, callbackTarget: callbackTarget))
+        guard retiredSurfaces.count == 1 else { return }
+        GhosttyThreadingBridge.enqueueOnMain { self.freeRetiredSurfaces() }
+    }
+
+    private func freeRetiredSurfaces() {
+        while !retiredSurfaces.isEmpty {
+            let retired = retiredSurfaces.removeFirst()
+            tick()
+            ghostty_surface_free(retired.surface)
+            // A callback may have queued main-actor work holding this userdata's address
+            // before the free; release only after that work has run.
+            let callbackTarget = retired.callbackTarget
+            GhosttyThreadingBridge.enqueueOnMain { callbackTarget.release() }
+        }
     }
 
     // MARK: Terminal Theme

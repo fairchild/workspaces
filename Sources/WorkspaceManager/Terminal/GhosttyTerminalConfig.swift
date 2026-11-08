@@ -328,9 +328,13 @@ struct GhosttyTerminalConfig {
         return "'\(escaped)'"
     }
 
-    func withCValue<T>(view: NSView, _ body: (inout ghostty_surface_config_s) throws -> T) rethrows -> T {
+    func withCValue<T>(
+        view: NSView,
+        userdata: UnsafeMutableRawPointer?,
+        _ body: (inout ghostty_surface_config_s) throws -> T
+    ) rethrows -> T {
         var config = ghostty_surface_config_new()
-        config.userdata = Unmanaged.passUnretained(view).toOpaque()
+        config.userdata = userdata
         config.platform_tag = GHOSTTY_PLATFORM_MACOS
         config.platform = ghostty_platform_u(
             macos: ghostty_platform_macos_s(

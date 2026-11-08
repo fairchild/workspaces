@@ -50,13 +50,26 @@ struct GhosttyCallbackUserdataTests {
         #expect(GhosttyCallbackUserdata.surfaceView(from: userdata) == nil)
     }
 
-    @Test("surfaceView(from:) round-trips passUnretained opaque pointers to the original view")
+    @Test("surfaceView(from:) resolves a view's callback userdata to that view")
     func surfaceViewRoundTrip() {
         let view = GhosttySurfaceView(workingDirectory: FileManager.default.temporaryDirectory)
-        let opaque = Unmanaged.passUnretained(view).toOpaque()
 
-        let resolved = GhosttyCallbackUserdata.surfaceView(from: opaque)
+        let resolved = GhosttyCallbackUserdata.surfaceView(from: view.callbackUserdata)
         #expect(resolved === view)
+    }
+
+    @Test("A released view's callback userdata resolves to no view while its surface waits to be freed")
+    func surfaceViewNilAfterViewReleased() {
+        let userdata: UnsafeMutableRawPointer = autoreleasepool {
+            let view = GhosttySurfaceView(workingDirectory: FileManager.default.temporaryDirectory)
+            _ = Unmanaged<GhosttySurfaceCallbackTarget>.fromOpaque(view.callbackUserdata).retain()
+            return view.callbackUserdata
+        }
+        defer { Unmanaged<GhosttySurfaceCallbackTarget>.fromOpaque(userdata).release() }
+
+        let resolvesToView = GhosttyCallbackUserdata.surfaceView(from: userdata) != nil
+        #expect(GhosttyAppManager.shared.retiredSurfaceCount > 0)
+        #expect(!resolvesToView)
     }
 
     @Test("surfaceView(from address:) returns nil for a nil address")
@@ -65,11 +78,10 @@ struct GhosttyCallbackUserdataTests {
         #expect(GhosttyCallbackUserdata.surfaceView(from: address) == nil)
     }
 
-    @Test("surfaceView(from address:) round-trips bitPattern addresses to the original view")
+    @Test("surfaceView(from address:) resolves a view's callback userdata address to that view")
     func surfaceViewFromAddressRoundTrip() {
         let view = GhosttySurfaceView(workingDirectory: FileManager.default.temporaryDirectory)
-        let opaque = Unmanaged.passUnretained(view).toOpaque()
-        let address = UInt(bitPattern: opaque)
+        let address = UInt(bitPattern: view.callbackUserdata)
 
         let resolved = GhosttyCallbackUserdata.surfaceView(from: address)
         #expect(resolved === view)

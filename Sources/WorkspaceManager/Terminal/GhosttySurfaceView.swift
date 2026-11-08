@@ -42,6 +42,8 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
     private var currentColorScheme: ghostty_color_scheme_e?
 
     private(set) var surface: ghostty_surface_t?
+    private let callbackTarget = Unmanaged.passRetained(GhosttySurfaceCallbackTarget())
+    var callbackUserdata: UnsafeMutableRawPointer { callbackTarget.toOpaque() }
     private(set) var terminalTitle: String = ""
     private(set) var currentWorkingDirectory: String?
     private(set) var latestScrollbarState: GhosttyScrollbarState?
@@ -78,6 +80,7 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
             shellProfileMode: terminalConfig.shellProfileModeLabel
         )
         super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        callbackTarget.takeUnretainedValue().view = self
         self.wantsLayer = true
         registerForDraggedTypes(GhosttyDroppedContentFormatter.pasteboardTypes)
 
@@ -128,7 +131,9 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
             }
 
             if let surface {
-                ghostty_surface_free(surface)
+                GhosttyAppManager.shared.retireSurface(surface, callbackTarget: callbackTarget)
+            } else {
+                callbackTarget.release()
             }
         }
     }
@@ -369,7 +374,7 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
             return
         }
 
-        let createdSurface = terminalConfig.withCValue(view: self) { config in
+        let createdSurface = terminalConfig.withCValue(view: self, userdata: callbackUserdata) { config in
             ghostty_surface_new(app, &config)
         }
 

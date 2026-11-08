@@ -2,11 +2,11 @@
 //  GhosttySurfaceMailboxDeadlockTests.swift
 //  WorkspaceManagerAppTests
 //
-//  Reproduces the surface-teardown deadlock from #1842. Every surface's `io-reader` pushes
-//  title and exit messages into one 64-slot app mailbox that only the main thread drains.
-//  When it is full, `ghostty_surface_free` on main joins `io`, which joins an `io-reader`
-//  blocked on that push forever. Opt-in, because today it hangs: run it under
-//  `scripts/watch-swift-test.sh`, where it passes once teardown drains or skips the mailbox.
+//  Guards surface teardown against the app-mailbox deadlock (#1856). Every surface's `io`
+//  threads push title and exit messages into one 64-slot app mailbox that only the main
+//  thread drains, and `ghostty_surface_free` joins those threads. Freeing behind a full
+//  mailbox hangs for good, so a regression here hangs rather than fails: to see where, run
+//  the suite under `scripts/watch-swift-test.sh`, which samples and stops a stalled run.
 //
 
 import Foundation
@@ -18,16 +18,17 @@ import Testing
 @MainActor
 struct GhosttySurfaceMailboxDeadlockTests {
     nonisolated private static let environment = ProcessInfo.processInfo.environment
-    nonisolated private static let surfaceCount = environment["WORKSPACES_MAILBOX_DEADLOCK_SURFACES"].flatMap {
-        Int($0)
-    }
+    nonisolated private static let surfaceCount =
+        environment["WORKSPACES_MAILBOX_DEADLOCK_SURFACES"].flatMap { Int($0) } ?? 24
 
+    /// Blocking main for 3 s lets every shell finish starting and fill the mailbox before the
+    /// first view goes; 0 releases the views while the shells are still sending.
     @Test(
-        "Freeing a surface while the app mailbox is full and undrained finishes",
-        .enabled(if: surfaceCount != nil, "set WORKSPACES_MAILBOX_DEADLOCK_SURFACES to run; it hangs today")
+        "Releasing surface views while the app mailbox is full and undrained frees every surface",
+        arguments: [3.0, 0]
     )
-    func freeWhileMailboxIsFull() throws {
-        let count = try #require(Self.surfaceCount)
+    func freeWhileMailboxIsFull(blockSeconds: Double) async throws {
+        let count = Self.surfaceCount
         try #require(
             count >= 24, "fewer than 24 surfaces do not fill the 64-slot mailbox, so the test would prove nothing")
         let log = DeadlockProgressLog(path: Self.environment["WORKSPACES_MAILBOX_DEADLOCK_PROGRESS"])
@@ -36,18 +37,31 @@ struct GhosttySurfaceMailboxDeadlockTests {
         autoreleasepool {
             views = (0..<count).map { _ in GhosttySurfaceView(workingDirectory: directory) }
         }
+        let released = views.map { WeakSurfaceView($0) }
 
         // Each shell's startup sends about three messages; blocking main keeps the app from
-        // ticking, so 24 or more surfaces fill the mailbox before the first free.
-        log.write("created \(count) surfaces; blocking main for 3s")
-        Thread.sleep(forTimeInterval: 3)
+        // ticking, so 24 or more surfaces fill the mailbox before the first view goes.
+        log.write("created \(count) surfaces; blocking main for \(blockSeconds)s")
+        Thread.sleep(forTimeInterval: blockSeconds)
 
         for index in 0..<count {
-            log.write("freeing \(index)")
+            log.write("releasing \(index)")
             autoreleasepool { _ = views.removeFirst() }
         }
+        log.write("released \(count) views; waiting for their surfaces to be freed")
+        while GhosttyAppManager.shared.retiredSurfaceCount > 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         log.write("end")
-        #expect(views.isEmpty)
+        #expect(released.allSatisfy { $0.view == nil })
+    }
+}
+
+private struct WeakSurfaceView {
+    weak var view: GhosttySurfaceView?
+
+    init(_ view: GhosttySurfaceView) {
+        self.view = view
     }
 }
 
