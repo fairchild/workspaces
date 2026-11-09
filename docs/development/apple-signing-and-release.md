@@ -1,7 +1,7 @@
 # Apple Signing, Notarization, and How WorkSpaces Ships
 
 This page explains why a macOS release needs the credentials it does and how the
-WorkSpaces release pipeline uses each one. [`RELEASING.md`](../../RELEASING.md)
+WorkSpaces release pipeline uses each one. [`RELEASING.md`](https://github.com/fairchild/workspaces/blob/main/RELEASING.md)
 holds the commands; this page holds the model those commands assume.
 
 ## The three questions every release answers
@@ -80,7 +80,7 @@ options matter for distribution:
 
 [**Entitlements**](https://developer.apple.com/documentation/bundleresources/entitlements)
 are capabilities the signature claims for the app. Most are self-declared in
-[`WorkspaceManager.entitlements`](../../WorkspaceManager.entitlements). A few are
+[`WorkspaceManager.entitlements`](https://github.com/fairchild/workspaces/blob/main/WorkspaceManager.entitlements). A few are
 restricted: Apple must grant them for a specific app ID, and the grant travels
 as a **provisioning profile** embedded in the bundle
 ([TN3125: Inside Code Signing: Provisioning Profiles](https://developer.apple.com/documentation/technotes/tn3125-inside-code-signing-provisioning-profiles)).
@@ -182,7 +182,7 @@ read.
 | Sparkle EdDSA private key | Login Keychain, account `com.cloudcompute.workspaces` | `SPARKLE_PRIVATE_KEY` | Signing the appcast |
 
 The owner's files conventionally live in `~/.config/apple/`.
-[`scripts/setup-release-secrets.sh`](../../scripts/setup-release-secrets.sh)
+[`scripts/setup-release-secrets.sh`](https://github.com/fairchild/workspaces/blob/main/scripts/setup-release-secrets.sh)
 uploads them, verifying the `.p12` first.
 
 > **GitHub secrets are write-only.** Nothing, including the API, can read a value back. A secret that is wrong or lost is replaced by uploading it again from the owner's copy.
@@ -279,8 +279,8 @@ still needs a real approval on every PR.
 
 In this repo:
 
-- [`RELEASING.md`](../../RELEASING.md): commands, recovery, and verification
-- [Release approval retrospective](../retros/2026-09-07-release-approval-contract.md):
+- [`RELEASING.md`](https://github.com/fairchild/workspaces/blob/main/RELEASING.md): commands, recovery, and verification
+- [Release approval retrospective](https://github.com/fairchild/workspaces/blob/main/docs/retros/2026-09-07-release-approval-contract.md):
   why signing moved ahead of the approval
 
 Apple:

@@ -338,6 +338,14 @@
 			"summary": "How to capture and publish evidence for WorkSpaces changes."
 		},
 		{
+			"source": "docs/development/apple-signing-and-release.md",
+			"dest": "development/apple-signing-and-release.md",
+			"title": "Apple Signing and Release",
+			"group": "Operations",
+			"topics": ["workspaces"],
+			"summary": "How Developer ID signing, notarization and Sparkle work, and how the release pipeline uses each credential."
+		},
+		{
 			"source": "docs/performance/dashboard.md",
 			"dest": "performance/dashboard.md",
 			"title": "Performance Dashboard",
