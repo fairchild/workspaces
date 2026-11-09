@@ -12,7 +12,8 @@ cd "$ROOT"
 
 uv run --script scripts/release-candidate.py verify --directory "$ASSETS" \
     --source "$SOURCE" --tag "$TAG" --channel "$CHANNEL" \
-    --version "$VERSION" --build "$BUILD" --candidate-sha256 "$CANDIDATE_SHA256"
+    --version "$VERSION" --build "$BUILD" --candidate-sha256 "$CANDIDATE_SHA256" \
+    --maintainer-reviewed-prs "${MAINTAINER_REVIEWED_PRS-}"
 
 PUBLIC_KEY="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' Sources/WorkspaceManager/Resources/Info.plist)"
 BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' Sources/WorkspaceManager/Resources/Info.plist)"
