@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 350" width="960" height="350" role="img" aria-labelledby="t d" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="t">How a release runs</title>
+  <desc id="d">Five jobs run in order: qualify, build sign notarize, validate candidate, publish, validate published. Only the build job holds signing secrets, in the release-candidate environment. The publish job waits for the owner's approval in the release-publication environment and holds no secrets. Everything before the approval builds and tests the exact bytes; everything after publishes those bytes and checks what users receive.</desc>
+  <style>
+    svg { --bg:#f7f6f2; --panel:#ffffff; --ink:#1b1f22; --muted:#59626a; --line:#c9cdcb; --sec:#a86b00; --gate:#2f62c9; --ok:#1f8a5b; }
+    @media (prefers-color-scheme: dark) {
+      svg { --bg:#0d1012; --panel:#1c2224; --ink:#f3f0e7; --muted:#a8afad; --line:#4a5256; --sec:#e7b75f; --gate:#8ab7ff; --ok:#5ed49d; }
+    }
+    .bg { fill: var(--bg); }
+    .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+    .tt { fill: var(--ink); font-size: 13.5px; font-weight: 650; text-anchor: middle; }
+    .mono { fill: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9.5px; text-anchor: middle; }
+    .st { fill: var(--muted); font-size: 11.5px; text-anchor: middle; }
+    .ar { stroke: var(--muted); stroke-width: 1.6; fill: none; }
+    .ah { fill: var(--muted); }
+    .zone-sec { fill: var(--sec); fill-opacity: .08; stroke: var(--sec); stroke-width: 1.5; stroke-dasharray: 5 4; }
+    .zone-gate { fill: var(--gate); fill-opacity: .08; stroke: var(--gate); stroke-width: 1.5; stroke-dasharray: 5 4; }
+    .lbl-sec { fill: var(--sec); font-size: 12px; font-weight: 700; text-anchor: middle; }
+    .lbl-gate { fill: var(--gate); font-size: 12px; font-weight: 700; text-anchor: middle; }
+    .sub-sec { fill: var(--sec); font-size: 11px; text-anchor: middle; }
+    .sub-gate { fill: var(--gate); font-size: 11px; text-anchor: middle; }
+    .trig { fill: var(--muted); font-size: 12px; }
+    .brace { stroke: var(--ok); stroke-width: 1.6; fill: none; }
+    .phase { fill: var(--ink); font-size: 12.5px; font-weight: 650; text-anchor: middle; }
+    .phase-sub { fill: var(--muted); font-size: 11.5px; text-anchor: middle; }
+  </style>
+  <defs>
+    <marker id="h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+  <rect class="bg" width="960" height="350" rx="10"/>
+
+  <text class="trig" x="20" y="30">Starts when CI passes on a release commit (automatic), or when the owner dispatches it.</text>
+
+  <rect class="zone-sec" x="200" y="56" width="180" height="176" rx="10"/>
+  <text class="lbl-sec" x="290" y="76">release-candidate</text>
+  <text class="sub-sec" x="290" y="92">7 signing secrets · main only</text>
+
+  <rect class="zone-gate" x="580" y="56" width="180" height="176" rx="10"/>
+  <text class="lbl-gate" x="670" y="76">release-publication</text>
+  <text class="sub-gate" x="670" y="92">owner approves · no secrets</text>
+
+  <rect class="box" x="20" y="110" width="160" height="110" rx="8"/>
+  <text class="tt" x="100" y="140">Qualify</text>
+  <text class="mono" x="100" y="158">qualify</text>
+  <text class="st" x="100" y="182">CI green, every PR</text>
+  <text class="st" x="100" y="198">reviewed, envs correct</text>
+
+  <rect class="box" x="210" y="110" width="160" height="110" rx="8"/>
+  <text class="tt" x="290" y="140">Build, sign, notarize</text>
+  <text class="mono" x="290" y="158">build-sign-notarize-release</text>
+  <text class="st" x="290" y="182">signed, notarized DMG</text>
+  <text class="st" x="290" y="198">+ signed appcast, sealed</text>
+
+  <rect class="box" x="400" y="110" width="160" height="110" rx="8"/>
+  <text class="tt" x="480" y="140">Validate candidate</text>
+  <text class="mono" x="480" y="158">validate-candidate</text>
+  <text class="st" x="480" y="182">checks the installer;</text>
+  <text class="st" x="480" y="198">summary links the DMG</text>
+
+  <rect class="box" x="590" y="110" width="160" height="110" rx="8"/>
+  <text class="tt" x="670" y="140">Publish</text>
+  <text class="mono" x="670" y="158">publish-github-release</text>
+  <text class="st" x="670" y="182">waits for approval, then</text>
+  <text class="st" x="670" y="198">publishes the same bytes</text>
+
+  <rect class="box" x="780" y="110" width="160" height="110" rx="8"/>
+  <text class="tt" x="860" y="140">Validate published</text>
+  <text class="mono" x="860" y="158">validate-published-…</text>
+  <text class="st" x="860" y="182">public assets and live</text>
+  <text class="st" x="860" y="198">appcast match the build</text>
+
+  <path class="ar" d="M182 165H207" marker-end="url(#h)"/>
+  <path class="ar" d="M372 165H397" marker-end="url(#h)"/>
+  <path class="ar" d="M562 165H587" marker-end="url(#h)"/>
+  <path class="ar" d="M752 165H777" marker-end="url(#h)"/>
+
+  <path class="brace" d="M20 254V262H560V254M290 262V270"/>
+  <text class="phase" x="290" y="292">Before approval</text>
+  <text class="phase-sub" x="290" y="310">build, sign and test the exact bytes that would ship</text>
+
+  <path class="brace" d="M590 254V262H940V254M765 262V270"/>
+  <text class="phase" x="765" y="292">After approval</text>
+  <text class="phase-sub" x="765" y="310">publish those bytes, then check what users get</text>
+</svg>

@@ -4,7 +4,7 @@ This page explains why a macOS release needs the credentials it does and how the
 WorkSpaces release pipeline uses each one. [`RELEASING.md`](../../RELEASING.md)
 holds the commands; this page holds the model those commands assume.
 
-## The question every release answers
+## The three questions every release answers
 
 A downloaded Mac app is checked by **Gatekeeper** the first time it opens.
 Gatekeeper asks two things: who built this, and has Apple looked at it? A
@@ -14,9 +14,27 @@ WorkSpaces also updates itself through **Sparkle**, which asks a third question
 on every update: did the same publisher sign this update? Sparkle answers that
 with its own key, unrelated to Apple's.
 
-Every credential below exists to answer one of those three questions.
+![Three lanes, one per question. Lane 1: the Developer ID certificate feeds codesign, which seals the app, which Gatekeeper checks. Lane 2: the App Store Connect key feeds notarytool and stapler, which produce a notarized DMG, which Gatekeeper checks. Lane 3: the Sparkle private key feeds sign_update, which signs appcast.xml, which the installed app verifies.](../assets/signing/trust-chains.svg)
 
-## Apple's model
+Every credential on this page sits in the left column of one of those lanes.
+The colors carry through the rest of the page: blue for Apple identity, amber
+for notarization, green for Sparkle.
+
+### Words this page uses
+
+| Term | Meaning |
+|---|---|
+| Developer ID Application certificate | Apple's certificate for signing Mac apps distributed outside the App Store |
+| `.p12` | One file holding a certificate and its private key, encrypted with an export password |
+| Hardened runtime | A signing option that blocks code injection and similar tricks; notarization requires it |
+| Entitlement | A capability the signature claims, such as JIT or a shared keychain group |
+| Provisioning profile | Apple's signed grant of restricted entitlements to one app ID |
+| Notarization | Apple's automated scan of a signed build, which issues a ticket when it passes |
+| Stapling | Attaching the ticket to the file so Gatekeeper can check it offline |
+| Appcast | Sparkle's update feed, `appcast.xml`, carrying a signature for each release |
+| Environment | A GitHub scope for secrets and approval rules, entered only by jobs that name it |
+
+## Part 1 · Apple's model
 
 ### Identity: the Developer ID certificate
 
@@ -30,8 +48,9 @@ A certificate is a public half that Apple signed and a private key that only
 its owner holds. The private key is created on the Mac that requested the
 certificate and normally never leaves that Mac's Keychain. To sign anywhere
 else, such as a CI runner, the pair is exported together as a **`.p12`** file,
-encrypted with an export password. The `.p12` and its password are therefore
-two separate secrets, and both are needed.
+encrypted with an export password.
+
+> **Two secrets, not one.** The `.p12` cannot be opened without its export password, so CI needs both, and losing the password means exporting a new `.p12` from the Mac that holds the private key.
 
 Developer ID certificates are valid for five years. Because each signature
 carries a secure timestamp, apps signed before expiry keep opening afterwards;
@@ -84,9 +103,9 @@ ID password. A key is three values that must belong together:
 | Issuer ID | A UUID naming the team's API account | Above the key list in App Store Connect |
 
 A team can have many keys, each with its own access level, and other tools
-(Fastlane, Xcode Cloud) often have keys of their own. The `.p8` file and the
-key ID must name the same key; a mismatched pair fails notarization with an
-authentication error, not a signing error.
+(Fastlane, Xcode Cloud) often have keys of their own.
+
+> **The `.p8` file and the key ID must name the same key.** A mismatched pair fails notarization with an authentication error, not a signing error. The key ID is in the file's name.
 
 ### Gatekeeper
 
@@ -95,22 +114,19 @@ chain, then looks for a notarization ticket, stapled or fetched from Apple.
 `spctl --assess` runs the same check from a terminal, and the pipeline runs it
 on every candidate.
 
-## Sparkle: a second, separate trust chain
+## Part 2 · Sparkle, a separate trust chain
 
 Sparkle checks updates with an **EdDSA key pair** that has nothing to do with
 Apple:
 
-- The public key ships inside every copy of the app as `SUPublicEDKey` in
-  `Info.plist`.
-- The private key signs each release DMG. The signature goes into
-  `appcast.xml`, the feed at `SUFeedURL` that installed apps poll.
-- An installed app refuses any update whose signature does not verify against
-  the public key it already has.
+1. The public key ships inside every copy of the app as `SUPublicEDKey` in
+   `Info.plist`.
+2. The private key signs each release DMG. The signature goes into
+   `appcast.xml`, the feed at `SUFeedURL` that installed apps poll.
+3. An installed app refuses any update whose signature does not verify against
+   the public key it already has.
 
-That last rule makes the Sparkle private key the one credential that cannot be
-replaced casually. A new key pair means every existing install rejects every
-future update until users reinstall by hand. Losing the key has the same
-effect. Treat it like the Developer ID private key, not like a token.
+> **Never replace the Sparkle key casually.** Rule 3 means a new key pair, or a lost one, leaves every existing install rejecting every future update until users reinstall by hand. Guard it like the Developer ID private key, not like a token.
 
 Sparkle's `generate_keys` tool keeps the private key in the login Keychain
 under a service of `https://sparkle-project.org` and an account name. This
@@ -120,43 +136,44 @@ the tool's default, so every lookup needs
 reports that no key exists. Before uploading the key anywhere, compare
 `generate_keys --account com.cloudcompute.workspaces -p` with `SUPublicEDKey`.
 
-## Where each credential lives
+## Part 3 · Our pipeline
 
-| Credential | Owner's copy | GitHub secret in `release-candidate` | Used by |
+### Where each credential lives
+
+The owner keeps the originals. GitHub holds copies that only the build job can
+read.
+
+![The owner's Mac holds the originals in ~/.config/apple, a password manager, App Store Connect and the login Keychain. They are uploaded once to seven secrets in the release-candidate GitHub environment, which only the build job on main can read. The build job creates a temporary keychain, signs, notarizes, signs the appcast, and deletes the keychain.](../assets/signing/credential-flow.svg)
+
+| Credential | Owner's copy | GitHub secret in `release-candidate` | Used for |
 |---|---|---|---|
 | Developer ID certificate and private key | `Developer_ID_Application_<TEAM_ID>.p12` | `APPLE_DEVELOPER_ID_CERT_BASE64` | Code signing |
-| `.p12` export password | Password manager | `APPLE_DEVELOPER_ID_CERT_PASSWORD` | Importing the `.p12` on the runner |
+| `.p12` export password | Password manager | `APPLE_DEVELOPER_ID_CERT_PASSWORD` | Opening the `.p12` on the runner |
 | Developer ID provisioning profile | `workspaces.provisionprofile` | `APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64` | Keychain-sharing entitlement |
 | App Store Connect private key | `AuthKey_<KEY_ID>.p8` | `APPLE_API_KEY_BASE64` | Notarization |
 | App Store Connect key ID | The `.p8` filename | `APPLE_API_KEY_ID` | Notarization |
 | App Store Connect issuer ID | App Store Connect, Integrations page | `APPLE_API_ISSUER_ID` | Notarization |
 | Sparkle EdDSA private key | Login Keychain, account `com.cloudcompute.workspaces` | `SPARKLE_PRIVATE_KEY` | Signing the appcast |
 
-The owner's files conventionally live in `~/.config/apple/`. GitHub stores
-secrets write-only: nothing, including the API, can read a value back, so a
-secret can only be re-created from the owner's copy.
+The owner's files conventionally live in `~/.config/apple/`.
 [`scripts/setup-release-secrets.sh`](../../scripts/setup-release-secrets.sh)
-does that from the files, verifying the `.p12` before uploading.
+uploads them, verifying the `.p12` first.
 
-## How a release runs
+> **GitHub secrets are write-only.** Nothing, including the API, can read a value back. A secret that is wrong or lost is replaced by uploading it again from the owner's copy.
+
+### How a release runs
 
 `scripts/release.py` opens a metadata PR that changes only `CHANGELOG.md` and
 `Info.plist`. Once it merges and CI passes on that exact commit,
-`.github/workflows/release.yml` takes over:
+`.github/workflows/release.yml` runs five jobs in order:
 
-```mermaid
-flowchart LR
-    Q["qualify<br/>Ubuntu, no secrets"] --> B["build-sign-notarize-release<br/>macOS, release-candidate"]
-    B --> V["validate-candidate<br/>macOS, no secrets"]
-    V --> P["publish-github-release<br/>release-publication: owner approves"]
-    P --> W["validate-published-release-assets<br/>macOS, no secrets"]
-```
+![Five jobs left to right: Qualify, Build sign notarize, Validate candidate, Publish, Validate published. A dashed amber zone marks the build job as the only one in release-candidate, holding seven signing secrets. A dashed blue zone marks Publish as release-publication, where the owner approves and no secrets exist. A bracket under the first three jobs reads: before approval, build, sign and test the exact bytes that would ship. A bracket under the last two reads: after approval, publish those bytes, then check what users get.](../assets/signing/release-pipeline.svg)
 
 | Job | Holds secrets | What it does |
 |---|---|---|
 | `qualify` | None | Checks the source: CI passed on this commit, every PR since the last release was independently approved, main has not moved past the metadata commit, and the environments are configured as below. |
 | `build-sign-notarize-release` | All seven | Imports the `.p12` into a throwaway keychain, builds and signs the app with the embedded profile, notarizes and staples the DMG, signs the appcast with the Sparkle key, seals the candidate's hashes, uploads it as an immutable artifact, then deletes the keychain. |
-| `validate-candidate` | None | Downloads the sealed artifact and checks the installer it actually contains. Its summary carries the candidate download. |
+| `validate-candidate` | None | Downloads the sealed artifact and checks the installer it actually contains. Its summary links the candidate download. |
 | `publish-github-release` | None | Waits for the owner's approval, then publishes the same bytes it validated. Nothing is rebuilt after approval. |
 | `validate-published-release-assets` | None | Downloads the public release and the live appcast and checks them against the approved candidate. |
 
@@ -164,7 +181,7 @@ Signing happens before the approval on purpose. The owner approves a finished,
 tested installer and can download it first, rather than approving permission to
 start building one.
 
-## Why three environments
+### Why three environments
 
 A GitHub **environment** scopes secrets and approval rules to the jobs that
 declare it. Repository-wide secrets would be readable by any workflow on any
@@ -177,18 +194,19 @@ environment and passes its branch policy.
 | `release-publication` | None | `main` only | Owner |
 | `release` (legacy) | The older copies | — | Owner, permanently |
 
-`release-candidate` signs without asking because the job that reads its
-secrets cannot publish anything. `release-publication` asks because it is the
-step that changes what users download, and it holds no signing material.
-`release` is the environment the pre-September 2026 workflow used. It keeps its
-approval so that rerunning an old workflow run cannot publish around the new
-gate.
+- `release-candidate` signs without asking because the job that reads its
+  secrets cannot publish anything.
+- `release-publication` asks because it is the step that changes what users
+  download, and it holds no signing material.
+- `release` is the environment the pre-September 2026 workflow used. It keeps
+  its approval so that rerunning an old workflow run cannot publish around the
+  new gate.
 
 `scripts/release-environments.py check` verifies this shape during `qualify`,
 and `apply` creates it. `apply` lifts the approval on `release-candidate` only
 once every signing secret is present.
 
-## The review proof and the maintainer allowlist
+### The review proof and the maintainer allowlist
 
 `qualify` refuses a release unless every PR merged since the previous stable
 release has an independent approving review on its final commit. A PR merged
@@ -202,33 +220,27 @@ The numbers are recorded in the release manifest as owner-signed rather than
 reviewed. The automatic release path takes no inputs, so an unattended release
 still needs a real approval on every PR.
 
-## Rotating or replacing a credential
+## Part 4 · Operating it
+
+### Rotating or replacing a credential
 
 | Credential | When | How |
 |---|---|---|
-| Developer ID certificate | Before it expires, or if the private key leaks | Create a new certificate, export a new `.p12`, run `setup-release-secrets.sh --force`. Revoking the old one is only for a leak, since revocation can affect already-shipped builds. |
+| Developer ID certificate | Before it expires, or if the private key leaks | Create a new certificate, export a new `.p12`, run `setup-release-secrets.sh --force`. Revoke the old one only for a leak, since revocation can affect already-shipped builds. |
 | `.p12` password | With the `.p12` | Same command. |
 | Provisioning profile | When it expires or the app ID's capabilities change | Regenerate in the Apple Developer portal, then the same command. |
 | App Store Connect key | If the `.p8` leaks, or to narrow access | Create a new key, re-upload all three API values together, then revoke the old one. `xcode-cloud-logs` holds its own copies of the same three names; update them too if it uses the same key. |
 | Sparkle key | Only if it is compromised | Plan a migration first. Existing installs only trust the current public key. |
 
-## Pitfalls seen in practice
+### Pitfalls seen in practice
 
-- **A one-time setup step was skipped.** The September 2026 move to
-  `release-candidate` required loading secrets into the new environment.
-  That step never ran, so `qualify` failed its environment check with
-  "Candidate signing still requires approval" until the secrets were loaded in
-  November 2026. Run
-  `release-environments.py check --settings` after any change to environments
-  or secrets.
-- **The API key file and key ID came from different keys.** Choosing a `.p8`
-  from a list of similar files is easy to get wrong. Check that the filename
-  contains the key ID you enter.
-- **`generate_keys` reported no Sparkle key.** The key exists under the
-  project's account name; pass `--account`.
-- **A merge landed between the metadata commit and the dispatch.** `qualify`
-  requires the dispatched commit to be the metadata commit itself. Hold merges
-  to `main` until the dispatch qualifies.
+| Symptom | Cause | Fix |
+|---|---|---|
+| `qualify` fails with "Candidate signing still requires approval" | The September 2026 move to `release-candidate` needed its secrets loaded, and that step never ran until November 2026 | Load the secrets, run `release-environments.py apply`, then `check --settings` |
+| Notarization fails to authenticate | The `.p8` file and the key ID came from different keys | Upload the `.p8` whose filename contains the key ID you entered |
+| `generate_keys` reports no Sparkle key | The key is stored under the project's account name | Pass `--account com.cloudcompute.workspaces` |
+| `qualify` fails with "Main advanced beyond the reviewed release notes" | A merge landed between the metadata commit and the dispatch | Prepare a new metadata commit, and hold merges to `main` until the dispatch qualifies |
+| The automatic run fails with "PR #N lacks an independent approving review" | A merged PR has no approval on its final commit, and the automatic path cannot carry an allowlist | Dispatch with `maintainer_reviewed_prs` naming the PRs you vouch for |
 
 ## Further reading
 

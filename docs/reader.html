@@ -858,6 +858,8 @@
 
     function renderInline(markdown) {
       let text = escapeHtml(markdown);
+      const codeSpans = [];
+      text = text.replace(/`([^`]+)`/g, (_, code) => `\u0000${codeSpans.push(code) - 1}\u0000`);
       text = text.replace(/!\[([^\]]*)\]\[([^\]]*)\]/g, (source, alt, id) => {
         const href = referenceDefinitions.get(referenceKey(id || alt));
         if (!href) return source;
@@ -874,10 +876,9 @@
       text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
         return `<a href="${resolveDocHref(href.trim())}">${label}</a>`;
       });
-      text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
       text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-      text = text.replace(/_([^_]+)_/g, "<em>$1</em>");
-      return text;
+      text = text.replace(/(^|[^\w])_([^_]+)_(?!\w)/g, "$1<em>$2</em>");
+      return text.replace(/\u0000(\d+)\u0000/g, (_, index) => `<code>${codeSpans[index]}</code>`);
     }
 
     function isTableStart(lines, index) {
