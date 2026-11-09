@@ -252,19 +252,30 @@ struct CellMetrics {
     /// From the cell's top to the baseline of a glyph centered in it.
     let baseline: CGFloat
 
-    init(fontSize: CGFloat) {
+    @MainActor init(fontSize: CGFloat) {
+        let font = PlatformFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        Self.familyAnchor = Self.familyAnchor ?? font
+        width = ("M" as NSString).size(withAttributes: [.font: font]).width
         #if canImport(UIKit)
-            let font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-            width = ("M" as NSString).size(withAttributes: [.font: font]).width
             height = font.lineHeight.rounded(.up)
             baseline = ((height - (font.ascender - font.descender)) / 2 + font.ascender).rounded()
         #else
-            let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-            width = ("M" as NSString).size(withAttributes: [.font: font]).width
             height = (font.ascender - font.descender + font.leading).rounded(.up)
             baseline = ((height - (font.ascender - font.descender)) / 2 + font.ascender).rounded()
         #endif
     }
+
+    #if canImport(UIKit)
+        typealias PlatformFont = UIFont
+    #else
+        typealias PlatformFont = NSFont
+    #endif
+
+    /// The first font measured, held for the life of the process. After a process
+    /// frees its last system monospaced font, the next request for one has come
+    /// back nil in parallel test runs despite its nonnull signature, and measuring
+    /// with nil raises. Holding one font of the family has kept that from happening.
+    @MainActor private static var familyAnchor: PlatformFont?
 
     /// A one-point line: an underline just under the baseline, a strikethrough
     /// through the middle, as web-next's painter draws them. A cell too short
