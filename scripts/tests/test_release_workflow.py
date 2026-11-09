@@ -92,6 +92,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 self.assertEqual(scope["MAINTAINER_REVIEWED_PRS"], qualified)
                 self.assertIn('--maintainer-reviewed-prs "$MAINTAINER_REVIEWED_PRS"', step["run"])
 
+    def test_candidate_verification_script_checks_the_sealed_allowlist(self):
+        step = next(s for s in JOBS["validate-candidate"]["steps"] if "verify-release-candidate.sh" in s.get("run", ""))
+        scope = {**JOBS["validate-candidate"].get("env", {}), **step.get("env", {})}
+        self.assertEqual(scope["MAINTAINER_REVIEWED_PRS"], "${{ needs.qualify.outputs.maintainer_reviewed_prs }}")
+        script = (ROOT / "scripts/verify-release-candidate.sh").read_text()
+        verify = script[script.index("release-candidate.py verify"):].split("\n\n", 1)[0]
+        self.assertIn('--maintainer-reviewed-prs "${MAINTAINER_REVIEWED_PRS-}"', verify)
+
     def test_perf_gate_grades_the_candidate_version_without_measuring(self):
         step = next(s for s in JOBS["build-sign-notarize-release"]["steps"] if s.get("name") == "Verify release performance benchmarks are current")
         self.assertIn('--tag "$(./scripts/release-version.sh print-tag)"', step["run"])
