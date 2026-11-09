@@ -138,17 +138,22 @@ private final class PTYRecorder {
     let view: GhosttySurfaceView
     private let directory: URL
     private let output: URL
+    private let budget: TimeInterval
 
-    private init(view: GhosttySurfaceView, directory: URL, output: URL) {
+    private init(view: GhosttySurfaceView, directory: URL, output: URL, budget: TimeInterval) {
         self.view = view
         self.directory = directory
         self.output = output
+        self.budget = budget
     }
 
     /// Starts the program and returns once it reports ready through its window title. The
     /// title follows the mode change in the same output stream, so Ghostty has applied the
-    /// mode by the time the title is visible.
+    /// mode by the time the title is visible. The wait budget is measured before the surface
+    /// exists, so the measuring launch never competes with the program it times.
     static func start(_ program: Program) async throws -> PTYRecorder {
+        let budget = await LaunchBudget.deadline(
+            launches: launchesPerWait, floor: waitFloor, ceiling: waitCeiling)
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ghostty-paste-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -157,10 +162,10 @@ private final class PTYRecorder {
         try source(for: program).write(to: script, atomically: true, encoding: .utf8)
 
         let view = GhosttySurfaceView(customCommand: "/bin/sh '\(script.path)' '\(output.path)'")
-        let recorder = PTYRecorder(view: view, directory: directory, output: output)
+        let recorder = PTYRecorder(view: view, directory: directory, output: output, budget: budget)
         try #require(view.surface != nil, "libghostty did not create a surface")
         try #require(
-            await poll { view.terminalTitle == readyTitle },
+            await recorder.poll { view.terminalTitle == readyTitle },
             "the program never reported ready"
         )
         return recorder
@@ -199,7 +204,7 @@ private final class PTYRecorder {
     func received(byteCount: Int) async throws -> String {
         let output = output
         let read = { (try? Data(contentsOf: output)) ?? Data() }
-        let arrived = await Self.poll { read().count >= byteCount }
+        let arrived = await poll { read().count >= byteCount }
         let text = String(decoding: read(), as: UTF8.self)
         try #require(arrived, "the program read fewer than \(byteCount) bytes: \(text.debugDescription)")
         return text
@@ -209,11 +214,28 @@ private final class PTYRecorder {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    /// Waits on an observable change. The ceiling only bounds a failure: a passing run returns
-    /// as soon as the program has answered. A hosted runner has taken 32 s to bring up the
-    /// suite's first surface, so the ceiling sits well clear of that.
-    private static func poll(_ condition: @MainActor () -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(180))
+    /// Each wait covers one program launch (`/bin/sh` running the probe script) and its answer.
+    /// The budget is that many of this machine's measured launch round trips (`LaunchBudget`),
+    /// floored so a fast machine still fails quickly and capped so a pathological baseline
+    /// cannot hang the run.
+    private static let launchesPerWait = 6.0
+    private static let waitFloor: TimeInterval = 30
+    private static let waitCeiling: TimeInterval = 300
+
+    /// Waits on an observable change within the launch-sized budget, widened once on a miss if
+    /// the machine has slowed since it was measured. The budget only bounds a failure: a
+    /// passing run returns as soon as the program has answered.
+    private func poll(_ condition: @MainActor () -> Bool) async -> Bool {
+        if await Self.poll(seconds: budget, condition) { return true }
+        let refreshed = await LaunchBudget.deadline(
+            launches: Self.launchesPerWait, floor: Self.waitFloor, ceiling: Self.waitCeiling,
+            refreshing: true)
+        guard refreshed > budget else { return false }
+        return await Self.poll(seconds: refreshed - budget, condition)
+    }
+
+    private static func poll(seconds: TimeInterval, _ condition: @MainActor () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(seconds))
         while ContinuousClock.now < deadline {
             if condition() { return true }
             try? await Task.sleep(for: .milliseconds(20))
