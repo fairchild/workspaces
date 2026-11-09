@@ -92,6 +92,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 self.assertEqual(scope["MAINTAINER_REVIEWED_PRS"], qualified)
                 self.assertIn('--maintainer-reviewed-prs "$MAINTAINER_REVIEWED_PRS"', step["run"])
 
+    # intent: fix
     def test_candidate_verification_script_checks_the_sealed_allowlist(self):
         step = next(s for s in JOBS["validate-candidate"]["steps"] if "verify-release-candidate.sh" in s.get("run", ""))
         scope = {**JOBS["validate-candidate"].get("env", {}), **step.get("env", {})}
