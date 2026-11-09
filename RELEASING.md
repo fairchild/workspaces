@@ -4,6 +4,10 @@ A release request prepares a signed, notarized installer and its Sparkle feed,
 then waits for one human publication approval. Optional manual testing uses the
 same installer that will ship.
 
+This file is the runbook. For why each credential exists, where the owner keeps
+it, and how the jobs and environments use it, read
+[Apple Signing, Notarization, and How WorkSpaces Ships](docs/development/apple-signing-and-release.md).
+
 ## Normal release
 
 ```bash
@@ -176,6 +180,10 @@ Then test signing:
 
 ### GitHub Actions Setup (for CI/CD)
 
+The model behind this section, with a table mapping each owner-held file to its
+secret and the job that reads it, is in
+[apple-signing-and-release.md](docs/development/apple-signing-and-release.md).
+
 Candidate signing uses `release-candidate`; human publication uses
 `release-publication`. Both allow only `main`, with no tags or wildcards.
 The legacy `release` environment keeps its existing human reviewer protection.
@@ -256,6 +264,8 @@ Preferred setup path:
 
 Notes:
 - The script is idempotent by default and only fills missing candidate secrets/variables. Supply the existing Sparkle private key; generating a new key would break existing installations' update trust.
+- The Sparkle key lives in the login Keychain under the account `com.cloudcompute.workspaces`. Export it with `generate_keys --account com.cloudcompute.workspaces -x <file>` (the tool ships in `.build/artifacts/sparkle/Sparkle/bin/`); without `--account` it reports that no key exists. Check `generate_keys --account com.cloudcompute.workspaces -p` against `SUPublicEDKey` before uploading.
+- The `.p8` filename carries its key ID. Pass the key ID that matches the file you upload.
 - Add `--force` to overwrite existing values.
 - Add `--non-interactive` for CI-friendly usage.
 - Add `--run-release` only to request a tester candidate after successful main CI. It still waits for publication approval; `--watch` waits through that gate.
