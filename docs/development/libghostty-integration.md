@@ -101,6 +101,22 @@ Registered callbacks in `ghostty_runtime_config_s`:
 - updates content scale + framebuffer size on backing/frame changes
 - installs minimal local monitor for `.leftMouseDown` and command `.keyUp`
 
+### Text entry points
+
+Text reaches a surface through one of three libghostty calls, chosen by where it came from:
+
+| Input | Call | Bracketed when the program enabled mode 2004 | Paste protection |
+|---|---|---|---|
+| Typed characters (inside `keyDown`) | `ghostty_surface_key` with `text` | no | no |
+| Pastes: the automation input verb, drag and drop | `ghostty_surface_paste_text` | yes | yes |
+| Cmd+V (Ghostty's `paste_from_clipboard` binding) | Ghostty's clipboard read | yes | yes |
+| IME commit, AppKit insertion outside a key event | `ghostty_surface_text` | yes | no |
+| App-composed launch commands (`SurfaceStore`) | `ghostty_surface_text` | yes | no |
+
+Paste protection holds text containing `\r` or `\n` while the program has not enabled bracketed paste, and text containing the end-of-paste marker `ESC [201~` in any mode. Ghostty then calls `confirm_read_clipboard_cb`. The app has no confirmation UI and declines every request. `GhosttySurfaceTextInputBridge.pasteText` reports the decline to its caller as `heldByPasteProtection`. The automation verb turns that into `invalid_request`, and a held drop slides back. `GhosttySurfacePasteTests` pins each row against a real surface by recording the bytes the program reads.
+
+In a tmux-backed tile Ghostty sees tmux, not the program in the pane. tmux 3.8 enables bracketed paste on its outer terminal when the client starts, whatever the pane asked for, then strips the markers for a pane that has not enabled it. Protection therefore treats multi-line text as safe there, and an unbracketed inner program receives it line by line. tmux reports the pane's own state as `#{bracket_paste_flag}`.
+
 ### Shortcut + split contract (required behavior)
 
 This project depends on the following keyboard behavior:

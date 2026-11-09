@@ -169,16 +169,23 @@ enum GhosttyClipboardBridge {
         }
     }
 
-    /// Ghostty asks for confirmation before serving a read it considers unsafe
-    /// (an OSC 52 sequence, say). This app has no confirmation UI, so the
-    /// request is denied and nothing reaches the terminal.
+    /// Ghostty asks for confirmation before completing a request it considers
+    /// unsafe: an OSC 52 read, or a paste that paste protection holds. This app
+    /// has no confirmation UI, so the request is denied and nothing reaches the
+    /// terminal. A held paste is reported to the text input bridge, whose
+    /// `pasteText` caller learns the paste was declined.
     static func confirmRead(
         userdata: UnsafeMutableRawPointer?,
-        state: UnsafeMutableRawPointer
+        state: UnsafeMutableRawPointer,
+        request: ghostty_clipboard_request_e
     ) {
         let userdataAddress = GhosttyCallbackUserdata.address(from: userdata)
         let surfaceAddress = GhosttyThreadingBridge.runOnMainSync {
-            GhosttyCallbackUserdata.surfaceAddress(from: userdataAddress)
+            let surfaceAddress = GhosttyCallbackUserdata.surfaceAddress(from: userdataAddress)
+            if request == GHOSTTY_CLIPBOARD_REQUEST_PASTE, let surfaceAddress {
+                GhosttySurfaceTextInputBridge.notePasteConfirmationRequested(surfaceAddress: surfaceAddress)
+            }
+            return surfaceAddress
         }
         let surface = GhosttyCallbackUserdata.pointer(from: surfaceAddress)
         guard let surface else { return }

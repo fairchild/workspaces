@@ -425,7 +425,7 @@ final class SurfaceStore: ObservableObject {
         )
 
         guard
-            GhosttySurfaceTextInputBridge.writeAutomationText(
+            GhosttySurfaceTextInputBridge.writeLaunchCommand(
                 into: terminal.surfaceView,
                 text: GhosttyTerminalConfig.tmuxRepairScript(tmuxLaunchScript)),
             GhosttySurfaceTextInputBridge.sendAutomationReturn(into: terminal.surfaceView)
@@ -475,7 +475,7 @@ final class SurfaceStore: ObservableObject {
         // The command reached no shell unless every bridge call succeeds. On any
         // failure (dead surface, dropped write), un-mark the session so a recreated
         // surface retries — nothing ran, so a retry cannot double-run the agent.
-        var delivered = GhosttySurfaceTextInputBridge.writeAutomationText(
+        var delivered = GhosttySurfaceTextInputBridge.writeLaunchCommand(
             into: terminal.surfaceView, text: initialCommand)
         if delivered, delivery == .execute {
             delivered = GhosttySurfaceTextInputBridge.sendAutomationReturn(into: terminal.surfaceView)

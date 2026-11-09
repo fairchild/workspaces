@@ -878,10 +878,20 @@ final class AutomationController: AutomationControlling {
                 "The automation handle no longer maps to a live terminal surface."
             )
         }
-        guard GhosttySurfaceTextInputBridge.writeAutomationText(into: terminal, text: text) else {
+        switch GhosttySurfaceTextInputBridge.pasteText(into: terminal, text: text) {
+        case .delivered:
+            break
+        case .noSurface:
             throw AutomationServiceError(.staleHandle, "The terminal surface is not ready to receive input.")
+        case .heldByPasteProtection:
+            // Delivered, the text could run commands (unframed newlines, or an end-of-paste
+            // marker escaping the frame); `input.write` never executes without `submit`.
+            throw AutomationServiceError(
+                .invalidRequest,
+                "Paste protection held the text, so nothing was written. Either it contains a line break while the program in this terminal has not enabled bracketed paste, so each line would run as a command (send one line per request, or retry once the program accepts bracketed paste, as a shell does at its prompt), or it contains an end-of-paste marker (ESC [ 201 ~), which is never accepted."
+            )
         }
-        // Submit goes through the key-event path, not an appended "\r": the text path is a paste,
+        // Submit goes through the key-event path, not an appended "\r": the text lands as a paste,
         // and bracketed paste turns an embedded CR into a literal newline instead of accept-line.
         if submit, !GhosttySurfaceTextInputBridge.sendAutomationReturn(into: terminal) {
             throw AutomationServiceError(.staleHandle, "The terminal surface dropped before the submit key.")

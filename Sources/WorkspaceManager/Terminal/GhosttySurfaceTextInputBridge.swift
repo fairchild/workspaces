@@ -2,12 +2,35 @@
 //  GhosttySurfaceTextInputBridge.swift
 //  WorkspaceManager
 //
+//  Every way text reaches a libghostty surface without a physical key: IME commits through
+//  `ghostty_surface_text`, pastes (the automation input verb, drag and drop) through
+//  `ghostty_surface_paste_text` so Ghostty's paste protection applies, and app-authored launch
+//  commands through `ghostty_surface_text`, which is trusted and skips that protection.
+//
 
 import AppKit
 import GhosttyKit
 
+/// What happened to text offered to a surface as a paste.
+enum GhosttyPasteOutcome: Equatable {
+    case delivered
+    /// Ghostty's paste protection asked to confirm the paste: multi-line text while the program
+    /// has not enabled bracketed paste (each line would run as a command), or text carrying an
+    /// end-of-paste marker. The app has no confirmation UI, so it declines and nothing is sent.
+    case heldByPasteProtection
+    case noSurface
+}
+
 @MainActor
 enum GhosttySurfaceTextInputBridge {
+    /// The surface a `pasteText` call is delivering into, and whether Ghostty asked to confirm
+    /// it. `ghostty_surface_paste_text` raises that request synchronously on the calling
+    /// thread, so the clipboard bridge's confirm callback lands here before the call returns.
+    private static var pasteInFlight: (surfaceAddress: UInt, held: Bool)?
+
+    /// IME commit path, and AppKit text insertion outside a key event (the emoji picker,
+    /// dictation). Inside `keyDown` the text joins the key event instead, so typed characters go
+    /// through Ghostty's key encoder rather than either text entry point.
     static func insertText(into view: GhosttySurfaceView, string: Any, replacementRange: NSRange) {
         _ = replacementRange
 
@@ -31,10 +54,35 @@ enum GhosttySurfaceTextInputBridge {
         }
     }
 
-    /// Automation write path: delivers text straight to the live libghostty surface, bypassing the
-    /// `keyTextAccumulator` IME diversion that keyboard-driven inserts honor. Returns false when the
-    /// view has no live surface to receive the bytes.
-    static func writeAutomationText(into view: GhosttySurfaceView, text: String) -> Bool {
+    /// Paste path for text the user or an automation caller hands over whole: the automation
+    /// input verb and drag and drop. Ghostty frames it in bracketed-paste markers when the
+    /// program enabled mode 2004 and applies paste protection, which this app always declines.
+    /// Goes straight to the live surface, bypassing the `keyTextAccumulator` IME diversion, so a
+    /// half-composed keyboard event cannot swallow it.
+    static func pasteText(into view: GhosttySurfaceView, text: String) -> GhosttyPasteOutcome {
+        guard let surface = view.surface else { return .noSurface }
+        let surfaceAddress = UInt(bitPattern: surface)
+        pasteInFlight = (surfaceAddress, false)
+        defer { pasteInFlight = nil }
+        text.withCString { pointer in
+            ghostty_surface_paste_text(surface, pointer, UInt(text.utf8.count))
+        }
+        return pasteInFlight?.held == true ? .heldByPasteProtection : .delivered
+    }
+
+    /// Called from Ghostty's confirm-paste callback, which declines every request. Marks an
+    /// in-flight `pasteText` into the same surface as held; a confirmation raised outside one
+    /// (a clipboard paste from a key binding) has no caller waiting on it.
+    static func notePasteConfirmationRequested(surfaceAddress: UInt) {
+        guard pasteInFlight?.surfaceAddress == surfaceAddress else { return }
+        pasteInFlight?.held = true
+    }
+
+    /// Launch path for commands the app itself composed (a session's initial command, the tmux
+    /// repair script). They skip paste protection: the app wrote them, no one is placed to
+    /// confirm them, and they can land before the shell has enabled bracketed paste. Ghostty
+    /// still delivers them as a paste. Returns false when the view has no live surface.
+    static func writeLaunchCommand(into view: GhosttySurfaceView, text: String) -> Bool {
         guard let surface = view.surface else { return false }
         text.withCString { pointer in
             ghostty_surface_text(surface, pointer, UInt(text.utf8.count))
@@ -42,10 +90,10 @@ enum GhosttySurfaceTextInputBridge {
         return true
     }
 
-    /// Automation submit path: presses and releases Return through the key-event pipeline.
-    /// `ghostty_surface_text` treats its payload as a paste, so a CR appended to the text arrives
-    /// inside the bracketed-paste envelope and shells insert it literally instead of executing.
-    /// A synthetic key event encodes CR outside any paste envelope, matching a physical Return.
+    /// Submit path: presses and releases Return through the key-event pipeline. Both text entry
+    /// points deliver a paste, so a CR appended to the text would arrive inside the
+    /// bracketed-paste envelope and shells would insert it literally instead of executing. A
+    /// synthetic key event encodes CR outside any paste envelope, matching a physical Return.
     static func sendAutomationReturn(into view: GhosttySurfaceView) -> Bool {
         guard let surface = view.surface else { return false }
         for action in [GHOSTTY_ACTION_PRESS, GHOSTTY_ACTION_RELEASE] {

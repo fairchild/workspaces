@@ -536,8 +536,8 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
         }
 
         TerminalFocusManager.shared.requestFocus(for: self)
-        insertText(content, replacementRange: NSRange(location: 0, length: 0))
-        return true
+        // A drop paste-protection holds returns false, so AppKit slides the drag back.
+        return GhosttySurfaceTextInputBridge.pasteText(into: self, text: content) == .delivered
     }
 
     // MARK: - Keyboard input

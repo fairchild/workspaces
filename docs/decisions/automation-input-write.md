@@ -39,14 +39,26 @@ Add `POST /v1/input/write` guarded by a new `input.write` capability.
   off.
 - **Bounded payloads.** `text` must be a non-empty string of at most 32 KiB
   UTF-8. No transformation is applied to the text.
-- **Submit is a synthetic Return key, not an appended `\r`.** The text path
-  (`ghostty_surface_text`) treats its payload as a paste, so with bracketed
+- **Submit is a synthetic Return key, not an appended `\r`.** The text is
+  delivered as a paste (`ghostty_surface_paste_text`), so with bracketed
   paste on (default in zsh) an embedded CR is inserted literally instead of
   executing. `submit: true` therefore delivers the text first, then a
   press/release of Return through the key-event path
   (`ghostty_surface_key`), which encodes CR outside any paste envelope —
   exactly what a physical Enter produces. Found by interactive smoke on the
   first implementation, which appended `\r` to the paste payload.
+- **Paste protection fails closed.** The paste goes through Ghostty's paste
+  protection. Text containing a line break, sent while the program has not enabled
+  bracketed paste, would reach it unframed, and each line would run as a
+  command. `input.write` never executes without `submit`, and the app has no
+  confirmation UI for an automation caller, so the request fails
+  `invalid_request` and writes nothing. Text carrying an end-of-paste marker
+  fails the same way, bracketed or not. Bypassing the protection would let a
+  type-only request run commands; holding the paste silently would report a
+  write that never happened. In a tmux-backed tile the protection judges the
+  mode tmux sets on its outer terminal, which is on from client start, not the
+  mode of the program in the pane, so multi-line text still reaches an
+  unbracketed inner program there.
 - **Content-free audit.** The listener's audit log records route-level
   metadata and error codes for every allowed and denied request, and never
   the written text — the same contract the audit stream already documents.

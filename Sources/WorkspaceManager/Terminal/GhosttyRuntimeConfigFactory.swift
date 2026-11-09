@@ -27,8 +27,8 @@ enum GhosttyRuntimeConfigFactory {
                     includeAvailableMIMEs: wantsAvailable
                 )
             },
-            confirm_read_clipboard_cb: { userdata, _, state, _ in
-                GhosttyClipboardBridge.confirmRead(userdata: userdata, state: state)
+            confirm_read_clipboard_cb: { userdata, _, state, request in
+                GhosttyClipboardBridge.confirmRead(userdata: userdata, state: state, request: request)
             },
             write_clipboard_cb: { userdata, location, content, len, _ in
                 GhosttyClipboardBridge.write(userdata: userdata, location: location, content: content, len: len)
