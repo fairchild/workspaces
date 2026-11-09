@@ -38,8 +38,9 @@ for notarization, green for Sparkle.
 
 ### Identity: the Developer ID certificate
 
-An Apple Developer Program membership gives a team (WorkSpaces ships from team
-`LKVN4J3C6C`) the right to create a **Developer ID Application** certificate.
+An Apple Developer Program membership gives a team the right to create a
+[**Developer ID Application**](https://developer.apple.com/developer-id/)
+certificate ([how to create one](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/)).
 That certificate type is the one Apple accepts for apps distributed outside the
 App Store; Apple Development and Mac App Distribution certificates do not
 notarize.
@@ -54,29 +55,41 @@ encrypted with an export password.
 
 Developer ID certificates are valid for five years. Because each signature
 carries a secure timestamp, apps signed before expiry keep opening afterwards;
-only new signing needs a renewed certificate.
+only new signing needs a renewed certificate. Apple's
+[Developer ID page](https://developer.apple.com/developer-id/) and
+[certificates overview](https://developer.apple.com/help/account/certificates/certificates-overview)
+describe expiry and revocation.
 
 ### The code signature
 
 `codesign` seals each executable in the bundle, innermost first (embedded
 frameworks such as Sparkle, then the app), so any later change to a signed file
-breaks the seal. Two options matter for distribution:
+breaks the seal. Apple's
+[Code Signing Guide](https://developer.apple.com/library/archive/documentation/Security/Conceptual/CodeSigningGuide/Introduction/Introduction.html)
+is archived but still the clearest account of what a signature covers. Two
+options matter for distribution:
 
-- `--options runtime` enables the **hardened runtime**, which notarization
-  requires. Exceptions the app genuinely needs, such as JIT for the terminal
+- `--options runtime` enables the
+  [**hardened runtime**](https://developer.apple.com/documentation/security/hardened-runtime),
+  which notarization requires. Exceptions the app genuinely needs, such as JIT for the terminal
   renderer, are declared as entitlements rather than by turning protection off.
 - `--timestamp` asks Apple's timestamp server to countersign, which is what
   keeps the signature valid past certificate expiry.
 
 ### Entitlements and the provisioning profile
 
-**Entitlements** are capabilities the signature claims for the app. Most are
-self-declared in [`WorkspaceManager.entitlements`](../../WorkspaceManager.entitlements).
-A few are restricted: Apple must grant them for a specific app ID, and the grant
-travels as a **provisioning profile** embedded in the bundle.
+[**Entitlements**](https://developer.apple.com/documentation/bundleresources/entitlements)
+are capabilities the signature claims for the app. Most are self-declared in
+[`WorkspaceManager.entitlements`](../../WorkspaceManager.entitlements). A few are
+restricted: Apple must grant them for a specific app ID, and the grant travels
+as a **provisioning profile** embedded in the bundle
+([TN3125: Inside Code Signing: Provisioning Profiles](https://developer.apple.com/documentation/technotes/tn3125-inside-code-signing-provisioning-profiles)).
 
-WorkSpaces needs one restricted entitlement, `keychain-access-groups`, because
-it keeps credentials in the data protection keychain. The Developer ID
+WorkSpaces needs one restricted entitlement,
+[`keychain-access-groups`](https://developer.apple.com/documentation/bundleresources/entitlements/keychain-access-groups),
+because it keeps credentials in the data protection keychain
+([TN3137: On Mac keychain APIs and implementations](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains)
+explains the two Mac keychains). The Developer ID
 provisioning profile for `com.cloudcompute.workspaces` carries that grant. An
 unsigned or ad-hoc local build has no profile, so it falls back to the legacy
 login keychain at runtime. Before signing, `scripts/build-release.sh` checks
@@ -86,15 +99,19 @@ never claims a group the profile does not grant.
 
 ### Notarization
 
-**Notarization** is an automated Apple service. The pipeline uploads the signed
-DMG with `xcrun notarytool`; Apple scans it for malware and for signing
+[**Notarization**](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
+is an automated Apple service. The pipeline uploads the signed DMG with
+`xcrun notarytool`
+([Customizing the notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)
+covers the command line); Apple scans it for malware and for signing
 mistakes (missing hardened runtime, unsigned nested code, no timestamp) and, if
 it passes, issues a **ticket** for that exact file. `xcrun stapler staple`
 attaches the ticket to the DMG so Gatekeeper can verify it without a network
 connection.
 
-`notarytool` authenticates with an **App Store Connect API key**, not an Apple
-ID password. A key is three values that must belong together:
+`notarytool` authenticates with an
+[**App Store Connect API key**](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api),
+not an Apple ID password. A key is three values that must belong together:
 
 | Value | What it is | Where it appears |
 |---|---|---|
@@ -107,22 +124,31 @@ A team can have many keys, each with its own access level, and other tools
 
 > **The `.p8` file and the key ID must name the same key.** A mismatched pair fails notarization with an authentication error, not a signing error. The key ID is in the file's name.
 
+When Apple rejects a submission for a signing reason rather than an
+authentication one, its log names the file and the rule;
+[Resolving common notarization issues](https://developer.apple.com/documentation/security/resolving-common-notarization-issues)
+maps each rule to its fix.
+
 ### Gatekeeper
 
-On first launch Gatekeeper checks the signature against Apple's certificate
-chain, then looks for a notarization ticket, stapled or fetched from Apple.
+On first launch
+[Gatekeeper](https://support.apple.com/guide/security/gatekeeper-and-runtime-protection-sec5599b66df/web)
+checks the signature against Apple's certificate chain, then looks for a
+notarization ticket, stapled or fetched from Apple.
 `spctl --assess` runs the same check from a terminal, and the pipeline runs it
 on every candidate.
 
 ## Part 2 · Sparkle, a separate trust chain
 
-Sparkle checks updates with an **EdDSA key pair** that has nothing to do with
-Apple:
+Sparkle checks updates with an
+[**EdDSA key pair**](https://sparkle-project.org/documentation/#3-segue-for-security-concerns)
+that has nothing to do with Apple:
 
 1. The public key ships inside every copy of the app as `SUPublicEDKey` in
    `Info.plist`.
 2. The private key signs each release DMG. The signature goes into
-   `appcast.xml`, the feed at `SUFeedURL` that installed apps poll.
+   `appcast.xml`, the feed at `SUFeedURL` that installed apps poll
+   ([Publishing an update](https://sparkle-project.org/documentation/publishing/)).
 3. An installed app refuses any update whose signature does not verify against
    the public key it already has.
 
@@ -161,11 +187,16 @@ uploads them, verifying the `.p12` first.
 
 > **GitHub secrets are write-only.** Nothing, including the API, can read a value back. A secret that is wrong or lost is replaced by uploading it again from the owner's copy.
 
+GitHub's [Using secrets in GitHub Actions](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)
+covers how secrets are stored and masked in logs.
+
 ### How a release runs
 
 `scripts/release.py` opens a metadata PR that changes only `CHANGELOG.md` and
 `Info.plist`. Once it merges and CI passes on that exact commit,
-`.github/workflows/release.yml` runs five jobs in order:
+`.github/workflows/release.yml` runs five jobs in order. It starts from a
+[`workflow_run`](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)
+event when CI completes, or from `workflow_dispatch` when the owner starts it.
 
 ![Five jobs left to right: Qualify, Build sign notarize, Validate candidate, Publish, Validate published. A dashed amber zone marks the build job as the only one in release-candidate, holding seven signing secrets. A dashed blue zone marks Publish as release-publication, where the owner approves and no secrets exist. A bracket under the first three jobs reads: before approval, build, sign and test the exact bytes that would ship. A bracket under the last two reads: after approval, publish those bytes, then check what users get.](../assets/signing/release-pipeline.svg)
 
@@ -183,8 +214,10 @@ start building one.
 
 ### Why three environments
 
-A GitHub **environment** scopes secrets and approval rules to the jobs that
-declare it. Repository-wide secrets would be readable by any workflow on any
+A GitHub
+[**environment**](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
+scopes secrets and approval rules (required reviewers, branch policies) to the
+jobs that declare it. Repository-wide secrets would be readable by any workflow on any
 branch; environment secrets are readable only by a job that names the
 environment and passes its branch policy.
 
@@ -244,9 +277,29 @@ still needs a real approval on every PR.
 
 ## Further reading
 
+In this repo:
+
 - [`RELEASING.md`](../../RELEASING.md): commands, recovery, and verification
 - [Release approval retrospective](../retros/2026-09-07-release-approval-contract.md):
   why signing moved ahead of the approval
-- Apple: [Notarizing macOS software before distribution](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
-- Apple: [Developer ID](https://developer.apple.com/developer-id/)
-- Sparkle: [Publishing an update](https://sparkle-project.org/documentation/publishing/)
+
+Apple:
+
+- [Developer ID](https://developer.apple.com/developer-id/) and
+  [Create Developer ID certificates](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/)
+- [Notarizing macOS software before distribution](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution),
+  [Customizing the notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow),
+  [Resolving common notarization issues](https://developer.apple.com/documentation/security/resolving-common-notarization-issues)
+- [Hardened Runtime](https://developer.apple.com/documentation/security/hardened-runtime),
+  [Entitlements](https://developer.apple.com/documentation/bundleresources/entitlements),
+  [TN3125: Provisioning Profiles](https://developer.apple.com/documentation/technotes/tn3125-inside-code-signing-provisioning-profiles)
+- [Creating API keys for App Store Connect API](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api)
+- [Gatekeeper and runtime protection](https://support.apple.com/guide/security/gatekeeper-and-runtime-protection-sec5599b66df/web)
+  (Apple Platform Security)
+
+Sparkle and GitHub:
+
+- Sparkle: [Documentation](https://sparkle-project.org/documentation/) and
+  [Publishing an update](https://sparkle-project.org/documentation/publishing/)
+- GitHub: [Managing environments for deployment](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
+  and [Using secrets in GitHub Actions](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)
