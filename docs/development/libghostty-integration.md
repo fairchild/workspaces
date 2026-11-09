@@ -3,6 +3,11 @@
 This document is the canonical reference for the WorkspaceManager terminal
 integration with GhosttyKit (`libghostty`).
 
+Status as of 2026-11-08: this guide covers the desktop GhosttyKit build, whose
+pin is `GHOSTTY_COMMIT` in `scripts/build-ghosttykit.sh` (`scripts/build-ghosttykit.sh
+--print-pin` prints it). The mobile and web libghostty-vt pins are separate; see
+[ghostty-pins.md](ghostty-pins.md) for all three.
+
 ## Why This Exists
 
 `libghostty` is powerful but still evolving. The public C API and generated
