@@ -24,9 +24,20 @@ struct RepoLandingView: View {
     /// Both lists below sit in `body`, and the agent-status poll re-runs it on its own clock,
     /// so the orderings are memoized behind their inputs the same way the sidebar's are (#1366).
     @State private var orderCache = MainWindowOrderCache()
+    /// Collapsed by default, per repo, matching the sidebar's archived pill: archived work is
+    /// the least of what a repo overview is about.
+    @State private var expandedArchivedRepoIDs: Set<UUID> = []
 
-    private var sortedWorkspaces: [Workspace] {
-        orderCache.workspaces(for: repo)
+    private var activeWorkspaces: [Workspace] {
+        orderCache.activeWorkspaces(for: repo)
+    }
+
+    private var archivedWorkspaces: [Workspace] {
+        orderCache.archivedWorkspaces(for: repo)
+    }
+
+    private var isArchivedExpanded: Bool {
+        expandedArchivedRepoIDs.contains(repo.id)
     }
 
     private var sortedRepoWebSources: [WebSource] {
@@ -66,9 +77,14 @@ struct RepoLandingView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                Text("\(sortedWorkspaces.count) workspace\(sortedWorkspaces.count == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(
+                    Self.workspaceCountSummary(
+                        active: activeWorkspaces.count,
+                        archived: archivedWorkspaces.count
+                    )
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Spacer()
@@ -100,6 +116,9 @@ struct RepoLandingView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 workspacesSection
+                if !archivedWorkspaces.isEmpty {
+                    archivedSection
+                }
                 webViewsSection
             }
             .padding(20)
@@ -110,14 +129,9 @@ struct RepoLandingView: View {
         VStack(alignment: .leading, spacing: 14) {
             sectionHeader("Workspaces")
 
-            let columns = [GridItem(.adaptive(minimum: 220, maximum: 280), spacing: 16)]
-            LazyVGrid(columns: columns, spacing: 16) {
-                ForEach(sortedWorkspaces) { workspace in
-                    WorkspaceCardView(
-                        workspace: workspace,
-                        agentStatus: agentStatuses[workspace.id] ?? .inactive,
-                        onSelect: { onWorkspaceSelected(workspace) }
-                    )
+            LazyVGrid(columns: Self.cardColumns, spacing: 16) {
+                ForEach(activeWorkspaces) { workspace in
+                    workspaceCard(workspace)
                 }
 
                 NewWorkspaceCardView {
@@ -125,6 +139,43 @@ struct RepoLandingView: View {
                 }
             }
         }
+    }
+
+    private var archivedSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ArchivedSectionHeader(count: archivedWorkspaces.count, isExpanded: isArchivedExpanded) {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    if isArchivedExpanded {
+                        expandedArchivedRepoIDs.remove(repo.id)
+                    } else {
+                        expandedArchivedRepoIDs.insert(repo.id)
+                    }
+                }
+            }
+
+            if isArchivedExpanded {
+                LazyVGrid(columns: Self.cardColumns, spacing: 16) {
+                    ForEach(archivedWorkspaces) { workspace in
+                        workspaceCard(workspace)
+                    }
+                }
+            }
+        }
+    }
+
+    private static let cardColumns = [GridItem(.adaptive(minimum: 220, maximum: 280), spacing: 16)]
+
+    private func workspaceCard(_ workspace: Workspace) -> some View {
+        WorkspaceCardView(
+            workspace: workspace,
+            agentStatus: agentStatuses[workspace.id] ?? .inactive,
+            onSelect: { onWorkspaceSelected(workspace) }
+        )
+    }
+
+    static func workspaceCountSummary(active: Int, archived: Int) -> String {
+        let live = "\(active) workspace\(active == 1 ? "" : "s")"
+        return archived == 0 ? live : "\(live) · \(archived) archived"
     }
 
     private var webViewsSection: some View {
@@ -189,7 +240,7 @@ struct RepoLandingView: View {
     private func pollAgentStatuses() async {
         while !Task.isCancelled {
             let directories = Dictionary(
-                uniqueKeysWithValues: sortedWorkspaces.map { ($0.id, $0.workspaceURL) }
+                uniqueKeysWithValues: activeWorkspaces.map { ($0.id, $0.workspaceURL) }
             )
             let statuses = await processMonitor.detectAgents(in: directories)
             await MainActor.run {
@@ -295,6 +346,46 @@ struct WorkspaceCardView: View {
                 .padding(.vertical, 2)
                 .background(Color.gray.opacity(0.08), in: Capsule())
         }
+    }
+}
+
+// MARK: - Archived Section Header
+
+/// The lid over a repo's archived workspaces on its overview: the section title, a count, and a
+/// chevron in one button. Value-shaped so a still render can stage both states.
+struct ArchivedSectionHeader: View {
+    let count: Int
+    let isExpanded: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 8) {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 10)
+
+                Text("Archived")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+
+                Text("\(count)")
+                    .font(.caption.weight(.medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Color.secondary.opacity(0.12), in: Capsule())
+
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Archived workspaces, \(count)")
+        .accessibilityValue(isExpanded ? "expanded" : "collapsed")
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
