@@ -266,6 +266,28 @@ struct TileTreeStoreTests {
             controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains("will end it"))
     }
 
+    @Test("The close prompt warns when closing a tab ends one of its splits")
+    func closePromptCountsSplits() throws {
+        let store = TileTreeStore()
+        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        let controller = MainWindowTerminalSessionController()
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
+        #expect(
+            controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains("keeps running"))
+
+        store.tmuxOwnershipLedger.record(
+            hostSessionID: split.id,
+            identity: TmuxLiveSession(
+                sessionID: "$9", name: try #require(split.tmuxSessionNameOverride),
+                createdAt: Date(timeIntervalSince1970: 100), serverPID: 4242),
+            launchedAt: Date(timeIntervalSince1970: 100)
+        )
+        #expect(
+            controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains("will end it"))
+    }
+
     /// Tabs recorded before they had names of their own share their primary's. Relaunching
     /// both onto it would carry the mirror forward, so the selected tab keeps the live session
     /// and the rest move to scoped names — and nothing is killed to get there.

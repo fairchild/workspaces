@@ -1130,10 +1130,15 @@ final class TileTreeStore: ObservableObject {
         return sessionName
     }
 
-    /// Whether closing `session`'s tab leaves its tmux session running: a local tmux-mode tab
-    /// whose session close does not reclaim — the scope's directory-derived one, or a scoped
-    /// one this run never recorded launching, which teardown cannot attribute and leaves alone.
+    /// Whether closing `session`'s tab leaves every tmux session it holds running. Closing a
+    /// primary also tears down its splits, so each of them must survive too.
     func closeLeavesTmuxSessionRunning(_ session: HostTerminalSession) -> Bool {
+        ([session] + splitSessions(forPrimarySessionID: session.id)).allSatisfy(teardownLeavesTmuxSessionRunning)
+    }
+
+    /// A local tmux-mode session whose teardown does not reclaim: the scope's directory-derived
+    /// one, or a scoped one this run never recorded launching, which teardown cannot attribute.
+    private func teardownLeavesTmuxSessionRunning(_ session: HostTerminalSession) -> Bool {
         guard !session.isRemote, resolveTerminalMultiplexingMode() == .tmuxPerSession else { return false }
         return paneScopedTmuxSessionNameToKill(for: session) == nil
             || tmuxOwnershipLedger.ownership(forHostSessionID: session.id) == nil
