@@ -60,6 +60,7 @@ run_drill_pass() {
     snapshot_processes before
     capture_window "$APP_PID" "$APP_WINDOW_ID" "$PASS_DIR/before-kill.png" || true
     capture_app_log before
+    freeze_tile_setup
 
     kill_holder "$PASS_KILL_ORDER" "$TMUX_LABEL" "$PASS_DIR"
     set_phase after
@@ -207,6 +208,21 @@ stub_starts() {
     jq -c 'select(.event == "start" and .source == "startup")' "$ledger"
 }
 
+freeze_tile_setup() {
+    local entry
+    : >"$PASS_DIR/autorun-withdrawn.txt"
+    for entry in "$ISOLATED_HOME"/.drill/autorun/*/*.cmd; do
+        [[ -f "$entry" ]] || continue
+        mv "$entry" "$entry.withdrawn" 2>/dev/null || continue
+        printf '%s: %s\n' "$(basename "$entry")" "$(cat "$entry.withdrawn")" >>"$PASS_DIR/autorun-withdrawn.txt"
+    done
+    stub_starts >"$PASS_DIR/stub-starts-before.jsonl"
+}
+
+tile_starts() {
+    cat "$PASS_DIR/stub-starts-before.jsonl" 2>/dev/null || true
+}
+
 snapshot_state() {
     local phase="$1"
     local database
@@ -320,7 +336,7 @@ wait_for_restore_settle() {
         missing=0
         while IFS= read -r conversation_id; do
             [[ -n "$(prefills_for "$conversation_id")" ]] || missing=$((missing + 1))
-        done < <(stub_starts | jq -r '.conversation_id')
+        done < <(tile_starts | jq -r '.conversation_id')
         ((missing > 0)) || return 0
         sleep 2
         waited=$((waited + 2))
@@ -360,7 +376,7 @@ record_tile_row() {
     local tile="$1" effort="$2" turn="$3"
     local start conversation_id cwd host_session_id prefill_sources hook_socket launch_record
     local assignment own_hosts claimed_hosts rendered fresh other_resumes
-    start="$(stub_starts | jq -c --arg effort "$effort" 'select(.effort == $effort)' | sed -n 1p)"
+    start="$(tile_starts | jq -c --arg effort "$effort" 'select(.effort == $effort)' | sed -n 1p)"
     if [[ -z "$start" ]]; then
         jq -nc --arg pass "$PASS_ID" --arg mode "$PASS_MODE" --arg flag "$PASS_FLAG" \
             --arg kill_order "$PASS_KILL_ORDER" --arg tile "$tile" --arg reason "$(not_started_reason "$tile")" \
@@ -455,11 +471,12 @@ restored_session_ids() {
 }
 
 not_started_reason() {
-    local logs
+    local logs withdrawn
     logs="$(cat "$ISOLATED_HOME"/.drill/observe/split-*.log 2>/dev/null | tr '\n' ' ')"
+    withdrawn="$(tr '\n' ' ' <"$PASS_DIR/autorun-withdrawn.txt" 2>/dev/null || true)"
     case "$1" in
-        split | mid_turn) echo "the stub agent for this tile never started; queued split output: ${logs:-none}" ;;
-        *) echo "the stub agent for this tile never started" ;;
+        split | mid_turn) echo "the stub agent for this tile never started before the kill; queued split output: ${logs:-none}; setup commands withdrawn before the kill: ${withdrawn:-none}" ;;
+        *) echo "the stub agent for this tile never started before the kill" ;;
     esac
 }
 

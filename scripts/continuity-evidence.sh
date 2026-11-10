@@ -531,6 +531,8 @@ build_isolation_env() {
     )
     if [[ "$flag" == on ]]; then
         ISOLATION_ENV+=("WORKSPACES_RESTORE_SESSIONS_ON_LAUNCH=1" "WORKSPACES_RESTORE_AUTORUN=1")
+    else
+        ISOLATION_ENV+=("WORKSPACES_RESTORE_SESSIONS_ON_LAUNCH=0" "WORKSPACES_RESTORE_AUTORUN=0")
     fi
     printf '%s\n' "${ISOLATION_ENV[@]}" >"$PASS_DIR/isolation-env.txt"
 }
