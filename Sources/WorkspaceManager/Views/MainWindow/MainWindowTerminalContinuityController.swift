@@ -84,19 +84,20 @@ struct MainWindowTerminalContinuityController {
         launchURL: URL
     ) {
         let inputs = continuityInputs
+        let terminalMode = dependencies.terminalMode()
         let manifest = TerminalContinuityManifest(
             targetKind: targetKind,
             targetID: targetID,
             rootURL: rootURL,
             launchURL: launchURL,
-            terminalMode: dependencies.terminalMode(),
+            terminalMode: terminalMode,
             sessions: inputs.sessions,
             activeSessionID: inputs.activeSessionID,
             activeSessionIDByScopeKey: inputs.activeSessionIDByScopeKey
         )
         dependencies.manifestRawValue.wrappedValue = manifest.rawValue
         terminalContinuityLog.info(
-            "[TerminalContinuity] persisted kind=\(targetKind.rawValue, privacy: .public) id=\(targetID.uuidString, privacy: .public) root=\(manifest.rootPath, privacy: .public) launch=\(manifest.launchPath, privacy: .public) tmux_session=\(manifest.tmuxSessionName, privacy: .public) mode=\(manifest.terminalMode.rawValue, privacy: .public)"
+            "[TerminalContinuity] persisted kind=\(targetKind.rawValue, privacy: .public) id=\(targetID.uuidString, privacy: .public) root=\(manifest.rootPath, privacy: .public) launch=\(manifest.launchPath, privacy: .public) tmux_session=\(manifest.tmuxSessionName, privacy: .public) mode=\(terminalMode.rawValue, privacy: .public)"
         )
     }
 
@@ -129,6 +130,7 @@ struct MainWindowTerminalContinuityController {
         let workspaces = dependencies.repos().flatMap(\.workspaces).filter {
             $0.backendIdentifier == ComposeWorkspaceProvider.identifier && $0.status != .archived
         }
+        let newSessionMode = dependencies.tileTreeStore.resolveTerminalMultiplexingMode
         var validated: [UUID: HostTerminalSession] = [:]
         for record in manifest.sessionRecords {
             guard case .backendSession(let providerID, _) = record.key,
@@ -140,7 +142,8 @@ struct MainWindowTerminalContinuityController {
                 guard spec.sessionKey == record.key, spec.customCommand != nil else { continue }
                 validated[record.id] = HostTerminalSession(
                     id: record.id, key: spec.sessionKey, directory: spec.workingDirectory,
-                    terminalMode: manifest.terminalMode, customCommand: spec.customCommand
+                    terminalMode: manifest.terminalMode(for: record, terminalModeForNewSession: newSessionMode),
+                    customCommand: spec.customCommand
                 )
             } catch {
                 terminalContinuityLog.error(
@@ -151,7 +154,8 @@ struct MainWindowTerminalContinuityController {
         return manifest.hostSessionSnapshot(
             excludingScopeKeys: archivedWorkspaceScopeKeys,
             validatedProviderSessions: validated,
-            includeHostSessions: includeHostSessions
+            includeHostSessions: includeHostSessions,
+            terminalModeForNewSession: newSessionMode
         )
     }
 
