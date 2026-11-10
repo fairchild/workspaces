@@ -143,7 +143,7 @@ struct MainWindowRestoreController {
         Set(
             plan.surfaces.compactMap { surface -> String? in
                 guard case .resumeClaude = surface.action else { return nil }
-                return sessionName(surface.directory)
+                return surface.launchTmuxSessionName ?? sessionName(surface.directory)
             }
         )
     }
@@ -194,16 +194,21 @@ struct MainWindowRestoreController {
             effort = lastEfforts[agentSessionID]
         }
         guard let command = initialCommand(for: surface.action, effort: effort) else { return nil }
-        guard !liveSessionNames.contains(sessionName(surface.directory)) else { return nil }
+        guard !liveSessionNames.contains(surface.launchTmuxSessionName ?? sessionName(surface.directory)) else {
+            return nil
+        }
         return command
     }
 
     /// The tmux session name a restored surface must launch on, or `nil` to derive from the
     /// launch directory. A reattach surface targets the probed name from its continuity row —
     /// re-deriving from the directory would start a fresh session in the fallback directory
-    /// and strand the surviving one whenever the recorded directory is gone (#1233).
-    func tmuxSessionNameOverride(for action: RestoreSurfaceAction) -> String? {
-        guard case .reattachTmux(let sessionName) = action else { return nil }
+    /// and strand the surviving one whenever the recorded directory is gone (#1233). A surface
+    /// with a name of its own launches on the name the plan gave it.
+    func tmuxSessionNameOverride(for surface: RestoreSurfacePlan) -> String? {
+        guard case .reattachTmux(let sessionName) = surface.action else {
+            return surface.launchTmuxSessionName
+        }
         return sessionName
     }
 

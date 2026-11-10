@@ -1172,14 +1172,15 @@ struct ContentView: View {
                     forceCloseTerminalTab(sessionID: confirmation.sessionID)
                 }
                 Button("Cancel", role: .cancel) {
+                    if let sessionID = viewState.terminalCloseConfirmation?.sessionID {
+                        tileTreeStore.forgetCloseRequest(sessionID)
+                    }
                     viewState.terminalCloseConfirmation = nil
                 }
             } message: {
                 Text(
-                    """
-                    The terminal still has a running process. Closing \
-                    '\(viewState.terminalCloseConfirmation?.title ?? "Terminal")' will end it.
-                    """
+                    viewState.terminalCloseConfirmation?.message
+                        ?? "The terminal still has a running process. Closing it will end the process."
                 )
             }
             .sheet(
@@ -1487,7 +1488,7 @@ struct ContentView: View {
         viewState.didApplyFixtureTerminalTabBootstrap = true
         viewState.didResolveInitialSurface = true
         handleRepoSelection(repo)
-        if configuration.createsTerminalTab {
+        for _ in 0..<configuration.terminalTabTriggers {
             createTerminalTabFromCurrentContext()
         }
         uiFixtureLog.info(
@@ -1959,6 +1960,7 @@ struct ContentView: View {
         guard let terminal = tileTreeStore.surfaceStore.terminal(for: sessionID) else {
             return false
         }
+        tileTreeStore.noteCloseRequested(sessionID)
         terminal.requestClose()
         return true
     }
@@ -3027,7 +3029,7 @@ struct ContentView: View {
                 key: surface.key,
                 directory: surface.directory,
                 initialCommand: initialCommand,
-                tmuxSessionNameOverride: restoreController.tmuxSessionNameOverride(for: surface.action),
+                tmuxSessionNameOverride: restoreController.tmuxSessionNameOverride(for: surface),
                 adoptedHostSessionID: adoptedHostSessionID
             )
             if let adoptedHostSessionID, session.id != adoptedHostSessionID {

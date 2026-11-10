@@ -183,15 +183,19 @@ struct MainWindowTerminalSessionController {
         sessionID: UUID,
         tileTreeStore: TileTreeStore
     ) -> TerminalCloseConfirmation {
+        let session = tileTreeStore.sessions.first(where: { $0.id == sessionID })
         let title =
-            tileTreeStore.sessions.first(where: { $0.id == sessionID })
-            .map {
+            session.map {
                 tileTreeStore.tabTitleOverride(for: $0.id)
                     ?? tileTreeStore.surfaceStore.displayTitle(for: $0)
             }
             ?? "Terminal"
 
-        return TerminalCloseConfirmation(sessionID: sessionID, title: title)
+        return TerminalCloseConfirmation(
+            sessionID: sessionID,
+            title: title,
+            keepsRunningInTmux: session.map(tileTreeStore.closeLeavesTmuxSessionRunning) ?? false
+        )
     }
 
     func handleProcessExit(
@@ -229,6 +233,7 @@ struct MainWindowTerminalSessionController {
         guard
             let focusSessionID = tileTreeStore.handleProcessExitAndResolveFocusTarget(
                 for: sessionID,
+                cause: .userClosed,
                 defaultHomeDirectory: defaultHomeDirectory
             )
         else {

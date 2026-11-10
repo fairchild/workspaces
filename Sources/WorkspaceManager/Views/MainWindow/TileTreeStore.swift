@@ -331,11 +331,42 @@ final class TileTreeStore: ObservableObject {
     ) {
         guard !sessions.isEmpty else { return }
         coordinator = HostTerminalSessionCoordinator(
-            sessions: sessions,
+            sessions: separatingSharedTmuxSessions(sessions),
             activeSessionID: activeSessionID,
             activeSessionIDByScopeKey: activeSessionIDByScopeKey
         )
         publishSnapshot()
+    }
+
+    /// Restored records that would launch on one tmux name, given names of their own past the
+    /// keeper. A tab recorded before tabs had their own names shares its primary's, and both
+    /// relaunching onto it would keep showing one shell twice. Nothing is killed: the keeper
+    /// rejoins the live session and the others start fresh shells. The keeper is the earliest
+    /// record, the scope's primary: its surface created the shell, and the shell's
+    /// `WORKSPACES_HOST_SESSION_ID` is set at creation, so the agent inside reports under that
+    /// record's id and its status keeps reaching the tile that shows it.
+    private func separatingSharedTmuxSessions(_ sessions: [HostTerminalSession]) -> [HostTerminalSession] {
+        guard resolveTerminalMultiplexingMode() == .tmuxPerSession else { return sessions }
+        let claims = sessions.filter { !$0.isRemote }.map {
+            TmuxSessionNameSharing.Claim(hostSessionID: $0.id, tmuxSessionName: $0.effectiveTmuxSessionName)
+        }
+        let displaced = TmuxSessionNameSharing.displacedClaims(claims)
+        guard !displaced.isEmpty else { return sessions }
+        return sessions.map { session in
+            guard displaced.contains(session.id) else { return session }
+            log.notice(
+                "[TileTreeStore] session \(session.id.uuidString, privacy: .public) shared tmux session \(session.effectiveTmuxSessionName, privacy: .public); restoring it on a name of its own"
+            )
+            return HostTerminalSession(
+                id: session.id,
+                key: session.key,
+                directory: session.directoryURL,
+                tmuxSessionNameOverride: TmuxSessionNaming.splitPaneName(
+                    for: session.directoryURL,
+                    paneSessionID: session.id
+                )
+            )
+        }
     }
 
     @discardableResult
@@ -497,19 +528,49 @@ final class TileTreeStore: ObservableObject {
         return retiredSessionIDs
     }
 
+    /// Why a terminal is going away, which decides whether its own tmux session may die.
+    ///
+    /// A user closing the tile is the only cause that reclaims it. A process exit is the tmux
+    /// client ending, and the client ends either because the session is already gone or because
+    /// it detached from a session that is still running work — so killing on exit has nothing
+    /// to gain and a detached session to lose.
+    ///
+    /// A close the user asked for can still arrive as a process exit: Ghostty skips the
+    /// confirmation when it believes the terminal is at a prompt and reports the surface as
+    /// exited. `noteCloseRequested` marks the request so that exit still counts as the user's.
+    enum TerminalCloseCause {
+        case userClosed
+        case processExited
+    }
+
+    private var closeRequestedSessionIDs: Set<UUID> = []
+
+    func noteCloseRequested(_ sessionID: UUID) {
+        closeRequestedSessionIDs.insert(sessionID)
+    }
+
+    func forgetCloseRequest(_ sessionID: UUID) {
+        closeRequestedSessionIDs.remove(sessionID)
+    }
+
     @discardableResult
-    func handleProcessExit(for sessionID: UUID) -> Bool {
+    func handleProcessExit(for sessionID: UUID, cause: TerminalCloseCause = .processExited) -> Bool {
         var removed = false
+        let wasRequested = closeRequestedSessionIDs.remove(sessionID) != nil
+        let reclaimsOwnTmuxSession = cause == .userClosed || wasRequested
 
         if let primarySessionID = primaryIDBySplitSessionID[sessionID] {
-            closeSplitPane(sessionID, primarySessionID: primarySessionID)
+            closeSplitPane(
+                sessionID, primarySessionID: primarySessionID, reclaimingTmuxSession: reclaimsOwnTmuxSession)
             removed = true
         }
 
         if let removedSession = coordinator.remove(sessionID: sessionID) {
-            // A restored split pane lives on as a tab carrying its pane-scoped
-            // override; closing that tab is the same reclaim as closing the pane.
-            killPaneScopedTmuxSession(for: removedSession)
+            // A tab or a restored split pane carries a pane-scoped override; closing it is the
+            // same reclaim as closing a pane.
+            if reclaimsOwnTmuxSession {
+                killPaneScopedTmuxSession(for: removedSession)
+            }
             removeSplitState(forPrimarySessionID: sessionID)
             tabTitleOverridesBySessionID.removeValue(forKey: sessionID)
             removed = true
@@ -527,9 +588,10 @@ final class TileTreeStore: ObservableObject {
     @discardableResult
     func handleProcessExitAndResolveFocusTarget(
         for sessionID: UUID,
+        cause: TerminalCloseCause = .processExited,
         defaultHomeDirectory: URL
     ) -> UUID? {
-        guard handleProcessExit(for: sessionID) else {
+        guard handleProcessExit(for: sessionID, cause: cause) else {
             return nil
         }
 
@@ -980,7 +1042,7 @@ final class TileTreeStore: ObservableObject {
     /// tab is left with only its primary the tree drops to the sparse single-pane shape; otherwise the
     /// rebalanced tree (one fewer pane) is kept. The pane's session is torn down either way. At depth 1
     /// this is identical to dropping the whole tree — there is only ever one split pane to remove.
-    private func closeSplitPane(_ sessionID: UUID, primarySessionID: UUID) {
+    private func closeSplitPane(_ sessionID: UUID, primarySessionID: UUID, reclaimingTmuxSession: Bool) {
         guard let tree = treesByPrimaryID[primarySessionID],
             let tile = tileIDBySessionID[sessionID]
         else {
@@ -992,7 +1054,7 @@ final class TileTreeStore: ObservableObject {
         let paneSession = sessionByTileID.removeValue(forKey: tile)
         tileIDBySessionID.removeValue(forKey: sessionID)
         primaryIDBySplitSessionID.removeValue(forKey: sessionID)
-        if let paneSession {
+        if let paneSession, reclaimingTmuxSession {
             killPaneScopedTmuxSession(for: paneSession)
         }
 
@@ -1058,6 +1120,20 @@ final class TileTreeStore: ObservableObject {
             return nil
         }
         return sessionName
+    }
+
+    /// Whether closing `session`'s tab leaves every tmux session it holds running. Closing a
+    /// primary also tears down its splits, so each of them must survive too.
+    func closeLeavesTmuxSessionRunning(_ session: HostTerminalSession) -> Bool {
+        ([session] + splitSessions(forPrimarySessionID: session.id)).allSatisfy(teardownLeavesTmuxSessionRunning)
+    }
+
+    /// A local tmux-mode session whose teardown does not reclaim: the scope's directory-derived
+    /// one, or a scoped one this run never recorded launching, which teardown cannot attribute.
+    private func teardownLeavesTmuxSessionRunning(_ session: HostTerminalSession) -> Bool {
+        guard !session.isRemote, resolveTerminalMultiplexingMode() == .tmuxPerSession else { return false }
+        return paneScopedTmuxSessionNameToKill(for: session) == nil
+            || tmuxOwnershipLedger.ownership(forHostSessionID: session.id) == nil
     }
 
     /// Best-effort async kill of a torn-down pane's tmux session. In-app teardown only —

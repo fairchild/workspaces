@@ -38,6 +38,14 @@ struct MainWindowPendingRemoteWorkspaceSelection: Equatable {
 struct TerminalCloseConfirmation: Identifiable, Equatable {
     let sessionID: UUID
     let title: String
+    /// Closing only detaches: the tab's tmux session outlives it.
+    var keepsRunningInTmux = false
+
+    var message: String {
+        keepsRunningInTmux
+            ? "'\(title)' is running in tmux. Closing the tab detaches it, and it keeps running."
+            : "The terminal still has a running process. Closing '\(title)' will end it."
+    }
 
     var id: UUID { sessionID }
 }

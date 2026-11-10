@@ -414,4 +414,29 @@ struct HostTerminalSessionCoordinatorTests {
         #expect(second.id != first.id)
         #expect(coordinator.sessions.count == 2)
     }
+
+    @Test("cmd+t in tmux mode gives the new tab its own tmux session")
+    func newTabGetsItsOwnTmuxSession() {
+        var coordinator = HostTerminalSessionCoordinator()
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = coordinator.createSession(key: .repoPath(directory.path), directory: directory)
+
+        let first = coordinator.createTab(from: primary)
+        let second = coordinator.createTab(from: primary)
+
+        let names = [primary, first, second].map(\.effectiveTmuxSessionName)
+        #expect(Set(names).count == 3)
+        #expect(TmuxSessionNaming.isPaneScopedName(first.effectiveTmuxSessionName, for: directory))
+        #expect(
+            first.effectiveTmuxSessionName == TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: first.id))
+    }
+
+    @Test("A remote tab keeps no tmux name override")
+    func remoteTabHasNoTmuxOverride() {
+        var coordinator = HostTerminalSessionCoordinator()
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let remote = HostTerminalSession(key: .hostPath(directory.path), directory: directory, customCommand: "ssh box")
+
+        #expect(coordinator.createTab(from: remote).tmuxSessionNameOverride == nil)
+    }
 }

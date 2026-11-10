@@ -396,12 +396,20 @@ public struct HostTerminalSessionCoordinator: Sendable {
         return session
     }
 
+    /// A new tab in `source`'s scope. A local tab gets a tmux name of its own, as a split pane
+    /// does: the directory derivation belongs to the scope's primary, and a second
+    /// `new-session -A` on it would show the primary's shell again instead of a new one.
     @discardableResult
     public mutating func createTab(from source: HostTerminalSession) -> HostTerminalSession {
+        let id = UUID()
         let session = HostTerminalSession(
+            id: id,
             key: source.key,
             directory: source.directoryURL,
-            customCommand: source.customCommand
+            customCommand: source.customCommand,
+            tmuxSessionNameOverride: source.isRemote
+                ? nil
+                : TmuxSessionNaming.splitPaneName(for: source.directoryURL, paneSessionID: id)
         )
         sessions.append(session)
         setActiveSessionID(session.id)
