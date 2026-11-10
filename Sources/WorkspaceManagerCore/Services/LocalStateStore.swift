@@ -1551,6 +1551,7 @@ public struct AgentStatusEventRow: Sendable, Equatable, Identifiable {
 /// `agent_status_events` row for the same host session. Agent fields are `nil`
 /// when no agent event was ever recorded. Strings are kept verbatim from the
 /// tables; resolving targets against current SwiftData rows is a caller concern.
+/// `terminalMode` is parsed once here, `nil` for a mode this build doesn't know.
 public struct TerminalSessionContinuityRow: Sendable, Equatable, Identifiable {
     public let hostSessionID: UUID
     public let sessionKey: String
@@ -1560,7 +1561,7 @@ public struct TerminalSessionContinuityRow: Sendable, Equatable, Identifiable {
     public let backendIdentifier: String?
     public let backendInstanceID: String?
     public let directoryPath: String
-    public let terminalMode: String
+    public let terminalMode: TerminalMultiplexingMode?
     public let tmuxSessionName: String?
     public let customCommandPresent: Bool
     public let isActive: Bool
@@ -1585,7 +1586,7 @@ public struct TerminalSessionContinuityRow: Sendable, Equatable, Identifiable {
         backendIdentifier: String?,
         backendInstanceID: String?,
         directoryPath: String,
-        terminalMode: String,
+        terminalMode: TerminalMultiplexingMode?,
         tmuxSessionName: String?,
         customCommandPresent: Bool,
         isActive: Bool,
@@ -1646,7 +1647,7 @@ public struct TerminalSessionContinuityRow: Sendable, Equatable, Identifiable {
             backendIdentifier: row["backend_identifier"] as String?,
             backendInstanceID: row["backend_instance_id"] as String?,
             directoryPath: directoryPath,
-            terminalMode: terminalMode,
+            terminalMode: TerminalMultiplexingMode(rawValue: terminalMode),
             tmuxSessionName: row["tmux_session_name"] as String?,
             customCommandPresent: (row["custom_command_present"] as Int? ?? 0) == 1,
             isActive: (row["is_active"] as Int? ?? 0) == 1,

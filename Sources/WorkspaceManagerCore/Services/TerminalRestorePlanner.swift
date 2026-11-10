@@ -40,9 +40,9 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
     /// derivation: a new name of its own when the row had one (a cmd+t tab) or shared a live
     /// session another surface keeps. Deriving from the directory would join the primary's.
     public let launchTmuxSessionName: String?
-    /// The terminal mode the row recorded, which the restored session is stamped with.
-    /// `nil` when the row's value is not a known mode; the session then takes the
-    /// resolver's mode like a new primary.
+    /// The mode the restored session is stamped with: tmux for a reattach, else the row's
+    /// recorded mode. `nil` when the row names no mode this build knows; the session then
+    /// takes the resolver's mode like a new primary.
     public let terminalMode: TerminalMultiplexingMode?
 
     public var id: UUID { hostSessionID }
@@ -209,7 +209,7 @@ public struct TerminalRestorePlanner: Sendable {
                     launchDirectoryFellBack: decision.fellBack,
                     launchTmuxSessionName: ownLaunchName(
                         row: row, action: decision.action, directory: decision.directory),
-                    terminalMode: TerminalMultiplexingMode(rawValue: row.terminalMode)
+                    terminalMode: terminalMode(row: row, action: decision.action)
                 )
             )
         }
@@ -243,6 +243,17 @@ public struct TerminalRestorePlanner: Sendable {
         return TmuxSessionNameSharing.displacedClaims(claims)
     }
 
+    /// A reattach puts the tile back inside a tmux session, so it is a tmux tile whatever its row
+    /// recorded. Any other action keeps the row's mode, `nil` leaving it to the store's resolver.
+    private func terminalMode(
+        row: TerminalSessionContinuityRow, action: RestoreSurfaceAction
+    )
+        -> TerminalMultiplexingMode?
+    {
+        if case .reattachTmux = action { return .tmuxPerSession }
+        return row.terminalMode
+    }
+
     /// A fresh name for a row that recorded a tmux name of its own but cannot reattach it, so
     /// its new shell stays apart from the directory-derived session its primary holds.
     private func ownLaunchName(
@@ -272,7 +283,7 @@ public struct TerminalRestorePlanner: Sendable {
             action: .freshShell,
             launchDirectoryFellBack: fellBack,
             launchTmuxSessionName: TmuxSessionNameSharing.replacementName(for: directory),
-            terminalMode: TerminalMultiplexingMode(rawValue: row.terminalMode)
+            terminalMode: row.terminalMode
         )
     }
 

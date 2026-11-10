@@ -292,7 +292,7 @@ struct LocalStateStoreTests {
         let activeRow = try #require(activeRows.first)
         #expect(activeRow.hostSessionID == agentSessionID)
         #expect(activeRow.directoryPath == "/tmp/workspaces/repo")
-        #expect(activeRow.terminalMode == "tmux_per_session")
+        #expect(activeRow.terminalMode == .tmuxPerSession)
         #expect(activeRow.tmuxSessionName != nil)
         #expect(activeRow.agentSessionID == "claude-session-new")
         #expect(activeRow.agentRunState == "running_tool")
@@ -830,7 +830,7 @@ struct LocalStateStoreTests {
         #expect(row.endedAt == Date(timeIntervalSince1970: 1_700_000_100))
         #expect(!row.isActive)
         #expect(row.directoryPath == recordedDirectory)
-        #expect(row.terminalMode == "tmux_per_session")
+        #expect(row.terminalMode == .tmuxPerSession)
         #expect(try await store.fetchContinuitySessions(activeOnly: true).isEmpty)
     }
 

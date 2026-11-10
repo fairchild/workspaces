@@ -511,11 +511,11 @@ struct TileTreeStoreTests {
         await store.continuityRecorder?.waitUntilDrained()
 
         let rows = try await fixture.rowsByID()
-        #expect(rows[primary.id]?.terminalMode == TerminalMultiplexingMode.tmuxPerSession.rawValue)
+        #expect(rows[primary.id]?.terminalMode == .tmuxPerSession)
         #expect(rows[primary.id]?.tmuxSessionName == primary.effectiveTmuxSessionName)
-        #expect(rows[tab.id]?.terminalMode == TerminalMultiplexingMode.tmuxPerSession.rawValue)
+        #expect(rows[tab.id]?.terminalMode == .tmuxPerSession)
         #expect(rows[tab.id]?.tmuxSessionName == tab.effectiveTmuxSessionName)
-        #expect(rows[bornAfter.id]?.terminalMode == TerminalMultiplexingMode.ghosttyManagedSplits.rawValue)
+        #expect(rows[bornAfter.id]?.terminalMode == .ghosttyManagedSplits)
         #expect(rows[bornAfter.id]?.tmuxSessionName == nil)
 
         #expect(store.paneScopedTmuxSessionNameToKill(for: tab) == tab.tmuxSessionNameOverride)
@@ -540,7 +540,7 @@ struct TileTreeStoreTests {
 
         let rows = try await fixture.rowsByID()
         for session in [primary, tab] {
-            #expect(rows[session.id]?.terminalMode == TerminalMultiplexingMode.ghosttyManagedSplits.rawValue)
+            #expect(rows[session.id]?.terminalMode == .ghosttyManagedSplits)
             #expect(rows[session.id]?.tmuxSessionName == nil)
         }
         #expect(store.paneScopedTmuxSessionNameToKill(for: tab) == nil)
@@ -565,7 +565,7 @@ struct TileTreeStoreTests {
         await store.continuityRecorder?.waitUntilDrained()
 
         let row = try #require(try await fixture.rowsByID()[remote.id])
-        #expect(row.terminalMode == TerminalMultiplexingMode.tmuxPerSession.rawValue)
+        #expect(row.terminalMode == .tmuxPerSession)
         #expect(row.tmuxSessionName == nil)
     }
 

@@ -25,7 +25,7 @@ struct TerminalRestorePlannerTests {
         hostSessionID: UUID = UUID(),
         targetKind: String = "repo",
         directoryPath: String = "/repo",
-        terminalMode: String = "ghostty_managed_splits",
+        terminalMode: TerminalMultiplexingMode? = .ghosttyManagedSplits,
         tmuxSessionName: String? = nil,
         isActive: Bool = true,
         endedAt: Date? = nil,
@@ -120,8 +120,8 @@ struct TerminalRestorePlannerTests {
     }
 
     /// Each surface carries the mode its row recorded, so the restored session is stamped with
-    /// the row's mode rather than the current setting's. A value this build does not know (an
-    /// older or fixture-written row) carries no mode, and the session takes the setting's.
+    /// the row's mode rather than the current setting's. A row with no mode this build knows
+    /// (an older or fixture-written one) carries none, and the session takes the resolver's.
     @Test("Every rung carries the row's recorded terminal mode")
     func surfacesCarryTheRowsTerminalMode() {
         let tmuxReattach = UUID()
@@ -129,10 +129,10 @@ struct TerminalRestorePlannerTests {
         let splitsFresh = UUID()
         let unknown = UUID()
         let rows = [
-            makeRow(hostSessionID: tmuxReattach, terminalMode: "tmux_per_session", tmuxSessionName: "wm-repo"),
-            makeRow(hostSessionID: tmuxDisplaced, terminalMode: "tmux_per_session", tmuxSessionName: "wm-repo"),
-            makeRow(hostSessionID: splitsFresh, directoryPath: "/other", terminalMode: "ghostty_managed_splits"),
-            makeRow(hostSessionID: unknown, directoryPath: "/third", terminalMode: "shell"),
+            makeRow(hostSessionID: tmuxReattach, terminalMode: .tmuxPerSession, tmuxSessionName: "wm-repo"),
+            makeRow(hostSessionID: tmuxDisplaced, terminalMode: .tmuxPerSession, tmuxSessionName: "wm-repo"),
+            makeRow(hostSessionID: splitsFresh, directoryPath: "/other", terminalMode: .ghosttyManagedSplits),
+            makeRow(hostSessionID: unknown, directoryPath: "/third", terminalMode: nil),
         ]
         let planner = makePlanner(tmuxAlive: { $0 == "wm-repo" })
 
@@ -146,6 +146,25 @@ struct TerminalRestorePlannerTests {
         #expect(modes[splitsFresh]?.terminalMode == .ghosttyManagedSplits)
         #expect(modes.keys.contains(unknown))
         #expect(modes[unknown]?.terminalMode == nil)
+    }
+
+    /// A reattach puts the tile inside a live tmux session, so a plan that also said Ghostty
+    /// splits (or nothing) would contradict its own action.
+    @Test("A reattach carries tmux mode whatever its row recorded")
+    func reattachCarriesTmuxMode() {
+        let splitsRow = UUID()
+        let unknownRow = UUID()
+        let rows = [
+            makeRow(hostSessionID: splitsRow, terminalMode: .ghosttyManagedSplits, tmuxSessionName: "wm-repo"),
+            makeRow(hostSessionID: unknownRow, directoryPath: "/other", terminalMode: nil, tmuxSessionName: "wm-other"),
+        ]
+        let planner = makePlanner(tmuxAlive: { _ in true })
+
+        let surfaces = planner.plan(rows: rows, layout: nil).surfaces
+
+        #expect(
+            surfaces.map(\.action) == [.reattachTmux(sessionName: "wm-repo"), .reattachTmux(sessionName: "wm-other")])
+        #expect(surfaces.map(\.terminalMode) == [.tmuxPerSession, .tmuxPerSession])
     }
 
     @Test("Without agent events, the first row sharing a tmux name keeps it")

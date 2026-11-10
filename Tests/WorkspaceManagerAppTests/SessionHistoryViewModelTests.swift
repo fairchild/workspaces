@@ -170,7 +170,7 @@ struct SessionHistoryViewModelTests {
             backendIdentifier: nil,
             backendInstanceID: nil,
             directoryPath: targetPath ?? "/",
-            terminalMode: "ghostty_managed_splits",
+            terminalMode: .ghosttyManagedSplits,
             tmuxSessionName: nil,
             customCommandPresent: false,
             isActive: false,
