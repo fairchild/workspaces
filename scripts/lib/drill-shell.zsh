@@ -1,7 +1,11 @@
 # drill-shell.zsh — the interactive zsh startup file for continuity-drill tiles. The drill
 # copies it to its isolated HOME as .zshrc, so every tile shell puts the stub `claude` first
 # on PATH, types and runs the next command queued for its directory as a person would, and
-# records what its command line holds, which is where a restore's prefill lands.
+# records what its command line holds, which is where a restore's prefill lands. HOME is
+# re-pinned to this file's directory because a tmux server the app starts from a surface
+# runs under /usr/bin/login, which resets HOME to the account's real home.
+drill_inherited_home="$HOME"
+export HOME="${${(%):-%x}:A:h}"
 drill_root="$HOME/.drill"
 drill_observe="$drill_root/observe"
 drill_pending=""
@@ -17,6 +21,7 @@ drill_record_start() {
     print -r -- "ppid=$PPID"
     print -r -- "cwd=${PWD:A}"
     print -r -- "phase=$(cat "$drill_root/phase" 2>/dev/null)"
+    print -r -- "inherited_home=$drill_inherited_home"
     print -r -- "host_session_id=${WORKSPACES_HOST_SESSION_ID:-}"
     print -r -- "tmux=${TMUX:-}"
     print -r -- "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
