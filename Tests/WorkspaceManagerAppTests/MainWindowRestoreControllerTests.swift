@@ -369,7 +369,7 @@ struct MainWindowRestoreControllerTests {
     /// Reattach surfaces launch on the name that was probed alive, so a directory fallback
     /// (workspace moved or archived) cannot silently start a fresh shell while the surviving
     /// session — possibly with a live agent — stays orphaned.
-    @Test("Reattach and displaced surfaces carry a tmux session name override, others derive one")
+    @Test("Reattach surfaces and surfaces with names of their own carry an override, others derive one")
     func tmuxOverrideIsReattachOrDisplaced() {
         #expect(controller.tmuxSessionNameOverride(for: surface(action: .freshShell)) == nil)
         #expect(controller.tmuxSessionNameOverride(for: surface(action: .resumeClaude(agentSessionID: "a"))) == nil)
@@ -381,7 +381,7 @@ struct MainWindowRestoreControllerTests {
             key: .hostPath("/Users/dev/code/alpha"),
             directory: URL(fileURLWithPath: "/Users/dev/code/alpha"),
             action: .freshShell,
-            displacedTmuxSessionName: "wm-alpha-p0123abcd"
+            launchTmuxSessionName: "wm-alpha-p0123abcd"
         )
         #expect(controller.tmuxSessionNameOverride(for: displaced) == "wm-alpha-p0123abcd")
     }
@@ -401,6 +401,24 @@ struct MainWindowRestoreControllerTests {
         #expect(
             controller.initialCommand(for: resume, liveSessionNames: [], sessionName: derive)
                 == RestoreLaunchCommand.claudeResume(sessionID: "a"))
+    }
+
+    @Test("A resume on a name of its own is not suppressed by its primary's live session")
+    func resumeOnOwnNameIgnoresPrimarySession() {
+        let directory = URL(fileURLWithPath: "/Users/dev/code/alpha")
+        let resume = RestoreSurfacePlan(
+            hostSessionID: UUID(), key: .hostPath(directory.path), directory: directory,
+            action: .resumeClaude(agentSessionID: "a"), launchTmuxSessionName: "wm-alpha-p0123abcd")
+        let derive = { (url: URL) in "wm-\(url.lastPathComponent)" }
+        let plan = RestorePlan(surfaces: [resume], selectedHostSessionID: nil, previousRunID: nil)
+
+        #expect(controller.resumeLaunchSessionNames(in: plan, sessionName: derive) == ["wm-alpha-p0123abcd"])
+        #expect(
+            controller.initialCommand(for: resume, liveSessionNames: ["wm-alpha"], sessionName: derive)
+                == RestoreLaunchCommand.claudeResume(sessionID: "a"))
+        #expect(
+            controller.initialCommand(for: resume, liveSessionNames: ["wm-alpha-p0123abcd"], sessionName: derive) == nil
+        )
     }
 
     @Test("A resume comes back at the effort the conversation last ran at")

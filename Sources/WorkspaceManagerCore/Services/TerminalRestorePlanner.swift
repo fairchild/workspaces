@@ -36,9 +36,10 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
     /// switching silently — for a reattach it means the surface launches somewhere
     /// other than where the surviving tmux session was recorded.
     public let launchDirectoryFellBack: Bool
-    /// The tmux name a fresh surface launches on in place of its directory derivation, set
-    /// when another surface keeps the live session this row shared with it.
-    public let displacedTmuxSessionName: String?
+    /// The tmux name a resume or fresh surface launches on in place of its directory
+    /// derivation: a new name of its own when the row had one (a cmd+t tab) or shared a live
+    /// session another surface keeps. Deriving from the directory would join the primary's.
+    public let launchTmuxSessionName: String?
 
     public var id: UUID { hostSessionID }
 
@@ -48,14 +49,14 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
         directory: URL,
         action: RestoreSurfaceAction,
         launchDirectoryFellBack: Bool = false,
-        displacedTmuxSessionName: String? = nil
+        launchTmuxSessionName: String? = nil
     ) {
         self.hostSessionID = hostSessionID
         self.key = key
         self.directory = directory
         self.action = action
         self.launchDirectoryFellBack = launchDirectoryFellBack
-        self.displacedTmuxSessionName = displacedTmuxSessionName
+        self.launchTmuxSessionName = launchTmuxSessionName
     }
 }
 
@@ -199,7 +200,9 @@ public struct TerminalRestorePlanner: Sendable {
                     key: resolved.key,
                     directory: decision.directory,
                     action: decision.action,
-                    launchDirectoryFellBack: decision.fellBack
+                    launchDirectoryFellBack: decision.fellBack,
+                    launchTmuxSessionName: ownLaunchName(
+                        row: row, action: decision.action, directory: decision.directory)
                 )
             )
         }
@@ -233,6 +236,20 @@ public struct TerminalRestorePlanner: Sendable {
         return TmuxSessionNameSharing.displacedClaims(claims)
     }
 
+    /// A fresh name for a row that recorded a tmux name of its own but cannot reattach it, so
+    /// its new shell stays apart from the directory-derived session its primary holds.
+    private func ownLaunchName(
+        row: TerminalSessionContinuityRow, action: RestoreSurfaceAction, directory: URL
+    )
+        -> String?
+    {
+        if case .reattachTmux = action { return nil }
+        guard let recorded = row.tmuxSessionName, recorded != TmuxSessionNaming.defaultName(for: directory) else {
+            return nil
+        }
+        return TmuxSessionNameSharing.replacementName(for: directory)
+    }
+
     /// A row that shared its live session with the row that keeps it. It was a second view of
     /// that one shell, so whatever conversation it recorded is the keeper's to rejoin; it comes
     /// back as a fresh shell on a name of its own, and nothing is killed.
@@ -247,7 +264,7 @@ public struct TerminalRestorePlanner: Sendable {
             directory: directory,
             action: .freshShell,
             launchDirectoryFellBack: fellBack,
-            displacedTmuxSessionName: TmuxSessionNameSharing.replacementName(for: directory)
+            launchTmuxSessionName: TmuxSessionNameSharing.replacementName(for: directory)
         )
     }
 

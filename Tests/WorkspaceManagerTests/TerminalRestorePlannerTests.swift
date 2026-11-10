@@ -113,9 +113,9 @@ struct TerminalRestorePlannerTests {
 
         #expect(surfaces.map(\.hostSessionID) == [primary, tab])
         #expect(surfaces[1].action == .reattachTmux(sessionName: "wm-repo"))
-        #expect(surfaces[1].displacedTmuxSessionName == nil)
+        #expect(surfaces[1].launchTmuxSessionName == nil)
         #expect(surfaces[0].action == .freshShell)
-        let moved = surfaces[0].displacedTmuxSessionName ?? ""
+        let moved = surfaces[0].launchTmuxSessionName ?? ""
         #expect(TmuxSessionNaming.isPaneScopedName(moved, for: URL(fileURLWithPath: "/repo")))
     }
 
@@ -134,25 +134,55 @@ struct TerminalRestorePlannerTests {
         #expect(surfaces.map(\.hostSessionID) == [first, second])
         #expect(surfaces[0].action == .reattachTmux(sessionName: "wm-repo"))
         #expect(surfaces[1].action == .freshShell)
-        #expect(surfaces[1].displacedTmuxSessionName != nil)
+        #expect(surfaces[1].launchTmuxSessionName != nil)
     }
 
     @Test("Rows with names of their own, or a dead shared name, are not displaced")
     func distinctOrDeadNamesAreNotDisplaced() {
+        let gone = TmuxSessionNaming.defaultName(for: URL(fileURLWithPath: "/gone"))
         let rows = [
             makeRow(tmuxSessionName: "wm-repo"),
             makeRow(tmuxSessionName: "wm-repo-p0123abcd"),
-            makeRow(directoryPath: "/gone", tmuxSessionName: "wm-gone"),
-            makeRow(directoryPath: "/gone", tmuxSessionName: "wm-gone"),
+            makeRow(directoryPath: "/gone", tmuxSessionName: gone),
+            makeRow(directoryPath: "/gone", tmuxSessionName: gone),
         ]
-        let planner = makePlanner(tmuxAlive: { $0 != "wm-gone" })
+        let planner = makePlanner(tmuxAlive: { $0 != gone })
 
         let surfaces = planner.plan(rows: rows, layout: nil).surfaces
 
         #expect(surfaces.count == 4)
-        #expect(surfaces.allSatisfy { $0.displacedTmuxSessionName == nil })
+        #expect(surfaces.allSatisfy { $0.launchTmuxSessionName == nil })
         #expect(surfaces[0].action == .reattachTmux(sessionName: "wm-repo"))
         #expect(surfaces[1].action == .reattachTmux(sessionName: "wm-repo-p0123abcd"))
+    }
+
+    /// A cmd+t tab whose own session died while its primary's survived: deriving its launch
+    /// name from the directory would put the resumed conversation in the primary's shell.
+    @Test("A tab that cannot reattach its own tmux session launches on a new name of its own")
+    func scopedTabWithoutLiveSessionKeepsItsOwnName() {
+        let directory = URL(fileURLWithPath: "/repo")
+        let primaryName = TmuxSessionNaming.defaultName(for: directory)
+        let tabName = TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: UUID())
+        let rows = [
+            makeRow(tmuxSessionName: primaryName),
+            makeRow(
+                tmuxSessionName: tabName, agentSessionID: Self.sessionOne,
+                agentKind: AgentKind.claudeCode.rawValue),
+            makeRow(tmuxSessionName: TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: UUID())),
+        ]
+        let planner = makePlanner(tmuxAlive: { $0 == primaryName }, transcriptResumable: { _, _ in true })
+
+        let surfaces = planner.plan(rows: rows, layout: nil).surfaces
+
+        #expect(surfaces[0].action == .reattachTmux(sessionName: primaryName))
+        #expect(surfaces[0].launchTmuxSessionName == nil)
+        #expect(surfaces[1].action == .resumeClaude(agentSessionID: Self.sessionOne))
+        #expect(surfaces[2].action == .freshShell)
+        for tab in surfaces.dropFirst() {
+            let name = tab.launchTmuxSessionName ?? ""
+            #expect(TmuxSessionNaming.isPaneScopedName(name, for: directory))
+            #expect(name != tabName)
+        }
     }
 
     @Test("Ended or inactive rows are excluded")
