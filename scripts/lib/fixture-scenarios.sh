@@ -143,6 +143,12 @@ fixture_resolve_scenario() {
             FIXTURE_CMD_T_REPO="workspaces"
             FIXTURE_TRIGGER_CMD_T=1
             ;;
+        cmd-t-second-tab)
+            # Cmd-T twice: the second press opens a sibling tab beside the repo terminal,
+            # which in tmux mode runs in a tmux session of its own.
+            FIXTURE_CMD_T_REPO="workspaces"
+            FIXTURE_TRIGGER_CMD_T=2
+            ;;
         clean)
             ;;
         *)
@@ -156,5 +162,5 @@ fixture_resolve_scenario() {
 
 # fixture_scenario_names — the known scenario ids, one per line.
 fixture_scenario_names() {
-    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner orphan-banner-overflow runaway-alert sidebar-recent sidebar-pinned sidebar-pinned-alphabetical sidebar-archived sidebar-active-card file-tree-unavailable file-tree-permission cmd-t-repo-overview repo-overview-archived cmd-t-repo-terminal clean
+    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner orphan-banner-overflow runaway-alert sidebar-recent sidebar-pinned sidebar-pinned-alphabetical sidebar-archived sidebar-active-card file-tree-unavailable file-tree-permission cmd-t-repo-overview repo-overview-archived cmd-t-repo-terminal cmd-t-second-tab clean
 }

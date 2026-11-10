@@ -4,7 +4,11 @@ import Foundation
 /// release builds retain the inert configuration type without carrying fixture arming keys.
 struct UIFixtureTerminalTabBootstrapConfiguration: Equatable, Sendable {
     let repoName: String
-    let createsTerminalTab: Bool
+    /// How many times the fixture presses Cmd-T after selecting the overview. The second
+    /// press opens a sibling tab beside the terminal the first one opened.
+    let terminalTabTriggers: Int
+
+    var createsTerminalTab: Bool { terminalTabTriggers > 0 }
 
     #if DEBUG
         static let repoEnvKey = "WORKSPACES_UI_FIXTURE_CMD_T_REPO"
@@ -15,7 +19,7 @@ struct UIFixtureTerminalTabBootstrapConfiguration: Equatable, Sendable {
             guard let repoName = normalizedValue(environment[repoEnvKey]) else { return nil }
             return Self(
                 repoName: repoName,
-                createsTerminalTab: enabled(environment[triggerEnvKey])
+                terminalTabTriggers: triggerCount(environment[triggerEnvKey])
             )
         }
 
@@ -25,10 +29,11 @@ struct UIFixtureTerminalTabBootstrapConfiguration: Equatable, Sendable {
             return value.isEmpty ? nil : value
         }
 
-        private static func enabled(_ rawValue: String?) -> Bool {
-            guard let rawValue else { return false }
+        private static func triggerCount(_ rawValue: String?) -> Int {
+            guard let rawValue else { return 0 }
             let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            return ["1", "true", "yes", "on"].contains(value)
+            if ["true", "yes", "on"].contains(value) { return 1 }
+            return min(max(Int(value) ?? 0, 0), 4)
         }
     #else
         static func from(environment: [String: String]) -> Self? { nil }

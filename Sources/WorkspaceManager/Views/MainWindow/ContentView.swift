@@ -1485,7 +1485,7 @@ struct ContentView: View {
         viewState.didApplyFixtureTerminalTabBootstrap = true
         viewState.didResolveInitialSurface = true
         handleRepoSelection(repo)
-        if configuration.createsTerminalTab {
+        for _ in 0..<configuration.terminalTabTriggers {
             createTerminalTabFromCurrentContext()
         }
         uiFixtureLog.info(

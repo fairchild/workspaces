@@ -46,7 +46,23 @@ struct UIFixtureTerminalTabBootstrapTests {
                     ]
                 )
             )
-            #expect(configuration.createsTerminalTab)
+            #expect(configuration.terminalTabTriggers == 1)
+        }
+    }
+
+    @Test("A numeric Cmd-T trigger presses it that many times, capped at four")
+    func numericTriggerCounts() throws {
+        for (value, expected) in [("2", 2), ("0", 0), ("9", 4), ("-1", 0), ("off", 0)] {
+            let configuration = try #require(
+                UIFixtureTerminalTabBootstrapConfiguration.from(
+                    environment: [
+                        "WORKSPACES_UI_FIXTURE": "1",
+                        "WORKSPACES_UI_FIXTURE_CMD_T_REPO": "workspaces",
+                        "WORKSPACES_UI_FIXTURE_TRIGGER_CMD_T": value,
+                    ]
+                )
+            )
+            #expect(configuration.terminalTabTriggers == expected)
         }
     }
 }
