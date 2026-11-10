@@ -36,6 +36,9 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
     /// switching silently — for a reattach it means the surface launches somewhere
     /// other than where the surviving tmux session was recorded.
     public let launchDirectoryFellBack: Bool
+    /// The tmux name a fresh surface launches on in place of its directory derivation, set
+    /// when another surface keeps the live session this row shared with it.
+    public let displacedTmuxSessionName: String?
 
     public var id: UUID { hostSessionID }
 
@@ -44,13 +47,15 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
         key: HostTerminalSessionKey,
         directory: URL,
         action: RestoreSurfaceAction,
-        launchDirectoryFellBack: Bool = false
+        launchDirectoryFellBack: Bool = false,
+        displacedTmuxSessionName: String? = nil
     ) {
         self.hostSessionID = hostSessionID
         self.key = key
         self.directory = directory
         self.action = action
         self.launchDirectoryFellBack = launchDirectoryFellBack
+        self.displacedTmuxSessionName = displacedTmuxSessionName
     }
 }
 
@@ -123,6 +128,8 @@ public struct TerminalRestorePlanner: Sendable {
     public typealias TargetResolver = @Sendable (TerminalSessionContinuityRow) -> ResolvedRestoreTarget?
     /// Whether a tmux session with the given deterministic name is alive.
     public typealias TmuxLivenessProbe = @Sendable (_ tmuxSessionName: String) -> Bool
+    /// The host-session id a live tmux session's environment reports, or `nil` when unknown.
+    public typealias TmuxHolderProbe = @Sendable (_ tmuxSessionName: String) -> UUID?
     /// Whether a Claude transcript for this session id and cwd is still present.
     public typealias TranscriptResumabilityCheck = @Sendable (_ agentSessionID: String, _ cwd: String) -> Bool
     /// Whether a directory currently exists (defaults to a `FileManager` probe).
@@ -134,6 +141,7 @@ public struct TerminalRestorePlanner: Sendable {
 
     private let resolveTarget: TargetResolver
     private let isTmuxSessionAlive: TmuxLivenessProbe
+    private let reportedTmuxHolder: TmuxHolderProbe
     private let isTranscriptResumable: TranscriptResumabilityCheck
     private let directoryExists: DirectoryExistenceCheck
     private let newestTranscriptID: TranscriptIdentityResolver
@@ -141,12 +149,14 @@ public struct TerminalRestorePlanner: Sendable {
     public init(
         resolveTarget: @escaping TargetResolver,
         isTmuxSessionAlive: @escaping TmuxLivenessProbe,
+        reportedTmuxHolder: @escaping TmuxHolderProbe = { _ in nil },
         isTranscriptResumable: @escaping TranscriptResumabilityCheck,
         directoryExists: @escaping DirectoryExistenceCheck = Self.defaultDirectoryExists,
         newestTranscriptID: @escaping TranscriptIdentityResolver = { _, _ in nil }
     ) {
         self.resolveTarget = resolveTarget
         self.isTmuxSessionAlive = isTmuxSessionAlive
+        self.reportedTmuxHolder = reportedTmuxHolder
         self.isTranscriptResumable = isTranscriptResumable
         self.directoryExists = directoryExists
         self.newestTranscriptID = newestTranscriptID
@@ -169,9 +179,16 @@ public struct TerminalRestorePlanner: Sendable {
         // Ids actually handed out so far, which is what stops two fallbacks in one
         // directory from resuming the same conversation into two panes.
         var usedAgentSessionIDs: Set<String> = []
-        for row in rows {
-            guard row.endedAt == nil, row.isActive else { continue }
-            guard let resolved = resolveTarget(row) else { continue }
+        let restorable = rows.compactMap { row -> (TerminalSessionContinuityRow, ResolvedRestoreTarget)? in
+            guard row.endedAt == nil, row.isActive, let resolved = resolveTarget(row) else { return nil }
+            return (row, resolved)
+        }
+        let displaced = displacedFromSharedTmuxSessions(restorable.map { $0.0 })
+        for (row, resolved) in restorable {
+            if displaced.contains(row.hostSessionID) {
+                surfaces.append(displacedSurface(row: row, resolved: resolved))
+                continue
+            }
             let decision = decideAction(
                 row: row,
                 resolved: resolved,
@@ -195,6 +212,37 @@ public struct TerminalRestorePlanner: Sendable {
             surfaces: surfaces,
             selectedHostSessionID: layout?.activeHostSessionID,
             previousRunID: previousRunID
+        )
+    }
+
+    /// Rows that recorded one live tmux name between them, minus the row that keeps it.
+    /// Before each tab had a name of its own, a tab and its primary recorded the same one.
+    private func displacedFromSharedTmuxSessions(_ rows: [TerminalSessionContinuityRow]) -> Set<UUID> {
+        let claims = rows.compactMap { row -> TmuxSessionNameSharing.Claim? in
+            guard let name = row.tmuxSessionName, isTmuxSessionAlive(name) else { return nil }
+            return TmuxSessionNameSharing.Claim(hostSessionID: row.hostSessionID, tmuxSessionName: name)
+        }
+        return TmuxSessionNameSharing.displacedClaims(claims, reportedHolder: reportedTmuxHolder)
+    }
+
+    /// A row that shared its live session with the row that keeps it. It was a second view of
+    /// that one shell, so whatever conversation it recorded is the keeper's to rejoin; it comes
+    /// back as a fresh shell on a name of its own, and nothing is killed.
+    private func displacedSurface(
+        row: TerminalSessionContinuityRow,
+        resolved: ResolvedRestoreTarget
+    ) -> RestoreSurfacePlan {
+        let (directory, fellBack) = nearestValidDirectory(row: row, resolved: resolved)
+        return RestoreSurfacePlan(
+            hostSessionID: row.hostSessionID,
+            key: resolved.key,
+            directory: directory,
+            action: .freshShell,
+            launchDirectoryFellBack: fellBack,
+            displacedTmuxSessionName: TmuxSessionNameSharing.replacementName(
+                for: directory,
+                hostSessionID: row.hostSessionID
+            )
         )
     }
 

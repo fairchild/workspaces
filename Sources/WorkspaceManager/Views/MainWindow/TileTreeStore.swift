@@ -331,11 +331,39 @@ final class TileTreeStore: ObservableObject {
     ) {
         guard !sessions.isEmpty else { return }
         coordinator = HostTerminalSessionCoordinator(
-            sessions: sessions,
+            sessions: separatingSharedTmuxSessions(sessions),
             activeSessionID: activeSessionID,
             activeSessionIDByScopeKey: activeSessionIDByScopeKey
         )
         publishSnapshot()
+    }
+
+    /// Restored records that would launch on one tmux name, given names of their own past the
+    /// first. A tab recorded before tabs had their own names shares its primary's, and both
+    /// relaunching onto it would keep showing one shell twice. Nothing is killed: the first
+    /// record rejoins the live session and the others start fresh shells.
+    private func separatingSharedTmuxSessions(_ sessions: [HostTerminalSession]) -> [HostTerminalSession] {
+        guard resolveTerminalMultiplexingMode() == .tmuxPerSession else { return sessions }
+        let claims = sessions.filter { !$0.isRemote }.map {
+            TmuxSessionNameSharing.Claim(hostSessionID: $0.id, tmuxSessionName: $0.effectiveTmuxSessionName)
+        }
+        let displaced = TmuxSessionNameSharing.displacedClaims(claims, reportedHolder: { _ in nil })
+        guard !displaced.isEmpty else { return sessions }
+        return sessions.map { session in
+            guard displaced.contains(session.id) else { return session }
+            log.notice(
+                "[TileTreeStore] session \(session.id.uuidString, privacy: .public) shared tmux session \(session.effectiveTmuxSessionName, privacy: .public); restoring it on a name of its own"
+            )
+            return HostTerminalSession(
+                id: session.id,
+                key: session.key,
+                directory: session.directoryURL,
+                tmuxSessionNameOverride: TmuxSessionNameSharing.replacementName(
+                    for: session.directoryURL,
+                    hostSessionID: session.id
+                )
+            )
+        }
     }
 
     @discardableResult
@@ -1058,6 +1086,14 @@ final class TileTreeStore: ObservableObject {
             return nil
         }
         return sessionName
+    }
+
+    /// Whether closing `session`'s tab leaves its tmux session running: a local tmux-mode tab
+    /// on a name close does not reclaim, which is the scope's directory-derived one.
+    func closeLeavesTmuxSessionRunning(_ session: HostTerminalSession) -> Bool {
+        !session.isRemote
+            && resolveTerminalMultiplexingMode() == .tmuxPerSession
+            && paneScopedTmuxSessionNameToKill(for: session) == nil
     }
 
     /// Best-effort async kill of a torn-down pane's tmux session. In-app teardown only —

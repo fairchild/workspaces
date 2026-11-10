@@ -360,4 +360,16 @@ private final class SynchronousArgumentRecorder: @unchecked Sendable {
         recorded.append((executable, arguments))
         lock.unlock()
     }
+
+    @Test("The host-session id a session's environment reports is read from show-environment")
+    func parsesReportedHostSessionID() {
+        let id = UUID()
+        #expect(
+            TmuxSessionProbe.parseHostSessionID(fromShowEnvironment: "WORKSPACES_HOST_SESSION_ID=\(id.uuidString)\n")
+                == id)
+        #expect(TmuxSessionProbe.parseHostSessionID(fromShowEnvironment: "-WORKSPACES_HOST_SESSION_ID\n") == nil)
+        #expect(
+            TmuxSessionProbe.parseHostSessionID(fromShowEnvironment: "WORKSPACES_HOST_SESSION_ID=not-a-uuid") == nil)
+        #expect(TmuxSessionProbe.parseHostSessionID(fromShowEnvironment: nil) == nil)
+    }
 }

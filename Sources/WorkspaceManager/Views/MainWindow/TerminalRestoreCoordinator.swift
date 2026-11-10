@@ -56,15 +56,44 @@ struct TerminalRestoreCoordinator: Sendable {
         let previousRunID = (try? await localStateStore.fetchPreviousRunID()) ?? nil
 
         let liveNames = await probeLiveTmuxSessions(Set(rows.compactMap(\.tmuxSessionName)))
+        let reportedHolders = await probeReportedHolders(
+            of: sharedLiveNames(in: rows.filter { $0.endedAt == nil && $0.isActive }, liveNames: liveNames)
+        )
 
         let resolver = TerminalRestoreTargetResolver(index: index, normalizePath: normalizePath)
         let planner = TerminalRestorePlanner(
             resolveTarget: resolver.asResolver(),
             isTmuxSessionAlive: { liveNames.contains($0) },
+            reportedTmuxHolder: { reportedHolders[$0] },
             isTranscriptResumable: transcriptResumability.asCheck(),
             newestTranscriptID: transcriptResumability.asIdentityResolver()
         )
         return planner.plan(rows: rows, layout: layout, previousRunID: previousRunID)
+    }
+
+    private func sharedLiveNames(in rows: [TerminalSessionContinuityRow], liveNames: Set<String>) -> Set<String> {
+        TmuxSessionNameSharing.sharedNames(
+            in: rows.compactMap { row in
+                guard let name = row.tmuxSessionName, liveNames.contains(name) else { return nil }
+                return TmuxSessionNameSharing.Claim(hostSessionID: row.hostSessionID, tmuxSessionName: name)
+            })
+    }
+
+    /// Ask each shared live session which host session its environment reports, so the
+    /// planner can leave the session with the tab its processes belong to.
+    private func probeReportedHolders(of names: Set<String>) async -> [String: UUID] {
+        guard !names.isEmpty else { return [:] }
+        let probe = tmuxProbe
+        return await withTaskGroup(of: (String, UUID?).self) { group in
+            for name in names {
+                group.addTask { (name, await probe.reportedHostSessionID(forSessionNamed: name)) }
+            }
+            var holders: [String: UUID] = [:]
+            for await (name, holder) in group {
+                holders[name] = holder
+            }
+            return holders
+        }
     }
 
     /// Fan out `has-session` probes concurrently and collect the live names, so

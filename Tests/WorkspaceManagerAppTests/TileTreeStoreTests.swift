@@ -131,6 +131,119 @@ struct TileTreeStoreTests {
         #expect(invocation.contains("=\(expectedSessionName)") == false)
     }
 
+    /// Model A: a tab is its own shell, not a second view of its primary's. Its session is
+    /// named like a split pane's, so closing it reclaims that session and nothing else.
+    @Test("Closing a scoped tab reclaims only its own tmux session")
+    func closingScopedTabReclaimsOnlyItsOwnSession() async throws {
+        let stub = try TmuxStub()
+        defer { stub.cleanUp() }
+
+        let store = TileTreeStore()
+        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        let tab = try #require(store.createTab(from: primary.id))
+        let tabSessionName = try #require(tab.tmuxSessionNameOverride)
+        try stub.publish(sessionName: tabSessionName)
+
+        store.tmuxOwnershipLedger.record(
+            hostSessionID: primary.id,
+            identity: TmuxLiveSession(
+                sessionID: "$1", name: primary.effectiveTmuxSessionName,
+                createdAt: Date(timeIntervalSince1970: 100), serverPID: 4242),
+            launchedAt: Date(timeIntervalSince1970: 100)
+        )
+        store.tmuxOwnershipLedger.record(
+            hostSessionID: tab.id,
+            identity: TmuxLiveSession(
+                sessionID: "$7", name: tabSessionName,
+                createdAt: Date(timeIntervalSince1970: 100), serverPID: 4242),
+            launchedAt: Date(timeIntervalSince1970: 100)
+        )
+        let teardown = OutcomeLog()
+        store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] hostSessionID in
+            let outcome = await TmuxOwnedSessionTerminator(ledger: ledger, probe: stub.probe)
+                .terminate(hostSessionID: hostSessionID, requiringCreation: false)
+            await teardown.append(outcome)
+            return outcome
+        }
+
+        #expect(store.handleProcessExit(for: tab.id))
+
+        let invocation = try await stub.awaitKillInvocation(reportedBy: teardown)
+        #expect(await teardown.awaitFirst() == .killed(sessionID: "$7", name: tabSessionName))
+        #expect(invocation.contains("-t $7"))
+        #expect(invocation.contains("$1") == false)
+        #expect(store.sessions.map(\.id) == [primary.id])
+        #expect(store.paneScopedTmuxSessionNameToKill(for: primary) == nil)
+    }
+
+    @Test("The close prompt says a tab keeps running only when closing detaches it")
+    func closePromptMatchesWhatCloseDoes() throws {
+        let store = TileTreeStore()
+        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        let tab = try #require(store.createTab(from: primary.id))
+
+        #expect(store.closeLeavesTmuxSessionRunning(primary))
+        #expect(store.closeLeavesTmuxSessionRunning(tab) == false)
+
+        store.resolveTerminalMultiplexingMode = { .ghosttyManagedSplits }
+        #expect(store.closeLeavesTmuxSessionRunning(primary) == false)
+
+        let detaching = TerminalCloseConfirmation(sessionID: primary.id, title: "repo", keepsRunningInTmux: true)
+        let ending = TerminalCloseConfirmation(sessionID: tab.id, title: "repo")
+        #expect(detaching.message.contains("keeps running"))
+        #expect(ending.message.contains("will end it"))
+    }
+
+    /// Tabs recorded before they had names of their own share their primary's. Relaunching
+    /// both onto it would carry the mirror forward, so the first keeps the live session and
+    /// the rest move to scoped names — and nothing is killed to get there.
+    @Test("Manifest restore splits sessions sharing a tmux name without killing any")
+    func manifestRestoreSplitsSharedTmuxNames() {
+        let store = TileTreeStore()
+        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        var killRequests: [UUID] = []
+        store.terminateOwnedTmuxSession = { hostSessionID in
+            killRequests.append(hostSessionID)
+            return .notAttributable
+        }
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let key = HostTerminalSessionKey.repoPath(directory.path)
+        let first = HostTerminalSession(key: key, directory: directory)
+        let mirror = HostTerminalSession(key: key, directory: directory)
+        let other = URL(fileURLWithPath: "/Users/test/code/other")
+        let unrelated = HostTerminalSession(key: .repoPath(other.path), directory: other)
+
+        store.restoreSessions(
+            [first, mirror, unrelated], activeSessionID: first.id, activeSessionIDByScopeKey: [:])
+
+        let restored = Dictionary(uniqueKeysWithValues: store.sessions.map { ($0.id, $0) })
+        #expect(restored[first.id]?.effectiveTmuxSessionName == TmuxSessionNaming.defaultName(for: directory))
+        #expect(restored[unrelated.id]?.effectiveTmuxSessionName == TmuxSessionNaming.defaultName(for: other))
+        let moved = restored[mirror.id]?.effectiveTmuxSessionName ?? ""
+        #expect(TmuxSessionNaming.isPaneScopedName(moved, for: directory))
+        #expect(store.sessions.count == 3)
+        #expect(killRequests.isEmpty)
+    }
+
+    @Test("Manifest restore leaves shared names alone outside tmux mode")
+    func manifestRestoreLeavesNamesOutsideTmuxMode() {
+        let store = TileTreeStore()
+        store.resolveTerminalMultiplexingMode = { .ghosttyManagedSplits }
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let key = HostTerminalSessionKey.repoPath(directory.path)
+        let sessions = [
+            HostTerminalSession(key: key, directory: directory), HostTerminalSession(key: key, directory: directory),
+        ]
+
+        store.restoreSessions(sessions, activeSessionID: sessions[0].id, activeSessionIDByScopeKey: [:])
+
+        #expect(store.sessions.allSatisfy { $0.tmuxSessionNameOverride == nil })
+    }
+
     /// #1267 at the pane-teardown seam. A pane whose tmux session this run never
     /// observed cannot be attributed to a surface it launched — the name shape says
     /// only that the app *could* have named it, which on a same-user shared socket is

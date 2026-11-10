@@ -369,11 +369,21 @@ struct MainWindowRestoreControllerTests {
     /// Reattach surfaces launch on the name that was probed alive, so a directory fallback
     /// (workspace moved or archived) cannot silently start a fresh shell while the surviving
     /// session — possibly with a live agent — stays orphaned.
-    @Test("Only reattach surfaces carry a tmux session name override")
-    func tmuxOverrideIsReattachOnly() {
-        #expect(controller.tmuxSessionNameOverride(for: .freshShell) == nil)
-        #expect(controller.tmuxSessionNameOverride(for: .resumeClaude(agentSessionID: "a")) == nil)
-        #expect(controller.tmuxSessionNameOverride(for: .reattachTmux(sessionName: "wm-alpha")) == "wm-alpha")
+    @Test("Reattach and displaced surfaces carry a tmux session name override, others derive one")
+    func tmuxOverrideIsReattachOrDisplaced() {
+        #expect(controller.tmuxSessionNameOverride(for: surface(action: .freshShell)) == nil)
+        #expect(controller.tmuxSessionNameOverride(for: surface(action: .resumeClaude(agentSessionID: "a"))) == nil)
+        #expect(
+            controller.tmuxSessionNameOverride(for: surface(action: .reattachTmux(sessionName: "wm-alpha")))
+                == "wm-alpha")
+        let displaced = RestoreSurfacePlan(
+            hostSessionID: UUID(),
+            key: .hostPath("/Users/dev/code/alpha"),
+            directory: URL(fileURLWithPath: "/Users/dev/code/alpha"),
+            action: .freshShell,
+            displacedTmuxSessionName: "wm-alpha-p0123abcd"
+        )
+        #expect(controller.tmuxSessionNameOverride(for: displaced) == "wm-alpha-p0123abcd")
     }
 
     /// The #1233 shared-directory hazard, launch side: a resume surface's `-A` launch name

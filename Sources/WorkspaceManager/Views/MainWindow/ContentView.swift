@@ -1176,10 +1176,8 @@ struct ContentView: View {
                 }
             } message: {
                 Text(
-                    """
-                    The terminal still has a running process. Closing \
-                    '\(viewState.terminalCloseConfirmation?.title ?? "Terminal")' will end it.
-                    """
+                    viewState.terminalCloseConfirmation?.message
+                        ?? "The terminal still has a running process. Closing it will end the process."
                 )
             }
             .sheet(
@@ -3027,7 +3025,7 @@ struct ContentView: View {
                 key: surface.key,
                 directory: surface.directory,
                 initialCommand: initialCommand,
-                tmuxSessionNameOverride: restoreController.tmuxSessionNameOverride(for: surface.action),
+                tmuxSessionNameOverride: restoreController.tmuxSessionNameOverride(for: surface),
                 adoptedHostSessionID: adoptedHostSessionID
             )
             if let adoptedHostSessionID, session.id != adoptedHostSessionID {

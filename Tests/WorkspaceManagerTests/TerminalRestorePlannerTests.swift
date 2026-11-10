@@ -66,6 +66,7 @@ struct TerminalRestorePlannerTests {
             )
         },
         tmuxAlive: @escaping TerminalRestorePlanner.TmuxLivenessProbe = { _ in false },
+        tmuxHolder: @escaping TerminalRestorePlanner.TmuxHolderProbe = { _ in nil },
         transcriptResumable: @escaping TerminalRestorePlanner.TranscriptResumabilityCheck = { _, _ in false },
         directoryExists: @escaping TerminalRestorePlanner.DirectoryExistenceCheck = { _ in true },
         newestTranscriptID: @escaping TerminalRestorePlanner.TranscriptIdentityResolver = { _, _ in nil }
@@ -73,6 +74,7 @@ struct TerminalRestorePlannerTests {
         TerminalRestorePlanner(
             resolveTarget: resolve,
             isTmuxSessionAlive: tmuxAlive,
+            reportedTmuxHolder: tmuxHolder,
             isTranscriptResumable: transcriptResumable,
             directoryExists: directoryExists,
             newestTranscriptID: newestTranscriptID
@@ -88,6 +90,73 @@ struct TerminalRestorePlannerTests {
     }
 
     // MARK: Tests
+
+    /// A tab and its primary recorded one live tmux name: two views of one shell. The live
+    /// session stays with the tab its processes report as theirs; the other comes back as a
+    /// fresh shell on a scoped name, and resumes nothing — its conversation is the keeper's.
+    @Test("Restore splits rows sharing a tmux name; the session stays with the tab its processes report")
+    func sharedTmuxNameStaysWithReportedHolder() {
+        let primary = UUID()
+        let tab = UUID()
+        let rows = [
+            makeRow(
+                hostSessionID: primary, tmuxSessionName: "wm-repo", agentSessionID: Self.sharedSession,
+                agentKind: AgentKind.claudeCode.rawValue),
+            makeRow(
+                hostSessionID: tab, tmuxSessionName: "wm-repo", agentSessionID: Self.sharedSession,
+                agentKind: AgentKind.claudeCode.rawValue),
+        ]
+        let planner = makePlanner(
+            tmuxAlive: { $0 == "wm-repo" },
+            tmuxHolder: { $0 == "wm-repo" ? tab : nil },
+            transcriptResumable: { _, _ in true }
+        )
+
+        let surfaces = Dictionary(
+            uniqueKeysWithValues: planner.plan(rows: rows, layout: nil).surfaces.map { ($0.hostSessionID, $0) })
+
+        #expect(surfaces[tab]?.action == .reattachTmux(sessionName: "wm-repo"))
+        #expect(surfaces[tab]?.displacedTmuxSessionName == nil)
+        #expect(surfaces[primary]?.action == .freshShell)
+        let moved = surfaces[primary]?.displacedTmuxSessionName ?? ""
+        #expect(TmuxSessionNaming.isPaneScopedName(moved, for: URL(fileURLWithPath: "/repo")))
+    }
+
+    @Test("Without a reported holder, the first row sharing a tmux name keeps it")
+    func sharedTmuxNameFallsBackToFirstRow() {
+        let first = UUID()
+        let second = UUID()
+        let stranger = UUID()
+        let rows = [
+            makeRow(hostSessionID: first, tmuxSessionName: "wm-repo"),
+            makeRow(hostSessionID: second, tmuxSessionName: "wm-repo"),
+        ]
+        let planner = makePlanner(tmuxAlive: { _ in true }, tmuxHolder: { _ in stranger })
+
+        let surfaces = planner.plan(rows: rows, layout: nil).surfaces
+
+        #expect(surfaces.map(\.hostSessionID) == [first, second])
+        #expect(surfaces[0].action == .reattachTmux(sessionName: "wm-repo"))
+        #expect(surfaces[1].action == .freshShell)
+        #expect(surfaces[1].displacedTmuxSessionName != nil)
+    }
+
+    @Test("Rows with names of their own, or a dead shared name, are not displaced")
+    func distinctOrDeadNamesAreNotDisplaced() {
+        let rows = [
+            makeRow(tmuxSessionName: "wm-repo"),
+            makeRow(tmuxSessionName: "wm-repo-p0123abcd"),
+            makeRow(directoryPath: "/gone", tmuxSessionName: "wm-gone"),
+            makeRow(directoryPath: "/gone", tmuxSessionName: "wm-gone"),
+        ]
+        let planner = makePlanner(tmuxAlive: { $0 != "wm-gone" })
+
+        let surfaces = planner.plan(rows: rows, layout: nil).surfaces
+
+        #expect(surfaces.allSatisfy { $0.displacedTmuxSessionName == nil })
+        #expect(surfaces[0].action == .reattachTmux(sessionName: "wm-repo"))
+        #expect(surfaces[1].action == .reattachTmux(sessionName: "wm-repo-p0123abcd"))
+    }
 
     @Test("Ended or inactive rows are excluded")
     func endedOrInactiveExcluded() {
