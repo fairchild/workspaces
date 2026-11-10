@@ -56,7 +56,11 @@ actor ContinuityWriteLog: TerminalContinuityWriting {
 @Suite("TerminalContinuityRecorder")
 struct TerminalContinuityRecorderTests {
     private func makeSession(path: String) -> HostTerminalSession {
-        HostTerminalSession(key: .repoPath(path), directory: URL(fileURLWithPath: path))
+        HostTerminalSession(
+            key: .repoPath(path),
+            directory: URL(fileURLWithPath: path),
+            terminalMode: .ghosttyManagedSplits
+        )
     }
 
     @Test("Writes execute in enqueue order")

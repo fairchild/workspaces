@@ -106,8 +106,8 @@ struct MainWindowOpenSurfaceReattachController {
     /// the previous run opened them, an accepted restore plan replays newest-first — so the
     /// cap is a bound, not a ranking. Dropped scopes open on demand.
     ///
-    /// Only `.tmuxPerSession` produces candidates: in Ghostty-managed mode a surface's shell
-    /// died with the previous process, so realizing its record would start a fresh shell
+    /// Only sessions born in `.tmuxPerSession` produce candidates: a Ghostty-managed surface's
+    /// shell died with the previous process, so realizing its record would start a fresh shell
     /// rather than rejoin anything — work the user did not ask for.
     ///
     /// One candidate per scope key (the scope's active session), because a scope shows one
@@ -117,11 +117,10 @@ struct MainWindowOpenSurfaceReattachController {
         activeSessionIDByScopeKey: [HostTerminalSessionKey: UUID],
         excludedSessionIDs: Set<UUID>,
         excludedScopeKeys: Set<HostTerminalSessionKey>,
-        terminalMode: TerminalMultiplexingMode,
         limit: Int = MainWindowOpenSurfaceReattachController.maximumSurfaces,
         fileManager: FileManager = .default
     ) -> [Candidate] {
-        guard terminalMode == .tmuxPerSession, limit > 0 else { return [] }
+        guard limit > 0 else { return [] }
 
         var seenScopeKeys: Set<HostTerminalSessionKey> = []
         var candidates: [Candidate] = []
@@ -142,6 +141,7 @@ struct MainWindowOpenSurfaceReattachController {
             }
             seenScopeKeys.insert(session.key)
 
+            guard session.terminalMode == .tmuxPerSession else { continue }
             guard !excludedSessionIDs.contains(session.id) else { continue }
             guard isReattachable(session, fileManager: fileManager) else { continue }
 

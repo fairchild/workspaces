@@ -217,6 +217,7 @@ struct ContentView: View {
                     tileTreeStore.createRestoredSession(
                         key: key,
                         directory: directory,
+                        recordedTerminalMode: .tmuxPerSession,
                         tmuxSessionNameOverride: tmuxSessionName
                     )
                 },
@@ -1091,7 +1092,6 @@ struct ContentView: View {
                 Task { @MainActor in
                     splitRoutingController.handle(
                         notification: notification,
-                        terminalMultiplexingMode: terminalMultiplexingMode,
                         tileTreeStore: tileTreeStore,
                         focusTerminal: { sessionID in
                             terminalFocusCoordinator.focusTerminal(
@@ -1795,10 +1795,7 @@ struct ContentView: View {
                 }
             },
             tmuxSessionName: { session in
-                WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(
-                    of: session,
-                    mode: tileTreeStore.resolveTerminalMultiplexingMode()
-                )
+                WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: session)
             },
             killTmuxSession: { session in
                 await TmuxOwnedSessionTerminator(ledger: tileTreeStore.tmuxOwnershipLedger)
@@ -2316,7 +2313,9 @@ struct ContentView: View {
             workspaceOrphanState.removeCleanedItem(item)
 
             var boundTmuxSessionName: String?
-            if terminalMultiplexingMode == .tmuxPerSession, let path = item.path {
+            if let path = item.path,
+                tileTreeStore.resolveTerminalMultiplexingMode(.hostPath(path)) == .tmuxPerSession
+            {
                 boundTmuxSessionName = await TmuxSessionProbe().sessionName(withCurrentDirectory: path)
             }
 
@@ -3028,6 +3027,7 @@ struct ContentView: View {
             let session = tileTreeStore.createRestoredSession(
                 key: surface.key,
                 directory: surface.directory,
+                recordedTerminalMode: surface.terminalMode,
                 initialCommand: initialCommand,
                 tmuxSessionNameOverride: restoreController.tmuxSessionNameOverride(for: surface),
                 adoptedHostSessionID: adoptedHostSessionID
@@ -3084,8 +3084,7 @@ struct ContentView: View {
             sessions: tileTreeStore.sessions,
             activeSessionIDByScopeKey: tileTreeStore.activeSessionIDByScopeKey,
             excludedSessionIDs: alreadyRealizedSessionIDs,
-            excludedScopeKeys: terminalContinuityController.archivedWorkspaceScopeKeys,
-            terminalMode: terminalMultiplexingMode
+            excludedScopeKeys: terminalContinuityController.archivedWorkspaceScopeKeys
         )
         guard !candidates.isEmpty else { return }
 

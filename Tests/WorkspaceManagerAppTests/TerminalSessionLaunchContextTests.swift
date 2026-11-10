@@ -17,7 +17,8 @@ struct TerminalSessionLaunchContextTests {
         let session = HostTerminalSession(
             id: hostSessionID,
             key: .repoPath("/Users/test/repo"),
-            directory: URL(fileURLWithPath: "/Users/test/repo")
+            directory: URL(fileURLWithPath: "/Users/test/repo"),
+            terminalMode: .ghosttyManagedSplits
         )
 
         let context = TerminalSessionLaunchContext.hostSession(
@@ -41,6 +42,7 @@ struct TerminalSessionLaunchContextTests {
             id: hostSessionID,
             key: .repoPath("/Users/test/repo"),
             directory: URL(fileURLWithPath: "/Users/test/repo"),
+            terminalMode: .ghosttyManagedSplits,
             initialCommand: "claude --resume sess-9"
         )
 
@@ -56,10 +58,15 @@ struct TerminalSessionLaunchContextTests {
     @Test("A host session's chosen tmux name threads into the launch context")
     func hostSessionThreadsChosenTmuxName() {
         let directory = URL(fileURLWithPath: "/Users/test/repo")
-        let plain = HostTerminalSession(key: .repoPath(directory.path), directory: directory)
+        let plain = HostTerminalSession(
+            key: .repoPath(directory.path),
+            directory: directory,
+            terminalMode: .ghosttyManagedSplits
+        )
         let overridden = HostTerminalSession(
             key: .repoPath(directory.path),
             directory: directory,
+            terminalMode: .ghosttyManagedSplits,
             tmuxSessionNameOverride: "wm-repo-12345678-pdeadbeef"
         )
 
@@ -76,6 +83,7 @@ struct TerminalSessionLaunchContextTests {
             id: UUID(),
             key: .repoPath("/Users/test/repo"),
             directory: URL(fileURLWithPath: "/Users/test/repo"),
+            terminalMode: .ghosttyManagedSplits,
             customCommand: "ssh sandbox"
         )
         let context = TerminalSessionLaunchContext.hostSession(session, hooksSocketPath: "/tmp/hooks.sock")
@@ -87,6 +95,7 @@ struct TerminalSessionLaunchContextTests {
         let hostSessionID = UUID(uuidString: "7BD8C9BD-7F3B-456D-A9EC-16CDB2221339")!
         let context = TerminalSessionLaunchContext.directoryBacked(
             workingDirectory: URL(fileURLWithPath: "/Users/test/repo"),
+            terminalMode: .ghosttyManagedSplits,
             hostSessionID: hostSessionID
         )
 
@@ -101,6 +110,7 @@ struct TerminalSessionLaunchContextTests {
             id: hostSessionID,
             key: .backendSession(providerID: "lume", instanceID: "vm-123"),
             directory: URL(fileURLWithPath: "/tmp/workspaces/vm-123"),
+            terminalMode: .ghosttyManagedSplits,
             customCommand: "/usr/local/bin/lume ssh vm-123"
         )
 

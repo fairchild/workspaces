@@ -25,7 +25,6 @@ struct SplitRoutingControllerTests {
 
         SplitRoutingController().handle(
             notification: notification,
-            terminalMultiplexingMode: .ghosttyManagedSplits,
             tileTreeStore: store,
             focusTerminal: { _ in }
         )
@@ -34,9 +33,9 @@ struct SplitRoutingControllerTests {
         #expect(store.splitLayout(for: primaryID) == .defaultTrailing)
     }
 
-    @Test("new_split is ignored in tmux mode")
+    @Test("new_split is ignored in a tab born in tmux mode")
     func newSplitIsIgnoredInTmuxMode() throws {
-        let store = makeStoreWithActiveSession()
+        let store = makeStoreWithActiveSession(.tmuxPerSession)
         let primaryID = try #require(store.activeSessionID)
         let notification = splitActionNotification(
             kind: .newSplit,
@@ -45,7 +44,6 @@ struct SplitRoutingControllerTests {
 
         SplitRoutingController().handle(
             notification: notification,
-            terminalMultiplexingMode: .tmuxPerSession,
             tileTreeStore: store,
             focusTerminal: { _ in }
         )
@@ -68,7 +66,6 @@ struct SplitRoutingControllerTests {
 
         SplitRoutingController().handle(
             notification: notification,
-            terminalMultiplexingMode: .ghosttyManagedSplits,
             tileTreeStore: store,
             focusTerminal: { _ in }
         )
@@ -78,8 +75,11 @@ struct SplitRoutingControllerTests {
         #expect(store.splitSession(for: primaryID) == nil)
     }
 
-    private func makeStoreWithActiveSession() -> TileTreeStore {
+    private func makeStoreWithActiveSession(
+        _ terminalMode: TerminalMultiplexingMode = .ghosttyManagedSplits
+    ) -> TileTreeStore {
         let store = TileTreeStore()
+        store.resolveTerminalMultiplexingMode = { _ in terminalMode }
         _ = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")

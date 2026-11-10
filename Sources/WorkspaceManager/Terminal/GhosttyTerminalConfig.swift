@@ -45,14 +45,13 @@ struct GhosttyTerminalConfig {
         launchContext: TerminalSessionLaunchContext,
         fontSize: Float32 = 13,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        terminalMultiplexingMode: TerminalMultiplexingMode? = nil,
         isTmuxAvailableOverride: Bool? = nil
     ) {
         switch launchContext.commandMode {
         case .customCommand(let customCommand):
             self.init(customCommand: customCommand, fontSize: fontSize)
 
-        case .directoryShell:
+        case .directoryShell(let terminalMultiplexingMode):
             self.init(
                 workingDirectory: launchContext.workingDirectory,
                 fontSize: fontSize,
@@ -71,7 +70,7 @@ struct GhosttyTerminalConfig {
         workingDirectory: URL,
         fontSize: Float32 = 13,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        terminalMultiplexingMode: TerminalMultiplexingMode? = nil,
+        terminalMultiplexingMode: TerminalMultiplexingMode,
         isTmuxAvailableOverride: Bool? = nil,
         tmuxSupportsSessionEnvironmentFlagOverride: Bool? = nil,
         hostSessionID: UUID? = nil,
@@ -112,7 +111,6 @@ struct GhosttyTerminalConfig {
         if shellProfileMode == .clean, environment["WORKSPACES_TERMINAL_DIAGNOSTICS"] == "1" {
             Self.installDiagnosticPromptMarker(for: shellName, environment: &environment)
         }
-        let mode = terminalMultiplexingMode ?? TerminalMultiplexingMode.resolve()
         let tmuxAvailable =
             isTmuxAvailableOverride
             ?? Self.isExecutableAvailable(
@@ -120,7 +118,7 @@ struct GhosttyTerminalConfig {
                 inPath: environment["PATH"]
             )
 
-        if mode == .tmuxPerSession, tmuxAvailable {
+        if terminalMultiplexingMode == .tmuxPerSession, tmuxAvailable {
             // The chosen name (split-pane disambiguation, restore's probed reattach
             // target) wins over the directory derivation, so what launches is what
             // the continuity row recorded.

@@ -320,7 +320,8 @@ struct MainWindowTerminalSessionControllerTests {
         repo.workspaces = [workspace]
         let session = HostTerminalSession(
             key: .backendSession(providerID: "daytona", instanceID: "routing-123"),
-            directory: URL(fileURLWithPath: "/tmp")
+            directory: URL(fileURLWithPath: "/tmp"),
+            terminalMode: .ghosttyManagedSplits
         )
 
         let syncedWorkspace = controller.syncedWorkspaceSelection(
@@ -337,7 +338,8 @@ struct MainWindowTerminalSessionControllerTests {
         let fixture = makeRepoWorkspaceFixture()
         let session = HostTerminalSession(
             key: .hostPath(fixture.workspace.path),
-            directory: fixture.workspace.workspaceURL
+            directory: fixture.workspace.workspaceURL,
+            terminalMode: .ghosttyManagedSplits
         )
 
         let destination = try #require(
@@ -361,7 +363,8 @@ struct MainWindowTerminalSessionControllerTests {
         let fixture = makeRepoWorkspaceFixture()
         let session = HostTerminalSession(
             key: .repoPath(fixture.repo.localPath),
-            directory: fixture.repo.localURL
+            directory: fixture.repo.localURL,
+            terminalMode: .ghosttyManagedSplits
         )
 
         let destination = try #require(

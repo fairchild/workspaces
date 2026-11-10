@@ -20,7 +20,8 @@ struct SidebarRowEqualityTests {
         let directory = URL(fileURLWithPath: path)
         return HostTerminalSession(
             key: key ?? .hostPath(path),
-            directory: directory
+            directory: directory,
+            terminalMode: .ghosttyManagedSplits
         )
     }
 

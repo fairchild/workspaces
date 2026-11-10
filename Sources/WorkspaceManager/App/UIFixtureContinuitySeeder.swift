@@ -75,7 +75,11 @@
         /// no I/O — so the shape of what gets seeded is assertable without a database.
         static func seedPlan(homeDirectory: URL, now: Date) -> (session: HostTerminalSession, runStartedAt: Date) {
             let directory = seededWorkspaceDirectory(homeDirectory: homeDirectory)
-            let session = HostTerminalSession(key: .hostPath(directory.path), directory: directory)
+            let session = HostTerminalSession(
+                key: .hostPath(directory.path),
+                directory: directory,
+                terminalMode: .ghosttyManagedSplits
+            )
             return (session, now.addingTimeInterval(priorRunOffset))
         }
 

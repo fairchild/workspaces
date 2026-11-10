@@ -76,7 +76,12 @@ struct SessionHistoryViewModelTests {
         // Record three sessions sequentially; last_seen_at is monotonic → newest first.
         for path in ["/a", "/b", "/c"] {
             try await store.recordTerminalSession(
-                HostTerminalSession(id: UUID(), key: .repoPath(path), directory: URL(fileURLWithPath: path)),
+                HostTerminalSession(
+                    id: UUID(),
+                    key: .repoPath(path),
+                    directory: URL(fileURLWithPath: path),
+                    terminalMode: .ghosttyManagedSplits
+                ),
                 terminalMode: "ghostty_managed_splits",
                 isActive: true,
                 hooksSocketPath: nil
@@ -104,7 +109,12 @@ struct SessionHistoryViewModelTests {
         let store = try makeStore()
         let sessionID = UUID()
         try await store.recordTerminalSession(
-            HostTerminalSession(id: sessionID, key: .repoPath("/a"), directory: URL(fileURLWithPath: "/a")),
+            HostTerminalSession(
+                id: sessionID,
+                key: .repoPath("/a"),
+                directory: URL(fileURLWithPath: "/a"),
+                terminalMode: .ghosttyManagedSplits
+            ),
             terminalMode: "ghostty_managed_splits",
             isActive: true,
             hooksSocketPath: nil

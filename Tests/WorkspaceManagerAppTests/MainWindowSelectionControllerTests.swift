@@ -232,12 +232,16 @@ struct MainWindowSelectionControllerTests {
                 acknowledgeAgentSession: { _ in effects.record("acknowledge_agent_session") },
                 activateHostSession: MainWindowHostSessionActivator { key, directory, _ in
                     effects.record(key: key, directory: directory)
-                    return HostTerminalSession(key: key, directory: directory)
+                    return HostTerminalSession(key: key, directory: directory, terminalMode: .ghosttyManagedSplits)
                 },
                 activateAdoptedHostSession: { key, directory, tmuxSessionName in
                     effects.record(adoptedTmuxSessionName: tmuxSessionName, key: key, directory: directory)
                     return HostTerminalSession(
-                        key: key, directory: directory, tmuxSessionNameOverride: tmuxSessionName)
+                        key: key,
+                        directory: directory,
+                        terminalMode: .tmuxPerSession,
+                        tmuxSessionNameOverride: tmuxSessionName
+                    )
                 },
                 persistTerminalContinuity: { kind, _, root, launch in
                     effects.record(kind: kind, root: root, launch: launch)

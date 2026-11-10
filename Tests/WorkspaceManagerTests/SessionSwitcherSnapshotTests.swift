@@ -20,7 +20,8 @@ struct SessionSwitcherSnapshotTests {
         let session = HostTerminalSession(
             id: sessionID,
             key: key,
-            directory: URL(fileURLWithPath: "/tmp/workspaces-feature-mux")
+            directory: URL(fileURLWithPath: "/tmp/workspaces-feature-mux"),
+            terminalMode: .ghosttyManagedSplits
         )
         let lastEventAt = Date(timeIntervalSince1970: 100)
         let status = AgentSessionStatus(
@@ -73,12 +74,14 @@ struct SessionSwitcherSnapshotTests {
         let attentionSession = HostTerminalSession(
             id: attentionSessionID,
             key: attentionKey,
-            directory: URL(fileURLWithPath: "/tmp/repo")
+            directory: URL(fileURLWithPath: "/tmp/repo"),
+            terminalMode: .ghosttyManagedSplits
         )
         let idleSession = HostTerminalSession(
             id: idleSessionID,
             key: idleKey,
-            directory: URL(fileURLWithPath: "/tmp")
+            directory: URL(fileURLWithPath: "/tmp"),
+            terminalMode: .ghosttyManagedSplits
         )
 
         let rows = SessionSwitcherSnapshot.make(

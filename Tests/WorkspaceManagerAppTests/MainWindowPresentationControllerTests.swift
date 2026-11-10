@@ -74,11 +74,13 @@ struct MainWindowPresentationControllerTests {
     func activeHostSessionFallsBackToLastSession() {
         let first = HostTerminalSession(
             key: .defaultHome,
-            directory: URL(fileURLWithPath: "/tmp/home")
+            directory: URL(fileURLWithPath: "/tmp/home"),
+            terminalMode: .ghosttyManagedSplits
         )
         let second = HostTerminalSession(
             key: .repoPath("/tmp/repo"),
-            directory: URL(fileURLWithPath: "/tmp/repo")
+            directory: URL(fileURLWithPath: "/tmp/repo"),
+            terminalMode: .ghosttyManagedSplits
         )
 
         let result = controller.activeHostSession(
@@ -95,7 +97,8 @@ struct MainWindowPresentationControllerTests {
         let repoB = Repo(name: "beta", localPath: URL(fileURLWithPath: "/tmp/beta"))
         let session = HostTerminalSession(
             key: .hostPath("/tmp/alpha/worktrees/feature"),
-            directory: URL(fileURLWithPath: "/tmp/alpha/worktrees/feature")
+            directory: URL(fileURLWithPath: "/tmp/alpha/worktrees/feature"),
+            terminalMode: .ghosttyManagedSplits
         )
 
         let repoIndex = Dictionary(
@@ -132,11 +135,13 @@ struct MainWindowPresentationControllerTests {
         let repoURL = URL(fileURLWithPath: "/tmp/repo")
         let primary = HostTerminalSession(
             key: .repoPath(repoURL.path),
-            directory: repoURL
+            directory: repoURL,
+            terminalMode: .ghosttyManagedSplits
         )
         let defaultHome = HostTerminalSession(
             key: .defaultHome,
-            directory: URL(fileURLWithPath: "/tmp/home")
+            directory: URL(fileURLWithPath: "/tmp/home"),
+            terminalMode: .ghosttyManagedSplits
         )
 
         let paneCounts = controller.paneCountBySessionKey(
@@ -189,7 +194,8 @@ struct MainWindowPresentationControllerTests {
     func toolbarTitleFallsBackToActiveTerminalDirectory() {
         let session = HostTerminalSession(
             key: .hostPath("/tmp/scratch"),
-            directory: URL(fileURLWithPath: "/tmp/scratch")
+            directory: URL(fileURLWithPath: "/tmp/scratch"),
+            terminalMode: .ghosttyManagedSplits
         )
 
         let title = controller.toolbarTitle(

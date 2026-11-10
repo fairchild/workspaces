@@ -406,13 +406,18 @@ struct SurfaceStoreTests {
         HostTerminalSession(
             key: .repoPath(path),
             directory: URL(fileURLWithPath: path),
+            terminalMode: .ghosttyManagedSplits,
             initialCommand: "claude --resume",
             initialCommandDelivery: delivery
         )
     }
 
     private func makeSession(path: String = "/Users/test/repo") -> HostTerminalSession {
-        HostTerminalSession(key: .repoPath(path), directory: URL(fileURLWithPath: path))
+        HostTerminalSession(
+            key: .repoPath(path),
+            directory: URL(fileURLWithPath: path),
+            terminalMode: .ghosttyManagedSplits
+        )
     }
 }
 
@@ -424,7 +429,8 @@ struct SurfaceConformerTests {
         let tile = TileID()
         let session = HostTerminalSession(
             key: .repoPath("/Users/test/proj"),
-            directory: URL(fileURLWithPath: "/Users/test/proj")
+            directory: URL(fileURLWithPath: "/Users/test/proj"),
+            terminalMode: .ghosttyManagedSplits
         )
         let surface = TerminalSurface(tileID: tile, session: session, hooksSocketPath: nil)
 
@@ -439,7 +445,8 @@ struct SurfaceConformerTests {
         let tile = TileID()
         let session = HostTerminalSession(
             key: .repoPath("/Users/test/proj"),
-            directory: URL(fileURLWithPath: "/Users/test/proj")
+            directory: URL(fileURLWithPath: "/Users/test/proj"),
+            terminalMode: .ghosttyManagedSplits
         )
         let surface = TerminalSurface(tileID: tile, session: session, hooksSocketPath: nil)
 

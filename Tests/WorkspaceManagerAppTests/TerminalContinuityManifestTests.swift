@@ -41,6 +41,7 @@ struct TerminalContinuityManifestTests {
         let session = HostTerminalSession(
             key: .hostPath(directory.path),
             directory: directory,
+            terminalMode: .ghosttyManagedSplits,
             tmuxSessionNameOverride: "wm-alpha-probed"
         )
         let manifest = TerminalContinuityManifest(
@@ -65,7 +66,11 @@ struct TerminalContinuityManifestTests {
     @Test("A manifest without the tmux name field still decodes")
     func manifestWithoutOverrideFieldDecodes() throws {
         let directory = try temporaryDirectory()
-        let session = HostTerminalSession(key: .hostPath(directory.path), directory: directory)
+        let session = HostTerminalSession(
+            key: .hostPath(directory.path),
+            directory: directory,
+            terminalMode: .ghosttyManagedSplits
+        )
         let manifest = TerminalContinuityManifest(
             targetKind: .workspace,
             targetID: UUID(),
@@ -85,6 +90,61 @@ struct TerminalContinuityManifestTests {
 
         #expect(restored.tmuxSessionNameOverride == nil)
         #expect(restored.effectiveTmuxSessionName == session.effectiveTmuxSessionName)
+    }
+
+    /// Records carry no mode of their own; restore stamps each one with the mode the
+    /// manifest was written under, whatever the setting says now.
+    @Test("Restored sessions take the manifest's mode")
+    func restoredSessionsTakeTheManifestsMode() throws {
+        let directory = try temporaryDirectory()
+        let session = HostTerminalSession(
+            key: .hostPath(directory.path),
+            directory: directory,
+            terminalMode: .tmuxPerSession
+        )
+        for mode in TerminalMultiplexingMode.allCases {
+            let manifest = TerminalContinuityManifest(
+                targetKind: .workspace,
+                targetID: UUID(),
+                rootURL: directory,
+                launchURL: directory,
+                terminalMode: mode,
+                sessions: [session],
+                activeSessionID: session.id
+            )
+
+            let decoded = try #require(TerminalContinuityManifest.decode(from: manifest.rawValue))
+
+            #expect(decoded.hostSessionSnapshot()?.sessions.map(\.terminalMode) == [mode])
+        }
+    }
+
+    @Test("A manifest without a terminal mode decodes to the current setting")
+    func manifestWithoutTerminalModeDecodesToTheSetting() throws {
+        let directory = try temporaryDirectory()
+        let session = HostTerminalSession(
+            key: .hostPath(directory.path),
+            directory: directory,
+            terminalMode: .tmuxPerSession
+        )
+        let manifest = TerminalContinuityManifest(
+            targetKind: .workspace,
+            targetID: UUID(),
+            rootURL: directory,
+            launchURL: directory,
+            terminalMode: .tmuxPerSession,
+            sessions: [session],
+            activeSessionID: session.id
+        )
+        let withoutField = manifest.rawValue.replacingOccurrences(
+            of: "\"terminalMode\"",
+            with: "\"unusedLegacyField\""
+        )
+
+        let decoded = try #require(TerminalContinuityManifest.decode(from: withoutField))
+
+        #expect(decoded.terminalMode == TerminalMultiplexingMode.resolve())
+        #expect(decoded.hostSessionSnapshot()?.sessions.map(\.terminalMode) == [TerminalMultiplexingMode.resolve()])
     }
 
     @Test("Launch directory restores only for matching target")
@@ -177,9 +237,17 @@ struct TerminalContinuityManifestTests {
     func hostSessionSnapshotRestoresTabsByScope() throws {
         let home = try temporaryDirectory()
         let repo = try temporaryDirectory()
-        let homeSession = HostTerminalSession(key: .defaultHome, directory: home)
-        let repoSession = HostTerminalSession(key: .repoPath(repo.path), directory: repo)
-        let secondRepoSession = HostTerminalSession(key: .repoPath(repo.path), directory: repo)
+        let homeSession = HostTerminalSession(key: .defaultHome, directory: home, terminalMode: .ghosttyManagedSplits)
+        let repoSession = HostTerminalSession(
+            key: .repoPath(repo.path),
+            directory: repo,
+            terminalMode: .ghosttyManagedSplits
+        )
+        let secondRepoSession = HostTerminalSession(
+            key: .repoPath(repo.path),
+            directory: repo,
+            terminalMode: .ghosttyManagedSplits
+        )
 
         let manifest = TerminalContinuityManifest(
             targetKind: .repo,
@@ -209,10 +277,11 @@ struct TerminalContinuityManifestTests {
     func hostSessionSnapshotSkipsProviderBackedCommandSessions() throws {
         let home = try temporaryDirectory()
         let remoteWorkingDirectory = try temporaryDirectory()
-        let homeSession = HostTerminalSession(key: .defaultHome, directory: home)
+        let homeSession = HostTerminalSession(key: .defaultHome, directory: home, terminalMode: .ghosttyManagedSplits)
         let remoteSession = HostTerminalSession(
             key: .backendSession(providerID: "lume", instanceID: "vm-123"),
             directory: remoteWorkingDirectory,
+            terminalMode: .ghosttyManagedSplits,
             customCommand: "/usr/local/bin/lume ssh vm-123"
         )
 
@@ -243,9 +312,17 @@ struct TerminalContinuityManifestTests {
     func hostSessionSnapshotExcludesArchivedWorkspaceScopes() throws {
         let home = try temporaryDirectory()
         let workspace = try temporaryDirectory()
-        let homeSession = HostTerminalSession(key: .defaultHome, directory: home)
-        let workspaceSession = HostTerminalSession(key: .hostPath(workspace.path), directory: workspace)
-        let secondWorkspaceSession = HostTerminalSession(key: .hostPath(workspace.path), directory: workspace)
+        let homeSession = HostTerminalSession(key: .defaultHome, directory: home, terminalMode: .ghosttyManagedSplits)
+        let workspaceSession = HostTerminalSession(
+            key: .hostPath(workspace.path),
+            directory: workspace,
+            terminalMode: .ghosttyManagedSplits
+        )
+        let secondWorkspaceSession = HostTerminalSession(
+            key: .hostPath(workspace.path),
+            directory: workspace,
+            terminalMode: .ghosttyManagedSplits
+        )
 
         let manifest = TerminalContinuityManifest(
             targetKind: .workspace,

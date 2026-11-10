@@ -7,6 +7,7 @@ import AppKit
 import Foundation
 import GhosttyKit
 import QuartzCore
+import WorkspaceManagerCore
 import os.log
 
 private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "GhosttySurfaceView")
@@ -87,8 +88,10 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
         createSurfaceIfNeeded()
     }
 
+    /// A surface with no `HostTerminalSession` behind it, born in `terminalMode`.
     convenience init(
         workingDirectory: URL,
+        terminalMode: TerminalMultiplexingMode = .resolve(),
         hostSessionID: UUID? = nil,
         hooksSocketPath: String? = nil,
         onProcessExit: (() -> Void)? = nil,
@@ -97,6 +100,7 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
         self.init(
             launchContext: .directoryBacked(
                 workingDirectory: workingDirectory,
+                terminalMode: terminalMode,
                 hostSessionID: hostSessionID,
                 hooksSocketPath: hooksSocketPath
             ),

@@ -45,12 +45,14 @@ struct MainWindowOpenSurfaceReattachControllerTests {
     private func session(
         directory: URL,
         key: HostTerminalSessionKey? = nil,
+        terminalMode: TerminalMultiplexingMode = .tmuxPerSession,
         customCommand: String? = nil,
         initialCommand: String? = nil
     ) -> HostTerminalSession {
         HostTerminalSession(
             key: key ?? .hostPath(directory.path),
             directory: directory,
+            terminalMode: terminalMode,
             customCommand: customCommand,
             initialCommand: initialCommand
         )
@@ -61,7 +63,6 @@ struct MainWindowOpenSurfaceReattachControllerTests {
         activeSessionIDByScopeKey: [HostTerminalSessionKey: UUID] = [:],
         excludedSessionIDs: Set<UUID> = [],
         excludedScopeKeys: Set<HostTerminalSessionKey> = [],
-        terminalMode: TerminalMultiplexingMode = .tmuxPerSession,
         limit: Int = MainWindowOpenSurfaceReattachController.maximumSurfaces
     ) -> [MainWindowOpenSurfaceReattachController.Candidate] {
         controller.candidates(
@@ -69,7 +70,6 @@ struct MainWindowOpenSurfaceReattachControllerTests {
             activeSessionIDByScopeKey: activeSessionIDByScopeKey,
             excludedSessionIDs: excludedSessionIDs,
             excludedScopeKeys: excludedScopeKeys,
-            terminalMode: terminalMode,
             limit: limit
         )
     }
@@ -92,17 +92,16 @@ struct MainWindowOpenSurfaceReattachControllerTests {
 
     /// Without tmux a surface's shell died with the previous process, so realizing its record
     /// would start a fresh shell rather than rejoin anything the user left running.
-    @Test("Ghostty-managed mode offers nothing to rejoin")
+    @Test("A session born in Ghostty-managed mode is not offered to rejoin")
     func ghosttyManagedModeOffersNothing() {
         let directories = TemporaryDirectories()
         defer { directories.remove() }
+        let splits = session(directory: directories.make("alpha"), terminalMode: .ghosttyManagedSplits)
+        let tmux = session(directory: directories.make("beta"))
 
-        let result = candidates(
-            [session(directory: directories.make("alpha"))],
-            terminalMode: .ghosttyManagedSplits
-        )
+        let result = candidates([splits, tmux])
 
-        #expect(result.isEmpty)
+        #expect(result.map(\.sessionID) == [tmux.id])
     }
 
     /// The window realizes the scope it lands on; rejoining it again would be redundant work

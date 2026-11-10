@@ -155,6 +155,11 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
     /// a split pane's disambiguated name, or the probed name a restore reattaches
     /// to. `nil` means the default directory-derived name.
     public let tmuxSessionNameOverride: String?
+    /// tmux or Ghostty splits, fixed when the session is born: a new primary takes the
+    /// resolver's answer, a tab or split its source's, a restore its record's. Every later
+    /// decision (launch, close/kill, the continuity row) reads this, so changing the setting
+    /// affects new tiles only.
+    public let terminalMode: TerminalMultiplexingMode
 
     public var directoryURL: URL {
         URL(fileURLWithPath: directoryPath)
@@ -174,6 +179,7 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
         id: UUID = UUID(),
         key: HostTerminalSessionKey,
         directory: URL,
+        terminalMode: TerminalMultiplexingMode,
         customCommand: String? = nil,
         initialCommand: String? = nil,
         initialCommandDelivery: InitialCommandDelivery = .execute,
@@ -182,6 +188,7 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
         self.id = id
         self.key = key.normalized()
         self.directoryPath = Self.normalize(directory).path
+        self.terminalMode = terminalMode
         self.customCommand = customCommand
         self.initialCommand = initialCommand
         self.initialCommandDelivery = initialCommandDelivery
@@ -263,10 +270,13 @@ public struct HostTerminalSessionCoordinator: Sendable {
         return sessions.filter { $0.key == normalizedScopeKey }
     }
 
+    /// Activates the scope's existing session, or creates one. `terminalMode` is evaluated
+    /// only when a session is created.
     @discardableResult
     public mutating func activate(
         key: HostTerminalSessionKey,
         directory: URL,
+        terminalMode: @autoclosure () -> TerminalMultiplexingMode,
         customCommand: String? = nil,
         initialCommand: String? = nil
     ) -> HostTerminalSessionActivationResult {
@@ -296,6 +306,7 @@ public struct HostTerminalSessionCoordinator: Sendable {
         let session = HostTerminalSession(
             key: normalizedKey,
             directory: normalizedDirectory,
+            terminalMode: terminalMode(),
             customCommand: customCommand,
             initialCommand: initialCommand
         )
@@ -304,10 +315,13 @@ public struct HostTerminalSessionCoordinator: Sendable {
         return HostTerminalSessionActivationResult(session: session, created: true)
     }
 
+    /// `activate` without moving the active session. `terminalMode` is evaluated only when a
+    /// session is created.
     @discardableResult
     public mutating func ensureSession(
         key: HostTerminalSessionKey,
         directory: URL,
+        terminalMode: @autoclosure () -> TerminalMultiplexingMode,
         customCommand: String? = nil,
         initialCommand: String? = nil
     ) -> HostTerminalSessionActivationResult {
@@ -336,6 +350,7 @@ public struct HostTerminalSessionCoordinator: Sendable {
         let session = HostTerminalSession(
             key: normalizedKey,
             directory: normalizedDirectory,
+            terminalMode: terminalMode(),
             customCommand: customCommand,
             initialCommand: initialCommand
         )
@@ -372,6 +387,7 @@ public struct HostTerminalSessionCoordinator: Sendable {
     public mutating func createSession(
         key: HostTerminalSessionKey,
         directory: URL,
+        terminalMode: TerminalMultiplexingMode,
         initialCommand: String? = nil,
         initialCommandDelivery: HostTerminalSession.InitialCommandDelivery = .execute,
         tmuxSessionNameOverride: String? = nil,
@@ -387,6 +403,7 @@ public struct HostTerminalSessionCoordinator: Sendable {
             id: resolvedID,
             key: key,
             directory: directory,
+            terminalMode: terminalMode,
             initialCommand: initialCommand,
             initialCommandDelivery: initialCommandDelivery,
             tmuxSessionNameOverride: tmuxSessionNameOverride
@@ -396,9 +413,10 @@ public struct HostTerminalSessionCoordinator: Sendable {
         return session
     }
 
-    /// A new tab in `source`'s scope. A local tab gets a tmux name of its own, as a split pane
-    /// does: the directory derivation belongs to the scope's primary, and a second
-    /// `new-session -A` on it would show the primary's shell again instead of a new one.
+    /// A new tab in `source`'s scope, in `source`'s terminal mode. A local tab gets a tmux name
+    /// of its own, as a split pane does: the directory derivation belongs to the scope's
+    /// primary, and a second `new-session -A` on it would show the primary's shell again
+    /// instead of a new one.
     @discardableResult
     public mutating func createTab(from source: HostTerminalSession) -> HostTerminalSession {
         let id = UUID()
@@ -406,6 +424,7 @@ public struct HostTerminalSessionCoordinator: Sendable {
             id: id,
             key: source.key,
             directory: source.directoryURL,
+            terminalMode: source.terminalMode,
             customCommand: source.customCommand,
             tmuxSessionNameOverride: source.isRemote
                 ? nil

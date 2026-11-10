@@ -12,7 +12,8 @@ import WorkspaceManagerCore
 
 struct TerminalSessionLaunchContext: Equatable, Sendable {
     enum CommandMode: Equatable, Sendable {
-        case directoryShell
+        /// A login shell in the working directory, under tmux or not as the mode says.
+        case directoryShell(TerminalMultiplexingMode)
         case customCommand(String)
 
         var label: String {
@@ -76,6 +77,7 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
 
         return directoryBacked(
             workingDirectory: session.directoryURL,
+            terminalMode: session.terminalMode,
             hostSessionID: session.id,
             hooksSocketPath: hooksSocketPath,
             automationEnvironment: automationEnvironment,
@@ -85,6 +87,7 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
 
     static func directoryBacked(
         workingDirectory: URL,
+        terminalMode: TerminalMultiplexingMode,
         hostSessionID: UUID? = nil,
         hooksSocketPath: String? = nil,
         automationEnvironment: AutomationTerminalEnvironment? = nil,
@@ -92,7 +95,7 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
     ) -> TerminalSessionLaunchContext {
         TerminalSessionLaunchContext(
             workingDirectory: workingDirectory,
-            commandMode: .directoryShell,
+            commandMode: .directoryShell(terminalMode),
             hostSessionID: hostSessionID,
             hooksSocketPath: hooksSocketPath,
             automationEnvironment: automationEnvironment,

@@ -48,15 +48,12 @@ struct TerminalForegroundProcessResolver: Sendable {
     /// The foreground process name for `session`, or `nil` when nothing resolves (the
     /// caller then falls back to the terminal title / directory). Cached per session id
     /// for `cacheTTL`.
-    func foregroundName(
-        for session: HostTerminalSession,
-        mode: TerminalMultiplexingMode
-    ) async -> String? {
+    func foregroundName(for session: HostTerminalSession) async -> String? {
         if let cached = Self.cache.read(sessionID: session.id, ttl: Self.cacheTTL) {
             return cached
         }
         var resolved: String?
-        if mode == .tmuxPerSession {
+        if session.terminalMode == .tmuxPerSession {
             resolved = await probe.foregroundCommand(forSessionNamed: tmuxSessionName(session))
         }
         if resolved == nil {

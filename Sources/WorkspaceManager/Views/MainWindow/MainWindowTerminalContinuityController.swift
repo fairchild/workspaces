@@ -140,7 +140,7 @@ struct MainWindowTerminalContinuityController {
                 guard spec.sessionKey == record.key, spec.customCommand != nil else { continue }
                 validated[record.id] = HostTerminalSession(
                     id: record.id, key: spec.sessionKey, directory: spec.workingDirectory,
-                    customCommand: spec.customCommand
+                    terminalMode: manifest.terminalMode, customCommand: spec.customCommand
                 )
             } catch {
                 terminalContinuityLog.error(

@@ -40,6 +40,10 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
     /// derivation: a new name of its own when the row had one (a cmd+t tab) or shared a live
     /// session another surface keeps. Deriving from the directory would join the primary's.
     public let launchTmuxSessionName: String?
+    /// The terminal mode the row recorded, which the restored session is stamped with.
+    /// `nil` when the row's value is not a known mode; the session then takes the
+    /// resolver's mode like a new primary.
+    public let terminalMode: TerminalMultiplexingMode?
 
     public var id: UUID { hostSessionID }
 
@@ -49,7 +53,8 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
         directory: URL,
         action: RestoreSurfaceAction,
         launchDirectoryFellBack: Bool = false,
-        launchTmuxSessionName: String? = nil
+        launchTmuxSessionName: String? = nil,
+        terminalMode: TerminalMultiplexingMode? = nil
     ) {
         self.hostSessionID = hostSessionID
         self.key = key
@@ -57,6 +62,7 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
         self.action = action
         self.launchDirectoryFellBack = launchDirectoryFellBack
         self.launchTmuxSessionName = launchTmuxSessionName
+        self.terminalMode = terminalMode
     }
 }
 
@@ -202,7 +208,8 @@ public struct TerminalRestorePlanner: Sendable {
                     action: decision.action,
                     launchDirectoryFellBack: decision.fellBack,
                     launchTmuxSessionName: ownLaunchName(
-                        row: row, action: decision.action, directory: decision.directory)
+                        row: row, action: decision.action, directory: decision.directory),
+                    terminalMode: TerminalMultiplexingMode(rawValue: row.terminalMode)
                 )
             )
         }
@@ -264,7 +271,8 @@ public struct TerminalRestorePlanner: Sendable {
             directory: directory,
             action: .freshShell,
             launchDirectoryFellBack: fellBack,
-            launchTmuxSessionName: TmuxSessionNameSharing.replacementName(for: directory)
+            launchTmuxSessionName: TmuxSessionNameSharing.replacementName(for: directory),
+            terminalMode: TerminalMultiplexingMode(rawValue: row.terminalMode)
         )
     }
 

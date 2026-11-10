@@ -47,7 +47,11 @@ struct SidebarWorkspacePresentationControllerTests {
     @Test("Agent-derived activity is preferred over baseline pane-count signal")
     func agentDerivedActivityWinsWhenRegistryHasState() {
         let key = HostTerminalSessionKey.repoPath("/repo")
-        let session = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
+        let session = HostTerminalSession(
+            key: key,
+            directory: URL(fileURLWithPath: "/repo"),
+            terminalMode: .ghosttyManagedSplits
+        )
         let status = AgentSessionStatus(
             hostSessionID: session.id,
             kind: .claudeCode,
@@ -70,7 +74,11 @@ struct SidebarWorkspacePresentationControllerTests {
     @Test("Errored agent state surfaces error category in sidebar")
     func erroredAgentStateSurfaces() {
         let key = HostTerminalSessionKey.repoPath("/repo")
-        let session = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
+        let session = HostTerminalSession(
+            key: key,
+            directory: URL(fileURLWithPath: "/repo"),
+            terminalMode: .ghosttyManagedSplits
+        )
         let status = AgentSessionStatus(
             hostSessionID: session.id,
             kind: .claudeCode,
@@ -97,7 +105,11 @@ struct SidebarWorkspacePresentationControllerTests {
     @Test("Idle agent state defers to baseline pane-count signal")
     func idleAgentStateDefersToBaseline() {
         let key = HostTerminalSessionKey.repoPath("/repo")
-        let session = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
+        let session = HostTerminalSession(
+            key: key,
+            directory: URL(fileURLWithPath: "/repo"),
+            terminalMode: .ghosttyManagedSplits
+        )
         let status = AgentSessionStatus(
             hostSessionID: session.id,
             kind: .claudeCode,
@@ -129,7 +141,11 @@ struct SidebarWorkspacePresentationControllerTests {
     @Test("Empty agent map preserves the existing pane-count + active signal")
     func emptyAgentMapKeepsBaseline() {
         let key = HostTerminalSessionKey.repoPath("/repo")
-        let session = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
+        let session = HostTerminalSession(
+            key: key,
+            directory: URL(fileURLWithPath: "/repo"),
+            terminalMode: .ghosttyManagedSplits
+        )
 
         let activity = controller.sessionActivity(
             for: key,
@@ -257,7 +273,11 @@ struct SidebarWorkspacePresentationControllerTests {
     @Test("The live status line carries the agent, its run summary, and the session's start")
     func liveSessionStatusComposesTheLine() {
         let key = HostTerminalSessionKey.repoPath("/repo")
-        let session = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
+        let session = HostTerminalSession(
+            key: key,
+            directory: URL(fileURLWithPath: "/repo"),
+            terminalMode: .ghosttyManagedSplits
+        )
         let startedAt = Date(timeIntervalSince1970: 1_756_000_000)
         let status = AgentSessionStatus(
             hostSessionID: session.id,
@@ -285,7 +305,11 @@ struct SidebarWorkspacePresentationControllerTests {
     @Test("A session with no registered agent status yields no live status line")
     func liveSessionStatusIsAbsentWithoutAgentState() {
         let key = HostTerminalSessionKey.repoPath("/repo")
-        let session = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
+        let session = HostTerminalSession(
+            key: key,
+            directory: URL(fileURLWithPath: "/repo"),
+            terminalMode: .ghosttyManagedSplits
+        )
 
         #expect(
             controller.liveSessionStatus(
@@ -302,8 +326,16 @@ struct SidebarWorkspacePresentationControllerTests {
     @Test("The line describes the same session the activity dot does — the freshest one")
     func liveSessionStatusFollowsTheFreshestSession() {
         let key = HostTerminalSessionKey.repoPath("/repo")
-        let older = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
-        let newer = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
+        let older = HostTerminalSession(
+            key: key,
+            directory: URL(fileURLWithPath: "/repo"),
+            terminalMode: .ghosttyManagedSplits
+        )
+        let newer = HostTerminalSession(
+            key: key,
+            directory: URL(fileURLWithPath: "/repo"),
+            terminalMode: .ghosttyManagedSplits
+        )
         let base = Date(timeIntervalSince1970: 1_756_000_000)
         let statuses = [
             older.id: AgentSessionStatus(

@@ -22,11 +22,13 @@ struct WorkspaceTerminalTeardownControllerTests {
 
     private func session(
         directory: String = "/tmp/ws",
+        terminalMode: TerminalMultiplexingMode = .tmuxPerSession,
         tmuxOverride: String? = nil
     ) -> HostTerminalSession {
         HostTerminalSession(
             key: Self.scope,
             directory: URL(fileURLWithPath: directory),
+            terminalMode: terminalMode,
             tmuxSessionNameOverride: tmuxOverride
         )
     }
@@ -303,18 +305,17 @@ struct WorkspaceTerminalTeardownControllerTests {
         let remote = HostTerminalSession(
             key: Self.scope,
             directory: URL(fileURLWithPath: "/tmp/ws"),
+            terminalMode: .tmuxPerSession,
             customCommand: "ssh sandbox"
         )
+        let splits = session(terminalMode: .ghosttyManagedSplits)
         #expect(local.effectiveTmuxSessionName == remote.effectiveTmuxSessionName)
 
         #expect(
-            WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: local, mode: .tmuxPerSession)
+            WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: local)
                 == local.effectiveTmuxSessionName)
-        #expect(
-            WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: remote, mode: .tmuxPerSession) == nil)
-        #expect(
-            WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: local, mode: .ghosttyManagedSplits)
-                == nil)
+        #expect(WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: remote) == nil)
+        #expect(WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: splits) == nil)
 
         // Through the state machine on the real derivation: the remote session still closes and
         // retires, it just contributes no name to the kill list.
@@ -323,7 +324,7 @@ struct WorkspaceTerminalTeardownControllerTests {
         let controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [remote] },
             tmuxSessionName: {
-                WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: $0, mode: .tmuxPerSession)
+                WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: $0)
             },
             killTmuxSession: { killedSession in
                 killCalls.append(killedSession.effectiveTmuxSessionName)

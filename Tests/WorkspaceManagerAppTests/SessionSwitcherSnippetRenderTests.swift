@@ -92,7 +92,8 @@ struct SessionSwitcherSnippetRenderTests {
         HostTerminalSession(
             id: UUID(),
             key: .hostPath(path),
-            directory: URL(fileURLWithPath: path)
+            directory: URL(fileURLWithPath: path),
+            terminalMode: .ghosttyManagedSplits
         )
     }
 

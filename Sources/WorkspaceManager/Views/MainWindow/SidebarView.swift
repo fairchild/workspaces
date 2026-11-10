@@ -1986,7 +1986,6 @@ struct SidebarView: View {
     /// to call from the hover card's lazy `tabsProvider`. Resolves in every multiplexing mode
     /// (tmux pane command when available, otherwise the directory's running program).
     private func refreshForegroundProcessNames(from state: SidebarRowSessionState) {
-        let mode = TerminalMultiplexingMode.resolve()
         let plainSessions = zip(state.sessions, state.statuses)
             .filter { $0.1 == nil }
             .map(\.0)
@@ -1994,7 +1993,7 @@ struct SidebarView: View {
         let resolver = foregroundResolver
         Task { @MainActor in
             for session in plainSessions {
-                let name = await resolver.foregroundName(for: session, mode: mode)
+                let name = await resolver.foregroundName(for: session)
                 if let name, foregroundNameBySessionID[session.id] != name {
                     foregroundNameBySessionID[session.id] = name
                 } else if name == nil, foregroundNameBySessionID[session.id] != nil {

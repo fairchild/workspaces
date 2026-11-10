@@ -32,7 +32,10 @@ struct TerminalContinuityManifest: Codable, Equatable {
             self.tmuxSessionNameOverride = session.tmuxSessionNameOverride
         }
 
-        func restoredSession(fileManager: FileManager = .default) -> HostTerminalSession? {
+        func restoredSession(
+            terminalMode: TerminalMultiplexingMode,
+            fileManager: FileManager = .default
+        ) -> HostTerminalSession? {
             guard isSafeForDirectRestore else {
                 return nil
             }
@@ -44,6 +47,7 @@ struct TerminalContinuityManifest: Codable, Equatable {
                 id: id,
                 key: key,
                 directory: URL(fileURLWithPath: directoryPath, isDirectory: true),
+                terminalMode: terminalMode,
                 customCommand: customCommand,
                 tmuxSessionNameOverride: tmuxSessionNameOverride
             )
@@ -85,6 +89,8 @@ struct TerminalContinuityManifest: Codable, Equatable {
     let targetID: UUID
     let rootPath: String
     let launchPath: String
+    /// The global mode when the manifest was written. Records carry no mode of their own, so
+    /// restore stamps every record's session with this one.
     let terminalMode: TerminalMultiplexingMode
     let tmuxSessionName: String
     let updatedAt: Date
@@ -147,7 +153,9 @@ struct TerminalContinuityManifest: Codable, Equatable {
         targetID = try container.decode(UUID.self, forKey: .targetID)
         rootPath = try container.decode(String.self, forKey: .rootPath)
         launchPath = try container.decode(String.self, forKey: .launchPath)
-        terminalMode = try container.decode(TerminalMultiplexingMode.self, forKey: .terminalMode)
+        terminalMode =
+            (try? container.decodeIfPresent(TerminalMultiplexingMode.self, forKey: .terminalMode))
+            ?? TerminalMultiplexingMode.resolve()
         tmuxSessionName = try container.decode(String.self, forKey: .tmuxSessionName)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         sessionRecords = try container.decodeIfPresent([SessionRecord].self, forKey: .sessionRecords) ?? []
@@ -229,7 +237,8 @@ struct TerminalContinuityManifest: Codable, Equatable {
             {
                 return validated
             }
-            return includeHostSessions ? record.restoredSession(fileManager: fileManager) : nil
+            return includeHostSessions
+                ? record.restoredSession(terminalMode: terminalMode, fileManager: fileManager) : nil
         }.filter {
             !excludedScopeKeys.contains($0.key)
         }
