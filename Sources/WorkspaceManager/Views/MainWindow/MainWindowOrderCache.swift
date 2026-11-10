@@ -135,7 +135,6 @@ final class MainWindowOrderCache {
     /// has to be distinct from the model ids sharing the same slot, which it is by construction.
     private let globalKey = UUID()
 
-    private let allWorkspaceSlot = MainWindowOrderSlot<Workspace>()
     private let activeWorkspaceSlot = MainWindowOrderSlot<Workspace>()
     private let archivedWorkspaceSlot = MainWindowOrderSlot<Workspace>()
     private let pinnedWorkspaceSlot = MainWindowOrderSlot<Workspace>()
@@ -177,21 +176,9 @@ final class MainWindowOrderCache {
     /// `MainWindowOrderSlot.buildCount` for why the count rather than the result is what a test
     /// has to read.
     var buildCount: Int {
-        allWorkspaceSlot.buildCount + activeWorkspaceSlot.buildCount
-            + archivedWorkspaceSlot.buildCount + pinnedWorkspaceSlot.buildCount
+        activeWorkspaceSlot.buildCount + archivedWorkspaceSlot.buildCount + pinnedWorkspaceSlot.buildCount
             + repoWebSourceSlot.buildCount + workspaceWebSourceSlot.buildCount
             + globalWebSourceSlot.buildCount + recentBuildCount
-    }
-
-    /// Every workspace of a repo, most recently accessed first — what the repo landing page
-    /// lists, archived rows included.
-    func workspaces(for repo: Repo) -> [Workspace] {
-        allWorkspaceSlot.ordered(
-            key: repo.id,
-            fingerprint: Self.workspaceSignatures(repo.workspaces)
-        ) {
-            Self.byLastAccessed(repo.workspaces)
-        }
     }
 
     /// A repo's non-archived workspaces, most recently accessed first.

@@ -10,6 +10,7 @@ import WorkspaceManagerCore
 
 struct RepoLandingView: View {
     @Environment(\.workspaceProcessMonitor) private var processMonitor
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let repo: Repo
     let onWorkspaceSelected: (Workspace) -> Void
@@ -144,7 +145,7 @@ struct RepoLandingView: View {
     private var archivedSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             ArchivedSectionHeader(count: archivedWorkspaces.count, isExpanded: isArchivedExpanded) {
-                withAnimation(.easeInOut(duration: 0.18)) {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
                     if isArchivedExpanded {
                         expandedArchivedRepoIDs.remove(repo.id)
                     } else {
@@ -240,9 +241,10 @@ struct RepoLandingView: View {
     private func pollAgentStatuses() async {
         while !Task.isCancelled {
             let directories = Dictionary(
-                uniqueKeysWithValues: activeWorkspaces.map { ($0.id, $0.workspaceURL) }
+                uniqueKeysWithValues: (activeWorkspaces + archivedWorkspaces).map { ($0.id, $0.workspaceURL) }
             )
             let statuses = await processMonitor.detectAgents(in: directories)
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 agentStatuses = statuses
             }
