@@ -1794,9 +1794,6 @@ struct ContentView: View {
                     tileTreeStore.splitSessions(forPrimarySessionID: primary.id) + [primary]
                 }
             },
-            tmuxSessionName: { session in
-                WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: session)
-            },
             killTmuxSession: { session in
                 await TmuxOwnedSessionTerminator(ledger: tileTreeStore.tmuxOwnershipLedger)
                     .terminate(hostSessionID: session.id, requiringCreation: false)
@@ -2926,7 +2923,8 @@ struct ContentView: View {
         // retire than a primary one.
         var ownedHostSessionIDsByTmuxName: [String: [UUID]] = [:]
         for session in tileTreeStore.allLiveSessions {
-            ownedHostSessionIDsByTmuxName[session.effectiveTmuxSessionName, default: []].append(session.id)
+            guard let tmuxSessionName = session.tmuxSessionName else { continue }
+            ownedHostSessionIDsByTmuxName[tmuxSessionName, default: []].append(session.id)
         }
         let ownedTmuxSessionNames = Set(ownedHostSessionIDsByTmuxName.keys)
 

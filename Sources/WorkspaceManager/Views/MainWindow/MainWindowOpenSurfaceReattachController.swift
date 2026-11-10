@@ -141,7 +141,7 @@ struct MainWindowOpenSurfaceReattachController {
             }
             seenScopeKeys.insert(session.key)
 
-            guard session.terminalMode == .tmuxPerSession else { continue }
+            guard let tmuxSessionName = session.tmuxSessionName else { continue }
             guard !excludedSessionIDs.contains(session.id) else { continue }
             guard isReattachable(session, fileManager: fileManager) else { continue }
 
@@ -149,7 +149,7 @@ struct MainWindowOpenSurfaceReattachController {
                 Candidate(
                     sessionID: session.id,
                     key: session.key,
-                    tmuxSessionName: session.effectiveTmuxSessionName
+                    tmuxSessionName: tmuxSessionName
                 )
             )
         }

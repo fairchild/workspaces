@@ -25,8 +25,6 @@ struct WorkspaceTerminalTeardownController {
 
     /// All terminal sessions in the scope, split panes before their primary (close order).
     let sessionsInScope: @MainActor (HostTerminalSessionKey) -> [HostTerminalSession]
-    /// The tmux session name backing a session, or `nil` when none does (non-tmux mode).
-    let tmuxSessionName: @MainActor (HostTerminalSession) -> String?
     /// End the tmux session backing a host session, when the app's ownership ledger
     /// authorizes it. `false` when nothing died: the kill failed, the session was already
     /// gone, or the app could not attribute the session to a surface it launched and left
@@ -44,15 +42,6 @@ struct WorkspaceTerminalTeardownController {
     var killedProcessExitBudget: Duration = .seconds(5)
     var closeRetryInterval: Duration = .milliseconds(100)
 
-    /// The tmux session backing `session` under teardown, or `nil` when none does: a session
-    /// born outside `.tmuxPerSession` launched no tmux, and a remote (`customCommand`) surface
-    /// runs its command directly even in tmux mode (`TerminalSessionLaunchContext.hostSession`
-    /// passes it no tmux name), so its directory derivation would name a session it does not own.
-    static func tmuxSessionNameForTeardown(of session: HostTerminalSession) -> String? {
-        guard session.terminalMode == .tmuxPerSession, !session.isRemote else { return nil }
-        return session.effectiveTmuxSessionName
-    }
-
     func teardown(scopeKey: HostTerminalSessionKey) async -> Outcome {
         let sessions = sessionsInScope(scopeKey)
 
@@ -67,7 +56,7 @@ struct WorkspaceTerminalTeardownController {
         var killed: [String] = []
         var killedNames = Set<String>()
         for session in sessions {
-            guard let name = tmuxSessionName(session), !killedNames.contains(name) else { continue }
+            guard let name = session.tmuxSessionName, !killedNames.contains(name) else { continue }
             if await killTmuxSession(session) {
                 killedNames.insert(name)
                 killed.append(name)
@@ -81,7 +70,7 @@ struct WorkspaceTerminalTeardownController {
         // arm. Fail typed instead of tearing down under the prompt.
         var blockedNames: [String] = []
         for session in sessions {
-            let tmuxWasKilled = tmuxSessionName(session).map(killedNames.contains) ?? false
+            let tmuxWasKilled = session.tmuxSessionName.map(killedNames.contains) ?? false
             let deadline = ContinuousClock.now.advanced(by: killedProcessExitBudget)
             while true {
                 do {

@@ -20,7 +20,6 @@ struct TerminalForegroundProcessResolverTests {
     ) -> TerminalForegroundProcessResolver {
         TerminalForegroundProcessResolver(
             probe: TmuxSessionProbe(runForOutput: { _, _, _ in tmuxOutput }, environment: [:]),
-            tmuxSessionName: { _ in "wm-repo-abcd1234" },
             cwdProgramName: { _ in cwdProgram }
         )
     }
@@ -56,6 +55,18 @@ struct TerminalForegroundProcessResolverTests {
     func tmuxModeFallsBackToCwd() async {
         let resolver = resolver(tmuxOutput: nil, cwdProgram: "python")
         #expect(await resolver.foregroundName(for: session(.tmuxPerSession)) == "python")
+    }
+
+    @Test("A remote session in tmux mode resolves via the cwd program, never a host tmux pane")
+    func remoteSessionSkipsTheTmuxProbe() async {
+        let resolver = resolver(tmuxOutput: "1 vim\n", cwdProgram: "python")
+        let remote = HostTerminalSession(
+            key: .backendSession(providerID: "lume", instanceID: "vm-\(UUID().uuidString)"),
+            directory: URL(fileURLWithPath: "/tmp"),
+            terminalMode: .tmuxPerSession,
+            customCommand: "ssh vm"
+        )
+        #expect(await resolver.foregroundName(for: remote) == "python")
     }
 
     @Test("ghostty-splits mode (default) resolves via the cwd program")

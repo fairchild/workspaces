@@ -56,7 +56,6 @@ struct WorkspaceTerminalTeardownControllerTests {
         let sessionsByID = [primary.id: primary, pane.id: pane]
         let controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [pane, primary] },
-            tmuxSessionName: { $0.effectiveTmuxSessionName },
             killTmuxSession: { killedSession in
                 let name = killedSession.effectiveTmuxSessionName
                 killOrder.append(name)
@@ -99,7 +98,6 @@ struct WorkspaceTerminalTeardownControllerTests {
         var closeAttempts = 0
         var controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [racing] },
-            tmuxSessionName: { $0.effectiveTmuxSessionName },
             killTmuxSession: { _ in true },
             closeForRetirement: { _ in
                 closeAttempts += 1
@@ -133,7 +131,6 @@ struct WorkspaceTerminalTeardownControllerTests {
         var retired = false
         var controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [stuck] },
-            tmuxSessionName: { $0.effectiveTmuxSessionName },
             killTmuxSession: { _ in true },
             closeForRetirement: { _ in
                 throw GhosttySurfaceRetirementCloseError.processStillRunning(title: "ws")
@@ -157,11 +154,10 @@ struct WorkspaceTerminalTeardownControllerTests {
 
     @Test("a process the tmux kill cannot end returns the typed blocked outcome and retires nothing")
     func blockedCloseFailsTyped() async {
-        let live = session()
+        let live = session(terminalMode: .ghosttyManagedSplits)
         var retired = false
         let controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [live] },
-            tmuxSessionName: { _ in nil },
             killTmuxSession: { _ in false },
             closeForRetirement: { _ in
                 throw GhosttySurfaceRetirementCloseError.processStillRunning(title: "ws")
@@ -184,10 +180,9 @@ struct WorkspaceTerminalTeardownControllerTests {
 
     @Test("a close timeout does not block teardown; retirement still reclaims the surface")
     func timeoutProceedsToRetirement() async {
-        let slow = session()
+        let slow = session(terminalMode: .ghosttyManagedSplits)
         let controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [slow] },
-            tmuxSessionName: { _ in nil },
             killTmuxSession: { _ in false },
             closeForRetirement: { _ in
                 throw GhosttySurfaceRetirementCloseError.timedOut(title: "ws")
@@ -220,7 +215,6 @@ struct WorkspaceTerminalTeardownControllerTests {
         var attempts: [UUID] = []
         let controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [unrecorded, recorded] },
-            tmuxSessionName: { $0.effectiveTmuxSessionName },
             killTmuxSession: { killedSession in
                 attempts.append(killedSession.id)
                 return killedSession.id == recorded.id
@@ -241,12 +235,11 @@ struct WorkspaceTerminalTeardownControllerTests {
 
     @Test("non-tmux idle scope closes gracefully with no tmux kills")
     func nonTmuxIdleScope() async {
-        let idle = session()
+        let idle = session(terminalMode: .ghosttyManagedSplits)
         var killCalls = 0
         var closed: [UUID] = []
         let controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [idle] },
-            tmuxSessionName: { _ in nil },
             killTmuxSession: { _ in
                 killCalls += 1
                 return true
@@ -276,7 +269,6 @@ struct WorkspaceTerminalTeardownControllerTests {
         var killCalls: [String] = []
         let controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [a, b, stubborn] },
-            tmuxSessionName: { $0.effectiveTmuxSessionName },
             killTmuxSession: { killedSession in
                 let name = killedSession.effectiveTmuxSessionName
                 killCalls.append(name)
@@ -296,10 +288,11 @@ struct WorkspaceTerminalTeardownControllerTests {
         #expect(report.killedTmuxSessions == [a.effectiveTmuxSessionName])
     }
 
-    /// The kill-list derivation the live wiring uses. A remote (`customCommand`) surface launches
-    /// its command directly and never under tmux, so its directory derivation names a session it
-    /// does not own — killing it would take down whatever local surface holds that name.
-    @Test("kill-list derivation excludes remote sessions and every session outside tmux mode")
+    /// The kill list comes from `HostTerminalSession.tmuxSessionName`. A remote (`customCommand`)
+    /// surface launches its command directly and never under tmux, so its directory derivation
+    /// names a session it does not own — killing it would take down whatever local surface holds
+    /// that name.
+    @Test("The kill list excludes remote sessions and every session outside tmux mode")
     func killListDerivationExcludesRemoteSessions() async {
         let local = session()
         let remote = HostTerminalSession(
@@ -311,21 +304,16 @@ struct WorkspaceTerminalTeardownControllerTests {
         let splits = session(terminalMode: .ghosttyManagedSplits)
         #expect(local.effectiveTmuxSessionName == remote.effectiveTmuxSessionName)
 
-        #expect(
-            WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: local)
-                == local.effectiveTmuxSessionName)
-        #expect(WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: remote) == nil)
-        #expect(WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: splits) == nil)
+        #expect(local.tmuxSessionName == local.effectiveTmuxSessionName)
+        #expect(remote.tmuxSessionName == nil)
+        #expect(splits.tmuxSessionName == nil)
 
-        // Through the state machine on the real derivation: the remote session still closes and
-        // retires, it just contributes no name to the kill list.
+        // Through the state machine: the remote session still closes and retires, it just
+        // contributes no name to the kill list.
         var killCalls: [String] = []
         var closed: [UUID] = []
         let controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [remote] },
-            tmuxSessionName: {
-                WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: $0)
-            },
             killTmuxSession: { killedSession in
                 killCalls.append(killedSession.effectiveTmuxSessionName)
                 return true

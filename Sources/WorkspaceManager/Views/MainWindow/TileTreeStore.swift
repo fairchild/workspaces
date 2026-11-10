@@ -358,8 +358,10 @@ final class TileTreeStore: ObservableObject {
     /// `WORKSPACES_HOST_SESSION_ID` is set at creation, so the agent inside reports under that
     /// record's id and its status keeps reaching the tile that shows it.
     private func separatingSharedTmuxSessions(_ sessions: [HostTerminalSession]) -> [HostTerminalSession] {
-        let claims = sessions.filter { !$0.isRemote && $0.terminalMode == .tmuxPerSession }.map {
-            TmuxSessionNameSharing.Claim(hostSessionID: $0.id, tmuxSessionName: $0.effectiveTmuxSessionName)
+        let claims = sessions.compactMap { session in
+            session.tmuxSessionName.map {
+                TmuxSessionNameSharing.Claim(hostSessionID: session.id, tmuxSessionName: $0)
+            }
         }
         let displaced = TmuxSessionNameSharing.displacedClaims(claims)
         guard !displaced.isEmpty else { return sessions }
@@ -1119,9 +1121,9 @@ final class TileTreeStore: ObservableObject {
         return splitSessions
     }
 
-    /// The tmux session a torn-down session must reclaim, or `nil` when nothing may die: no
-    /// override, an override that is not shaped like the app's own split-pane naming, or a
-    /// session born outside tmux mode. A pane-scoped override is unreachable by directory derivation, and
+    /// The tmux session a torn-down session must reclaim, or `nil` when nothing may die: the
+    /// tile runs in no host tmux session, or its session's name is not shaped like the app's
+    /// own split-pane naming. A pane-scoped override is unreachable by directory derivation, and
     /// teardown ends its continuity row, so an unkilled one would be stranded with no reclaim
     /// path (#1232).
     ///
@@ -1132,9 +1134,8 @@ final class TileTreeStore: ObservableObject {
     /// owned session with no relationship to this app at all. Closing that tab would otherwise
     /// `kill-session` someone else's live shell.
     func paneScopedTmuxSessionNameToKill(for session: HostTerminalSession) -> String? {
-        guard let sessionName = session.tmuxSessionNameOverride,
-            TmuxSessionNaming.isPaneScopedName(sessionName, for: session.directoryURL),
-            session.terminalMode == .tmuxPerSession
+        guard let sessionName = session.tmuxSessionName,
+            TmuxSessionNaming.isPaneScopedName(sessionName, for: session.directoryURL)
         else {
             return nil
         }
@@ -1147,10 +1148,11 @@ final class TileTreeStore: ObservableObject {
         ([session] + splitSessions(forPrimarySessionID: session.id)).allSatisfy(teardownLeavesTmuxSessionRunning)
     }
 
-    /// A local tmux-mode session whose teardown does not reclaim: the scope's directory-derived
-    /// one, or a scoped one this run never recorded launching, which teardown cannot attribute.
+    /// A tile in a host tmux session whose teardown does not reclaim it: the scope's
+    /// directory-derived one, or a scoped one this run never recorded launching, which
+    /// teardown cannot attribute.
     private func teardownLeavesTmuxSessionRunning(_ session: HostTerminalSession) -> Bool {
-        guard !session.isRemote, session.terminalMode == .tmuxPerSession else { return false }
+        guard session.tmuxSessionName != nil else { return false }
         return paneScopedTmuxSessionNameToKill(for: session) == nil
             || tmuxOwnershipLedger.ownership(forHostSessionID: session.id) == nil
     }

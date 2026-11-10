@@ -155,10 +155,9 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
     /// a split pane's disambiguated name, or the probed name a restore reattaches
     /// to. `nil` means the default directory-derived name.
     public let tmuxSessionNameOverride: String?
-    /// tmux or Ghostty splits, fixed when the session is born: a new primary takes the
-    /// resolver's answer, a tab or split its source's, a restore its record's. Every later
-    /// decision (launch, close/kill, the continuity row) reads this, so changing the setting
-    /// affects new tiles only.
+    /// tmux or Ghostty splits, fixed when the session is created: the first tile of a scope
+    /// asks the store's resolver, tabs and splits copy their source, and a restore takes the
+    /// mode its record carries. Nothing changes it afterwards.
     public let terminalMode: TerminalMultiplexingMode
 
     public var directoryURL: URL {
@@ -173,6 +172,12 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
 
     public var isRemote: Bool {
         customCommand != nil
+    }
+
+    /// The host tmux session this tile's shell runs in, or `nil` when it runs in none: a
+    /// Ghostty-splits tile launches a plain shell, and a remote tile runs its command directly.
+    public var tmuxSessionName: String? {
+        terminalMode == .tmuxPerSession && !isRemote ? effectiveTmuxSessionName : nil
     }
 
     public init(
