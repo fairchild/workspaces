@@ -1,7 +1,7 @@
 {
   "artifacts": {
     "line_count": 44,
-    "log_file": "/Users/fairchild/workspaces/workspaces/workspaces-steward/tmp/orchestrator/perf-v0.27.0/perf-artifacts/installed_clean_shell/run5/installed_clean_shell.log",
+    "log_file": "/Users/fairchild/workspaces/workspaces/workspaces-orchestrator/tmp/orchestrator/perf-v0.27.0/perf-artifacts/installed_clean_shell/run5/installed_clean_shell.log",
     "perf_event_count": 10
   },
   "budget_results": {
@@ -151,7 +151,7 @@
     }
   },
   "line_count": 44,
-  "log_file": "/Users/fairchild/workspaces/workspaces/workspaces-steward/tmp/orchestrator/perf-v0.27.0/perf-artifacts/installed_clean_shell/run5/installed_clean_shell.log",
+  "log_file": "/Users/fairchild/workspaces/workspaces/workspaces-orchestrator/tmp/orchestrator/perf-v0.27.0/perf-artifacts/installed_clean_shell/run5/installed_clean_shell.log",
   "metadata": {
     "build_kind": "installed",
     "launch_trigger": "terminal_set_title",
