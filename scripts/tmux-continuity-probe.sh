@@ -9,7 +9,7 @@ Usage:
   scripts/tmux-continuity-probe.sh cleanup <path> [label]
 
 Starts or checks a deterministic Workspaces tmux session on the dedicated
-"workspaces" socket. Use start before an app restart, sleep/wake, logout, or
+"workspaces" socket, or the one WORKSPACES_TMUX_SOCKET_LABEL names. Use start before an app restart, sleep/wake, logout, or
 reboot boundary; use check after the boundary to record whether the session,
 cwd, and marker state survived.
 EOF
@@ -23,7 +23,7 @@ fi
 action="$1"
 target_path="$2"
 label="${3:-manual}"
-socket_name="workspaces"
+socket_name="${WORKSPACES_TMUX_SOCKET_LABEL:-workspaces}"
 
 if ! command -v tmux >/dev/null 2>&1; then
   echo "tmux is not available on PATH" >&2

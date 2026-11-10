@@ -61,6 +61,21 @@ The harness:
 
 If multiple debug WorkSpaces windows are visible, use `scripts/capture-window.sh --pid <pid>` for manual follow-up captures. The harness already uses exact-window capture first and PID-filtered capture as its fallback.
 
+## Isolated socket and the holder-death drill
+
+The default run checks `has-session` on the desktop's live `-L workspaces` socket and quits the installed app (launch-dev without `--coexist`). Anything that kills a tmux server runs on an isolated socket instead:
+
+```bash
+./scripts/continuity-evidence.sh --socket-label wsdrill-$RANDOM --kill-holder
+./scripts/continuity-evidence.sh --socket-label wsdrill-$RANDOM --drill [--pass tmux-on-app]
+```
+
+`--socket-label` refuses `workspaces`, the app's quarantine label, any label `TmuxSessionProbe.isSafeSocketLabel` rejects, and any label whose server is already running, so a run only ever kills a server it started. The app runs beside the installed one (`--coexist --no-activate`) with `HOME` and `CFFIXED_USER_HOME` (the app's home, its `~/code` repo import and `~/.claude`), `XDG_CONFIG_HOME` (Launch Records and locks), a scratch preferences suite (`WORKSPACES_PREFERENCES_SUITE`), a synthetic workspaces root and its own hooks socket, all inside the run directory. The scratch repo it opens lives there too.
+
+`--kill-holder` terminates the app by pid, kills the isolated server by the pid `tmux -L <label> display -p '#{pid}'` reports (after checking that pid's argv names the label), relaunches, and records what restore did. `--kill-order server-first` kills the server while the app still runs.
+
+`--drill` runs that kill across six passes: tmux and Ghostty-splits mode, the restore flag on and off, and both kill orders for tmux. Each pass has its own socket `<label>-pN`. Its tiles are a `ws launch` agent, a hand-typed `claude`, a split, and an agent mid-turn. The agents are `scripts/lib/stub-agent.sh` on `PATH` as `claude`. It writes a transcript, fires the configured hooks through the real `event-forwarder.sh`, and holds its argv until killed, without spending tokens. Tile shells run `scripts/lib/drill-shell.zsh` as their `.zshrc`, which types each queued command and records what the command line holds after relaunch, where a restore's prefill lands. `summary.json` has one row per tile and pass: the expected rung, the rung taken (`reattach`, `resume`, `fresh` or `none`), the prefill text, and the tile's `terminal_sessions` rows before and after. A cmd+t tab and a mixed window are recorded as `not_drivable`, because no automation verb opens a tab and the terminal mode is process-wide.
+
 ## Verification
 
 For code changes touching this area:

@@ -230,6 +230,8 @@ Use these scripts for day-to-day UI verification:
   - `./output/continuity-evidence/<timestamp>/`
 - Use for PRs that touch terminal continuity restore behavior:
   - `./scripts/continuity-evidence.sh --target "$HOME/code/workspaces" --no-build --trust-mise`
+- `--socket-label <label>` moves the run onto an isolated tmux socket with its own HOME, `XDG_CONFIG_HOME`, preferences suite and Claude home, next to the installed app. `--kill-holder` and `--drill` (the holder-death matrix, with `scripts/lib/stub-agent.sh` as `claude`) require it:
+  - `./scripts/continuity-evidence.sh --socket-label wsdrill-$RANDOM --drill`
 
 8. `./scripts/open-in-editor-shortcut-smoke.sh`
 - End-to-end regression smoke for `Cmd+Shift+O` editor launch.
