@@ -571,7 +571,7 @@ launch_debug_app() {
     [[ "$clean_flag" == true ]] && args+=("--clean-data")
     if [[ "$ISOLATED" == true ]]; then
         refuse_running_debug_app
-        args+=("--coexist" "--no-activate" "--pid-file" "${output_file%.log}.app-pid")
+        args+=("--coexist" "--refuse-running-debug" "--no-activate" "--pid-file" "${output_file%.log}.app-pid")
         APP_LAUNCHES+=("${output_file%.log}.app-pid|$(date +%s)")
     fi
     for entry in ${ISOLATION_ENV[@]+"${ISOLATION_ENV[@]}"} "$@"; do
@@ -663,15 +663,16 @@ kill_holder() {
 }
 
 record_isolated_server() {
-    local label="$1" pid entry
+    local label="$1" pid snapshot entry
     LAST_SERVER=""
     pid="$(tmux -L "$label" display-message -p '#{pid}' 2>/dev/null || true)"
     [[ "$pid" =~ ^[0-9]+$ ]] || return 0
-    if ! server_argv_names_label "$pid" "$label"; then
-        log "tmux -L $label reported pid $pid, whose argv does not name the label; not recording it"
+    snapshot="$(process_snapshot "$pid")"
+    if [[ -z "$snapshot" ]] || ! command_names_label "${snapshot#*|}" "$label"; then
+        log "tmux -L $label reported pid $pid, which has no start time or whose argv does not name the label; not recording it"
         return 0
     fi
-    LAST_SERVER="$label|$pid|$(process_start "$pid")"
+    LAST_SERVER="$label|$pid|${snapshot%%|*}"
     for entry in ${OWNED_SERVERS[@]+"${OWNED_SERVERS[@]}"}; do
         [[ "$entry" != "$LAST_SERVER" ]] || return 0
     done
@@ -693,15 +694,14 @@ kill_owned_server() {
 }
 
 server_identity_holds() {
-    local label="$1" pid="$2" start="$3"
-    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-    server_argv_names_label "$pid" "$label" && [[ "$(process_start "$pid")" == "$start" ]]
+    local label="$1" pid="$2" start="$3" snapshot
+    [[ "$pid" =~ ^[0-9]+$ && -n "$start" ]] || return 1
+    snapshot="$(process_snapshot "$pid")"
+    [[ -n "$snapshot" && "${snapshot%%|*}" == "$start" ]] && command_names_label "${snapshot#*|}" "$label"
 }
 
-server_argv_names_label() {
-    local command
-    command="$(ps -p "$1" -o command= 2>/dev/null) "
-    [[ "$command" == *tmux* && "$command" == *" -L $2 "* ]]
+command_names_label() {
+    [[ "$1 " == *tmux* && "$1 " == *" -L $2 "* ]]
 }
 
 stop_owned_servers() {
@@ -712,14 +712,17 @@ stop_owned_servers() {
     done
 }
 
-process_start() {
-    LC_ALL=C ps -p "$1" -o lstart= 2>/dev/null | tr -s ' ' | sed -e 's/^ //' -e 's/ $//'
+process_snapshot() {
+    LC_ALL=C ps -ww -p "$1" -o lstart=,command= 2>/dev/null \
+        | awk 'NF >= 6 {
+                   start = $1 " " $2 " " $3 " " $4 " " $5
+                   sub(/^ *[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +/, "")
+                   print start "|" $0
+               }'
 }
 
-start_epoch() {
-    local start
-    start="$(process_start "$1")"
-    [[ -z "$start" ]] || LC_ALL=C date -j -f '%a %b %d %T %Y' "$start" +%s 2>/dev/null || true
+lstart_epoch() {
+    [[ -z "$1" ]] || LC_ALL=C date -j -f '%a %b %d %T %Y' "$1" +%s 2>/dev/null || true
 }
 
 stop_app() {
@@ -734,11 +737,13 @@ stop_app() {
 }
 
 app_identity_holds() {
-    local pid="$1" not_before="$2" command started
+    local pid="$1" not_before="$2" snapshot command started
     [[ "$pid" =~ ^[0-9]+$ && "$not_before" =~ ^[0-9]+$ && -n "$DEBUG_BINARY" ]] || return 1
-    command="$(ps -p "$pid" -o command= 2>/dev/null | sed 's/^ *//')"
+    snapshot="$(process_snapshot "$pid")"
+    [[ -n "$snapshot" ]] || return 1
+    command="${snapshot#*|}"
     [[ "$command" == "$DEBUG_BINARY" || "$command" == "$DEBUG_BINARY "* ]] || return 1
-    started="$(start_epoch "$pid")"
+    started="$(lstart_epoch "${snapshot%%|*}")"
     [[ "$started" =~ ^[0-9]+$ ]] && ((started >= not_before))
 }
 

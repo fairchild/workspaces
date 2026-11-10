@@ -231,12 +231,29 @@ snapshot_state() {
 }
 
 snapshot_processes() {
-    LC_ALL=C ps -A -ww -o pid=,lstart=,command= \
-        | awk -v home="$ISOLATED_HOME/" 'index($0, home) && ($7 ~ /(^|\/)claude$/ || $8 ~ /(^|\/)claude$/) {
-                   command = $7
-                   for (i = 8; i <= NF; i++) command = command " " $i
-                   print $1 "|" $2 " " $3 " " $4 " " $5 " " $6 "|" command
-               }' >"$PASS_DIR/processes-$1.txt"
+    local output="$PASS_DIR/processes-$1.txt" ledger="$ISOLATED_HOME/.claude/stub-agent-ledger.jsonl"
+    local pid at source conversation_id start started recorded
+    : >"$output"
+    [[ -f "$ledger" ]] || return 0
+    while read -r pid at source conversation_id; do
+        [[ "$pid" =~ ^[0-9]+$ ]] || continue
+        start="$(process_start_time "$pid")"
+        [[ -n "$start" ]] || continue
+        started="$(lstart_epoch "$start")"
+        recorded="$(ledger_epoch "$at")"
+        [[ "$started" =~ ^[0-9]+$ && "$recorded" =~ ^[0-9]+$ ]] || continue
+        ((started <= recorded + 1 && started >= recorded - 120)) || continue
+        jq -nc --argjson pid "$pid" --arg start "$start" --arg source "$source" --arg conversation_id "$conversation_id" \
+            '{pid: $pid, start: $start, source: $source, conversation_id: $conversation_id}' >>"$output"
+    done < <(jq -r 'select(.event == "start") | "\(.pid) \(.at) \(.source) \(.conversation_id)"' "$ledger")
+}
+
+process_start_time() {
+    LC_ALL=C ps -p "$1" -o lstart= 2>/dev/null | awk 'NF == 5 { print $1, $2, $3, $4, $5 }' || true
+}
+
+ledger_epoch() {
+    LC_ALL=C date -j -u -f '%Y-%m-%dT%H:%M:%S' "${1%%.*}" +%s 2>/dev/null || true
 }
 
 capture_panes() {
@@ -370,8 +387,7 @@ record_tile_row() {
         --arg kill_order "$PASS_KILL_ORDER" --arg tile "$tile" --arg effort "$effort" --arg turn "$turn" \
         --arg conversation_id "$conversation_id" --arg cwd "$cwd" --arg host_session_id "$host_session_id" \
         --arg prefill_sources "$prefill_sources" --arg own_hosts "$own_hosts" --arg claimed "$claimed_hosts" \
-        --arg survivor_lines "$SURVIVOR_LINES" --arg resumed_lines "$RESUMED_LINES" --arg other_resumes "$other_resumes" \
-        --argjson before_holders "$BEFORE_HOLDERS" --argjson assignment "$assignment" \
+        --arg other_resumes "$other_resumes" --argjson holders "$HOLDERS" --argjson assignment "$assignment" \
         --argjson rendered "$rendered" --argjson fresh "$fresh" --argjson hook_socket "$hook_socket" \
         --argjson launch_record "$launch_record" --arg restored "$(restored_session_ids)" \
         --slurpfile db_before "$PASS_DIR/db-before.json" --slurpfile db_after "$PASS_DIR/db-after.json" \
@@ -389,8 +405,8 @@ def text: sub("^(shell|pane) [^:]*: "; "");
 | lines($restored) as $restored_ids
 | lines($own_hosts) as $own_ids
 | lines($claimed) as $claimed_ids
-| lines($survivor_lines) as $survivors
-| lines($resumed_lines) as $resumed
+| $holders.survivors as $survivors
+| $holders.resumed as $resumed
 | [$db_after[0][]? | select(.host_session_id | IN($claimed_ids[])) | .tmux_session_name | select(. != null)] as $claimed_tmux
 | [lines($prefill_sources)[]
    | if startswith("shell ") then {source: ., own: (capture("^shell (?<h>[^:]*):").h | IN($claimed_ids[])),
@@ -426,10 +442,10 @@ def text: sub("^(shell|pane) [^:]*: "; "");
                 elif ($own_prefills | any(.host != null and (.host | IN($own_ids[])))) then "reused_host_session"
                 elif ($own_prefills | length) > 0 then "pane_in_claimed_session"
                 else "new_resume_process" end),
-   holders_before_kill: $before_holders, surviving_holders: $survivors, new_resume_processes: $resumed,
+   holders_before_kill: $holders.before, surviving_holders: $survivors, new_resume_processes: $resumed,
    successor_host_sessions: $assignment.successors, os_log_restored_sessions: $restored_ids,
    claimed_shells: $rendered, claimed_shells_without_resume: $fresh,
-   rung_basis: "successor = an unended after-relaunch terminal_sessions row the os_log says restore created, matched one-to-one to a before-row by session_key and tmux_session_name (then by is_active when several share them; a tie or a before-row claimed twice is ambiguous). Claimed sessions = successors plus the tile's own reused host sessions. reattach = a holder pid with its pre-kill start time is still alive; resume = a claimed shell or pane shows `--resume <id>`, or a new process resumed the conversation; ambiguous = the successor match tied, the resume landed only outside the tile's claimed sessions, or a claimed shell holds another conversation's resume; fresh = a claimed shell holds no resume; restored_unrendered = a successor exists but no shell started; none = neither",
+   rung_basis: "successor = an unended after-relaunch terminal_sessions row the os_log says restore created, matched one-to-one to a before-row: first by an unchanged host_session_id, then (for newly minted rows only) by session_key and tmux_session_name, then by is_active when several share them; a tie or a before-row claimed twice is ambiguous. Claimed sessions = successors plus the tile's own reused host sessions. Holders come from the stub-agent ledger: a start event's pid counts only while its process start time falls within 120s before the event. reattach = a pre-kill holder pid is alive with the same start time; resume = a claimed shell or pane shows `--resume <id>`, or the ledger shows a new resume-source start for the conversation; ambiguous = the successor match tied, the resume landed only outside the tile's claimed sessions, or a claimed shell holds another conversation's resume; fresh = a claimed shell holds no resume; restored_unrendered = a successor exists but no shell started; none = neither",
    db_before: rows($db_before), db_after: rows($db_after)}
 JQ
 }
@@ -448,30 +464,15 @@ not_started_reason() {
 }
 
 classify_conversation_processes() {
-    local conversation_id="$1" before_keys line key
-    before_keys="$(before_holder_keys "$conversation_id")"
-    BEFORE_HOLDERS="$(grep -c . <<<"$before_keys" || true)"
-    SURVIVOR_LINES=""
-    RESUMED_LINES=""
-    while IFS= read -r line; do
-        [[ -n "$line" ]] || continue
-        key="$(cut -d'|' -f1,2 <<<"$line")"
-        if [[ -n "$before_keys" ]] && grep -qxF -- "$key" <<<"$before_keys"; then
-            SURVIVOR_LINES+="$line"$'\n'
-        elif [[ "$line" == *"--resume $conversation_id"* ]]; then
-            RESUMED_LINES+="$line"$'\n'
-        fi
-    done <"$PASS_DIR/processes-after.txt"
-    printf '%s' "$SURVIVOR_LINES" | sed "s/^/$conversation_id survivor /" >>"$PASS_DIR/holders-after.txt"
-    printf '%s' "$RESUMED_LINES" | sed "s/^/$conversation_id resumed /" >>"$PASS_DIR/holders-after.txt"
-}
-
-before_holder_keys() {
-    local conversation_id="$1" pids
-    pids=" $(jq -r --arg id "$conversation_id" 'select(.event == "start" and .conversation_id == $id) | .pid' \
-        "$ISOLATED_HOME/.claude/stub-agent-ledger.jsonl" 2>/dev/null | tr '\n' ' ')"
-    awk -F'|' -v id="$conversation_id" -v pids="$pids" \
-        'index(pids, " " $1 " ") || index($3, id) { print $1 "|" $2 }' "$PASS_DIR/processes-before.txt"
+    HOLDERS="$(jq -cn --arg id "$1" \
+        --slurpfile before "$PASS_DIR/processes-before.txt" --slurpfile after "$PASS_DIR/processes-after.txt" \
+        'def held_before: . as $p | any($before[]; .pid == $p.pid and .start == $p.start);
+         ($before | map(select(.conversation_id == $id))) as $mine
+         | {before: ($mine | length),
+          survivors: [$after[] | select(. as $p | any($mine[]; .pid == $p.pid and .start == $p.start))],
+          resumed: [$after[] | select(.conversation_id == $id and .source == "resume" and (held_before | not))]}')"
+    jq -c '(.survivors | map({kind: "survivor"} + .)) + (.resumed | map({kind: "resumed"} + .)) | .[]' \
+        <<<"$HOLDERS" >>"$PASS_DIR/holders-after.txt"
 }
 
 successor_assignment() {
@@ -481,14 +482,22 @@ successor_assignment() {
          | $before[0] as $rows
          | ($rows | map(select(if $host == "" then .directory_path == $cwd else .host_session_id == $host end))
                   | map(.host_session_id)) as $mine
-         | [$after[0][]
-            | select(.ended_at == null and (.host_session_id | IN($restored_ids[])))
+         | [$after[0][] | select(.ended_at == null and (.host_session_id | IN($restored_ids[])))] as $restored_rows
+         | ($rows | map(.host_session_id)) as $before_ids
+         | [$restored_rows[] | .host_session_id | select(IN($before_ids[]))] as $kept
+         | [$restored_rows[]
             | . as $row
-            | ($rows | map(select(.session_key == $row.session_key and .tmux_session_name == $row.tmux_session_name))) as $peers
-            | (if ($peers | length) <= 1 then $peers else ($peers | map(select(.is_active == $row.is_active))) end) as $narrow
-            | {after: $row.host_session_id,
-               candidates: (if ($narrow | length) == 0 then $peers else $narrow end | map(.host_session_id)),
-               before: (if ($narrow | length) == 1 then $narrow[0].host_session_id else null end)}] as $pairs
+            | if ($row.host_session_id | IN($kept[])) then
+                {after: $row.host_session_id, candidates: [$row.host_session_id], before: $row.host_session_id}
+              else
+                ($rows | map(select((.host_session_id | IN($kept[]) | not)
+                                    and .session_key == $row.session_key
+                                    and .tmux_session_name == $row.tmux_session_name))) as $peers
+                | (if ($peers | length) <= 1 then $peers else ($peers | map(select(.is_active == $row.is_active))) end) as $narrow
+                | {after: $row.host_session_id,
+                   candidates: (if ($narrow | length) == 0 then $peers else $narrow end | map(.host_session_id)),
+                   before: (if ($narrow | length) == 1 then $narrow[0].host_session_id else null end)}
+              end] as $pairs
          | ($pairs | map(select(.before != null)) | group_by(.before) | map(select(length > 1) | .[0].before)) as $contested
          | ($pairs | map(select(.before != null and (.before | IN($mine[])) and (.before | IN($contested[]) | not)) | .after)) as $successors
          | ($pairs | map(select((.before == null and any(.candidates[]; IN($mine[])))

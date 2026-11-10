@@ -66,6 +66,7 @@ APP_SUPPORT_DATA_DIR="$HOME/Library/Application Support/WorkspaceManager"
 DO_BUILD=true
 KILL_EXISTING=true
 COEXIST=false
+REFUSE_RUNNING_DEBUG=false
 SEED_STORE=false
 RUN_IN_BACKGROUND=true
 USE_APP_SUPPORT=false
@@ -94,6 +95,9 @@ Options:
   --no-kill            Do not stop existing WorkspaceManager processes
   --coexist            Leave the installed WorkSpaces.app running; only a previous
                        debug instance is stopped
+  --refuse-running-debug
+                       With --coexist, fail instead of stopping a running debug
+                       instance of this checkout
   --seed-store         Seed an empty data dir from a snapshot of the installed app's
                        store (SwiftData + local-state sidecar); the live files are
                        only read
@@ -149,6 +153,10 @@ parse_args() {
             --coexist)
                 COEXIST=true
                 KILL_EXISTING=false
+                shift
+                ;;
+            --refuse-running-debug)
+                REFUSE_RUNNING_DEBUG=true
                 shift
                 ;;
             --seed-store)
@@ -348,8 +356,13 @@ ensure_no_installed_app_instance() {
 
 stop_existing_if_requested() {
     if [[ "$COEXIST" == true ]]; then
+        local pid running
+        if [[ "$REFUSE_RUNNING_DEBUG" == true ]]; then
+            running="$(list_instances_for_binary "$DEBUG_BINARY" | awk '{ print $1 }' | tr '\n' ' ')"
+            [[ -z "$running" ]] || fail "a debug instance of this checkout is running (pid ${running% }); refusing to stop it (--refuse-running-debug)"
+            return
+        fi
         log "Coexist mode: leaving the installed app running; stopping any previous debug instance..."
-        local pid
         while read -r pid _; do
             [[ -n "$pid" ]] && kill "$pid" >/dev/null 2>&1 || true
         done <<< "$(list_instances_for_binary "$DEBUG_BINARY")"
