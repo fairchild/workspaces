@@ -1222,12 +1222,7 @@ final class TileTreeStore: ObservableObject {
     }
 
     private func recordTerminalSession(_ session: HostTerminalSession, isActive: Bool) {
-        continuityRecorder?.record(
-            session,
-            terminalMode: session.terminalMode.rawValue,
-            isActive: isActive,
-            hooksSocketPath: surfaceStore.hooksSocketPath
-        )
+        continuityRecorder?.record(session, isActive: isActive, hooksSocketPath: surfaceStore.hooksSocketPath)
     }
 
     private func recordTerminalSessionEnded(_ sessionID: UUID) {

@@ -548,6 +548,27 @@ struct TileTreeStoreTests {
         #expect(store.closeLeavesTmuxSessionRunning(tab) == false)
     }
 
+    /// Restore probes and reattaches by a row's `tmux_session_name`, so a remote tile's row
+    /// names none: its command runs directly and no host tmux session holds its name.
+    @Test("A remote tile's continuity row names no host tmux session")
+    func remoteTileRowNamesNoTmuxSession() async throws {
+        let fixture = try ContinuityStoreFixture()
+        defer { fixture.remove() }
+        let store = TileTreeStore()
+        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.continuityRecorder = TerminalContinuityRecorder(sink: fixture.store)
+        let remote = store.activateSession(
+            key: .backendSession(providerID: "lume", instanceID: "vm-1"),
+            directory: URL(fileURLWithPath: "/tmp"),
+            customCommand: "ssh vm-1"
+        ).session
+        await store.continuityRecorder?.waitUntilDrained()
+
+        let row = try #require(try await fixture.rowsByID()[remote.id])
+        #expect(row.terminalMode == TerminalMultiplexingMode.tmuxPerSession.rawValue)
+        #expect(row.tmuxSessionName == nil)
+    }
+
     @Test("A new tab and a split take their source's mode, not the current setting")
     func tabAndSplitCopyTheirSourcesMode() throws {
         let store = TileTreeStore()
@@ -1688,7 +1709,7 @@ private actor FreezeThenOutcome {
 }
 
 /// A real continuity store on a temporary file, so a test reads back the row the recorder
-/// wrote — `terminal_mode` and the `tmux_session_name` the store derives from it.
+/// wrote — the session's `terminal_mode` and the `tmux_session_name` it runs in.
 private struct ContinuityStoreFixture {
     let directory: URL
     let store: LocalStateStore

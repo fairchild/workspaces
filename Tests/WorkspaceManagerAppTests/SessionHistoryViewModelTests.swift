@@ -82,7 +82,6 @@ struct SessionHistoryViewModelTests {
                     directory: URL(fileURLWithPath: path),
                     terminalMode: .ghosttyManagedSplits
                 ),
-                terminalMode: "ghostty_managed_splits",
                 isActive: true,
                 hooksSocketPath: nil
             )
@@ -115,7 +114,6 @@ struct SessionHistoryViewModelTests {
                 directory: URL(fileURLWithPath: "/a"),
                 terminalMode: .ghosttyManagedSplits
             ),
-            terminalMode: "ghostty_managed_splits",
             isActive: true,
             hooksSocketPath: nil
         )

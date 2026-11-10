@@ -371,7 +371,6 @@ public actor LocalStateStore {
     /// is closed and reopened under a new id.
     public func recordTerminalSession(
         _ session: HostTerminalSession,
-        terminalMode: String,
         isActive: Bool,
         hooksSocketPath: String?
     ) async throws {
@@ -381,7 +380,7 @@ public actor LocalStateStore {
         let activeValue = isActive ? 1 : 0
         // The session's chosen name (split-pane or restore override included), not a
         // directory re-derivation — restore probes and reattaches by this recorded value.
-        let tmuxSessionName = terminalMode == "tmux_per_session" ? session.effectiveTmuxSessionName : nil
+        let tmuxSessionName = session.tmuxSessionName
         let runID = self.runID
         let runStartedAt = self.runStartedAt
 
@@ -436,7 +435,7 @@ public actor LocalStateStore {
                     target.backendIdentifier,
                     target.backendInstanceID,
                     session.directoryPath,
-                    terminalMode,
+                    session.terminalMode.rawValue,
                     tmuxSessionName,
                     customCommandPresent,
                     hooksSocketPath,

@@ -24,9 +24,8 @@ struct TerminalRestoreCoordinatorTests {
                 id: UUID(),
                 key: .repoPath(directory.path),
                 directory: directory,
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session",
             isActive: true,
             hooksSocketPath: nil
         )
@@ -63,9 +62,8 @@ struct TerminalRestoreCoordinatorTests {
                 id: UUID(),
                 key: .repoPath(directory.path),
                 directory: directory,
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session",
             isActive: true,
             hooksSocketPath: nil
         )
@@ -95,9 +93,8 @@ struct TerminalRestoreCoordinatorTests {
                 id: UUID(),
                 key: .repoPath(directory.path),
                 directory: directory,
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session",
             isActive: true,
             hooksSocketPath: nil
         )

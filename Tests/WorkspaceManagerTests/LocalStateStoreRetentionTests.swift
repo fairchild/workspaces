@@ -48,9 +48,9 @@ struct LocalStateStoreRetentionTests {
                 id: activeID,
                 key: .repoPath("/code/active"),
                 directory: URL(fileURLWithPath: "/code/active"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         try await prev.recordAgentEvents(
             [.toolStart(name: "Read", detail: "older.txt")],
@@ -69,9 +69,9 @@ struct LocalStateStoreRetentionTests {
                 id: endedID,
                 key: .repoPath("/code/ended"),
                 directory: URL(fileURLWithPath: "/code/ended"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
         try await prev.markTerminalSessionEnded(hostSessionID: endedID)
 
         try await prev.recordDiagnosticEvent(
@@ -121,9 +121,9 @@ struct LocalStateStoreRetentionTests {
                 id: sessionID,
                 key: .repoPath("/code/fresh"),
                 directory: URL(fileURLWithPath: "/code/fresh"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
         try await store.recordAgentEvents(
             [.toolStart(name: "Read", detail: "fresh.txt")],
             hostSessionID: sessionID, origin: .hook,
@@ -178,9 +178,9 @@ struct LocalStateStoreRetentionTests {
                 id: staleID,
                 key: .repoPath("/code/stale"),
                 directory: URL(fileURLWithPath: "/code/stale"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         // Most-recent prior run: everything cleanly ended, and old enough to age out.
         let prior = try LocalStateStore(
@@ -191,9 +191,9 @@ struct LocalStateStoreRetentionTests {
                 id: endedID,
                 key: .repoPath("/code/closed"),
                 directory: URL(fileURLWithPath: "/code/closed"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
         try await prior.markTerminalSessionEnded(hostSessionID: endedID)
 
         let current = try LocalStateStore(

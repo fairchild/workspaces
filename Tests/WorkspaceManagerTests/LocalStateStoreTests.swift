@@ -17,12 +17,11 @@ struct LocalStateStoreTests {
             id: sessionID,
             key: .repoPath("/tmp/workspaces/repo"),
             directory: URL(fileURLWithPath: "/tmp/workspaces/repo"),
-            terminalMode: .ghosttyManagedSplits
+            terminalMode: .tmuxPerSession
         )
 
         try await store.recordTerminalSession(
             session,
-            terminalMode: "tmux_per_session",
             isActive: true,
             hooksSocketPath: "/tmp/workspaces-hooks.sock"
         )
@@ -111,21 +110,20 @@ struct LocalStateStoreTests {
         let primary = HostTerminalSession(
             key: .repoPath(directory.path),
             directory: directory,
-            terminalMode: .ghosttyManagedSplits
+            terminalMode: .tmuxPerSession
         )
         let splitID = UUID()
         let split = HostTerminalSession(
             id: splitID,
             key: .repoPath(directory.path),
             directory: directory,
-            terminalMode: .ghosttyManagedSplits,
+            terminalMode: .tmuxPerSession,
             tmuxSessionNameOverride: TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: splitID)
         )
 
         for session in [primary, split] {
             try await store.recordTerminalSession(
                 session,
-                terminalMode: "tmux_per_session",
                 isActive: true,
                 hooksSocketPath: nil
             )
@@ -220,11 +218,10 @@ struct LocalStateStoreTests {
             id: agentSessionID,
             key: .repoPath("/tmp/workspaces/repo"),
             directory: URL(fileURLWithPath: "/tmp/workspaces/repo"),
-            terminalMode: .ghosttyManagedSplits
+            terminalMode: .tmuxPerSession
         )
         try await store.recordTerminalSession(
             agentSession,
-            terminalMode: "tmux_per_session",
             isActive: true,
             hooksSocketPath: nil
         )
@@ -238,7 +235,6 @@ struct LocalStateStoreTests {
         )
         try await store.recordTerminalSession(
             endedSession,
-            terminalMode: "ghostty_managed_splits",
             isActive: true,
             hooksSocketPath: nil
         )
@@ -325,7 +321,6 @@ struct LocalStateStoreTests {
             )
             try await store.recordTerminalSession(
                 session,
-                terminalMode: "ghostty_managed_splits",
                 isActive: true,
                 hooksSocketPath: nil
             )
@@ -436,9 +431,9 @@ struct LocalStateStoreTests {
                 id: staleID,
                 key: .repoPath("/code/old"),
                 directory: URL(fileURLWithPath: "/code/old"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         let run2 = try LocalStateStore(
             databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
@@ -448,9 +443,9 @@ struct LocalStateStoreTests {
                 id: prevID,
                 key: .repoPath("/code/prev"),
                 directory: URL(fileURLWithPath: "/code/prev"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         let current = try LocalStateStore(
             databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_200_000))
@@ -480,9 +475,9 @@ struct LocalStateStoreTests {
                 id: ancientID,
                 key: .repoPath("/code/ancient"),
                 directory: URL(fileURLWithPath: "/code/ancient"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         let run2 = try LocalStateStore(
             databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
@@ -491,9 +486,9 @@ struct LocalStateStoreTests {
                 id: priorID,
                 key: .repoPath("/code/prior"),
                 directory: URL(fileURLWithPath: "/code/prior"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         _ = try LocalStateStore(
             databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_200_000))
@@ -528,9 +523,9 @@ struct LocalStateStoreTests {
                 id: strandedID,
                 key: .repoPath("/code/stranded"),
                 directory: URL(fileURLWithPath: "/code/stranded"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         _ = try LocalStateStore(
             databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
@@ -544,9 +539,9 @@ struct LocalStateStoreTests {
                 id: strandedID,
                 key: .repoPath("/code/stranded"),
                 directory: URL(fileURLWithPath: "/code/stranded"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         let state = try sessionSweepState(db: db)
         #expect(state[strandedID.uuidString]?.isActive == 1)
@@ -572,7 +567,7 @@ struct LocalStateStoreTests {
                 id: id,
                 key: .repoPath(directory.path),
                 directory: directory,
-                terminalMode: .ghosttyManagedSplits,
+                terminalMode: .tmuxPerSession,
                 tmuxSessionNameOverride: "wm-survivor"
             )
         }
@@ -581,14 +576,14 @@ struct LocalStateStoreTests {
             databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_000_000))
         try await firstRun.recordTerminalSession(
             survivor(id: survivorID),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         // The relaunch reattaches to the surviving pane under its recorded identity.
         let reattachRun = try LocalStateStore(
             databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
         try await reattachRun.recordTerminalSession(
             survivor(id: survivorID),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         let adopted = try await reattachRun.summary()
         #expect(adopted.tableCounts["terminal_sessions"] == 1)
@@ -602,7 +597,7 @@ struct LocalStateStoreTests {
             databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_200_000))
         try await mintingRun.recordTerminalSession(
             survivor(id: UUID()),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         let minted = try await mintingRun.summary()
         #expect(minted.tableCounts["terminal_sessions"] == 2)
@@ -624,9 +619,9 @@ struct LocalStateStoreTests {
                 id: liveID,
                 key: .repoPath("/code/live"),
                 directory: URL(fileURLWithPath: "/code/live"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         // The fixture continuity seeder opens a second store stamped in the
         // past; it must not touch rows of runs newer than itself.
@@ -710,9 +705,9 @@ struct LocalStateStoreTests {
                     id: id,
                     key: .repoPath(path),
                     directory: URL(fileURLWithPath: path),
-                    terminalMode: .ghosttyManagedSplits
+                    terminalMode: .tmuxPerSession
                 ),
-                terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+                isActive: true, hooksSocketPath: nil)
         }
         try await prev.markTerminalSessionEnded(hostSessionID: endedID)
 
@@ -723,9 +718,9 @@ struct LocalStateStoreTests {
                 id: UUID(),
                 key: .repoPath("/code/now"),
                 directory: URL(fileURLWithPath: "/code/now"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         let rows = try await current.fetchPreviousRunSessions()
         #expect(rows.map(\.hostSessionID) == [keptID])
@@ -775,9 +770,9 @@ struct LocalStateStoreTests {
                 id: UUID(),
                 key: .repoPath("/code/prev"),
                 directory: URL(fileURLWithPath: "/code/prev"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         let current = try LocalStateStore(
             databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_200_000))
@@ -786,9 +781,9 @@ struct LocalStateStoreTests {
                 id: UUID(),
                 key: .repoPath("/code/now"),
                 directory: URL(fileURLWithPath: "/code/now"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         #expect(try await current.fetchPreviousRunID() == priorRunID.uuidString)
     }
@@ -807,11 +802,11 @@ struct LocalStateStoreTests {
             id: sessionID,
             key: .repoPath("/tmp/workspaces/repo"),
             directory: URL(fileURLWithPath: "/tmp/workspaces/repo"),
-            terminalMode: .ghosttyManagedSplits
+            terminalMode: .tmuxPerSession
         )
 
         try await store.recordTerminalSession(
-            session, terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            session, isActive: true, hooksSocketPath: nil)
         let recordedDirectory = try #require(
             try await store.fetchContinuitySessions().first { $0.hostSessionID == sessionID }
         ).directoryPath
@@ -826,7 +821,6 @@ struct LocalStateStoreTests {
                 directory: URL(fileURLWithPath: "/tmp/workspaces/elsewhere"),
                 terminalMode: .ghosttyManagedSplits
             ),
-            terminalMode: "shell",
             isActive: true,
             hooksSocketPath: "/tmp/late.sock"
         )
@@ -851,9 +845,9 @@ struct LocalStateStoreTests {
                 id: sessionID,
                 key: .repoPath("/tmp/workspaces/repo"),
                 directory: URL(fileURLWithPath: "/tmp/workspaces/repo"),
-                terminalMode: .ghosttyManagedSplits
+                terminalMode: .tmuxPerSession
             ),
-            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            isActive: true, hooksSocketPath: nil)
 
         try await store.markTerminalSessionEnded(
             hostSessionID: sessionID, endedAt: Date(timeIntervalSince1970: 1_700_000_100))

@@ -36,7 +36,6 @@ actor ContinuityWriteLog: TerminalContinuityWriting {
 
     func recordTerminalSession(
         _ session: HostTerminalSession,
-        terminalMode: String,
         isActive: Bool,
         hooksSocketPath: String?
     ) async throws {
@@ -71,7 +70,7 @@ struct TerminalContinuityRecorderTests {
         var expected: [ContinuityWriteOperation] = []
         for index in 0..<100 {
             let session = makeSession(path: "/tmp/workspaces/repo-\(index)")
-            recorder.record(session, terminalMode: "shell", isActive: true, hooksSocketPath: nil)
+            recorder.record(session, isActive: true, hooksSocketPath: nil)
             expected.append(.record(session.id, isActive: true))
             if index.isMultiple(of: 3) {
                 recorder.recordEnded(session.id)
@@ -89,11 +88,11 @@ struct TerminalContinuityRecorderTests {
         let recorder = TerminalContinuityRecorder(sink: sink)
         let session = makeSession(path: "/tmp/workspaces/repo")
 
-        recorder.record(session, terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
-        recorder.record(session, terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
-        recorder.record(session, terminalMode: "tmux_per_session", isActive: false, hooksSocketPath: nil)
+        recorder.record(session, isActive: true, hooksSocketPath: nil)
+        recorder.record(session, isActive: true, hooksSocketPath: nil)
+        recorder.record(session, isActive: false, hooksSocketPath: nil)
         recorder.record(
-            session, terminalMode: "tmux_per_session", isActive: false, hooksSocketPath: "/tmp/hooks.sock")
+            session, isActive: false, hooksSocketPath: "/tmp/hooks.sock")
         await recorder.waitUntilDrained()
 
         #expect(
@@ -112,8 +111,8 @@ struct TerminalContinuityRecorderTests {
         let healthy = makeSession(path: "/tmp/workspaces/healthy")
         await sink.failRecords(for: failing.id)
 
-        recorder.record(failing, terminalMode: "shell", isActive: true, hooksSocketPath: nil)
-        recorder.record(healthy, terminalMode: "shell", isActive: true, hooksSocketPath: nil)
+        recorder.record(failing, isActive: true, hooksSocketPath: nil)
+        recorder.record(healthy, isActive: true, hooksSocketPath: nil)
         recorder.recordEnded(healthy.id)
         await recorder.waitUntilDrained()
 
@@ -134,12 +133,12 @@ struct TerminalContinuityRecorderTests {
         let session = makeSession(path: "/tmp/workspaces/transient")
         await sink.failRecords(for: session.id, times: 1)
 
-        recorder.record(session, terminalMode: "shell", isActive: true, hooksSocketPath: nil)
+        recorder.record(session, isActive: true, hooksSocketPath: nil)
         await recorder.waitUntilDrained()
         #expect(await sink.operations.isEmpty)
 
         // Byte-identical to the failed snapshot: dedup alone would drop it.
-        recorder.record(session, terminalMode: "shell", isActive: true, hooksSocketPath: nil)
+        recorder.record(session, isActive: true, hooksSocketPath: nil)
         await recorder.waitUntilDrained()
 
         #expect(await sink.operations == [.record(session.id, isActive: true)])
@@ -154,10 +153,10 @@ struct TerminalContinuityRecorderTests {
         let session = makeSession(path: "/tmp/workspaces/superseded")
         await sink.failRecords(for: session.id, times: 1)
 
-        recorder.record(session, terminalMode: "shell", isActive: true, hooksSocketPath: nil)
-        recorder.record(session, terminalMode: "shell", isActive: false, hooksSocketPath: nil)
+        recorder.record(session, isActive: true, hooksSocketPath: nil)
+        recorder.record(session, isActive: false, hooksSocketPath: nil)
         await recorder.waitUntilDrained()
-        recorder.record(session, terminalMode: "shell", isActive: false, hooksSocketPath: nil)
+        recorder.record(session, isActive: false, hooksSocketPath: nil)
         await recorder.waitUntilDrained()
 
         #expect(await sink.operations == [.record(session.id, isActive: false)])
@@ -179,12 +178,12 @@ struct TerminalContinuityRecorderTests {
         for iteration in 0..<100 {
             let session = makeSession(path: "/tmp/workspaces/repo-\(iteration)")
             // Snapshot storm: state-changing upserts in flight around the close.
-            recorder.record(session, terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
-            recorder.record(session, terminalMode: "tmux_per_session", isActive: false, hooksSocketPath: nil)
-            recorder.record(session, terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            recorder.record(session, isActive: true, hooksSocketPath: nil)
+            recorder.record(session, isActive: false, hooksSocketPath: nil)
+            recorder.record(session, isActive: true, hooksSocketPath: nil)
             recorder.recordEnded(session.id)
             // Stale upsert after the close — the store's guard must reject it.
-            recorder.record(session, terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+            recorder.record(session, isActive: true, hooksSocketPath: nil)
         }
         await recorder.waitUntilDrained()
 
