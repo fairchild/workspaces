@@ -166,7 +166,8 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
     }
 
     /// The tmux session name this surface launches on in `.tmuxPerSession` mode:
-    /// the override when one was chosen, otherwise the directory derivation.
+    /// the override when one was chosen, otherwise the directory derivation. It has a value in
+    /// every mode; whether the tile runs in a tmux session at all is `tmuxSessionName`.
     public var effectiveTmuxSessionName: String {
         tmuxSessionNameOverride ?? TmuxSessionNaming.defaultName(for: directoryURL)
     }

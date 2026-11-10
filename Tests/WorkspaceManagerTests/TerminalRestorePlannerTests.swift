@@ -183,6 +183,7 @@ struct TerminalRestorePlannerTests {
         #expect(surfaces[0].action == .reattachTmux(sessionName: "wm-repo"))
         #expect(surfaces[1].action == .freshShell)
         #expect(surfaces[1].launchTmuxSessionName != nil)
+        #expect(surfaces[1].terminalMode == .tmuxPerSession)
     }
 
     @Test("Rows with names of their own, or a dead shared name, are not displaced")

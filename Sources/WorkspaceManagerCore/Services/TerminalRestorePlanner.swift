@@ -270,7 +270,8 @@ public struct TerminalRestorePlanner: Sendable {
 
     /// A row that shared its live session with the row that keeps it. It was a second view of
     /// that one shell, so whatever conversation it recorded is the keeper's to rejoin; it comes
-    /// back as a fresh shell on a name of its own, and nothing is killed.
+    /// back as a fresh shell on a name of its own, and nothing is killed. Only a tmux tile records
+    /// a live tmux name, so it stays a tmux tile.
     private func displacedSurface(
         row: TerminalSessionContinuityRow,
         resolved: ResolvedRestoreTarget
@@ -283,7 +284,7 @@ public struct TerminalRestorePlanner: Sendable {
             action: .freshShell,
             launchDirectoryFellBack: fellBack,
             launchTmuxSessionName: TmuxSessionNameSharing.replacementName(for: directory),
-            terminalMode: row.terminalMode
+            terminalMode: .tmuxPerSession
         )
     }
 
