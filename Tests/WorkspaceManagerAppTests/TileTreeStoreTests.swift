@@ -603,6 +603,22 @@ struct TileTreeStoreTests {
         #expect(unrecorded.terminalMode == .ghosttyManagedSplits)
     }
 
+    /// Adoption attaches the tile to a live tmux session by name, so a tile stamped Ghostty
+    /// splits would run inside tmux while every close and teardown decision treated it as not.
+    @Test("An adopted session is a tmux tile whatever a new session would be")
+    func adoptedSessionIsATmuxTile() {
+        let store = TileTreeStore()
+        store.resolveTerminalMultiplexingMode = { _ in .ghosttyManagedSplits }
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+
+        let adopted = store.createAdoptedSession(
+            key: .hostPath(directory.path), directory: directory, tmuxSessionName: "agent-repo")
+
+        #expect(adopted.terminalMode == .tmuxPerSession)
+        #expect(adopted.tmuxSessionName == "agent-repo")
+        #expect(store.sessions.map(\.id) == [adopted.id])
+    }
+
     /// The #1232 restore side: one created session per continuity row. The activation
     /// path's key-reuse would collapse a primary and its recorded split panes into one
     /// session and drop the panes' recorded tmux targets — `createRestoredSession`

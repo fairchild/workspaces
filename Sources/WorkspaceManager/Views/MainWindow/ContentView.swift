@@ -214,12 +214,7 @@ struct ContentView: View {
                     activateHostSession(key: key, directory: directory, customCommand: customCommand)
                 },
                 activateAdoptedHostSession: { key, directory, tmuxSessionName in
-                    tileTreeStore.createRestoredSession(
-                        key: key,
-                        directory: directory,
-                        recordedTerminalMode: .tmuxPerSession,
-                        tmuxSessionNameOverride: tmuxSessionName
-                    )
+                    tileTreeStore.createAdoptedSession(key: key, directory: directory, tmuxSessionName: tmuxSessionName)
                 },
                 persistTerminalContinuity: { targetKind, targetID, rootURL, launchURL in
                     terminalContinuityController.persist(

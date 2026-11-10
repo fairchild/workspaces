@@ -310,6 +310,24 @@ final class TileTreeStore: ObservableObject {
         return session
     }
 
+    /// Binds a scope to a live tmux session found on the host by directory match (#1390). The
+    /// tile attaches to that session by name, so it is a tmux tile whatever a new one would be.
+    @discardableResult
+    func createAdoptedSession(
+        key: HostTerminalSessionKey,
+        directory: URL,
+        tmuxSessionName: String
+    ) -> HostTerminalSession {
+        let session = coordinator.createSession(
+            key: key,
+            directory: directory,
+            terminalMode: .tmuxPerSession,
+            tmuxSessionNameOverride: tmuxSessionName
+        )
+        publishSnapshot()
+        return session
+    }
+
     @discardableResult
     func ensureSession(
         key: HostTerminalSessionKey,
