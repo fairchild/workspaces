@@ -1172,6 +1172,9 @@ struct ContentView: View {
                     forceCloseTerminalTab(sessionID: confirmation.sessionID)
                 }
                 Button("Cancel", role: .cancel) {
+                    if let sessionID = viewState.terminalCloseConfirmation?.sessionID {
+                        tileTreeStore.forgetCloseRequest(sessionID)
+                    }
                     viewState.terminalCloseConfirmation = nil
                 }
             } message: {
@@ -1957,6 +1960,7 @@ struct ContentView: View {
         guard let terminal = tileTreeStore.surfaceStore.terminal(for: sessionID) else {
             return false
         }
+        tileTreeStore.noteCloseRequested(sessionID)
         terminal.requestClose()
         return true
     }

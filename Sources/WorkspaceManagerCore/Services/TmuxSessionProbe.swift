@@ -135,32 +135,6 @@ public struct TmuxSessionProbe: Sendable {
         await runForOutput("/usr/bin/env", ["tmux", "-V"], environment) != nil
     }
 
-    /// The host-session id `tmuxSessionName`'s session environment carries, or `nil` when tmux
-    /// did not answer or the session sets none. Each surface attaching to a session writes its
-    /// id there, so this is the id the session's newer processes report as theirs.
-    public func reportedHostSessionID(forSessionNamed tmuxSessionName: String) async -> UUID? {
-        Self.parseHostSessionID(
-            fromShowEnvironment: await runForOutput(
-                "/usr/bin/env",
-                [
-                    "tmux", "-L", Self.socketLabel, "show-environment", "-t", "=\(tmuxSessionName)",
-                    Self.hostSessionEnvironmentKey,
-                ],
-                environment
-            ))
-    }
-
-    static let hostSessionEnvironmentKey = "WORKSPACES_HOST_SESSION_ID"
-
-    /// Reads `KEY=value` from `show-environment`; an unset variable prints `-KEY` instead.
-    static func parseHostSessionID(fromShowEnvironment output: String?) -> UUID? {
-        let prefix = "\(hostSessionEnvironmentKey)="
-        guard
-            let line = output?.split(whereSeparator: \.isNewline).first(where: { $0.hasPrefix(prefix) })
-        else { return nil }
-        return UUID(uuidString: String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces))
-    }
-
     /// How many clients are attached to `tmuxSessionName`, or `nil` when tmux did
     /// not answer — a failed command, a missing binary, or a session that is not
     /// there to have clients.

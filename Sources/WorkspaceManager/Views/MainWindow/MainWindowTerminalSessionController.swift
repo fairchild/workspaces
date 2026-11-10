@@ -233,6 +233,7 @@ struct MainWindowTerminalSessionController {
         guard
             let focusSessionID = tileTreeStore.handleProcessExitAndResolveFocusTarget(
                 for: sessionID,
+                cause: .userClosed,
                 defaultHomeDirectory: defaultHomeDirectory
             )
         else {

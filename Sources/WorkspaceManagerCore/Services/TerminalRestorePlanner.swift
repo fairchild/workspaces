@@ -128,8 +128,6 @@ public struct TerminalRestorePlanner: Sendable {
     public typealias TargetResolver = @Sendable (TerminalSessionContinuityRow) -> ResolvedRestoreTarget?
     /// Whether a tmux session with the given deterministic name is alive.
     public typealias TmuxLivenessProbe = @Sendable (_ tmuxSessionName: String) -> Bool
-    /// The host-session id a live tmux session's environment reports, or `nil` when unknown.
-    public typealias TmuxHolderProbe = @Sendable (_ tmuxSessionName: String) -> UUID?
     /// Whether a Claude transcript for this session id and cwd is still present.
     public typealias TranscriptResumabilityCheck = @Sendable (_ agentSessionID: String, _ cwd: String) -> Bool
     /// Whether a directory currently exists (defaults to a `FileManager` probe).
@@ -141,7 +139,6 @@ public struct TerminalRestorePlanner: Sendable {
 
     private let resolveTarget: TargetResolver
     private let isTmuxSessionAlive: TmuxLivenessProbe
-    private let reportedTmuxHolder: TmuxHolderProbe
     private let isTranscriptResumable: TranscriptResumabilityCheck
     private let directoryExists: DirectoryExistenceCheck
     private let newestTranscriptID: TranscriptIdentityResolver
@@ -149,14 +146,12 @@ public struct TerminalRestorePlanner: Sendable {
     public init(
         resolveTarget: @escaping TargetResolver,
         isTmuxSessionAlive: @escaping TmuxLivenessProbe,
-        reportedTmuxHolder: @escaping TmuxHolderProbe = { _ in nil },
         isTranscriptResumable: @escaping TranscriptResumabilityCheck,
         directoryExists: @escaping DirectoryExistenceCheck = Self.defaultDirectoryExists,
         newestTranscriptID: @escaping TranscriptIdentityResolver = { _, _ in nil }
     ) {
         self.resolveTarget = resolveTarget
         self.isTmuxSessionAlive = isTmuxSessionAlive
-        self.reportedTmuxHolder = reportedTmuxHolder
         self.isTranscriptResumable = isTranscriptResumable
         self.directoryExists = directoryExists
         self.newestTranscriptID = newestTranscriptID
@@ -217,12 +212,25 @@ public struct TerminalRestorePlanner: Sendable {
 
     /// Rows that recorded one live tmux name between them, minus the row that keeps it.
     /// Before each tab had a name of its own, a tab and its primary recorded the same one.
+    ///
+    /// The keeper is the row the session's agent last reported under: a shell keeps the
+    /// host-session id it was spawned with, so its hook events land on that row whichever
+    /// view attached last. Without agent events, the first row keeps it.
     private func displacedFromSharedTmuxSessions(_ rows: [TerminalSessionContinuityRow]) -> Set<UUID> {
-        let claims = rows.compactMap { row -> TmuxSessionNameSharing.Claim? in
-            guard let name = row.tmuxSessionName, isTmuxSessionAlive(name) else { return nil }
-            return TmuxSessionNameSharing.Claim(hostSessionID: row.hostSessionID, tmuxSessionName: name)
-        }
-        return TmuxSessionNameSharing.displacedClaims(claims, reportedHolder: reportedTmuxHolder)
+        let claims = rows.enumerated()
+            .sorted { lhs, rhs in
+                switch (lhs.element.agentEventAt, rhs.element.agentEventAt) {
+                case let (left?, right?) where left != right: return left > right
+                case (.some, .none): return true
+                case (.none, .some): return false
+                default: return lhs.offset < rhs.offset
+                }
+            }
+            .compactMap { _, row -> TmuxSessionNameSharing.Claim? in
+                guard let name = row.tmuxSessionName, isTmuxSessionAlive(name) else { return nil }
+                return TmuxSessionNameSharing.Claim(hostSessionID: row.hostSessionID, tmuxSessionName: name)
+            }
+        return TmuxSessionNameSharing.displacedClaims(claims)
     }
 
     /// A row that shared its live session with the row that keeps it. It was a second view of
@@ -239,10 +247,7 @@ public struct TerminalRestorePlanner: Sendable {
             directory: directory,
             action: .freshShell,
             launchDirectoryFellBack: fellBack,
-            displacedTmuxSessionName: TmuxSessionNameSharing.replacementName(
-                for: directory,
-                hostSessionID: row.hostSessionID
-            )
+            displacedTmuxSessionName: TmuxSessionNameSharing.replacementName(for: directory)
         )
     }
 

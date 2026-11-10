@@ -116,7 +116,7 @@ struct TileTreeStoreTests {
             return outcome
         }
 
-        #expect(store.handleProcessExit(for: split.id))
+        #expect(store.handleProcessExit(for: split.id, cause: .userClosed))
 
         // The kill is async and crosses two child-process launches. Wait on the close
         // reporting how it ended, not on the stub's record file: a close that never kills
@@ -168,7 +168,7 @@ struct TileTreeStoreTests {
             return outcome
         }
 
-        #expect(store.handleProcessExit(for: tab.id))
+        #expect(store.handleProcessExit(for: tab.id, cause: .userClosed))
 
         let invocation = try await stub.awaitKillInvocation(reportedBy: teardown)
         #expect(await teardown.awaitFirst() == .killed(sessionID: "$7", name: tabSessionName))
@@ -178,29 +178,97 @@ struct TileTreeStoreTests {
         #expect(store.paneScopedTmuxSessionNameToKill(for: primary) == nil)
     }
 
-    @Test("The close prompt says a tab keeps running only when closing detaches it")
-    func closePromptMatchesWhatCloseDoes() throws {
+    /// A tab's tmux client ends on its own when the user detaches (`prefix d`) while the
+    /// session keeps running work. That exit is not a close: the session must survive it.
+    /// Kills run as main-actor tasks in the order closes enqueue them, so a later user close
+    /// reaching the terminator first proves the earlier exits enqueued nothing.
+    @Test("A tab or split whose client exits on its own keeps its tmux session")
+    func clientExitKeepsSession() async throws {
         let store = TileTreeStore()
         store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
         let tab = try #require(store.createTab(from: primary.id))
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
+        let closedByUser = try #require(store.createTab(from: primary.id))
+        let requests = OutcomeLog()
+        store.terminateOwnedTmuxSession = { hostSessionID in
+            await requests.append(.killed(sessionID: hostSessionID.uuidString, name: ""))
+            return .notLive
+        }
 
-        #expect(store.closeLeavesTmuxSessionRunning(primary))
-        #expect(store.closeLeavesTmuxSessionRunning(tab) == false)
+        #expect(store.handleProcessExit(for: tab.id))
+        #expect(store.handleProcessExit(for: split.id))
+        #expect(store.handleProcessExit(for: closedByUser.id, cause: .userClosed))
 
-        store.resolveTerminalMultiplexingMode = { .ghosttyManagedSplits }
-        #expect(store.closeLeavesTmuxSessionRunning(primary) == false)
+        #expect(await requests.awaitFirst() == .killed(sessionID: closedByUser.id.uuidString, name: ""))
+        #expect(await requests.all().count == 1)
+        #expect(store.sessions.map(\.id) == [primary.id])
+    }
 
-        let detaching = TerminalCloseConfirmation(sessionID: primary.id, title: "repo", keepsRunningInTmux: true)
-        let ending = TerminalCloseConfirmation(sessionID: tab.id, title: "repo")
+    /// Ghostty skips the confirmation when it believes the terminal sits at a prompt and
+    /// reports the requested close as an exit; the request still makes it the user's close.
+    @Test("A requested close that arrives as a process exit still reclaims the tab's session")
+    func requestedCloseArrivingAsExitReclaims() async throws {
+        let store = TileTreeStore()
+        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        let requested = try #require(store.createTab(from: primary.id))
+        let cancelled = try #require(store.createTab(from: primary.id))
+        let closedByUser = try #require(store.createTab(from: primary.id))
+        let requests = OutcomeLog()
+        store.terminateOwnedTmuxSession = { hostSessionID in
+            await requests.append(.killed(sessionID: hostSessionID.uuidString, name: ""))
+            return .notLive
+        }
+
+        store.noteCloseRequested(requested.id)
+        store.noteCloseRequested(cancelled.id)
+        store.forgetCloseRequest(cancelled.id)
+        #expect(store.handleProcessExit(for: requested.id))
+        #expect(store.handleProcessExit(for: cancelled.id))
+        #expect(store.handleProcessExit(for: closedByUser.id, cause: .userClosed))
+
+        #expect(
+            await requests.awaitCount(2) == [
+                .killed(sessionID: requested.id.uuidString, name: ""),
+                .killed(sessionID: closedByUser.id.uuidString, name: ""),
+            ])
+    }
+
+    @Test("The close prompt says a tab keeps running only when closing detaches it")
+    func closePromptMatchesWhatCloseDoes() throws {
+        let store = TileTreeStore()
+        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        let controller = MainWindowTerminalSessionController()
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        let tab = try #require(store.createTab(from: primary.id))
+        let unrecordedTab = try #require(store.createTab(from: primary.id))
+        store.tmuxOwnershipLedger.record(
+            hostSessionID: tab.id,
+            identity: TmuxLiveSession(
+                sessionID: "$7", name: try #require(tab.tmuxSessionNameOverride),
+                createdAt: Date(timeIntervalSince1970: 100), serverPID: 4242),
+            launchedAt: Date(timeIntervalSince1970: 100)
+        )
+
+        let detaching = controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store)
+        let ending = controller.closeConfirmation(sessionID: tab.id, tileTreeStore: store)
+        let unattributable = controller.closeConfirmation(sessionID: unrecordedTab.id, tileTreeStore: store)
         #expect(detaching.message.contains("keeps running"))
         #expect(ending.message.contains("will end it"))
+        #expect(unattributable.message.contains("keeps running"))
+
+        store.resolveTerminalMultiplexingMode = { .ghosttyManagedSplits }
+        #expect(
+            controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains("will end it"))
     }
 
     /// Tabs recorded before they had names of their own share their primary's. Relaunching
-    /// both onto it would carry the mirror forward, so the first keeps the live session and
-    /// the rest move to scoped names — and nothing is killed to get there.
+    /// both onto it would carry the mirror forward, so the selected tab keeps the live session
+    /// and the rest move to scoped names — and nothing is killed to get there.
     @Test("Manifest restore splits sessions sharing a tmux name without killing any")
     func manifestRestoreSplitsSharedTmuxNames() {
         let store = TileTreeStore()
@@ -218,15 +286,31 @@ struct TileTreeStoreTests {
         let unrelated = HostTerminalSession(key: .repoPath(other.path), directory: other)
 
         store.restoreSessions(
-            [first, mirror, unrelated], activeSessionID: first.id, activeSessionIDByScopeKey: [:])
+            [first, mirror, unrelated], activeSessionID: unrelated.id, activeSessionIDByScopeKey: [key: mirror.id])
 
         let restored = Dictionary(uniqueKeysWithValues: store.sessions.map { ($0.id, $0) })
-        #expect(restored[first.id]?.effectiveTmuxSessionName == TmuxSessionNaming.defaultName(for: directory))
+        #expect(restored[mirror.id]?.effectiveTmuxSessionName == TmuxSessionNaming.defaultName(for: directory))
         #expect(restored[unrelated.id]?.effectiveTmuxSessionName == TmuxSessionNaming.defaultName(for: other))
-        let moved = restored[mirror.id]?.effectiveTmuxSessionName ?? ""
-        #expect(TmuxSessionNaming.isPaneScopedName(moved, for: directory))
+        let moved = restored[first.id]?.effectiveTmuxSessionName ?? ""
+        #expect(moved == TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: first.id))
         #expect(store.sessions.count == 3)
         #expect(killRequests.isEmpty)
+    }
+
+    @Test("Manifest restore keeps a shared name on the first record when none is selected")
+    func manifestRestoreFallsBackToFirstRecord() {
+        let store = TileTreeStore()
+        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let key = HostTerminalSessionKey.repoPath(directory.path)
+        let first = HostTerminalSession(key: key, directory: directory)
+        let second = HostTerminalSession(key: key, directory: directory)
+
+        store.restoreSessions([first, second], activeSessionID: nil, activeSessionIDByScopeKey: [:])
+
+        let names = store.sessions.map(\.effectiveTmuxSessionName)
+        #expect(names.first == TmuxSessionNaming.defaultName(for: directory))
+        #expect(names.last == TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: second.id))
     }
 
     @Test("Manifest restore leaves shared names alone outside tmux mode")
@@ -241,6 +325,7 @@ struct TileTreeStoreTests {
 
         store.restoreSessions(sessions, activeSessionID: sessions[0].id, activeSessionIDByScopeKey: [:])
 
+        #expect(store.sessions.count == 2)
         #expect(store.sessions.allSatisfy { $0.tmuxSessionNameOverride == nil })
     }
 
@@ -271,7 +356,7 @@ struct TileTreeStoreTests {
             return outcome
         }
 
-        #expect(store.handleProcessExit(for: split.id))
+        #expect(store.handleProcessExit(for: split.id, cause: .userClosed))
 
         #expect(await outcomes.awaitFirst() == .notAttributable)
         #expect(stub.killWasInvoked == false)
@@ -1413,6 +1498,23 @@ private actor OutcomeLog {
     }
 
     private static let maxChargePerPoll: TimeInterval = 0.25
+
+    func all() -> [TmuxOwnedSessionTerminator.Outcome] {
+        outcomes
+    }
+
+    /// The first `count` outcomes, or as many as arrived once the wait has used up `budget`.
+    func awaitCount(_ count: Int, within budget: TimeInterval = 30) async -> [TmuxOwnedSessionTerminator.Outcome] {
+        var spent: TimeInterval = 0
+        var last = Date()
+        while outcomes.count < count, spent < budget {
+            try? await Task.sleep(for: .milliseconds(25))
+            let current = Date()
+            spent += min(current.timeIntervalSince(last), Self.maxChargePerPoll)
+            last = current
+        }
+        return Array(outcomes.prefix(count))
+    }
 }
 
 /// Replays a close wait that a process freeze interrupts: the first poll comes back 40 s
