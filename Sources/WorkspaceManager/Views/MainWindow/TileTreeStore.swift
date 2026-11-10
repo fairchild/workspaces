@@ -331,10 +331,7 @@ final class TileTreeStore: ObservableObject {
     ) {
         guard !sessions.isEmpty else { return }
         coordinator = HostTerminalSessionCoordinator(
-            sessions: separatingSharedTmuxSessions(
-                sessions,
-                selectedSessionIDs: Set(activeSessionIDByScopeKey.values).union([activeSessionID].compactMap { $0 })
-            ),
+            sessions: separatingSharedTmuxSessions(sessions),
             activeSessionID: activeSessionID,
             activeSessionIDByScopeKey: activeSessionIDByScopeKey
         )
@@ -344,18 +341,13 @@ final class TileTreeStore: ObservableObject {
     /// Restored records that would launch on one tmux name, given names of their own past the
     /// keeper. A tab recorded before tabs had their own names shares its primary's, and both
     /// relaunching onto it would keep showing one shell twice. Nothing is killed: the keeper
-    /// rejoins the live session and the others start fresh shells. The keeper is the scope's
-    /// selected tab, the one launch rejoins first, so the live work comes back where the user
-    /// left it.
-    private func separatingSharedTmuxSessions(
-        _ sessions: [HostTerminalSession],
-        selectedSessionIDs: Set<UUID>
-    ) -> [HostTerminalSession] {
+    /// rejoins the live session and the others start fresh shells. The keeper is the earliest
+    /// record, the scope's primary: its surface created the shell, and the shell's
+    /// `WORKSPACES_HOST_SESSION_ID` is set at creation, so the agent inside reports under that
+    /// record's id and its status keeps reaching the tile that shows it.
+    private func separatingSharedTmuxSessions(_ sessions: [HostTerminalSession]) -> [HostTerminalSession] {
         guard resolveTerminalMultiplexingMode() == .tmuxPerSession else { return sessions }
-        let ordered =
-            sessions.filter { selectedSessionIDs.contains($0.id) }
-            + sessions.filter { !selectedSessionIDs.contains($0.id) }
-        let claims = ordered.filter { !$0.isRemote }.map {
+        let claims = sessions.filter { !$0.isRemote }.map {
             TmuxSessionNameSharing.Claim(hostSessionID: $0.id, tmuxSessionName: $0.effectiveTmuxSessionName)
         }
         let displaced = TmuxSessionNameSharing.displacedClaims(claims)

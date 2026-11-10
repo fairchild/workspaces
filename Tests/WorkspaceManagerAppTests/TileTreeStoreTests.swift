@@ -289,8 +289,9 @@ struct TileTreeStoreTests {
     }
 
     /// Tabs recorded before they had names of their own share their primary's. Relaunching
-    /// both onto it would carry the mirror forward, so the selected tab keeps the live session
-    /// and the rest move to scoped names — and nothing is killed to get there.
+    /// both onto it would carry the mirror forward, so the primary — whose surface created the
+    /// shell, and whose id the agent inside reports under — keeps the live session, the rest
+    /// move to scoped names, and nothing is killed to get there. Selection doesn't decide it.
     @Test("Manifest restore splits sessions sharing a tmux name without killing any")
     func manifestRestoreSplitsSharedTmuxNames() {
         let store = TileTreeStore()
@@ -302,37 +303,21 @@ struct TileTreeStoreTests {
         }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let key = HostTerminalSessionKey.repoPath(directory.path)
-        let first = HostTerminalSession(key: key, directory: directory)
+        let primary = HostTerminalSession(key: key, directory: directory)
         let mirror = HostTerminalSession(key: key, directory: directory)
         let other = URL(fileURLWithPath: "/Users/test/code/other")
         let unrelated = HostTerminalSession(key: .repoPath(other.path), directory: other)
 
         store.restoreSessions(
-            [first, mirror, unrelated], activeSessionID: unrelated.id, activeSessionIDByScopeKey: [key: mirror.id])
+            [primary, mirror, unrelated], activeSessionID: unrelated.id, activeSessionIDByScopeKey: [key: mirror.id])
 
         let restored = Dictionary(uniqueKeysWithValues: store.sessions.map { ($0.id, $0) })
-        #expect(restored[mirror.id]?.effectiveTmuxSessionName == TmuxSessionNaming.defaultName(for: directory))
+        #expect(restored[primary.id]?.effectiveTmuxSessionName == TmuxSessionNaming.defaultName(for: directory))
         #expect(restored[unrelated.id]?.effectiveTmuxSessionName == TmuxSessionNaming.defaultName(for: other))
-        let moved = restored[first.id]?.effectiveTmuxSessionName ?? ""
-        #expect(moved == TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: first.id))
+        let moved = restored[mirror.id]?.effectiveTmuxSessionName ?? ""
+        #expect(moved == TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: mirror.id))
         #expect(store.sessions.count == 3)
         #expect(killRequests.isEmpty)
-    }
-
-    @Test("Manifest restore keeps a shared name on the first record when none is selected")
-    func manifestRestoreFallsBackToFirstRecord() {
-        let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
-        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
-        let key = HostTerminalSessionKey.repoPath(directory.path)
-        let first = HostTerminalSession(key: key, directory: directory)
-        let second = HostTerminalSession(key: key, directory: directory)
-
-        store.restoreSessions([first, second], activeSessionID: nil, activeSessionIDByScopeKey: [:])
-
-        let names = store.sessions.map(\.effectiveTmuxSessionName)
-        #expect(names.first == TmuxSessionNaming.defaultName(for: directory))
-        #expect(names.last == TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: second.id))
     }
 
     @Test("Manifest restore leaves shared names alone outside tmux mode")
