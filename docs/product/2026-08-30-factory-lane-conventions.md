@@ -46,7 +46,7 @@ evidence about how fast this surface moves.
 | 7 factory workflows | 8 (`factory-revise.yml` merged since) | `ls .github/workflows/factory-*.yml` |
 | 1,174 lines of workflow YAML | 1,525 (29.7% of the repo's 5,127 workflow-YAML lines; 38% counting `_evidence.yml`, which two factory lanes call) | `wc -l .github/workflows/factory-*.yml` |
 | 7,496 lines of Python across 9 scripts | 8,607 across 12 `factory-*.py` files; workflows actually invoke 11 scripts totaling 8,349 (10 factory-named plus the Monitor's `ops-report.py` at 1,364; `factory-dashboard.py` and `factory-worker-token.py` are laptop/operator-only) | `wc -l scripts/factory-*.py` |
-| 21 `FACTORY_*` variables | 38 distinct names in scripts + workflow YAML. The steward's 32 is exact under "names that touch a process environment or repo variable." The issue's 21 undercounts because its taxonomy (enable flags / caps / expectation-passing) has no bucket for 11 of the names: there are 7 enable flags (not 6), 5 cap variables (not 3 — the two runaway caps), and a credential/actor/telemetry group that fits none of the three buckets | `grep -rhoE 'FACTORY_[A-Z_]+' scripts/*.py .github/workflows/*.yml \| sort -u` |
+| 21 `FACTORY_*` variables | 38 distinct names in scripts + workflow YAML. The orchestrator's 32 is exact under "names that touch a process environment or repo variable." The issue's 21 undercounts because its taxonomy (enable flags / caps / expectation-passing) has no bucket for 11 of the names: there are 7 enable flags (not 6), 5 cap variables (not 3 — the two runaway caps), and a credential/actor/telemetry group that fits none of the three buckets | `grep -rhoE 'FACTORY_[A-Z_]+' scripts/*.py .github/workflows/*.yml \| sort -u` |
 
 The full classification: 12 GitHub repo variables (7 enable flags, 5 caps),
 18 env names one workflow sets for a later step or the contributor runtime,
@@ -57,7 +57,7 @@ them.**
 
 ## New specimens from this session
 
-The issue's five specimens (three in the body, two in the steward comment)
+The issue's five specimens (three in the body, two in the orchestrator comment)
 all reproduced. Working the exploration added three more, same disease.
 
 **6. The revision loop has never run, and nothing noticed.** Every Factory
@@ -160,7 +160,7 @@ rejection still stands (`scripts/factory-evidence-verify.py:455-460`), and
 revise's resolve dispatches after a body-only turn that clears the readiness
 gate (`scripts/factory-revise.py:757-790`). A PR that was cap-declined, or
 whose review run never fired, matches neither and waits for a push that may
-never come — the steward's five-frozen-PRs specimen, structurally.
+never come — the orchestrator's five-frozen-PRs specimen, structurally.
 
 The digest's "Needs your merge" section keys off the linked issue's
 `mergeable` label, not off whether any review exists at the current head

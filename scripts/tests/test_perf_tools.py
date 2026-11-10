@@ -16,6 +16,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -444,6 +445,24 @@ class PerfSummarizerTests(unittest.TestCase):
                 payload["budget_results"]["launch_to_first_prompt"]["gate_budget_ms"],
                 expected_budgets("debug_no_activate")[0],
             )
+
+    def test_log_file_never_records_a_machine_local_absolute_path(self) -> None:
+        line = "2026-04-11 10:00:00.000 [Perf] metric=launch_to_first_prompt duration_ms=240.00 trigger=terminal_focus\n"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            outside = Path(tmpdir) / "home" / "someone" / "run5" / "debug.log"
+            outside.parent.mkdir(parents=True)
+            outside.write_text(line, encoding="utf-8")
+            inside_dir = Path(tempfile.mkdtemp(dir=REPO_ROOT / "scripts" / "tests"))
+            self.addCleanup(shutil.rmtree, inside_dir, ignore_errors=True)
+            inside = inside_dir / "debug.log"
+            inside.write_text(line, encoding="utf-8")
+            args = ["--json", "--scenario", "debug_no_activate", "--build-kind", "debug"]
+            far = self.run_json([str(SUMMARIZE_PERF_LOG), *args, str(outside)])
+            near = self.run_json([str(SUMMARIZE_PERF_LOG), *args, str(inside)])
+        self.assertEqual(far["log_file"], "debug.log")
+        self.assertEqual(far["artifacts"]["log_file"], "debug.log")
+        self.assertEqual(near["log_file"], f"scripts/tests/{inside_dir.name}/debug.log")
+        self.assertEqual(near["artifacts"]["log_file"], near["log_file"])
 
     def test_installed_clean_log_summary_is_canonical(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

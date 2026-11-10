@@ -69,7 +69,7 @@ LEADING_PARAGRAPH_MIN_CHARS = 40
 # Shown on failure as an example, not a block to paste and fill in: the shape is
 # a paragraph, and a labelled skeleton is what produced the bodies this replaces.
 LEADING_PARAGRAPH_EXAMPLE = """\
-Decisions on the steward's board wait hours for a click: on 2026-09-13 nine pull
+Decisions on the review board wait hours for a click: on 2026-09-13 nine pull
 requests each waited eleven hours on one. This PR lets a decision be answered
 from a macOS notification, so a tap and a board click are the same event
 everywhere downstream. Off by default behind an experimental feature.
