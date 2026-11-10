@@ -130,7 +130,7 @@ struct MainWindowTerminalContinuityController {
         let workspaces = dependencies.repos().flatMap(\.workspaces).filter {
             $0.backendIdentifier == ComposeWorkspaceProvider.identifier && $0.status != .archived
         }
-        let newSessionMode = dependencies.tileTreeStore.resolveTerminalMultiplexingMode
+        let newSessionMode = dependencies.tileTreeStore.terminalModeForNewSession
         var validated: [UUID: HostTerminalSession] = [:]
         for record in manifest.sessionRecords {
             guard case .backendSession(let providerID, _) = record.key,

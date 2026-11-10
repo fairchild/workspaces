@@ -48,7 +48,7 @@ struct GhosttyTerminalIntentRouterTests {
     func splitIntentsFollowTheSourceTabsMode() throws {
         let splitsStore = makeStore(.ghosttyManagedSplits)
         let splitsPrimary = try #require(splitsStore.activeSessionID)
-        splitsStore.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        splitsStore.terminalModeForNewSession = { _ in .tmuxPerSession }
 
         _ = router.route(
             .split(.newSplit(direction: .right)), sourceSessionID: splitsPrimary, tileTreeStore: splitsStore)
@@ -57,7 +57,7 @@ struct GhosttyTerminalIntentRouterTests {
 
         let tmuxStore = makeStore(.tmuxPerSession)
         let tmuxPrimary = try #require(tmuxStore.activeSessionID)
-        tmuxStore.resolveTerminalMultiplexingMode = { _ in .ghosttyManagedSplits }
+        tmuxStore.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
 
         let effects = router.route(
             .split(.newSplit(direction: .right)), sourceSessionID: tmuxPrimary, tileTreeStore: tmuxStore)
@@ -209,7 +209,7 @@ struct GhosttyTerminalIntentRouterTests {
 
     private func makeStore(_ terminalMode: TerminalMultiplexingMode = .ghosttyManagedSplits) -> TileTreeStore {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in terminalMode }
+        store.terminalModeForNewSession = { _ in terminalMode }
         _ = store.activateSession(
             key: .repoPath("/Users/test/repo"),
             directory: URL(fileURLWithPath: "/Users/test/repo")

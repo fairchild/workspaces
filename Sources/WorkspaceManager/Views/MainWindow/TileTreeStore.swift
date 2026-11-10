@@ -89,11 +89,11 @@ final class TileTreeStore: ObservableObject {
     /// wiring asks it before killing anything (#1267).
     let tmuxOwnershipLedger = TmuxSessionOwnershipLedger()
 
-    /// The terminal mode a new primary session in `key`'s scope is born with. Read only at
-    /// birth: tabs and splits copy their source, restores take their record, and every later
-    /// decision reads the session's own `terminalMode`. Production resolves the global
-    /// setting; tests inject a fixed mode.
-    var resolveTerminalMultiplexingMode: (HostTerminalSessionKey) -> TerminalMultiplexingMode = { _ in
+    /// The terminal mode a new primary session in `key`'s scope is born with, asked with the
+    /// normalized key the session will carry. Read only at birth: tabs and splits copy their
+    /// source, restores take their record, and every later decision reads the session's own
+    /// `terminalMode`. Production resolves the global setting; tests inject a fixed mode.
+    var terminalModeForNewSession: (HostTerminalSessionKey) -> TerminalMultiplexingMode = { _ in
         TerminalMultiplexingMode.resolve()
     }
     /// Test seam for pane-scoped tmux session reclamation (#1232): production terminates
@@ -268,7 +268,7 @@ final class TileTreeStore: ObservableObject {
         let result = coordinator.activate(
             key: key,
             directory: directory,
-            terminalMode: resolveTerminalMultiplexingMode(key),
+            terminalMode: terminalModeForNewSession(key.normalized()),
             customCommand: customCommand,
             initialCommand: initialCommand
         )
@@ -300,7 +300,7 @@ final class TileTreeStore: ObservableObject {
         let session = coordinator.createSession(
             key: key,
             directory: directory,
-            terminalMode: recordedTerminalMode ?? resolveTerminalMultiplexingMode(key),
+            terminalMode: recordedTerminalMode ?? terminalModeForNewSession(key.normalized()),
             initialCommand: initialCommand,
             initialCommandDelivery: initialCommandDelivery,
             tmuxSessionNameOverride: tmuxSessionNameOverride,
@@ -338,7 +338,7 @@ final class TileTreeStore: ObservableObject {
         let result = coordinator.ensureSession(
             key: key,
             directory: directory,
-            terminalMode: resolveTerminalMultiplexingMode(key),
+            terminalMode: terminalModeForNewSession(key.normalized()),
             customCommand: customCommand,
             initialCommand: initialCommand
         )

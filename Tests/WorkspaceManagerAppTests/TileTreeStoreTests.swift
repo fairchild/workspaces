@@ -91,7 +91,7 @@ struct TileTreeStoreTests {
         defer { stub.cleanUp() }
 
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
 
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
@@ -139,7 +139,7 @@ struct TileTreeStoreTests {
         defer { stub.cleanUp() }
 
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
         let tab = try #require(store.createTab(from: primary.id))
@@ -185,7 +185,7 @@ struct TileTreeStoreTests {
     @Test("A tab or split whose client exits on its own keeps its tmux session")
     func clientExitKeepsSession() async throws {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
         let tab = try #require(store.createTab(from: primary.id))
@@ -211,7 +211,7 @@ struct TileTreeStoreTests {
     @Test("A requested close that arrives as a process exit still reclaims the tab's session")
     func requestedCloseArrivingAsExitReclaims() async throws {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
         let requested = try #require(store.createTab(from: primary.id))
@@ -240,7 +240,7 @@ struct TileTreeStoreTests {
     @Test("The close prompt says a tab keeps running only when closing detaches it")
     func closePromptMatchesWhatCloseDoes() throws {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let controller = MainWindowTerminalSessionController()
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
@@ -263,7 +263,7 @@ struct TileTreeStoreTests {
 
         // The setting moving to Ghostty splits leaves the live tmux tab detaching on close;
         // only a tab born after the change closes for good.
-        store.resolveTerminalMultiplexingMode = { _ in .ghosttyManagedSplits }
+        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
         #expect(
             controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains("keeps running"))
         let other = URL(fileURLWithPath: "/Users/test/code/other")
@@ -275,7 +275,7 @@ struct TileTreeStoreTests {
     @Test("The close prompt warns when closing a tab ends one of its splits")
     func closePromptCountsSplits() throws {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let controller = MainWindowTerminalSessionController()
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
@@ -301,7 +301,7 @@ struct TileTreeStoreTests {
     @Test("Manifest restore splits sessions sharing a tmux name without killing any")
     func manifestRestoreSplitsSharedTmuxNames() {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .ghosttyManagedSplits }
+        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
         var killRequests: [UUID] = []
         store.terminateOwnedTmuxSession = { hostSessionID in
             killRequests.append(hostSessionID)
@@ -329,7 +329,7 @@ struct TileTreeStoreTests {
     @Test("Manifest restore leaves shared names alone on records born outside tmux mode")
     func manifestRestoreLeavesNamesOutsideTmuxMode() {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let key = HostTerminalSessionKey.repoPath(directory.path)
         let sessions = [
@@ -353,7 +353,7 @@ struct TileTreeStoreTests {
         defer { stub.cleanUp() }
 
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
 
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
@@ -454,7 +454,7 @@ struct TileTreeStoreTests {
     @Test("A remote split pane is never reclaimed on teardown")
     func remoteSplitPaneIsNeverReclaimed() throws {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let primary = store.activateSession(
             key: .backendSession(providerID: "lume", instanceID: "vm-1"),
             directory: URL(fileURLWithPath: "/tmp"),
@@ -476,7 +476,7 @@ struct TileTreeStoreTests {
     @Test("An externally owned session bound by directory match is never reclaimed on teardown")
     func externallyOwnedSessionIsNeverReclaimed() {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/issue-1390")
         let adopted = HostTerminalSession(
             key: .hostPath(directory.path),
@@ -498,13 +498,13 @@ struct TileTreeStoreTests {
         let fixture = try ContinuityStoreFixture()
         defer { fixture.remove() }
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         store.continuityRecorder = TerminalContinuityRecorder(sink: fixture.store)
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
         let tab = try #require(store.createTab(from: primary.id))
 
-        store.resolveTerminalMultiplexingMode = { _ in .ghosttyManagedSplits }
+        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
         #expect(store.activateExistingSession(sessionID: primary.id))
         let other = URL(fileURLWithPath: "/Users/test/code/other")
         let bornAfter = store.activateSession(key: .repoPath(other.path), directory: other).session
@@ -528,13 +528,13 @@ struct TileTreeStoreTests {
         let fixture = try ContinuityStoreFixture()
         defer { fixture.remove() }
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .ghosttyManagedSplits }
+        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
         store.continuityRecorder = TerminalContinuityRecorder(sink: fixture.store)
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
         let tab = try #require(store.createTab(from: primary.id))
 
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         #expect(store.activateExistingSession(sessionID: primary.id))
         await store.continuityRecorder?.waitUntilDrained()
 
@@ -555,7 +555,7 @@ struct TileTreeStoreTests {
         let fixture = try ContinuityStoreFixture()
         defer { fixture.remove() }
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         store.continuityRecorder = TerminalContinuityRecorder(sink: fixture.store)
         let remote = store.activateSession(
             key: .backendSession(providerID: "lume", instanceID: "vm-1"),
@@ -572,11 +572,11 @@ struct TileTreeStoreTests {
     @Test("A new tab and a split take their source's mode, not the current setting")
     func tabAndSplitCopyTheirSourcesMode() throws {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
 
-        store.resolveTerminalMultiplexingMode = { _ in .ghosttyManagedSplits }
+        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
         let tab = try #require(store.createTab(from: primary.id))
         let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
 
@@ -591,7 +591,7 @@ struct TileTreeStoreTests {
     @Test("A restored session takes its record's mode; a record without one takes the setting's")
     func restoredSessionTakesItsRecordsMode() {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .ghosttyManagedSplits }
+        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
 
         let recorded = store.createRestoredSession(
@@ -603,12 +603,38 @@ struct TileTreeStoreTests {
         #expect(unrecorded.terminalMode == .ghosttyManagedSplits)
     }
 
+    /// Sessions carry a symlink-resolved key, so a policy keyed by path is asked about the path
+    /// the session will carry rather than the one the caller happened to hold.
+    @Test("A new session's mode is asked under the key the session is born with")
+    func newSessionModeIsAskedUnderTheBirthKey() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent("birth-key-\(UUID().uuidString)")
+        let real = root.appendingPathComponent("real", isDirectory: true)
+        let link = root.appendingPathComponent("link")
+        try fileManager.createDirectory(at: real, withIntermediateDirectories: true)
+        try fileManager.createSymbolicLink(at: link, withDestinationURL: real)
+        defer { try? fileManager.removeItem(at: root) }
+        let store = TileTreeStore()
+        var askedKeys: [HostTerminalSessionKey] = []
+        store.terminalModeForNewSession = { key in
+            askedKeys.append(key)
+            return .tmuxPerSession
+        }
+
+        let activated = store.activateSession(key: .hostPath(link.path), directory: link).session
+        let restored = store.createRestoredSession(
+            key: .repoPath(link.path), directory: link, recordedTerminalMode: nil)
+
+        #expect(activated.key != .hostPath(link.path))
+        #expect(askedKeys == [activated.key, restored.key])
+    }
+
     /// Adoption attaches the tile to a live tmux session by name, so a tile stamped Ghostty
     /// splits would run inside tmux while every close and teardown decision treated it as not.
     @Test("An adopted session is a tmux tile whatever a new session would be")
     func adoptedSessionIsATmuxTile() {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .ghosttyManagedSplits }
+        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
 
         let adopted = store.createAdoptedSession(
@@ -1441,7 +1467,7 @@ struct TileTreeStoreTests {
     func focusChangeWritesOnlyChangedContinuityRows() async throws {
         let sink = ContinuityWriteLog()
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         store.continuityRecorder = TerminalContinuityRecorder(sink: sink)
 
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
@@ -1474,7 +1500,7 @@ struct TileTreeStoreTests {
         let sink = ContinuityWriteLog()
         let store = TileTreeStore()
         let registry = AgentSessionRegistry()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         store.continuityRecorder = TerminalContinuityRecorder(sink: sink)
         store.attach(agentSessionRegistry: registry, localStateStore: nil, hooksSocketPath: nil)
 
@@ -1506,7 +1532,7 @@ struct TileTreeStoreTests {
         let sink = ContinuityWriteLog()
         let store = TileTreeStore()
         let registry = AgentSessionRegistry()
-        store.resolveTerminalMultiplexingMode = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         store.continuityRecorder = TerminalContinuityRecorder(sink: sink)
         store.attach(agentSessionRegistry: registry, localStateStore: nil, hooksSocketPath: nil)
 

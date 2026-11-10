@@ -2306,7 +2306,8 @@ struct ContentView: View {
 
             var boundTmuxSessionName: String?
             if let path = item.path,
-                tileTreeStore.resolveTerminalMultiplexingMode(.hostPath(path)) == .tmuxPerSession
+                tileTreeStore.terminalModeForNewSession(HostTerminalSessionKey.hostPath(path).normalized())
+                    == .tmuxPerSession
             {
                 boundTmuxSessionName = await TmuxSessionProbe().sessionName(withCurrentDirectory: path)
             }

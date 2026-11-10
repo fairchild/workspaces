@@ -79,7 +79,7 @@ struct SplitRoutingControllerTests {
         _ terminalMode: TerminalMultiplexingMode = .ghosttyManagedSplits
     ) -> TileTreeStore {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { _ in terminalMode }
+        store.terminalModeForNewSession = { _ in terminalMode }
         _ = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
