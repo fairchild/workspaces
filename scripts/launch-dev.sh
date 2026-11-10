@@ -66,6 +66,7 @@ APP_SUPPORT_DATA_DIR="$HOME/Library/Application Support/WorkspaceManager"
 DO_BUILD=true
 KILL_EXISTING=true
 COEXIST=false
+REFUSE_RUNNING_DEBUG=false
 SEED_STORE=false
 RUN_IN_BACKGROUND=true
 USE_APP_SUPPORT=false
@@ -79,6 +80,7 @@ WINDOW_TIMEOUT_SECONDS=10
 DATA_DIR="$DEFAULT_DATA_DIR"
 LOG_PATH=""
 BUILD_LOG_PATH=""
+PID_FILE=""
 APP_PID=""
 WINDOW_ID=""
 DIAGNOSTICS_DIR=""
@@ -93,6 +95,9 @@ Options:
   --no-kill            Do not stop existing WorkspaceManager processes
   --coexist            Leave the installed WorkSpaces.app running; only a previous
                        debug instance is stopped
+  --refuse-running-debug
+                       With --coexist, fail instead of stopping a running debug
+                       instance of this checkout
   --seed-store         Seed an empty data dir from a snapshot of the installed app's
                        store (SwiftData + local-state sidecar); the live files are
                        only read
@@ -107,6 +112,8 @@ Options:
   --verbose-build      Stream full swift build output instead of summarizing to a log
   --watch              Tail the launch log after successful startup until interrupted
   --window-timeout <s> Require a visible app window within this many seconds (default: 10)
+  --pid-file <path>    Write the app's pid here the moment it is backgrounded, before
+                       launch verification, so a caller can clean up an interrupted launch
   --help, -h           Show this help
 
 Isolation notes:
@@ -146,6 +153,10 @@ parse_args() {
             --coexist)
                 COEXIST=true
                 KILL_EXISTING=false
+                shift
+                ;;
+            --refuse-running-debug)
+                REFUSE_RUNNING_DEBUG=true
                 shift
                 ;;
             --seed-store)
@@ -198,6 +209,11 @@ parse_args() {
             --window-timeout)
                 [[ $# -ge 2 ]] || fail "--window-timeout requires a value"
                 WINDOW_TIMEOUT_SECONDS="$2"
+                shift 2
+                ;;
+            --pid-file)
+                [[ $# -ge 2 ]] || fail "--pid-file requires a path"
+                PID_FILE="$2"
                 shift 2
                 ;;
             --help|-h)
@@ -340,8 +356,13 @@ ensure_no_installed_app_instance() {
 
 stop_existing_if_requested() {
     if [[ "$COEXIST" == true ]]; then
+        local pid running
+        if [[ "$REFUSE_RUNNING_DEBUG" == true ]]; then
+            running="$(list_instances_for_binary "$DEBUG_BINARY" | awk '{ print $1 }' | tr '\n' ' ')"
+            [[ -z "$running" ]] || fail "a debug instance of this checkout is running (pid ${running% }); refusing to stop it (--refuse-running-debug)"
+            return
+        fi
         log "Coexist mode: leaving the installed app running; stopping any previous debug instance..."
-        local pid
         while read -r pid _; do
             [[ -n "$pid" ]] && kill "$pid" >/dev/null 2>&1 || true
         done <<< "$(list_instances_for_binary "$DEBUG_BINARY")"
@@ -733,6 +754,7 @@ launch_background() {
     pushd "$REPO_ROOT" >/dev/null
     nohup env "${ENV_VARS[@]}" "$DEBUG_BINARY" >"$LOG_PATH" 2>&1 &
     APP_PID=$!
+    [[ -z "$PID_FILE" ]] || printf '%s\n' "$APP_PID" >"$PID_FILE"
     popd >/dev/null
 
     verify_background_process
