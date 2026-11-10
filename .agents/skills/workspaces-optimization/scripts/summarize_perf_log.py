@@ -210,6 +210,14 @@ def build_canonical_metrics(
     return metrics
 
 
+def recorded_log_path(log_file: Path) -> str:
+    resolved = log_file.resolve()
+    try:
+        return resolved.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return resolved.name
+
+
 def build_summary(
     log_file: Path,
     metrics_filter: set[str],
@@ -329,14 +337,14 @@ def build_summary(
         metrics=canonical_metrics,
         diagnostic_findings=findings,
         artifacts={
-            "log_file": str(log_file),
+            "log_file": recorded_log_path(log_file),
             "line_count": len(lines),
             "perf_event_count": len(parsed_events),
         },
         app_version=app_version,
         contract=contract,
         extra={
-            "log_file": str(log_file),
+            "log_file": recorded_log_path(log_file),
             "line_count": len(lines),
             "perf_event_count": len(parsed_events),
             "phases": phase_summaries,
