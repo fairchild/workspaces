@@ -16,6 +16,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -452,7 +453,7 @@ class PerfSummarizerTests(unittest.TestCase):
             outside.parent.mkdir(parents=True)
             outside.write_text(line, encoding="utf-8")
             inside_dir = Path(tempfile.mkdtemp(dir=REPO_ROOT / "scripts" / "tests"))
-            self.addCleanup(lambda: [f.unlink() for f in inside_dir.iterdir()] or inside_dir.rmdir())
+            self.addCleanup(shutil.rmtree, inside_dir, ignore_errors=True)
             inside = inside_dir / "debug.log"
             inside.write_text(line, encoding="utf-8")
             args = ["--json", "--scenario", "debug_no_activate", "--build-kind", "debug"]
