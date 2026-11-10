@@ -16,7 +16,7 @@ struct MainToolbarTitleBreadcrumb: View {
     let onOpenRepoTerminal: () -> Void
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 7) {
             Button(action: onOpenRepoOverview) {
                 repoIcon
             }
@@ -46,7 +46,9 @@ struct MainToolbarTitleBreadcrumb: View {
                     .accessibilityIdentifier("main-toolbar.workspace-title")
             }
         }
-        .frame(maxWidth: 360)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 2)
+        .frame(maxWidth: 380)
         .accessibilityIdentifier("main-toolbar.title")
     }
 
