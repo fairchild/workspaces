@@ -38,10 +38,9 @@ normal pipeline, and prints the markdown link — then stops the launched app:
 ./scripts/evidence.sh --pr <number> --fixture <scenario>
 ```
 
-Named scenarios (`phase-1-release`, `m6-status-sliver`, `attention-only`,
-`restore-banner`, `orphan-banner`, `orphan-banner-overflow`, `clean`, or `inline:<agent-states>`) come from
-[`scripts/lib/fixture-scenarios.sh`](../../scripts/lib/fixture-scenarios.sh) and
-match the release-screenshot catalog; the env grammar behind them lives in
+Named scenarios (the current list is in `./scripts/evidence.sh --help`, or
+`inline:<agent-states>`) come from
+[`scripts/lib/fixture-scenarios.sh`](../../scripts/lib/fixture-scenarios.sh); the env grammar behind them lives in
 [ui-fixture-mode.md](ui-fixture-mode.md). `--name` defaults to the scenario.
 
 Why this is the default, and how it beats the older fallbacks:
@@ -186,7 +185,7 @@ gh secret set EVIDENCE_UPLOAD_TOKEN --repo fairchild/workspaces --body "$TOKEN"
 |------|----------|-------------|
 | `--pr <number>` | Yes | PR number (used in R2 path) |
 | `--name <slug>` | Yes* | Filename slug (e.g., `test-results`, `before-fix`). *In `--fixture` mode defaults to the scenario. |
-| `--fixture <scenario>` | No | App evidence lane: launch a named fixture state, snapshot the main window via operator scope, upload. Known: `phase-1-release`, `m6-status-sliver`, `attention-only`, `clean`, `inline:<agent-states>`. |
+| `--fixture <scenario>` | No | App evidence lane: launch a named fixture state, snapshot the main window via operator scope, upload. `./scripts/evidence.sh --help` lists the named scenarios; `inline:<agent-states>` also works. |
 | `--timeout <s>` | No | Readiness timeout for the fixture launch (default: 45) |
 | `--keep-running` | No | Leave the launched app running after capture (debugging) |
 | `--file <path>` | No | Use existing file instead of capturing screenshot |

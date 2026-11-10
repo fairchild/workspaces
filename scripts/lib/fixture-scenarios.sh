@@ -132,6 +132,13 @@ fixture_resolve_scenario() {
         cmd-t-repo-overview)
             FIXTURE_CMD_T_REPO="workspaces"
             ;;
+        repo-overview-archived)
+            # A repo overview with its archived work folded under the Archived section.
+            # bertram-chat keeps feature-auth and bugfix-422 live in the main grid while
+            # refactor-state sits collapsed beneath them.
+            FIXTURE_CMD_T_REPO="bertram-chat"
+            FIXTURE_ARCHIVED="refactor-state"
+            ;;
         cmd-t-repo-terminal)
             FIXTURE_CMD_T_REPO="workspaces"
             FIXTURE_TRIGGER_CMD_T=1
@@ -149,5 +156,5 @@ fixture_resolve_scenario() {
 
 # fixture_scenario_names — the known scenario ids, one per line.
 fixture_scenario_names() {
-    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner orphan-banner-overflow runaway-alert sidebar-recent sidebar-pinned sidebar-pinned-alphabetical sidebar-archived sidebar-active-card file-tree-unavailable file-tree-permission cmd-t-repo-overview cmd-t-repo-terminal clean
+    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner orphan-banner-overflow runaway-alert sidebar-recent sidebar-pinned sidebar-pinned-alphabetical sidebar-archived sidebar-active-card file-tree-unavailable file-tree-permission cmd-t-repo-overview repo-overview-archived cmd-t-repo-terminal clean
 }

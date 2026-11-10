@@ -10,6 +10,7 @@ Each named scenario maps to literal UI fixture env vars. The script `scripts/cap
 | `m6-status-sliver` | *(unset)* | `feature-auth:failed` | `feature-auth` selected with a compact terminal sliver showing a failed `swift test` command, exit `1`, and duration. |
 | `attention-only` | `bugfix-422:awaitingInput` | *(unset)* | Only `bugfix-422` shows a yellow dot; toolbar pill reads "1 needs you". |
 | `restore-banner` | *(unset)* | *(unset)* | Seeds a synthetic previous-run continuity row (`WORKSPACES_UI_FIXTURE_SEED_RESTORE_BANNER=1` + `WORKSPACES_RESTORE_SESSIONS_ON_LAUNCH=1`) so the cold-start restore banner offers to reopen `feature-auth`. Evidence-lane only — see `docs/development/ui-fixture-mode.md` § "Staging the restore banner". `capture.sh` doesn't support the seeding side (it never cleans data between runs, so it never needed to) and refuses this scenario with an error rather than silently capturing a banner-less baseline. |
+| `repo-overview-archived` | *(unset)* | *(unset)* | App evidence lane only (it opens a repo overview, which `capture.sh` doesn't drive). `bertram-chat`'s overview with `feature-auth` and `bugfix-422` in the grid and `refactor-state` folded under a collapsed Archived section; the header reads "2 workspaces · 1 archived". |
 | `clean` | *(unset)* | *(unset)* | Baseline sidebar with no agent-state dots; toolbar pill hidden. |
 
 ## Inline form

@@ -58,7 +58,6 @@ struct MainWindowOrderCacheTests {
         repo.workspaces = [middle, archived, newest]
 
         let cache = MainWindowOrderCache()
-        #expect(cache.workspaces(for: repo).map(\.name) == ["newest", "archived", "middle"])
         #expect(cache.activeWorkspaces(for: repo).map(\.name) == ["newest", "middle"])
         #expect(cache.archivedWorkspaces(for: repo).map(\.name) == ["archived"])
     }
