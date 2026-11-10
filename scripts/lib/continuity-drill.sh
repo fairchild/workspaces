@@ -243,7 +243,7 @@ capture_app_log() {
     started="$(cat "$PASS_DIR/launch-$phase.started")"
     /usr/bin/log show --predicate "subsystem == \"com.cloudcompute.workspaces\" AND processID == $pid" \
         --start "$started" --info --style compact >"$PASS_DIR/app-$phase.oslog.txt" 2>&1 || true
-    grep -E '\[(Restore|Reattach)\]|HostSession|resume' "$PASS_DIR/app-$phase.oslog.txt" \
+    grep -E '\[(Restore|Reattach|SurfaceStore)\]|HostSession|resume' "$PASS_DIR/app-$phase.oslog.txt" \
         >"$PASS_DIR/$(restore_log_name "$phase")" || true
 }
 
@@ -331,7 +331,7 @@ record_pass_rows() {
 record_tile_row() {
     local tile="$1" effort="$2" turn="$3"
     local start conversation_id cwd host_session_id holders prefill prefill_sources fresh rung hook_socket launch_record
-    local successors rendered
+    local successors own_hosts rendered
     start="$(stub_starts | jq -c --arg effort "$effort" 'select(.effort == $effort)' | sed -n 1p)"
     if [[ -z "$start" ]]; then
         jq -nc --arg pass "$PASS_ID" --arg mode "$PASS_MODE" --arg flag "$PASS_FLAG" \
@@ -348,8 +348,9 @@ record_tile_row() {
     prefill_sources="$(prefills_for "$conversation_id")"
     prefill="$(sed -n 1p <<<"$prefill_sources" | sed -E 's/^(shell|pane) [^:]*: //')"
     successors="$(successor_hosts "$host_session_id" "$cwd")"
-    rendered="$(after_shells_on "$successors" | wc -l | tr -d ' ')"
-    fresh="$(after_shells_on "$successors" | without_resume | wc -l | tr -d ' ')"
+    own_hosts="$(own_before_hosts "$host_session_id" "$cwd")"
+    rendered="$(after_shells_on "$successors"$'\n'"$own_hosts" | wc -l | tr -d ' ')"
+    fresh="$(after_shells_on "$successors"$'\n'"$own_hosts" | without_resume | wc -l | tr -d ' ')"
     hook_socket="$(session_start_reached_socket "$conversation_id")"
     launch_record=false
     ! grep -rqF -- "$conversation_id" "$PASS_DIR/xdg/workspaces-cli/launches" 2>/dev/null || launch_record=true
@@ -369,7 +370,7 @@ record_tile_row() {
         --arg conversation_id "$conversation_id" --arg cwd "$cwd" --arg host_session_id "$host_session_id" \
         --arg rung "$rung" --arg prefill "$prefill" --arg prefill_sources "$prefill_sources" \
         --argjson holders "$holders" --argjson fresh "$fresh" --argjson hook_socket "$hook_socket" \
-        --argjson rendered "$rendered" --arg successors "$successors" \
+        --argjson rendered "$rendered" --arg successors "$successors" --arg own_hosts "$own_hosts" \
         --argjson launch_record "$launch_record" --arg restored "$(restored_session_ids)" \
         --slurpfile db_before "$PASS_DIR/db-before.json" --slurpfile db_after "$PASS_DIR/db-after.json" \
         --slurpfile events "$PASS_DIR/db-before-events.json" \
@@ -391,11 +392,14 @@ record_tile_row() {
           prefill_sources: $sources,
           prefill_host_sessions: $prefill_hosts,
           prefill_in_os_log_restored_session: ($prefill_hosts | any(.[]; IN($restored_ids[]))),
+          resume_via: (if ($prefill_hosts | any(.[]; IN($restored_ids[]))) then "restored_session"
+                       elif ($prefill_hosts | any(.[]; IN($own_hosts | split("\n")[]))) then "reused_host_session"
+                       elif ($prefill_hosts | length) > 0 then "other_session" else null end),
           os_log_restored_sessions: $restored_ids,
           successor_host_sessions: ($successors | split("\n") | map(select(. != ""))),
           successor_shells: $rendered, successor_shells_without_resume: $fresh,
           holders_after_relaunch: $holders,
-          rung_basis: "successor = an active after-relaunch terminal_sessions row with the tile'"'"'s session_key and tmux_session_name; reattach = a process still holds the conversation; resume = an after-relaunch shell or pane shows `--resume <id>`; fresh = a successor shell holds no resume; restored_unrendered = a successor row exists but no shell started for it; none = no successor",
+          rung_basis: "successor = a new active after-relaunch terminal_sessions row with the session_key and tmux_session_name of this tile'"'"'s row (when several before rows share them, the one active row claims it); shells count on successors and on the tile'"'"'s own host sessions reused after relaunch. reattach = a process still holds the conversation; resume = an after-relaunch shell or pane shows `--resume <id>`; fresh = such a shell holds no resume; restored_unrendered = a successor row exists but no shell started for it; none = neither",
           db_before: rows($db_before), db_after: rows($db_after)}' >>"$ROWS_PATH"
 }
 
@@ -425,7 +429,16 @@ successor_hosts() {
          | $after[0][]
          | select(.is_active == 1 and .ended_at == null and (.host_session_id | IN($old[]) | not))
          | . as $row
-         | select(any($mine[]; .session_key == $row.session_key and .tmux_session_name == $row.tmux_session_name))
+         | ($before[0] | map(select(.session_key == $row.session_key and .tmux_session_name == $row.tmux_session_name))) as $peers
+         | ($peers | map(select(.is_active == 1))) as $live
+         | select(if ($live | length) == 1 then any($mine[]; .host_session_id == $live[0].host_session_id)
+                  else any($mine[]; IN($peers[])) end)
+         | .host_session_id'
+}
+
+own_before_hosts() {
+    jq -rn --arg host "$1" --arg cwd "$2" --slurpfile before "$PASS_DIR/db-before.json" \
+        '$before[0][] | select(if $host == "" then .directory_path == $cwd else .host_session_id == $host end)
          | .host_session_id'
 }
 
@@ -435,7 +448,7 @@ after_shells_on() {
     for start in "$ISOLATED_HOME"/.drill/observe/shell-*.start; do
         [[ -f "$start" ]] || continue
         grep -qx 'phase=after' "$start" || continue
-        grep -qxF -f <(sed 's/^/host_session_id=/' <<<"$hosts") "$start" || continue
+        grep -qxF -f <(sed '/^$/d; s/^/host_session_id=/' <<<"$hosts") "$start" || continue
         echo "${start%.start}"
     done
 }
