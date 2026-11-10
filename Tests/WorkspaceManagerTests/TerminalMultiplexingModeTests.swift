@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import WorkspaceManager
+@testable import WorkspaceManagerCore
 
 @Suite("TerminalMultiplexingMode")
 struct TerminalMultiplexingModeTests {
