@@ -148,6 +148,28 @@ struct TerminalRestorePlannerTests {
         #expect(modes[unknown]?.terminalMode == nil)
     }
 
+    @Test("Settling a plan fills only the modes its rows left open, asking under the normalized key")
+    func settlingFillsOnlyOpenModes() {
+        let open = RestoreSurfacePlan(
+            hostSessionID: UUID(), key: .hostPath("/code/repo/../repo"), directory: URL(fileURLWithPath: "/code/repo"),
+            action: .freshShell)
+        let recorded = RestoreSurfacePlan(
+            hostSessionID: UUID(), key: .hostPath("/code/other"), directory: URL(fileURLWithPath: "/code/other"),
+            action: .freshShell, terminalMode: .ghosttyManagedSplits)
+        var asked: [HostTerminalSessionKey] = []
+
+        let settled = RestorePlan(surfaces: [open, recorded], selectedHostSessionID: open.id, previousRunID: "run")
+            .settlingTerminalModes { key in
+                asked.append(key)
+                return .tmuxPerSession
+            }
+
+        #expect(settled.surfaces.map(\.terminalMode) == [.tmuxPerSession, .ghosttyManagedSplits])
+        #expect(asked == [open.key.normalized()])
+        #expect(settled.selectedHostSessionID == open.id)
+        #expect(settled.previousRunID == "run")
+    }
+
     /// A reattach puts the tile inside a live tmux session, so a plan that also said Ghostty
     /// splits (or nothing) would contradict its own action.
     @Test("A reattach carries tmux mode whatever its row recorded")

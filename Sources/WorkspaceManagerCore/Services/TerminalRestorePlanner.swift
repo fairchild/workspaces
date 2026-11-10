@@ -47,6 +47,22 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
 
     public var id: UUID { hostSessionID }
 
+    /// This surface with its mode settled: a surface whose row named no mode takes the mode a
+    /// new session in its scope would get, so everything downstream reads one concrete mode.
+    public func settlingTerminalMode(
+        _ terminalModeForNewSession: (HostTerminalSessionKey) -> TerminalMultiplexingMode
+    ) -> RestoreSurfacePlan {
+        RestoreSurfacePlan(
+            hostSessionID: hostSessionID,
+            key: key,
+            directory: directory,
+            action: action,
+            launchDirectoryFellBack: launchDirectoryFellBack,
+            launchTmuxSessionName: launchTmuxSessionName,
+            terminalMode: terminalMode ?? terminalModeForNewSession(key.normalized())
+        )
+    }
+
     public init(
         hostSessionID: UUID,
         key: HostTerminalSessionKey,
@@ -84,6 +100,17 @@ public struct RestorePlan: Sendable, Equatable {
         self.surfaces = surfaces
         self.selectedHostSessionID = selectedHostSessionID
         self.previousRunID = previousRunID
+    }
+
+    /// This plan with every surface's mode settled (see `RestoreSurfacePlan.settlingTerminalMode`).
+    public func settlingTerminalModes(
+        _ terminalModeForNewSession: (HostTerminalSessionKey) -> TerminalMultiplexingMode
+    ) -> RestorePlan {
+        RestorePlan(
+            surfaces: surfaces.map { $0.settlingTerminalMode(terminalModeForNewSession) },
+            selectedHostSessionID: selectedHostSessionID,
+            previousRunID: previousRunID
+        )
     }
 
     /// Whether this plan's prior run was already handled (restored or dismissed).

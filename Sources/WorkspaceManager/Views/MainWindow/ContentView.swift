@@ -2903,7 +2903,8 @@ struct ContentView: View {
     /// `-A` target is already a live session another surface owns.
     /// Then honor the plan's advisory focus by re-activating the selected surface.
     @MainActor
-    private func executeRestore(_ plan: RestorePlan) async {
+    private func executeRestore(_ recordedPlan: RestorePlan) async {
+        let plan = recordedPlan.settlingTerminalModes(tileTreeStore.terminalModeForNewSession)
         // #3: the restore plan owns every key it restores. Retire any session a
         // pre-restore seed (the default-home fallback) left on those keys, so a
         // resume/reattach surface is created fresh and the coordinator's key-reuse
