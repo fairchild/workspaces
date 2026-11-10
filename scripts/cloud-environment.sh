@@ -11,8 +11,8 @@ export repo=/home/user/workspaces
 export raw=https://raw.githubusercontent.com/fairchild/workspaces/main
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
-export mise_version=v2026.10.25
-export mise_sha256=5d362ecc578dc7c146679b841dda949d6472cbf86ff5635db7afdca1b6b3fd87
+export mise_version=v2026.11.5
+export mise_sha256=7a5b051d6f17d335c502f8047a5175cf3103f347d91942771c60da4e302ebcb0
 export prek_version=0.3.4
 export swift_format_version=604.0.0
 export swift_format_sha256=90c1263e0a1f4cd7ec4242cb7c1d79433badb7f03c01bf2b0dfcb592d0986801
