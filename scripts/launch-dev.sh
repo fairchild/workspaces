@@ -79,6 +79,7 @@ WINDOW_TIMEOUT_SECONDS=10
 DATA_DIR="$DEFAULT_DATA_DIR"
 LOG_PATH=""
 BUILD_LOG_PATH=""
+PID_FILE=""
 APP_PID=""
 WINDOW_ID=""
 DIAGNOSTICS_DIR=""
@@ -107,6 +108,8 @@ Options:
   --verbose-build      Stream full swift build output instead of summarizing to a log
   --watch              Tail the launch log after successful startup until interrupted
   --window-timeout <s> Require a visible app window within this many seconds (default: 10)
+  --pid-file <path>    Write the app's pid here the moment it is backgrounded, before
+                       launch verification, so a caller can clean up an interrupted launch
   --help, -h           Show this help
 
 Isolation notes:
@@ -198,6 +201,11 @@ parse_args() {
             --window-timeout)
                 [[ $# -ge 2 ]] || fail "--window-timeout requires a value"
                 WINDOW_TIMEOUT_SECONDS="$2"
+                shift 2
+                ;;
+            --pid-file)
+                [[ $# -ge 2 ]] || fail "--pid-file requires a path"
+                PID_FILE="$2"
                 shift 2
                 ;;
             --help|-h)
@@ -733,6 +741,7 @@ launch_background() {
     pushd "$REPO_ROOT" >/dev/null
     nohup env "${ENV_VARS[@]}" "$DEBUG_BINARY" >"$LOG_PATH" 2>&1 &
     APP_PID=$!
+    [[ -z "$PID_FILE" ]] || printf '%s\n' "$APP_PID" >"$PID_FILE"
     popd >/dev/null
 
     verify_background_process

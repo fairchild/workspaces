@@ -57,6 +57,7 @@ run_drill_pass() {
     create_tiles
     wait_for_stub_starts
     snapshot_state before
+    snapshot_processes before
     capture_window "$APP_PID" "$APP_WINDOW_ID" "$PASS_DIR/before-kill.png" || true
     capture_app_log before
 
@@ -72,7 +73,8 @@ run_drill_pass() {
     record_pass_rows
 
     terminate_drill_app
-    stop_isolated_server "$TMUX_LABEL"
+    record_isolated_server "$TMUX_LABEL"
+    stop_owned_servers "$TMUX_LABEL"
 }
 
 describe_pass() {
@@ -208,6 +210,7 @@ stub_starts() {
 snapshot_state() {
     local phase="$1"
     local database
+    record_isolated_server "$TMUX_LABEL"
     database="$(find "$DATA_DIR" -name local-state.sqlite -print -quit 2>/dev/null)"
     if [[ -n "$database" ]]; then
         sqlite3 -readonly -json "$database" \
@@ -225,6 +228,15 @@ snapshot_state() {
         -F '#{session_id} #{session_name} #{pane_pid} #{pane_current_command} #{pane_current_path}' \
         >"$PASS_DIR/tmux-$phase.txt" 2>&1 || true
     capture_panes "$phase"
+}
+
+snapshot_processes() {
+    LC_ALL=C ps -A -ww -o pid=,lstart=,command= \
+        | awk -v home="$ISOLATED_HOME/" 'index($0, home) && ($7 ~ /(^|\/)claude$/ || $8 ~ /(^|\/)claude$/) {
+                   command = $7
+                   for (i = 8; i <= NF; i++) command = command " " $i
+                   print $1 "|" $2 " " $3 " " $4 " " $5 " " $6 "|" command
+               }' >"$PASS_DIR/processes-$1.txt"
 }
 
 capture_panes() {
@@ -316,7 +328,7 @@ prefills_for() {
 }
 
 record_pass_rows() {
-    ps -A -ww -o pid=,command= >"$PASS_DIR/.processes-after.raw"
+    snapshot_processes after
     local spec tile effort turn
     for spec in "${DRILL_TILES[@]}"; do
         IFS='|' read -r tile effort turn <<<"$spec"
@@ -325,82 +337,101 @@ record_pass_rows() {
         fi
         record_tile_row "$tile" "$effort" "$turn"
     done
-    rm -f "$PASS_DIR/.processes-after.raw"
 }
 
 record_tile_row() {
     local tile="$1" effort="$2" turn="$3"
-    local start conversation_id cwd host_session_id holders prefill prefill_sources fresh rung hook_socket launch_record
-    local successors own_hosts rendered
+    local start conversation_id cwd host_session_id prefill_sources hook_socket launch_record
+    local assignment own_hosts claimed_hosts rendered fresh other_resumes
     start="$(stub_starts | jq -c --arg effort "$effort" 'select(.effort == $effort)' | sed -n 1p)"
     if [[ -z "$start" ]]; then
         jq -nc --arg pass "$PASS_ID" --arg mode "$PASS_MODE" --arg flag "$PASS_FLAG" \
             --arg kill_order "$PASS_KILL_ORDER" --arg tile "$tile" --arg reason "$(not_started_reason "$tile")" \
             '{pass: $pass, mode: $mode, restore_flag: $flag, kill_order: $kill_order, tile: $tile,
-              drivable: true, status: "not_started", expected_rung: "resume", rung_taken: null,
-              prefill_text: null, reason: $reason}' >>"$ROWS_PATH"
+              drivable: true, status: "not_started", rung_taken: null, prefill_text: null, reason: $reason}' >>"$ROWS_PATH"
         return 0
     fi
     conversation_id="$(jq -r '.conversation_id' <<<"$start")"
     cwd="$(jq -r '.cwd' <<<"$start")"
     host_session_id="$(jq -r '.host_session_id' <<<"$start")"
-    holders="$(conversation_holders "$conversation_id" | tee -a "$PASS_DIR/holders-after.txt" | wc -l | tr -d ' ')"
+    classify_conversation_processes "$conversation_id"
     prefill_sources="$(prefills_for "$conversation_id")"
-    prefill="$(sed -n 1p <<<"$prefill_sources" | sed -E 's/^(shell|pane) [^:]*: //')"
-    successors="$(successor_hosts "$host_session_id" "$cwd")"
+    assignment="$(successor_assignment "$host_session_id" "$cwd")"
     own_hosts="$(own_before_hosts "$host_session_id" "$cwd")"
-    rendered="$(after_shells_on "$successors"$'\n'"$own_hosts" | wc -l | tr -d ' ')"
-    fresh="$(after_shells_on "$successors"$'\n'"$own_hosts" | without_resume | wc -l | tr -d ' ')"
+    claimed_hosts="$(jq -r '.successors[]' <<<"$assignment")"$'\n'"$own_hosts"
+    rendered="$(after_shells_on "$claimed_hosts" | wc -l | tr -d ' ')"
+    fresh="$(after_shells_on "$claimed_hosts" | without_resume | wc -l | tr -d ' ')"
+    other_resumes="$(after_shells_on "$claimed_hosts" | resuming_other_than "$conversation_id")"
     hook_socket="$(session_start_reached_socket "$conversation_id")"
     launch_record=false
     ! grep -rqF -- "$conversation_id" "$PASS_DIR/xdg/workspaces-cli/launches" 2>/dev/null || launch_record=true
-    rung="none"
-    if ((holders > 0)); then
-        rung="reattach"
-    elif [[ -n "$prefill_sources" ]]; then
-        rung="resume"
-    elif ((fresh > 0)); then
-        rung="fresh"
-    elif [[ -n "$successors" ]]; then
-        rung="restored_unrendered"
-    fi
     jq -nc \
         --arg pass "$PASS_ID" --arg mode "$PASS_MODE" --arg flag "$PASS_FLAG" \
         --arg kill_order "$PASS_KILL_ORDER" --arg tile "$tile" --arg effort "$effort" --arg turn "$turn" \
         --arg conversation_id "$conversation_id" --arg cwd "$cwd" --arg host_session_id "$host_session_id" \
-        --arg rung "$rung" --arg prefill "$prefill" --arg prefill_sources "$prefill_sources" \
-        --argjson holders "$holders" --argjson fresh "$fresh" --argjson hook_socket "$hook_socket" \
-        --argjson rendered "$rendered" --arg successors "$successors" --arg own_hosts "$own_hosts" \
+        --arg prefill_sources "$prefill_sources" --arg own_hosts "$own_hosts" --arg claimed "$claimed_hosts" \
+        --arg survivor_lines "$SURVIVOR_LINES" --arg resumed_lines "$RESUMED_LINES" --arg other_resumes "$other_resumes" \
+        --argjson before_holders "$BEFORE_HOLDERS" --argjson assignment "$assignment" \
+        --argjson rendered "$rendered" --argjson fresh "$fresh" --argjson hook_socket "$hook_socket" \
         --argjson launch_record "$launch_record" --arg restored "$(restored_session_ids)" \
         --slurpfile db_before "$PASS_DIR/db-before.json" --slurpfile db_after "$PASS_DIR/db-after.json" \
         --slurpfile events "$PASS_DIR/db-before-events.json" \
-        'def rows($db): [$db[0][]? | select(if $host_session_id == "" then .directory_path == $cwd
-                                          else .host_session_id == $host_session_id end)];
-         ($events[0] | map(select(.agent_session_id == $conversation_id))) as $landed
-         | ($restored | split("\n") | map(select(. != ""))) as $restored_ids
-         | ($prefill_sources | split("\n") | map(select(. != ""))) as $sources
-         | ($sources | map(capture("^shell (?<id>[^:]*):").id)) as $prefill_hosts
-         | {pass: $pass, mode: $mode, restore_flag: $flag, kill_order: $kill_order, tile: $tile,
-          drivable: true, status: "observed", effort: $effort, turn: $turn,
-          conversation_id: $conversation_id, cwd: $cwd, host_session_id: $host_session_id,
-          hook_had_socket: $hook_socket, app_events_for_conversation: ($landed | length),
-          app_event_names: ($landed | map(.event_name)), launch_record_names_conversation: $launch_record,
-          identity_source: (if ($landed | length) > 0 then "hook_events"
-                            elif $launch_record then "launch_record" else "none" end),
-          expected_rung: "resume", rung_taken: $rung,
-          prefill_text: (if $prefill == "" then null else $prefill end),
-          prefill_sources: $sources,
-          prefill_host_sessions: $prefill_hosts,
-          prefill_in_os_log_restored_session: ($prefill_hosts | any(.[]; IN($restored_ids[]))),
-          resume_via: (if ($prefill_hosts | any(.[]; IN($restored_ids[]))) then "restored_session"
-                       elif ($prefill_hosts | any(.[]; IN($own_hosts | split("\n")[]))) then "reused_host_session"
-                       elif ($prefill_hosts | length) > 0 then "other_session" else null end),
-          os_log_restored_sessions: $restored_ids,
-          successor_host_sessions: ($successors | split("\n") | map(select(. != ""))),
-          successor_shells: $rendered, successor_shells_without_resume: $fresh,
-          holders_after_relaunch: $holders,
-          rung_basis: "successor = a new active after-relaunch terminal_sessions row with the session_key and tmux_session_name of this tile'"'"'s row (when several before rows share them, the one active row claims it); shells count on successors and on the tile'"'"'s own host sessions reused after relaunch. reattach = a process still holds the conversation; resume = an after-relaunch shell or pane shows `--resume <id>`; fresh = such a shell holds no resume; restored_unrendered = a successor row exists but no shell started for it; none = neither",
-          db_before: rows($db_before), db_after: rows($db_after)}' >>"$ROWS_PATH"
+        "$(tile_row_program)" >>"$ROWS_PATH"
+}
+
+tile_row_program() {
+    cat <<'JQ'
+def lines($s): $s | split("\n") | map(select(. != ""));
+def rows($db): [$db[0][]? | select(if $host_session_id == "" then .directory_path == $cwd
+                                   else .host_session_id == $host_session_id end)];
+def text: sub("^(shell|pane) [^:]*: "; "");
+($events[0] | map(select(.agent_session_id == $conversation_id))) as $landed
+| lines($restored) as $restored_ids
+| lines($own_hosts) as $own_ids
+| lines($claimed) as $claimed_ids
+| lines($survivor_lines) as $survivors
+| lines($resumed_lines) as $resumed
+| [$db_after[0][]? | select(.host_session_id | IN($claimed_ids[])) | .tmux_session_name | select(. != null)] as $claimed_tmux
+| [lines($prefill_sources)[]
+   | if startswith("shell ") then {source: ., own: (capture("^shell (?<h>[^:]*):").h | IN($claimed_ids[])),
+                                   host: capture("^shell (?<h>[^:]*):").h}
+     else {source: ., own: (capture("^pane (?<s>.*)-[0-9]+:").s | IN($claimed_tmux[])), host: null} end] as $prefills
+| ($prefills | map(select(.own))) as $own_prefills
+| ($prefills | map(select(.own | not))) as $foreign_prefills
+| lines($other_resumes) as $other_resumes
+| (if ($survivors | length) > 0 then "reattach"
+   elif $assignment.ambiguous then "ambiguous"
+   elif ($own_prefills | length) > 0 or ($resumed | length) > 0 then "resume"
+   elif ($foreign_prefills | length) > 0 or ($other_resumes | length) > 0 then "ambiguous"
+   elif $fresh > 0 then "fresh"
+   elif ($assignment.successors | length) > 0 then "restored_unrendered"
+   else "none" end) as $rung
+| {pass: $pass, mode: $mode, restore_flag: $flag, kill_order: $kill_order, tile: $tile,
+   drivable: true, status: "observed", effort: $effort, turn: $turn,
+   conversation_id: $conversation_id, cwd: $cwd, host_session_id: $host_session_id,
+   hook_had_socket: $hook_socket, app_events_for_conversation: ($landed | length),
+   app_event_names: ($landed | map(.event_name)), launch_record_names_conversation: $launch_record,
+   identity_source: (if ($landed | length) > 0 then "hook_events"
+                     elif $launch_record then "launch_record" else "none" end),
+   rung_taken: $rung,
+   ambiguity: (if $rung != "ambiguous" then null
+               elif $assignment.ambiguous then "restored rows \($assignment.ambiguous_rows | join(", ")) match this tile and another tile equally"
+               elif ($foreign_prefills | length) > 0 then "this conversation's resume landed only in another tile's session: \($foreign_prefills | map(.source) | join("; "))"
+               else "this tile's restored shell holds another conversation's resume: \($other_resumes | join("; "))" end),
+   prefill_text: (($own_prefills[0].source // null) | if . == null then null else text end),
+   own_prefill_sources: ($own_prefills | map(.source)),
+   foreign_prefill_sources: ($foreign_prefills | map(.source)),
+   resume_via: (if $rung != "resume" then null
+                elif ($own_prefills | any(.host != null and (.host | IN($restored_ids[])))) then "restored_session"
+                elif ($own_prefills | any(.host != null and (.host | IN($own_ids[])))) then "reused_host_session"
+                elif ($own_prefills | length) > 0 then "pane_in_claimed_session"
+                else "new_resume_process" end),
+   holders_before_kill: $before_holders, surviving_holders: $survivors, new_resume_processes: $resumed,
+   successor_host_sessions: $assignment.successors, os_log_restored_sessions: $restored_ids,
+   claimed_shells: $rendered, claimed_shells_without_resume: $fresh,
+   rung_basis: "successor = an unended after-relaunch terminal_sessions row the os_log says restore created, matched one-to-one to a before-row by session_key and tmux_session_name (then by is_active when several share them; a tie or a before-row claimed twice is ambiguous). Claimed sessions = successors plus the tile's own reused host sessions. reattach = a holder pid with its pre-kill start time is still alive; resume = a claimed shell or pane shows `--resume <id>`, or a new process resumed the conversation; ambiguous = the successor match tied, the resume landed only outside the tile's claimed sessions, or a claimed shell holds another conversation's resume; fresh = a claimed shell holds no resume; restored_unrendered = a successor exists but no shell started; none = neither",
+   db_before: rows($db_before), db_after: rows($db_after)}
+JQ
 }
 
 restored_session_ids() {
@@ -416,24 +447,54 @@ not_started_reason() {
     esac
 }
 
-conversation_holders() {
-    grep -F -- "$1" "$PASS_DIR/.processes-after.raw" \
-        | awk '$2 ~ /(^|\/)claude$/ || $3 ~ /(^|\/)claude$/' || true
+classify_conversation_processes() {
+    local conversation_id="$1" before_keys line key
+    before_keys="$(before_holder_keys "$conversation_id")"
+    BEFORE_HOLDERS="$(grep -c . <<<"$before_keys" || true)"
+    SURVIVOR_LINES=""
+    RESUMED_LINES=""
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        key="$(cut -d'|' -f1,2 <<<"$line")"
+        if [[ -n "$before_keys" ]] && grep -qxF -- "$key" <<<"$before_keys"; then
+            SURVIVOR_LINES+="$line"$'\n'
+        elif [[ "$line" == *"--resume $conversation_id"* ]]; then
+            RESUMED_LINES+="$line"$'\n'
+        fi
+    done <"$PASS_DIR/processes-after.txt"
+    printf '%s' "$SURVIVOR_LINES" | sed "s/^/$conversation_id survivor /" >>"$PASS_DIR/holders-after.txt"
+    printf '%s' "$RESUMED_LINES" | sed "s/^/$conversation_id resumed /" >>"$PASS_DIR/holders-after.txt"
 }
 
-successor_hosts() {
-    jq -rn --arg host "$1" --arg cwd "$2" \
+before_holder_keys() {
+    local conversation_id="$1" pids
+    pids=" $(jq -r --arg id "$conversation_id" 'select(.event == "start" and .conversation_id == $id) | .pid' \
+        "$ISOLATED_HOME/.claude/stub-agent-ledger.jsonl" 2>/dev/null | tr '\n' ' ')"
+    awk -F'|' -v id="$conversation_id" -v pids="$pids" \
+        'index(pids, " " $1 " ") || index($3, id) { print $1 "|" $2 }' "$PASS_DIR/processes-before.txt"
+}
+
+successor_assignment() {
+    jq -cn --arg host "$1" --arg cwd "$2" --arg restored "$(restored_session_ids)" \
         --slurpfile before "$PASS_DIR/db-before.json" --slurpfile after "$PASS_DIR/db-after.json" \
-        '($before[0] | map(select(if $host == "" then .directory_path == $cwd else .host_session_id == $host end))) as $mine
-         | ($before[0] | map(.host_session_id)) as $old
-         | $after[0][]
-         | select(.is_active == 1 and .ended_at == null and (.host_session_id | IN($old[]) | not))
-         | . as $row
-         | ($before[0] | map(select(.session_key == $row.session_key and .tmux_session_name == $row.tmux_session_name))) as $peers
-         | ($peers | map(select(.is_active == 1))) as $live
-         | select(if ($live | length) == 1 then any($mine[]; .host_session_id == $live[0].host_session_id)
-                  else any($mine[]; IN($peers[])) end)
-         | .host_session_id'
+        '($restored | split("\n") | map(select(. != ""))) as $restored_ids
+         | $before[0] as $rows
+         | ($rows | map(select(if $host == "" then .directory_path == $cwd else .host_session_id == $host end))
+                  | map(.host_session_id)) as $mine
+         | [$after[0][]
+            | select(.ended_at == null and (.host_session_id | IN($restored_ids[])))
+            | . as $row
+            | ($rows | map(select(.session_key == $row.session_key and .tmux_session_name == $row.tmux_session_name))) as $peers
+            | (if ($peers | length) <= 1 then $peers else ($peers | map(select(.is_active == $row.is_active))) end) as $narrow
+            | {after: $row.host_session_id,
+               candidates: (if ($narrow | length) == 0 then $peers else $narrow end | map(.host_session_id)),
+               before: (if ($narrow | length) == 1 then $narrow[0].host_session_id else null end)}] as $pairs
+         | ($pairs | map(select(.before != null)) | group_by(.before) | map(select(length > 1) | .[0].before)) as $contested
+         | ($pairs | map(select(.before != null and (.before | IN($mine[])) and (.before | IN($contested[]) | not)) | .after)) as $successors
+         | ($pairs | map(select((.before == null and any(.candidates[]; IN($mine[])))
+                                 or (.before != null and (.before | IN($mine[])) and (.before | IN($contested[])))))
+                   | map(.after)) as $ambiguous_rows
+         | {successors: $successors, ambiguous: ($ambiguous_rows | length > 0), ambiguous_rows: $ambiguous_rows}'
 }
 
 own_before_hosts() {
@@ -444,7 +505,7 @@ own_before_hosts() {
 
 after_shells_on() {
     local hosts="$1" start
-    [[ -n "$hosts" ]] || return 0
+    [[ -n "${hosts//$'\n'/}" ]] || return 0
     for start in "$ISOLATED_HOME"/.drill/observe/shell-*.start; do
         [[ -f "$start" ]] || continue
         grep -qx 'phase=after' "$start" || continue
@@ -461,6 +522,16 @@ without_resume() {
     done
 }
 
+resuming_other_than() {
+    local conversation_id="$1" shell
+    while IFS= read -r shell; do
+        [[ -f "$shell.buffer" ]] || continue
+        grep -qF -- "--resume " "$shell.buffer" || continue
+        grep -qF -- "--resume $conversation_id" "$shell.buffer" && continue
+        printf '%s: %s\n' "$(sed -n 's/^host_session_id=//p' "$shell.start")" "$(cat "$shell.buffer")"
+    done
+}
+
 session_start_reached_socket() {
     local ledger="$ISOLATED_HOME/.claude/stub-agent-ledger.jsonl"
     jq -s --arg id "$1" \
@@ -470,9 +541,7 @@ session_start_reached_socket() {
 
 terminate_drill_app() {
     [[ -n "$APP_PID" ]] || return 0
-    terminate_app_pid "$APP_PID" >/dev/null 2>&1 || true
-    wait_for_pid_exit "$APP_PID" || kill -TERM "$APP_PID" 2>/dev/null || true
-    wait_for_pid_exit "$APP_PID" || true
+    stop_app "$APP_PID" "$(launch_not_before "$APP_PID")" || true
     APP_PID=""
 }
 

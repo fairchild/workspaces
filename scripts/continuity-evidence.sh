@@ -53,7 +53,10 @@ FAILURE_REASON=""
 TMUX_LABEL="$LIVE_SOCKET_LABEL"
 ISOLATED=false
 ISOLATION_ENV=()
-USED_LABELS=()
+DEBUG_BINARY=""
+APP_LAUNCHES=()
+OWNED_SERVERS=()
+LAST_SERVER=""
 USED_SUITES=()
 SOCKET_DIRS=()
 WS_CLI=""
@@ -120,10 +123,11 @@ Options:
   --trust-mise             Trust this repo's .mise.toml before launch
   --window-timeout <s>     Visible-window timeout passed to launch-dev.sh (default: 15)
   --socket-label <label>   Run against an isolated tmux socket (-L <label>) with HOME,
-                           XDG_CONFIG_HOME, preferences suite and Claude home in the run
-                           directory. Required by --kill-holder and --drill. Refuses
-                           "workspaces", "workspaces-rejected-label", anything the app would
-                           quarantine, and a label whose server is already running.
+                           XDG_CONFIG_HOME and Claude home in the run directory and a scratch
+                           preferences suite that cleanup deletes. Required by --kill-holder
+                           and --drill. Refuses "workspaces", "workspaces-rejected-label",
+                           anything the app would quarantine, a label whose server is already
+                           running, and a run while a debug build of this checkout is open.
   --kill-holder            Instead of a plain terminate, kill the holder: terminate the app by
                            pid, kill the isolated tmux server by the pid it reports, relaunch,
                            and record what restore did.
@@ -142,11 +146,13 @@ What the default run proves:
   - relaunch restores the same terminal surface from persisted continuity state
   - the tmux socket survives the app terminate/relaunch boundary
 
-What --drill records (summary.json, one row per tile and pass):
-  tiles from `ws launch`, a hand-typed `claude`, a split, one agent mid-turn, and the
-  cmd+t tab and mixed-window cases (recorded as not_drivable); the rung each tile was
-  expected to take after holder death, the rung it took, and the prefill text. Agents are
-  scripts/lib/stub-agent.sh on PATH as `claude`: deterministic and token-free.
+What --drill records (summary.json, one row per tile and pass, plus one global
+mixed-window row):
+  tiles from `ws launch`, a hand-typed `claude`, two splits of it with one agent
+  mid-turn, and the cmd+t tab (recorded as not_drivable); the rung each tile took after
+  holder death (reattach, resume, fresh, restored_unrendered, ambiguous or none) and the
+  prefill text. Agents are scripts/lib/stub-agent.sh on PATH as `claude`: deterministic
+  and token-free. Needs jq and sqlite3.
 
 The script writes an evidence bundle under output/continuity-evidence/ and does
 not upload artifacts. Upload screenshots with scripts/evidence.sh; summary.json and
@@ -316,7 +322,10 @@ prepare_paths() {
     PROBE_START_LOG="$RUN_DIR/tmux-probe-start.log"
     PROBE_CHECK_LOG="$RUN_DIR/tmux-probe-check.log"
     PROBE_CLEANUP_LOG="$RUN_DIR/tmux-probe-cleanup.log"
-    [[ "$ISOLATED" == true ]] && return 0
+    if [[ "$ISOLATED" == true ]]; then
+        DEBUG_BINARY="$(build_products_dir "$REPO_ROOT")/WorkspaceManager"
+        return 0
+    fi
     TARGET_PATH="$(expand_path "$TARGET_PATH")"
     [[ -d "$TARGET_PATH" ]] || fail "target path is not a directory: $TARGET_PATH"
     TARGET_REAL_PATH="$(cd "$TARGET_PATH" && pwd -P)"
@@ -354,6 +363,7 @@ run_lane() {
     tmux -L "$TMUX_LABEL" has-session -t "$BEFORE_TMUX_SESSION" \
         >"$RUN_DIR/app-tmux-session-before.log" 2>&1 \
         || fail "app tmux session was not present: $BEFORE_TMUX_SESSION"
+    [[ "$ISOLATED" == false ]] || record_isolated_server "$TMUX_LABEL"
 
     capture_window "$BEFORE_PID" "$BEFORE_WINDOW_ID" "$RUN_DIR/before-close.png"
     BEFORE_CAPTURED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -385,6 +395,7 @@ run_lane() {
 
     wait_for_log_pattern "$AFTER_LOG" 'TerminalContinuity.*mode=tmux_per_session' 20 \
         || fail "after launch did not restore and persist terminal continuity in tmux mode"
+    [[ "$ISOLATED" == false ]] || record_isolated_server "$TMUX_LABEL"
     if [[ "$KILL_HOLDER" == true ]]; then
         record_restore_outcome "$RUN_DIR" "$AFTER_LOG"
     else
@@ -448,7 +459,6 @@ prepare_isolated_home() {
     refuse_unsafe_label "$label"
     refuse_running_server "$label"
     TMUX_LABEL="$label"
-    USED_LABELS+=("$label")
     ISOLATED_HOME="$PASS_DIR/home"
     DATA_DIR="$PASS_DIR/data"
     mkdir -p "$ISOLATED_HOME/code" "$ISOLATED_HOME/.claude" "$ISOLATED_HOME/.drill/bin" \
@@ -559,7 +569,11 @@ launch_debug_app() {
     [[ "$skip_build" == true ]] && args+=("--no-build")
     [[ "$TRUST_MISE" == true ]] && args+=("--trust-mise")
     [[ "$clean_flag" == true ]] && args+=("--clean-data")
-    [[ "$ISOLATED" == true ]] && args+=("--coexist" "--no-activate")
+    if [[ "$ISOLATED" == true ]]; then
+        refuse_running_debug_app
+        args+=("--coexist" "--no-activate" "--pid-file" "${output_file%.log}.app-pid")
+        APP_LAUNCHES+=("${output_file%.log}.app-pid|$(date +%s)")
+    fi
     for entry in ${ISOLATION_ENV[@]+"${ISOLATION_ENV[@]}"} "$@"; do
         args+=("--env" "$entry")
     done
@@ -568,6 +582,12 @@ launch_debug_app() {
         cd "$REPO_ROOT"
         env -u TMUX -u TMUX_PANE "$LAUNCH_SCRIPT" "${args[@]}"
     ) | tee "$output_file"
+}
+
+refuse_running_debug_app() {
+    local running
+    running="$(ps -axo pid=,command= | awk -v binary="$DEBUG_BINARY" '$2 == binary { print $1 }' | tr '\n' ' ')"
+    [[ -z "$running" ]] || fail "a debug instance of this checkout ($DEBUG_BINARY) is already running (pid ${running% }); launch-dev.sh --coexist would stop it, so quit it first"
 }
 
 parse_launch_pid() {
@@ -619,19 +639,19 @@ kill_holder() {
     local order="$1"
     local label="$2"
     local evidence_dir="$3"
-    local server_pid
-    server_pid="$(isolated_server_pid "$label")"
+    local server server_pid=""
+    record_isolated_server "$label"
+    server="$LAST_SERVER"
+    [[ -z "$server" ]] || server_pid="$(cut -d'|' -f2 <<<"$server")"
     log "Killing the holder ($order): app pid=$APP_PID, tmux -L $label server pid=${server_pid:-none}"
-    if [[ "$order" == server-first && -n "$server_pid" ]]; then
-        kill_isolated_server_pid "$label" "$server_pid"
+    if [[ "$order" == server-first && -n "$server" ]]; then
+        kill_owned_server "$server"
         sleep 5
         [[ "$DRILL" == false ]] || snapshot_state holder-lost
     fi
-    terminate_app_pid "$APP_PID" || true
-    wait_for_pid_exit "$APP_PID" || kill -TERM "$APP_PID" 2>/dev/null || true
-    wait_for_pid_exit "$APP_PID" || fail "app pid did not exit: $APP_PID"
-    if [[ "$order" == app-first && -n "$server_pid" ]]; then
-        kill_isolated_server_pid "$label" "$server_pid"
+    stop_app "$APP_PID" "$(launch_not_before "$APP_PID")" || fail "app pid did not exit: $APP_PID"
+    if [[ "$order" == app-first && -n "$server" ]]; then
+        kill_owned_server "$server"
     fi
     if tmux -L "$label" list-sessions >/dev/null 2>&1; then
         fail "a tmux server still answers on -L $label after the holder kill"
@@ -642,33 +662,104 @@ kill_holder() {
         >"$evidence_dir/holder-kill.json"
 }
 
-isolated_server_pid() {
-    tmux -L "$1" display-message -p '#{pid}' 2>/dev/null || true
+record_isolated_server() {
+    local label="$1" pid entry
+    LAST_SERVER=""
+    pid="$(tmux -L "$label" display-message -p '#{pid}' 2>/dev/null || true)"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+    if ! server_argv_names_label "$pid" "$label"; then
+        log "tmux -L $label reported pid $pid, whose argv does not name the label; not recording it"
+        return 0
+    fi
+    LAST_SERVER="$label|$pid|$(process_start "$pid")"
+    for entry in ${OWNED_SERVERS[@]+"${OWNED_SERVERS[@]}"}; do
+        [[ "$entry" != "$LAST_SERVER" ]] || return 0
+    done
+    OWNED_SERVERS+=("$LAST_SERVER")
 }
 
-kill_isolated_server_pid() {
-    local label="$1"
-    local pid="$2"
+kill_owned_server() {
+    local label pid start
+    IFS='|' read -r label pid start <<<"$1"
     refuse_unsafe_label "$label"
-    [[ "$pid" =~ ^[0-9]+$ ]] || fail "tmux -L $label reported a non-numeric server pid: '$pid'"
-    server_pid_belongs_to_label "$pid" "$label" \
-        || fail "pid $pid does not look like the tmux server for -L $label; not killing it"
+    server_identity_holds "$label" "$pid" "$start" || return 0
     kill -TERM "$pid" 2>/dev/null || true
-    wait_for_pid_exit "$pid" || kill -KILL "$pid" 2>/dev/null || true
-    wait_for_pid_exit "$pid" || fail "tmux server pid $pid for -L $label did not exit"
+    if ! wait_for_pid_exit "$pid"; then
+        server_identity_holds "$label" "$pid" "$start" || return 0
+        kill -KILL "$pid" 2>/dev/null || true
+        wait_for_pid_exit "$pid" || fail "tmux server pid $pid for -L $label did not exit"
+    fi
     KILLED_SERVER_PID="$pid"
 }
 
-server_pid_belongs_to_label() {
+server_identity_holds() {
+    local label="$1" pid="$2" start="$3"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    server_argv_names_label "$pid" "$label" && [[ "$(process_start "$pid")" == "$start" ]]
+}
+
+server_argv_names_label() {
     local command
     command="$(ps -p "$1" -o command= 2>/dev/null) "
     [[ "$command" == *tmux* && "$command" == *" -L $2 "* ]]
 }
 
-stop_isolated_server() {
-    local pid
-    pid="$(isolated_server_pid "$1")"
-    [[ -z "$pid" ]] || (kill_isolated_server_pid "$1" "$pid") || true
+stop_owned_servers() {
+    local label="${1:-}" entry
+    for entry in ${OWNED_SERVERS[@]+"${OWNED_SERVERS[@]}"}; do
+        [[ -z "$label" || "$entry" == "$label|"* ]] || continue
+        (kill_owned_server "$entry") || true
+    done
+}
+
+process_start() {
+    LC_ALL=C ps -p "$1" -o lstart= 2>/dev/null | tr -s ' ' | sed -e 's/^ //' -e 's/ $//'
+}
+
+start_epoch() {
+    local start
+    start="$(process_start "$1")"
+    [[ -z "$start" ]] || LC_ALL=C date -j -f '%a %b %d %T %Y' "$start" +%s 2>/dev/null || true
+}
+
+stop_app() {
+    local pid="$1" not_before="$2"
+    [[ -n "$pid" ]] || return 0
+    app_identity_holds "$pid" "$not_before" || return 0
+    terminate_app_pid "$pid" >/dev/null 2>&1 || true
+    wait_for_pid_exit "$pid" && return 0
+    app_identity_holds "$pid" "$not_before" || return 0
+    kill -TERM "$pid" 2>/dev/null || true
+    wait_for_pid_exit "$pid"
+}
+
+app_identity_holds() {
+    local pid="$1" not_before="$2" command started
+    [[ "$pid" =~ ^[0-9]+$ && "$not_before" =~ ^[0-9]+$ && -n "$DEBUG_BINARY" ]] || return 1
+    command="$(ps -p "$pid" -o command= 2>/dev/null | sed 's/^ *//')"
+    [[ "$command" == "$DEBUG_BINARY" || "$command" == "$DEBUG_BINARY "* ]] || return 1
+    started="$(start_epoch "$pid")"
+    [[ "$started" =~ ^[0-9]+$ ]] && ((started >= not_before))
+}
+
+launch_not_before() {
+    local entry file epoch
+    for entry in ${APP_LAUNCHES[@]+"${APP_LAUNCHES[@]}"}; do
+        IFS='|' read -r file epoch <<<"$entry"
+        if [[ "$(cat "$file" 2>/dev/null)" == "$1" ]]; then
+            echo "$epoch"
+            return 0
+        fi
+    done
+    return 0
+}
+
+stop_launched_apps() {
+    local entry file epoch
+    for entry in ${APP_LAUNCHES[@]+"${APP_LAUNCHES[@]}"}; do
+        IFS='|' read -r file epoch <<<"$entry"
+        stop_app "$(cat "$file" 2>/dev/null)" "$epoch" >/dev/null 2>&1 || true
+    done
 }
 
 terminate_app_pid() {
@@ -817,9 +908,13 @@ cleanup() {
     local exit_code=$?
     set +e
 
-    terminate_pid_if_running "$APP_PID"
-    terminate_pid_if_running "$AFTER_PID"
-    terminate_pid_if_running "$BEFORE_PID"
+    if [[ "$ISOLATED" == true ]]; then
+        stop_launched_apps
+    else
+        terminate_pid_if_running "$APP_PID"
+        terminate_pid_if_running "$AFTER_PID"
+        terminate_pid_if_running "$BEFORE_PID"
+    fi
     [[ "$PROBE_USED" == false ]] || probe cleanup >>"$PROBE_CLEANUP_LOG" 2>&1
     [[ "$ISOLATED" == true ]] || restore_preferences
     release_isolated_state
@@ -858,18 +953,23 @@ restore_preferences() {
 }
 
 release_isolated_state() {
-    local label suite socket_dir
-    for label in ${USED_LABELS[@]+"${USED_LABELS[@]}"}; do
-        stop_isolated_server "$label"
-    done
+    local suite socket_dir
+    stop_owned_servers
     for suite in ${USED_SUITES[@]+"${USED_SUITES[@]}"}; do
-        [[ "$suite" == "$PREFS_SUITE_PREFIX".* ]] || continue
-        defaults delete "$suite" >/dev/null 2>&1 || true
+        remove_preferences_suite "$suite"
     done
     for socket_dir in ${SOCKET_DIRS[@]+"${SOCKET_DIRS[@]}"}; do
         rm -f "$socket_dir/hooks.sock"
         rmdir "$socket_dir" 2>/dev/null || true
     done
+}
+
+remove_preferences_suite() {
+    local suite="$1" plist
+    [[ "$suite" == "$PREFS_SUITE_PREFIX".* && "${suite#"$PREFS_SUITE_PREFIX".}" =~ ^[A-Za-z0-9._-]+$ ]] || return 0
+    defaults delete "$suite" >/dev/null 2>&1 || true
+    plist="$HOME/Library/Preferences/$suite.plist"
+    [[ ! -f "$plist" ]] || rm -f "$plist"
 }
 
 main "$@"
