@@ -29,10 +29,18 @@ struct AgentLaunchRecordWatcherTests {
         )
     }
 
+    /// Waits on a budget of time the main actor was free to run the watcher. Everything between a save
+    /// and a pass, the event source's handler and the coalescing task, runs on the main actor, and other
+    /// suites in the process hold it for seconds at a time (a terminal surface freed on the main thread
+    /// joins its threads there). A stretch the main actor spent elsewhere counts as one short tick, so a
+    /// stall cannot spend the budget before the pass queued behind it gets to run.
     private func waitForPasses(_ passes: Passes, atLeast expected: Int) async throws {
-        let deadline = Date().addingTimeInterval(10)
-        while passes.count < expected, Date() < deadline {
+        let clock = ContinuousClock()
+        var free: Duration = .zero
+        while passes.count < expected, free < .seconds(10) {
+            let asleep = clock.now
             try await Task.sleep(for: .milliseconds(10))
+            free += min(clock.now - asleep, .milliseconds(100))
         }
     }
 
