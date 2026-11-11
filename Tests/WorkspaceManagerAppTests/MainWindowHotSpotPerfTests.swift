@@ -261,7 +261,8 @@ struct MainWindowHotSpotPerfTests {
 
                 let session = HostTerminalSession(
                     key: .hostPath(normalize(workspaceURL)),
-                    directory: workspaceURL
+                    directory: workspaceURL,
+                    terminalMode: .ghosttyManagedSplits
                 )
                 sessions.append(session)
                 paneCountBySessionKey[session.key.normalized()] = workspaceIndex % 2 == 0 ? 2 : 1
@@ -284,7 +285,8 @@ struct MainWindowHotSpotPerfTests {
         for repo in repos.prefix(repoSessionCount) {
             let session = HostTerminalSession(
                 key: .repoPath(normalize(repo.localURL)),
-                directory: repo.localURL
+                directory: repo.localURL,
+                terminalMode: .ghosttyManagedSplits
             )
             sessions.append(session)
             paneCountBySessionKey[session.key.normalized()] = 1

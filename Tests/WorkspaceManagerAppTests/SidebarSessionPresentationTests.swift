@@ -66,7 +66,8 @@ struct SidebarSessionPresentationTests {
         let session = HostTerminalSession(
             id: sessionID,
             key: .repoPath("/Users/test/code/repo"),
-            directory: URL(fileURLWithPath: "/Users/test/code/repo")
+            directory: URL(fileURLWithPath: "/Users/test/code/repo"),
+            terminalMode: .ghosttyManagedSplits
         )
 
         let resolved = ContentView.sidebarActiveSessionKey(
@@ -84,7 +85,8 @@ struct SidebarSessionPresentationTests {
         let session = HostTerminalSession(
             id: sessionID,
             key: .repoPath("/Users/test/code/repo"),
-            directory: URL(fileURLWithPath: "/Users/test/code/repo")
+            directory: URL(fileURLWithPath: "/Users/test/code/repo"),
+            terminalMode: .ghosttyManagedSplits
         )
 
         let resolved = ContentView.sidebarActiveSessionKey(

@@ -344,11 +344,13 @@ struct MainWindowMaintenanceControllerTests {
 
         let matching = HostTerminalSession(
             key: .hostPath(workspace.workspaceURL.path),
-            directory: workspace.workspaceURL
+            directory: workspace.workspaceURL,
+            terminalMode: .ghosttyManagedSplits
         )
         let unrelated = HostTerminalSession(
             key: .hostPath("/tmp/somewhere-else"),
-            directory: URL(fileURLWithPath: "/tmp/somewhere-else")
+            directory: URL(fileURLWithPath: "/tmp/somewhere-else"),
+            terminalMode: .ghosttyManagedSplits
         )
         let status = AgentSessionStatus(
             hostSessionID: matching.id,

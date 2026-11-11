@@ -26,7 +26,6 @@ struct TabRoutingController {
         let effects = router.route(
             .tab(GhosttyTabIntent(request: request)),
             sourceSessionID: sourceSessionID,
-            terminalMultiplexingMode: .ghosttyManagedSplits,
             tileTreeStore: tileTreeStore
         )
         apply(

@@ -165,12 +165,12 @@ struct GhosttyTerminalConfigTests {
                     HostTerminalSession(
                         key: .repoPath("/tmp/repo-a"),
                         directory: URL(fileURLWithPath: "/tmp/repo-a"),
+                        terminalMode: mode,
                         initialCommand: "claude --resume sess-123"
                     ),
                     hooksSocketPath: nil
                 ),
                 environment: environment,
-                terminalMultiplexingMode: mode,
                 isTmuxAvailableOverride: true
             )
             let plain = GhosttyTerminalConfig(
@@ -430,12 +430,12 @@ struct GhosttyTerminalConfigTests {
                     id: splitID,
                     key: .repoPath(directory.path),
                     directory: directory,
+                    terminalMode: .tmuxPerSession,
                     tmuxSessionNameOverride: splitName
                 ),
                 hooksSocketPath: nil
             ),
             environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
-            terminalMultiplexingMode: .tmuxPerSession,
             isTmuxAvailableOverride: true
         )
 
@@ -940,12 +940,12 @@ struct GhosttyTerminalConfigTests {
                 HostTerminalSession(
                     key: .repoPath("/tmp/repo-a"),
                     directory: URL(fileURLWithPath: "/tmp/repo-a"),
+                    terminalMode: .tmuxPerSession,
                     initialCommand: initialCommand
                 ),
                 hooksSocketPath: nil
             ),
             environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
-            terminalMultiplexingMode: .tmuxPerSession,
             isTmuxAvailableOverride: true
         )
 

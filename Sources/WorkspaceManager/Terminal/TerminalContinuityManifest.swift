@@ -23,6 +23,9 @@ struct TerminalContinuityManifest: Codable, Equatable {
         /// restored record would otherwise silently retarget the derived name, which on a
         /// shared socket can belong to a different live session (#1374).
         let tmuxSessionNameOverride: String?
+        /// The mode the session was born with. `nil` for a record written before records
+        /// carried one, or naming a mode this build doesn't know; restore then falls back.
+        let terminalMode: TerminalMultiplexingMode?
 
         init(session: HostTerminalSession) {
             self.id = session.id
@@ -30,9 +33,27 @@ struct TerminalContinuityManifest: Codable, Equatable {
             self.directoryPath = session.directoryPath
             self.customCommand = session.customCommand
             self.tmuxSessionNameOverride = session.tmuxSessionNameOverride
+            self.terminalMode = session.terminalMode
         }
 
-        func restoredSession(fileManager: FileManager = .default) -> HostTerminalSession? {
+        private enum CodingKeys: String, CodingKey {
+            case id, key, directoryPath, customCommand, tmuxSessionNameOverride, terminalMode
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(UUID.self, forKey: .id)
+            key = try container.decode(HostTerminalSessionKey.self, forKey: .key)
+            directoryPath = try container.decode(String.self, forKey: .directoryPath)
+            customCommand = try container.decodeIfPresent(String.self, forKey: .customCommand)
+            tmuxSessionNameOverride = try container.decodeIfPresent(String.self, forKey: .tmuxSessionNameOverride)
+            terminalMode = try? container.decodeIfPresent(TerminalMultiplexingMode.self, forKey: .terminalMode)
+        }
+
+        func restoredSession(
+            terminalMode: TerminalMultiplexingMode,
+            fileManager: FileManager = .default
+        ) -> HostTerminalSession? {
             guard isSafeForDirectRestore else {
                 return nil
             }
@@ -44,6 +65,7 @@ struct TerminalContinuityManifest: Codable, Equatable {
                 id: id,
                 key: key,
                 directory: URL(fileURLWithPath: directoryPath, isDirectory: true),
+                terminalMode: terminalMode,
                 customCommand: customCommand,
                 tmuxSessionNameOverride: tmuxSessionNameOverride
             )
@@ -85,7 +107,9 @@ struct TerminalContinuityManifest: Codable, Equatable {
     let targetID: UUID
     let rootPath: String
     let launchPath: String
-    let terminalMode: TerminalMultiplexingMode
+    /// The global setting when the manifest was written: the mode a record without its own
+    /// restores in. `nil` when the manifest predates the field or names an unknown mode.
+    let terminalMode: TerminalMultiplexingMode?
     let tmuxSessionName: String
     let updatedAt: Date
     let sessionRecords: [SessionRecord]
@@ -147,7 +171,7 @@ struct TerminalContinuityManifest: Codable, Equatable {
         targetID = try container.decode(UUID.self, forKey: .targetID)
         rootPath = try container.decode(String.self, forKey: .rootPath)
         launchPath = try container.decode(String.self, forKey: .launchPath)
-        terminalMode = try container.decode(TerminalMultiplexingMode.self, forKey: .terminalMode)
+        terminalMode = try? container.decodeIfPresent(TerminalMultiplexingMode.self, forKey: .terminalMode)
         tmuxSessionName = try container.decode(String.self, forKey: .tmuxSessionName)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         sessionRecords = try container.decodeIfPresent([SessionRecord].self, forKey: .sessionRecords) ?? []
@@ -163,7 +187,7 @@ struct TerminalContinuityManifest: Codable, Equatable {
         try container.encode(targetID, forKey: .targetID)
         try container.encode(rootPath, forKey: .rootPath)
         try container.encode(launchPath, forKey: .launchPath)
-        try container.encode(terminalMode, forKey: .terminalMode)
+        try container.encodeIfPresent(terminalMode, forKey: .terminalMode)
         try container.encode(tmuxSessionName, forKey: .tmuxSessionName)
         try container.encode(updatedAt, forKey: .updatedAt)
         try container.encode(sessionRecords, forKey: .sessionRecords)
@@ -217,10 +241,20 @@ struct TerminalContinuityManifest: Codable, Equatable {
         )
     }
 
+    /// The mode a record's session restores in: its own, else the manifest's, else the mode a
+    /// session born now would get.
+    func terminalMode(
+        for record: SessionRecord,
+        terminalModeForNewSession: (HostTerminalSessionKey) -> TerminalMultiplexingMode
+    ) -> TerminalMultiplexingMode {
+        record.terminalMode ?? terminalMode ?? terminalModeForNewSession(record.key.normalized())
+    }
+
     func hostSessionSnapshot(
         excludingScopeKeys excludedScopeKeys: Set<HostTerminalSessionKey> = [],
         validatedProviderSessions: [UUID: HostTerminalSession] = [:],
         includeHostSessions: Bool = true,
+        terminalModeForNewSession: (HostTerminalSessionKey) -> TerminalMultiplexingMode,
         fileManager: FileManager = .default
     ) -> HostSessionSnapshot? {
         let restoredSessions = sessionRecords.compactMap { record -> HostTerminalSession? in
@@ -229,7 +263,11 @@ struct TerminalContinuityManifest: Codable, Equatable {
             {
                 return validated
             }
-            return includeHostSessions ? record.restoredSession(fileManager: fileManager) : nil
+            guard includeHostSessions else { return nil }
+            return record.restoredSession(
+                terminalMode: terminalMode(for: record, terminalModeForNewSession: terminalModeForNewSession),
+                fileManager: fileManager
+            )
         }.filter {
             !excludedScopeKeys.contains($0.key)
         }

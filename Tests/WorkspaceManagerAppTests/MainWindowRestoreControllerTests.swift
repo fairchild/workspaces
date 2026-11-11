@@ -24,13 +24,15 @@ struct MainWindowRestoreControllerTests {
     private func surface(
         action: RestoreSurfaceAction = .freshShell,
         key: HostTerminalSessionKey = .hostPath("/Users/dev/code/alpha"),
-        directory: URL = URL(fileURLWithPath: "/Users/dev/code/alpha")
+        directory: URL = URL(fileURLWithPath: "/Users/dev/code/alpha"),
+        terminalMode: TerminalMultiplexingMode = .tmuxPerSession
     ) -> RestoreSurfacePlan {
         RestoreSurfacePlan(
             hostSessionID: UUID(),
             key: key,
             directory: directory,
-            action: action
+            action: action,
+            terminalMode: terminalMode
         )
     }
 
@@ -408,7 +410,8 @@ struct MainWindowRestoreControllerTests {
         let directory = URL(fileURLWithPath: "/Users/dev/code/alpha")
         let resume = RestoreSurfacePlan(
             hostSessionID: UUID(), key: .hostPath(directory.path), directory: directory,
-            action: .resumeClaude(agentSessionID: "a"), launchTmuxSessionName: "wm-alpha-p0123abcd")
+            action: .resumeClaude(agentSessionID: "a"), launchTmuxSessionName: "wm-alpha-p0123abcd",
+            terminalMode: .tmuxPerSession)
         let derive = { (url: URL) in "wm-\(url.lastPathComponent)" }
         let plan = RestorePlan(surfaces: [resume], selectedHostSessionID: nil, previousRunID: nil)
 
@@ -419,6 +422,28 @@ struct MainWindowRestoreControllerTests {
         #expect(
             controller.initialCommand(for: resume, liveSessionNames: ["wm-alpha-p0123abcd"], sessionName: derive) == nil
         )
+    }
+
+    /// A Ghostty-splits resume surface launches a plain shell, so a live tmux session on its
+    /// directory's name is no obstacle: it keeps its resume command, and restore neither probes
+    /// nor kills on its behalf.
+    @Test("A resume launching without tmux ignores tmux sessions on its directory's name")
+    func splitsResumeIgnoresTmuxNames() {
+        let directory = URL(fileURLWithPath: "/Users/dev/code/alpha")
+        let resume = surface(
+            action: .resumeClaude(agentSessionID: "a"), directory: directory, terminalMode: .ghosttyManagedSplits)
+        let reattach = surface(action: .reattachTmux(sessionName: "wm-alpha"), directory: directory)
+        let target = plan([reattach, resume])
+        let derive = { (url: URL) in "wm-\(url.lastPathComponent)" }
+
+        #expect(controller.resumeLaunchSessionNames(in: target, sessionName: derive).isEmpty)
+        let scope = controller.tmuxSessionNamesToKill(
+            in: plan([resume]), ownedTmuxSessionNames: ["wm-alpha"], sessionName: derive)
+        #expect(scope.kill.isEmpty)
+        #expect(scope.skippedUnowned.isEmpty)
+        #expect(
+            controller.initialCommand(for: resume, liveSessionNames: ["wm-alpha"], sessionName: derive)
+                == RestoreLaunchCommand.claudeResume(sessionID: "a"))
     }
 
     @Test("A resume comes back at the effort the conversation last ran at")

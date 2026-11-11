@@ -28,36 +28,28 @@ struct TerminalForegroundProcessResolver: Sendable {
     private static let cache = CacheBox()
 
     private let probe: TmuxSessionProbe
-    /// The session's effective tmux name — the chosen (possibly split-pane) name,
-    /// not a directory re-derivation, so sibling panes probe their own sessions.
-    private let tmuxSessionName: @Sendable (HostTerminalSession) -> String
     /// The non-shell program running in a directory (via `lsof` cwd match), or nil.
     private let cwdProgramName: @Sendable (URL) async -> String?
 
     init(
         probe: TmuxSessionProbe = TmuxSessionProbe(),
-        tmuxSessionName: @escaping @Sendable (HostTerminalSession) -> String = { $0.effectiveTmuxSessionName },
         cwdProgramName: @escaping @Sendable (URL) async -> String? = TerminalForegroundProcessResolver
             .defaultCwdProgramName
     ) {
         self.probe = probe
-        self.tmuxSessionName = tmuxSessionName
         self.cwdProgramName = cwdProgramName
     }
 
     /// The foreground process name for `session`, or `nil` when nothing resolves (the
     /// caller then falls back to the terminal title / directory). Cached per session id
     /// for `cacheTTL`.
-    func foregroundName(
-        for session: HostTerminalSession,
-        mode: TerminalMultiplexingMode
-    ) async -> String? {
+    func foregroundName(for session: HostTerminalSession) async -> String? {
         if let cached = Self.cache.read(sessionID: session.id, ttl: Self.cacheTTL) {
             return cached
         }
         var resolved: String?
-        if mode == .tmuxPerSession {
-            resolved = await probe.foregroundCommand(forSessionNamed: tmuxSessionName(session))
+        if let tmuxSessionName = session.tmuxSessionName {
+            resolved = await probe.foregroundCommand(forSessionNamed: tmuxSessionName)
         }
         if resolved == nil {
             resolved = await cwdProgramName(session.directoryURL)

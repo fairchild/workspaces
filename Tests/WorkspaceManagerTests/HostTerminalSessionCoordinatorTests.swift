@@ -19,11 +19,13 @@ struct HostTerminalSessionCoordinatorTests {
 
         let first = coordinator.activate(
             key: .repoPath(repoURL.path),
-            directory: repoURL
+            directory: repoURL,
+            terminalMode: .ghosttyManagedSplits
         )
         let second = coordinator.activate(
             key: .repoPath(repoURL.path),
-            directory: repoURL
+            directory: repoURL,
+            terminalMode: .ghosttyManagedSplits
         )
 
         #expect(first.created)
@@ -41,11 +43,13 @@ struct HostTerminalSessionCoordinatorTests {
 
         let active = coordinator.activate(
             key: .repoPath(repoURL.path),
-            directory: repoURL
+            directory: repoURL,
+            terminalMode: .ghosttyManagedSplits
         ).session
         let ensured = coordinator.ensureSession(
             key: .hostPath(workspaceURL.path),
-            directory: workspaceURL
+            directory: workspaceURL,
+            terminalMode: .ghosttyManagedSplits
         )
 
         #expect(ensured.created)
@@ -61,11 +65,13 @@ struct HostTerminalSessionCoordinatorTests {
 
         let first = coordinator.activate(
             key: .repoPath(repoURL.path),
-            directory: repoURL
+            directory: repoURL,
+            terminalMode: .ghosttyManagedSplits
         )
         let second = coordinator.activate(
             key: .hostPath(repoURL.path),
-            directory: repoURL
+            directory: repoURL,
+            terminalMode: .ghosttyManagedSplits
         )
 
         #expect(first.created)
@@ -81,16 +87,19 @@ struct HostTerminalSessionCoordinatorTests {
 
         let hostSession = coordinator.activate(
             key: .hostPath(sharedDirectory.path),
-            directory: sharedDirectory
+            directory: sharedDirectory,
+            terminalMode: .ghosttyManagedSplits
         )
         let backendSession = coordinator.activate(
             key: .backendSession(providerID: "lume", instanceID: "vm-123"),
             directory: sharedDirectory,
+            terminalMode: .ghosttyManagedSplits,
             customCommand: "/usr/local/bin/lume ssh vm-123"
         )
         let backendSessionReuse = coordinator.activate(
             key: .backendSession(providerID: "lume", instanceID: "vm-123"),
             directory: sharedDirectory,
+            terminalMode: .ghosttyManagedSplits,
             customCommand: "/usr/local/bin/lume ssh vm-123"
         )
 
@@ -108,15 +117,18 @@ struct HostTerminalSessionCoordinatorTests {
 
         let defaultSession = coordinator.activate(
             key: .defaultHome,
-            directory: URL(fileURLWithPath: "/Users/test/code")
+            directory: URL(fileURLWithPath: "/Users/test/code"),
+            terminalMode: .ghosttyManagedSplits
         ).session
         let keepRepoSession = coordinator.activate(
             key: .repoPath("/Users/test/code/repo-keep"),
-            directory: URL(fileURLWithPath: "/Users/test/code/repo-keep")
+            directory: URL(fileURLWithPath: "/Users/test/code/repo-keep"),
+            terminalMode: .ghosttyManagedSplits
         ).session
         let removeRepoSession = coordinator.activate(
             key: .repoPath("/Users/test/code/repo-remove"),
-            directory: URL(fileURLWithPath: "/Users/test/code/repo-remove")
+            directory: URL(fileURLWithPath: "/Users/test/code/repo-remove"),
+            terminalMode: .ghosttyManagedSplits
         ).session
 
         #expect(coordinator.activeSessionID == removeRepoSession.id)
@@ -138,11 +150,13 @@ struct HostTerminalSessionCoordinatorTests {
 
         let firstSession = coordinator.activate(
             key: .defaultHome,
-            directory: URL(fileURLWithPath: "/Users/test/code")
+            directory: URL(fileURLWithPath: "/Users/test/code"),
+            terminalMode: .ghosttyManagedSplits
         ).session
         let secondSession = coordinator.activate(
             key: .repoPath("/Users/test/code/repo-a"),
-            directory: URL(fileURLWithPath: "/Users/test/code/repo-a")
+            directory: URL(fileURLWithPath: "/Users/test/code/repo-a"),
+            terminalMode: .ghosttyManagedSplits
         ).session
 
         #expect(coordinator.activeSessionID == secondSession.id)
@@ -158,7 +172,8 @@ struct HostTerminalSessionCoordinatorTests {
         var coordinator = HostTerminalSessionCoordinator()
         _ = coordinator.activate(
             key: .defaultHome,
-            directory: URL(fileURLWithPath: "/Users/test/code")
+            directory: URL(fileURLWithPath: "/Users/test/code"),
+            terminalMode: .ghosttyManagedSplits
         )
         let initialSessions = coordinator.sessions
         let initialActiveID = coordinator.activeSessionID
@@ -175,19 +190,23 @@ struct HostTerminalSessionCoordinatorTests {
         var coordinator = HostTerminalSessionCoordinator()
         _ = coordinator.activate(
             key: .defaultHome,
-            directory: URL(fileURLWithPath: "/Users/test/code")
+            directory: URL(fileURLWithPath: "/Users/test/code"),
+            terminalMode: .ghosttyManagedSplits
         )
         let activeRepo = coordinator.activate(
             key: .repoPath("/Users/test/code/repo-a"),
-            directory: URL(fileURLWithPath: "/Users/test/code/repo-a")
+            directory: URL(fileURLWithPath: "/Users/test/code/repo-a"),
+            terminalMode: .ghosttyManagedSplits
         ).session
         _ = coordinator.activate(
             key: .repoPath("/Users/test/code/repo-b"),
-            directory: URL(fileURLWithPath: "/Users/test/code/repo-b")
+            directory: URL(fileURLWithPath: "/Users/test/code/repo-b"),
+            terminalMode: .ghosttyManagedSplits
         )
         _ = coordinator.activate(
             key: .repoPath("/Users/test/code/repo-a"),
-            directory: URL(fileURLWithPath: "/Users/test/code/repo-a")
+            directory: URL(fileURLWithPath: "/Users/test/code/repo-a"),
+            terminalMode: .ghosttyManagedSplits
         )
 
         let presentation = coordinator.presentation
@@ -202,7 +221,8 @@ struct HostTerminalSessionCoordinatorTests {
         var coordinator = HostTerminalSessionCoordinator()
         _ = coordinator.activate(
             key: .defaultHome,
-            directory: URL(fileURLWithPath: "/Users/test/code")
+            directory: URL(fileURLWithPath: "/Users/test/code"),
+            terminalMode: .ghosttyManagedSplits
         )
 
         let presentation = coordinator.presentation
@@ -221,15 +241,18 @@ struct HostTerminalSessionCoordinatorTests {
 
         let repoASession = coordinator.activate(
             key: .repoPath(repoA.path),
-            directory: repoA
+            directory: repoA,
+            terminalMode: .ghosttyManagedSplits
         ).session
         let repoBSession = coordinator.activate(
             key: .repoPath(repoB.path),
-            directory: repoB
+            directory: repoB,
+            terminalMode: .ghosttyManagedSplits
         ).session
         let workspaceSession = coordinator.activate(
             key: .hostPath(workspaceA.path),
-            directory: workspaceA
+            directory: workspaceA,
+            terminalMode: .ghosttyManagedSplits
         ).session
 
         let switches: [(HostTerminalSessionKey, URL, UUID)] = [
@@ -242,7 +265,7 @@ struct HostTerminalSessionCoordinatorTests {
         ]
 
         for (key, directory, expectedID) in switches {
-            let activation = coordinator.activate(key: key, directory: directory)
+            let activation = coordinator.activate(key: key, directory: directory, terminalMode: .ghosttyManagedSplits)
             #expect(activation.session.id == expectedID)
             #expect(coordinator.activeSessionID == expectedID)
         }
@@ -257,15 +280,27 @@ struct HostTerminalSessionCoordinatorTests {
         let homeURL = URL(fileURLWithPath: "/Users/test/code")
         let repoURL = URL(fileURLWithPath: "/Users/test/code/repo-a")
 
-        let home = coordinator.activate(key: .defaultHome, directory: homeURL).session
+        let home = coordinator.activate(
+            key: .defaultHome,
+            directory: homeURL,
+            terminalMode: .ghosttyManagedSplits
+        ).session
         let secondHomeTab = coordinator.createTab(from: home)
-        let repo = coordinator.activate(key: .repoPath(repoURL.path), directory: repoURL).session
+        let repo = coordinator.activate(
+            key: .repoPath(repoURL.path),
+            directory: repoURL,
+            terminalMode: .ghosttyManagedSplits
+        ).session
         let secondRepoTab = coordinator.createTab(from: repo)
 
-        _ = coordinator.activate(key: .defaultHome, directory: homeURL)
+        _ = coordinator.activate(key: .defaultHome, directory: homeURL, terminalMode: .ghosttyManagedSplits)
         #expect(coordinator.activeSessionID == secondHomeTab.id)
 
-        let restoredRepo = coordinator.activate(key: .repoPath(repoURL.path), directory: repoURL)
+        let restoredRepo = coordinator.activate(
+            key: .repoPath(repoURL.path),
+            directory: repoURL,
+            terminalMode: .ghosttyManagedSplits
+        )
         #expect(!restoredRepo.created)
         #expect(restoredRepo.session.id == secondRepoTab.id)
         #expect(coordinator.activeSessionID == secondRepoTab.id)
@@ -277,9 +312,17 @@ struct HostTerminalSessionCoordinatorTests {
         let homeURL = URL(fileURLWithPath: "/Users/test/code")
         let repoURL = URL(fileURLWithPath: "/Users/test/code/repo-a")
 
-        let home = coordinator.activate(key: .defaultHome, directory: homeURL).session
+        let home = coordinator.activate(
+            key: .defaultHome,
+            directory: homeURL,
+            terminalMode: .ghosttyManagedSplits
+        ).session
         let secondHomeTab = coordinator.createTab(from: home)
-        let repo = coordinator.activate(key: .repoPath(repoURL.path), directory: repoURL).session
+        let repo = coordinator.activate(
+            key: .repoPath(repoURL.path),
+            directory: repoURL,
+            terminalMode: .ghosttyManagedSplits
+        ).session
         let secondRepoTab = coordinator.createTab(from: repo)
 
         #expect(coordinator.activateAdjacent(to: secondRepoTab.id, offset: 1)?.id == repo.id)
@@ -287,7 +330,7 @@ struct HostTerminalSessionCoordinatorTests {
         #expect(coordinator.activateTab(atOneBasedIndex: 1)?.id == repo.id)
         #expect(coordinator.activateLastTab()?.id == secondRepoTab.id)
 
-        _ = coordinator.activate(key: .defaultHome, directory: homeURL)
+        _ = coordinator.activate(key: .defaultHome, directory: homeURL, terminalMode: .ghosttyManagedSplits)
         #expect(coordinator.activateAdjacent(to: secondHomeTab.id, offset: 1)?.id == home.id)
     }
 
@@ -297,9 +340,17 @@ struct HostTerminalSessionCoordinatorTests {
         let homeURL = URL(fileURLWithPath: "/Users/test/code")
         let repoURL = URL(fileURLWithPath: "/Users/test/code/repo-a")
 
-        let home = coordinator.activate(key: .defaultHome, directory: homeURL).session
+        let home = coordinator.activate(
+            key: .defaultHome,
+            directory: homeURL,
+            terminalMode: .ghosttyManagedSplits
+        ).session
         let secondHomeTab = coordinator.createTab(from: home)
-        let repo = coordinator.activate(key: .repoPath(repoURL.path), directory: repoURL).session
+        let repo = coordinator.activate(
+            key: .repoPath(repoURL.path),
+            directory: repoURL,
+            terminalMode: .ghosttyManagedSplits
+        ).session
         let secondRepoTab = coordinator.createTab(from: repo)
 
         let didMoveRepoTab = coordinator.moveTab(sessionID: secondRepoTab.id, offset: -1)
@@ -333,15 +384,18 @@ struct HostTerminalSessionCoordinatorTests {
 
         let first = coordinator.activate(
             key: .repoPath(canonicalRepo.path),
-            directory: canonicalRepo
+            directory: canonicalRepo,
+            terminalMode: .ghosttyManagedSplits
         )
         let second = coordinator.activate(
             key: .repoPath(symlinkRepo.path),
-            directory: symlinkRepo
+            directory: symlinkRepo,
+            terminalMode: .ghosttyManagedSplits
         )
         let third = coordinator.activate(
             key: .hostPath(dotDotDirectory.path),
-            directory: dotDotDirectory
+            directory: dotDotDirectory,
+            terminalMode: .ghosttyManagedSplits
         )
 
         #expect(first.created)
@@ -360,6 +414,7 @@ struct HostTerminalSessionCoordinatorTests {
         let created = coordinator.activate(
             key: .repoPath(directory.path),
             directory: directory,
+            terminalMode: .ghosttyManagedSplits,
             initialCommand: "claude --resume sess-1"
         )
         #expect(created.created)
@@ -371,6 +426,7 @@ struct HostTerminalSessionCoordinatorTests {
         let reused = coordinator.activate(
             key: .repoPath(directory.path),
             directory: directory,
+            terminalMode: .ghosttyManagedSplits,
             initialCommand: "claude --resume sess-2"
         )
         #expect(!reused.created)
@@ -390,6 +446,7 @@ struct HostTerminalSessionCoordinatorTests {
         let session = coordinator.createSession(
             key: .repoPath(directory.path),
             directory: directory,
+            terminalMode: .ghosttyManagedSplits,
             adoptedID: recorded
         )
 
@@ -403,11 +460,16 @@ struct HostTerminalSessionCoordinatorTests {
     func createSessionRefusesToDuplicateALiveIdentity() {
         var coordinator = HostTerminalSessionCoordinator()
         let directory = URL(fileURLWithPath: "/code/repo")
-        let first = coordinator.createSession(key: .repoPath(directory.path), directory: directory)
+        let first = coordinator.createSession(
+            key: .repoPath(directory.path),
+            directory: directory,
+            terminalMode: .ghosttyManagedSplits
+        )
 
         let second = coordinator.createSession(
             key: .repoPath(directory.path),
             directory: directory,
+            terminalMode: .ghosttyManagedSplits,
             adoptedID: first.id
         )
 
@@ -419,7 +481,11 @@ struct HostTerminalSessionCoordinatorTests {
     func newTabGetsItsOwnTmuxSession() {
         var coordinator = HostTerminalSessionCoordinator()
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
-        let primary = coordinator.createSession(key: .repoPath(directory.path), directory: directory)
+        let primary = coordinator.createSession(
+            key: .repoPath(directory.path),
+            directory: directory,
+            terminalMode: .ghosttyManagedSplits
+        )
 
         let first = coordinator.createTab(from: primary)
         let second = coordinator.createTab(from: primary)
@@ -435,7 +501,12 @@ struct HostTerminalSessionCoordinatorTests {
     func remoteTabHasNoTmuxOverride() {
         var coordinator = HostTerminalSessionCoordinator()
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
-        let remote = HostTerminalSession(key: .hostPath(directory.path), directory: directory, customCommand: "ssh box")
+        let remote = HostTerminalSession(
+            key: .hostPath(directory.path),
+            directory: directory,
+            terminalMode: .ghosttyManagedSplits,
+            customCommand: "ssh box"
+        )
 
         #expect(coordinator.createTab(from: remote).tmuxSessionNameOverride == nil)
     }

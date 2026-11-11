@@ -91,7 +91,7 @@ struct TileTreeStoreTests {
         defer { stub.cleanUp() }
 
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
 
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
@@ -139,7 +139,7 @@ struct TileTreeStoreTests {
         defer { stub.cleanUp() }
 
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
         let tab = try #require(store.createTab(from: primary.id))
@@ -185,7 +185,7 @@ struct TileTreeStoreTests {
     @Test("A tab or split whose client exits on its own keeps its tmux session")
     func clientExitKeepsSession() async throws {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
         let tab = try #require(store.createTab(from: primary.id))
@@ -211,7 +211,7 @@ struct TileTreeStoreTests {
     @Test("A requested close that arrives as a process exit still reclaims the tab's session")
     func requestedCloseArrivingAsExitReclaims() async throws {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
         let requested = try #require(store.createTab(from: primary.id))
@@ -240,7 +240,7 @@ struct TileTreeStoreTests {
     @Test("The close prompt says a tab keeps running only when closing detaches it")
     func closePromptMatchesWhatCloseDoes() throws {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let controller = MainWindowTerminalSessionController()
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
@@ -261,15 +261,21 @@ struct TileTreeStoreTests {
         #expect(ending.message.contains("will end it"))
         #expect(unattributable.message.contains("keeps running"))
 
-        store.resolveTerminalMultiplexingMode = { .ghosttyManagedSplits }
+        // The setting moving to Ghostty splits leaves the live tmux tab detaching on close;
+        // only a tab born after the change closes for good.
+        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
         #expect(
-            controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains("will end it"))
+            controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains("keeps running"))
+        let other = URL(fileURLWithPath: "/Users/test/code/other")
+        let bornAfter = store.activateSession(key: .repoPath(other.path), directory: other).session
+        #expect(
+            controller.closeConfirmation(sessionID: bornAfter.id, tileTreeStore: store).message.contains("will end it"))
     }
 
     @Test("The close prompt warns when closing a tab ends one of its splits")
     func closePromptCountsSplits() throws {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let controller = MainWindowTerminalSessionController()
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
@@ -295,7 +301,7 @@ struct TileTreeStoreTests {
     @Test("Manifest restore splits sessions sharing a tmux name without killing any")
     func manifestRestoreSplitsSharedTmuxNames() {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
         var killRequests: [UUID] = []
         store.terminateOwnedTmuxSession = { hostSessionID in
             killRequests.append(hostSessionID)
@@ -303,10 +309,10 @@ struct TileTreeStoreTests {
         }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let key = HostTerminalSessionKey.repoPath(directory.path)
-        let primary = HostTerminalSession(key: key, directory: directory)
-        let mirror = HostTerminalSession(key: key, directory: directory)
+        let primary = HostTerminalSession(key: key, directory: directory, terminalMode: .tmuxPerSession)
+        let mirror = HostTerminalSession(key: key, directory: directory, terminalMode: .tmuxPerSession)
         let other = URL(fileURLWithPath: "/Users/test/code/other")
-        let unrelated = HostTerminalSession(key: .repoPath(other.path), directory: other)
+        let unrelated = HostTerminalSession(key: .repoPath(other.path), directory: other, terminalMode: .tmuxPerSession)
 
         store.restoreSessions(
             [primary, mirror, unrelated], activeSessionID: unrelated.id, activeSessionIDByScopeKey: [key: mirror.id])
@@ -320,14 +326,15 @@ struct TileTreeStoreTests {
         #expect(killRequests.isEmpty)
     }
 
-    @Test("Manifest restore leaves shared names alone outside tmux mode")
+    @Test("Manifest restore leaves shared names alone on records born outside tmux mode")
     func manifestRestoreLeavesNamesOutsideTmuxMode() {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { .ghosttyManagedSplits }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let key = HostTerminalSessionKey.repoPath(directory.path)
         let sessions = [
-            HostTerminalSession(key: key, directory: directory), HostTerminalSession(key: key, directory: directory),
+            HostTerminalSession(key: key, directory: directory, terminalMode: .ghosttyManagedSplits),
+            HostTerminalSession(key: key, directory: directory, terminalMode: .ghosttyManagedSplits),
         ]
 
         store.restoreSessions(sessions, activeSessionID: sessions[0].id, activeSessionIDByScopeKey: [:])
@@ -346,7 +353,7 @@ struct TileTreeStoreTests {
         defer { stub.cleanUp() }
 
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
 
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
@@ -402,27 +409,63 @@ struct TileTreeStoreTests {
     /// Which teardown may reclaim a tmux session: only a pane-scoped override (one
     /// that differs from the directory derivation). Primaries and restored primaries
     /// carry names a future launch in that directory `-A`-reattaches, so they must
-    /// survive; non-tmux mode never kills anything.
+    /// survive; a session born outside tmux mode never kills anything.
     @Test("Only pane-scoped overrides are reclaimed on teardown")
     func onlyPaneScopedOverridesAreReclaimed() {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let derived = TmuxSessionNaming.defaultName(for: directory)
-        let primary = HostTerminalSession(key: .repoPath(directory.path), directory: directory)
+        let primary = HostTerminalSession(
+            key: .repoPath(directory.path),
+            directory: directory,
+            terminalMode: .tmuxPerSession
+        )
         let restoredPrimary = HostTerminalSession(
-            key: .repoPath(directory.path), directory: directory, tmuxSessionNameOverride: derived)
+            key: .repoPath(directory.path),
+            directory: directory,
+            terminalMode: .tmuxPerSession,
+            tmuxSessionNameOverride: derived
+        )
         let paneID = UUID()
+        let paneName = TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: paneID)
         let pane = HostTerminalSession(
-            id: paneID, key: .repoPath(directory.path), directory: directory,
-            tmuxSessionNameOverride: TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: paneID))
+            id: paneID,
+            key: .repoPath(directory.path),
+            directory: directory,
+            terminalMode: .tmuxPerSession,
+            tmuxSessionNameOverride: paneName
+        )
+        let splitsPane = HostTerminalSession(
+            id: paneID,
+            key: .repoPath(directory.path),
+            directory: directory,
+            terminalMode: .ghosttyManagedSplits,
+            tmuxSessionNameOverride: paneName
+        )
 
         #expect(store.paneScopedTmuxSessionNameToKill(for: primary) == nil)
         #expect(store.paneScopedTmuxSessionNameToKill(for: restoredPrimary) == nil)
-        #expect(store.paneScopedTmuxSessionNameToKill(for: pane) == pane.tmuxSessionNameOverride)
+        #expect(store.paneScopedTmuxSessionNameToKill(for: pane) == paneName)
+        #expect(store.paneScopedTmuxSessionNameToKill(for: splitsPane) == nil)
+    }
 
-        store.resolveTerminalMultiplexingMode = { .ghosttyManagedSplits }
-        #expect(store.paneScopedTmuxSessionNameToKill(for: pane) == nil)
+    /// A remote tile's split gets a pane-shaped name like any split, but its command runs
+    /// directly and no host tmux session ever holds that name, so closing it kills nothing.
+    @Test("A remote split pane is never reclaimed on teardown")
+    func remoteSplitPaneIsNeverReclaimed() throws {
+        let store = TileTreeStore()
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
+        let primary = store.activateSession(
+            key: .backendSession(providerID: "lume", instanceID: "vm-1"),
+            directory: URL(fileURLWithPath: "/tmp"),
+            customCommand: "ssh vm-1"
+        ).session
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
+
+        #expect(split.tmuxSessionNameOverride != nil)
+        #expect(split.tmuxSessionName == nil)
+        #expect(store.paneScopedTmuxSessionNameToKill(for: split) == nil)
+        #expect(store.closeLeavesTmuxSessionRunning(primary) == false)
     }
 
     /// The failure this guards: adoption (#1390) binds a workspace to a live tmux session found
@@ -433,13 +476,173 @@ struct TileTreeStoreTests {
     @Test("An externally owned session bound by directory match is never reclaimed on teardown")
     func externallyOwnedSessionIsNeverReclaimed() {
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/issue-1390")
         let adopted = HostTerminalSession(
-            key: .hostPath(directory.path), directory: directory,
-            tmuxSessionNameOverride: "ws-1374")
+            key: .hostPath(directory.path),
+            directory: directory,
+            terminalMode: .tmuxPerSession,
+            tmuxSessionNameOverride: "ws-1374"
+        )
 
         #expect(store.paneScopedTmuxSessionNameToKill(for: adopted) == nil)
+    }
+
+    // MARK: - Each tile keeps the terminal mode it was born with
+
+    /// A settings change used to relabel live tiles: every snapshot recorded `terminal_mode`
+    /// from the global setting, and the close/kill gate followed it too. A tmux tile keeps its
+    /// mode, its row keeps naming its tmux session, and closing it still reclaims that session.
+    @Test("A live tmux session keeps its mode after the setting moves to Ghostty splits")
+    func liveTmuxSessionKeepsItsModeAfterTheSettingFlips() async throws {
+        let fixture = try ContinuityStoreFixture()
+        defer { fixture.remove() }
+        let store = TileTreeStore()
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
+        store.continuityRecorder = TerminalContinuityRecorder(sink: fixture.store)
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        let tab = try #require(store.createTab(from: primary.id))
+
+        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
+        #expect(store.activateExistingSession(sessionID: primary.id))
+        let other = URL(fileURLWithPath: "/Users/test/code/other")
+        let bornAfter = store.activateSession(key: .repoPath(other.path), directory: other).session
+        await store.continuityRecorder?.waitUntilDrained()
+
+        let rows = try await fixture.rowsByID()
+        #expect(rows[primary.id]?.terminalMode == .tmuxPerSession)
+        #expect(rows[primary.id]?.tmuxSessionName == primary.effectiveTmuxSessionName)
+        #expect(rows[tab.id]?.terminalMode == .tmuxPerSession)
+        #expect(rows[tab.id]?.tmuxSessionName == tab.effectiveTmuxSessionName)
+        #expect(rows[bornAfter.id]?.terminalMode == .ghosttyManagedSplits)
+        #expect(rows[bornAfter.id]?.tmuxSessionName == nil)
+
+        #expect(store.paneScopedTmuxSessionNameToKill(for: tab) == tab.tmuxSessionNameOverride)
+        #expect(store.closeLeavesTmuxSessionRunning(primary))
+        #expect(store.closeLeavesTmuxSessionRunning(bornAfter) == false)
+    }
+
+    @Test("A live Ghostty-splits session keeps its mode after the setting moves to tmux")
+    func liveSplitsSessionKeepsItsModeAfterTheSettingFlips() async throws {
+        let fixture = try ContinuityStoreFixture()
+        defer { fixture.remove() }
+        let store = TileTreeStore()
+        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
+        store.continuityRecorder = TerminalContinuityRecorder(sink: fixture.store)
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        let tab = try #require(store.createTab(from: primary.id))
+
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
+        #expect(store.activateExistingSession(sessionID: primary.id))
+        await store.continuityRecorder?.waitUntilDrained()
+
+        let rows = try await fixture.rowsByID()
+        for session in [primary, tab] {
+            #expect(rows[session.id]?.terminalMode == .ghosttyManagedSplits)
+            #expect(rows[session.id]?.tmuxSessionName == nil)
+        }
+        #expect(store.paneScopedTmuxSessionNameToKill(for: tab) == nil)
+        #expect(store.closeLeavesTmuxSessionRunning(primary) == false)
+        #expect(store.closeLeavesTmuxSessionRunning(tab) == false)
+    }
+
+    /// Restore probes and reattaches by a row's `tmux_session_name`, so a remote tile's row
+    /// names none: its command runs directly and no host tmux session holds its name.
+    @Test("A remote tile's continuity row names no host tmux session")
+    func remoteTileRowNamesNoTmuxSession() async throws {
+        let fixture = try ContinuityStoreFixture()
+        defer { fixture.remove() }
+        let store = TileTreeStore()
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
+        store.continuityRecorder = TerminalContinuityRecorder(sink: fixture.store)
+        let remote = store.activateSession(
+            key: .backendSession(providerID: "lume", instanceID: "vm-1"),
+            directory: URL(fileURLWithPath: "/tmp"),
+            customCommand: "ssh vm-1"
+        ).session
+        await store.continuityRecorder?.waitUntilDrained()
+
+        let row = try #require(try await fixture.rowsByID()[remote.id])
+        #expect(row.terminalMode == .tmuxPerSession)
+        #expect(row.tmuxSessionName == nil)
+    }
+
+    @Test("A new tab and a split take their source's mode, not the current setting")
+    func tabAndSplitCopyTheirSourcesMode() throws {
+        let store = TileTreeStore()
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+
+        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
+        let tab = try #require(store.createTab(from: primary.id))
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
+
+        #expect(primary.terminalMode == .tmuxPerSession)
+        #expect(tab.terminalMode == .tmuxPerSession)
+        #expect(split.terminalMode == .tmuxPerSession)
+        #expect(store.session(withID: split.id)?.terminalMode == .tmuxPerSession)
+    }
+
+    /// The restore plan carries each row's recorded mode; a row whose mode is not one this
+    /// build knows is born like a new primary.
+    @Test("A restored session takes its record's mode; a record without one takes the setting's")
+    func restoredSessionTakesItsRecordsMode() {
+        let store = TileTreeStore()
+        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+
+        let recorded = store.createRestoredSession(
+            key: .repoPath(directory.path), directory: directory, recordedTerminalMode: .tmuxPerSession)
+        let unrecorded = store.createRestoredSession(
+            key: .repoPath(directory.path), directory: directory, recordedTerminalMode: nil)
+
+        #expect(recorded.terminalMode == .tmuxPerSession)
+        #expect(unrecorded.terminalMode == .ghosttyManagedSplits)
+    }
+
+    /// Sessions carry a symlink-resolved key, so a policy keyed by path is asked about the path
+    /// the session will carry rather than the one the caller happened to hold.
+    @Test("A new session's mode is asked under the key the session is born with")
+    func newSessionModeIsAskedUnderTheBirthKey() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent("birth-key-\(UUID().uuidString)")
+        let real = root.appendingPathComponent("real", isDirectory: true)
+        let link = root.appendingPathComponent("link")
+        try fileManager.createDirectory(at: real, withIntermediateDirectories: true)
+        try fileManager.createSymbolicLink(at: link, withDestinationURL: real)
+        defer { try? fileManager.removeItem(at: root) }
+        let store = TileTreeStore()
+        var askedKeys: [HostTerminalSessionKey] = []
+        store.terminalModeForNewSession = { key in
+            askedKeys.append(key)
+            return .tmuxPerSession
+        }
+
+        let activated = store.activateSession(key: .hostPath(link.path), directory: link).session
+        let restored = store.createRestoredSession(
+            key: .repoPath(link.path), directory: link, recordedTerminalMode: nil)
+
+        #expect(activated.key != .hostPath(link.path))
+        #expect(askedKeys == [activated.key, restored.key])
+    }
+
+    /// Adoption attaches the tile to a live tmux session by name, so a tile stamped Ghostty
+    /// splits would run inside tmux while every close and teardown decision treated it as not.
+    @Test("An adopted session is a tmux tile whatever a new session would be")
+    func adoptedSessionIsATmuxTile() {
+        let store = TileTreeStore()
+        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+
+        let adopted = store.createAdoptedSession(
+            key: .hostPath(directory.path), directory: directory, tmuxSessionName: "agent-repo")
+
+        #expect(adopted.terminalMode == .tmuxPerSession)
+        #expect(adopted.tmuxSessionName == "agent-repo")
+        #expect(store.sessions.map(\.id) == [adopted.id])
     }
 
     /// The #1232 restore side: one created session per continuity row. The activation
@@ -454,9 +657,10 @@ struct TileTreeStoreTests {
         let paneName = "\(derived)-pdeadbeef"
 
         let primary = store.createRestoredSession(
-            key: .repoPath(directory.path), directory: directory, tmuxSessionNameOverride: derived)
+            key: .repoPath(directory.path), directory: directory, recordedTerminalMode: .tmuxPerSession,
+            tmuxSessionNameOverride: derived)
         let pane = store.createRestoredSession(
-            key: .repoPath(directory.path), directory: directory,
+            key: .repoPath(directory.path), directory: directory, recordedTerminalMode: .tmuxPerSession,
             initialCommand: nil, tmuxSessionNameOverride: paneName)
 
         #expect(store.sessions.count == 2)
@@ -1263,7 +1467,7 @@ struct TileTreeStoreTests {
     func focusChangeWritesOnlyChangedContinuityRows() async throws {
         let sink = ContinuityWriteLog()
         let store = TileTreeStore()
-        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         store.continuityRecorder = TerminalContinuityRecorder(sink: sink)
 
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
@@ -1296,7 +1500,7 @@ struct TileTreeStoreTests {
         let sink = ContinuityWriteLog()
         let store = TileTreeStore()
         let registry = AgentSessionRegistry()
-        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         store.continuityRecorder = TerminalContinuityRecorder(sink: sink)
         store.attach(agentSessionRegistry: registry, localStateStore: nil, hooksSocketPath: nil)
 
@@ -1328,7 +1532,7 @@ struct TileTreeStoreTests {
         let sink = ContinuityWriteLog()
         let store = TileTreeStore()
         let registry = AgentSessionRegistry()
-        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
         store.continuityRecorder = TerminalContinuityRecorder(sink: sink)
         store.attach(agentSessionRegistry: registry, localStateStore: nil, hooksSocketPath: nil)
 
@@ -1337,6 +1541,7 @@ struct TileTreeStoreTests {
         let session = store.createRestoredSession(
             key: .repoPath(directory.path),
             directory: directory,
+            recordedTerminalMode: .tmuxPerSession,
             tmuxSessionNameOverride: "wm-repo-survivor",
             adoptedHostSessionID: recorded
         )
@@ -1542,5 +1747,27 @@ private actor FreezeThenOutcome {
         polls += 1
         if polls == 2 { await log.append(outcome) }
         return start.addingTimeInterval(40 + 0.025 * Double(polls - 1))
+    }
+}
+
+/// A real continuity store on a temporary file, so a test reads back the row the recorder
+/// wrote — the session's `terminal_mode` and the `tmux_session_name` it runs in.
+private struct ContinuityStoreFixture {
+    let directory: URL
+    let store: LocalStateStore
+
+    init() throws {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tile-mode-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        store = try LocalStateStore(databaseURL: directory.appendingPathComponent("state.sqlite"))
+    }
+
+    func rowsByID() async throws -> [UUID: TerminalSessionContinuityRow] {
+        Dictionary(uniqueKeysWithValues: try await store.fetchContinuitySessions(limit: 50).map { ($0.id, $0) })
+    }
+
+    func remove() {
+        try? FileManager.default.removeItem(at: directory)
     }
 }

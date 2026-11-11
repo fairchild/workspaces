@@ -118,7 +118,8 @@ struct SessionSwitcherPresentationControllerTests {
         let workspace = try #require(repo.workspaces.first)
         let session = HostTerminalSession(
             key: .hostPath(workspace.workspaceURL.path),
-            directory: workspace.workspaceURL
+            directory: workspace.workspaceURL,
+            terminalMode: .ghosttyManagedSplits
         )
 
         let activities = controller.workspaceActivities(
@@ -141,7 +142,11 @@ struct SessionSwitcherPresentationControllerTests {
     @Test("A repo with no bubbled status keeps its own baseline")
     func repoWithoutBubbledStatusKeepsBaseline() {
         let repo = makeRepo(name: "alpha")
-        let session = HostTerminalSession(key: .repoPath(repo.localURL.path), directory: repo.localURL)
+        let session = HostTerminalSession(
+            key: .repoPath(repo.localURL.path),
+            directory: repo.localURL,
+            terminalMode: .ghosttyManagedSplits
+        )
 
         let activities = controller.repoActivities(
             context(
@@ -195,7 +200,11 @@ struct SessionSwitcherPresentationControllerTests {
     @Test("On equal severity the repo's own activity wins over the bubbled one")
     func equalSeverityPrefersTheBaseline() {
         let repo = makeRepo(name: "alpha", workspaceNames: ["a1"])
-        let session = HostTerminalSession(key: .repoPath(repo.localURL.path), directory: repo.localURL)
+        let session = HostTerminalSession(
+            key: .repoPath(repo.localURL.path),
+            directory: repo.localURL,
+            terminalMode: .ghosttyManagedSplits
+        )
 
         let activities = controller.repoActivities(
             context(
@@ -221,7 +230,11 @@ struct SessionSwitcherPresentationControllerTests {
     @Test("Repo activity resolves its session key through the context normalizer")
     func repoActivityUsesTheContextNormalizer() {
         let repo = makeRepo(name: "alpha")
-        let session = HostTerminalSession(key: .repoPath(repo.localURL.path), directory: repo.localURL)
+        let session = HostTerminalSession(
+            key: .repoPath(repo.localURL.path),
+            directory: repo.localURL,
+            terminalMode: .ghosttyManagedSplits
+        )
         var rewritten = SessionSwitcherProjectionContext(
             repos: [repo],
             webSources: [],
@@ -268,7 +281,8 @@ struct SessionSwitcherPresentationControllerTests {
         let workspace = try #require(repo.workspaces.first)
         let session = HostTerminalSession(
             key: .hostPath(workspace.workspaceURL.path),
-            directory: workspace.workspaceURL
+            directory: workspace.workspaceURL,
+            terminalMode: .ghosttyManagedSplits
         )
 
         let snapshot = controller.snapshot(
@@ -290,7 +304,11 @@ struct SessionSwitcherPresentationControllerTests {
     @Test("A live repo row carries the merged bubbled activity")
     func snapshotLiveRepoRowReflectsBubbledActivity() throws {
         let repo = makeRepo(name: "alpha", workspaceNames: ["a1"])
-        let session = HostTerminalSession(key: .repoPath(repo.localURL.path), directory: repo.localURL)
+        let session = HostTerminalSession(
+            key: .repoPath(repo.localURL.path),
+            directory: repo.localURL,
+            terminalMode: .ghosttyManagedSplits
+        )
         let bubbled = status(hostSessionID: UUID(), run: .awaitingInput(reason: .permissionPrompt))
 
         let snapshot = controller.snapshot(

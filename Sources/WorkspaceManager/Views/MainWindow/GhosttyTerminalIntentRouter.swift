@@ -34,17 +34,20 @@ enum GhosttyTerminalRoutingEffect: Equatable {
 struct GhosttyTerminalIntentRouter {
     static let splitFocusDelay: TimeInterval = 0.12
 
+    /// Split intents act only on a tab born in Ghostty-splits mode; a tmux tab splits
+    /// with tmux's own keybindings. The source pane's session decides, else the active one.
     func route(
         _ intent: GhosttyTerminalIntent,
         sourceSessionID: UUID?,
-        terminalMultiplexingMode: TerminalMultiplexingMode,
         tileTreeStore: TileTreeStore
     ) -> [GhosttyTerminalRoutingEffect] {
         switch intent {
         case .split(let splitIntent):
-            guard terminalMultiplexingMode == .ghosttyManagedSplits else {
+            if let session = (sourceSessionID ?? tileTreeStore.activeSessionID).flatMap(tileTreeStore.session(withID:)),
+                session.terminalMode != .ghosttyManagedSplits
+            {
                 log.error(
-                    "[SplitRouting] Ignored split action while terminal mode=\(terminalMultiplexingMode.rawValue, privacy: .public)"
+                    "[SplitRouting] Ignored split action while terminal mode=\(session.terminalMode.rawValue, privacy: .public)"
                 )
                 return []
             }

@@ -40,8 +40,28 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
     /// derivation: a new name of its own when the row had one (a cmd+t tab) or shared a live
     /// session another surface keeps. Deriving from the directory would join the primary's.
     public let launchTmuxSessionName: String?
+    /// The mode the restored session is stamped with: tmux for a reattach, else the row's
+    /// recorded mode. `nil` when the row names no mode this build knows; the session then
+    /// takes the resolver's mode like a new primary.
+    public let terminalMode: TerminalMultiplexingMode?
 
     public var id: UUID { hostSessionID }
+
+    /// This surface with its mode settled: a surface whose row named no mode takes the mode a
+    /// new session in its scope would get, so everything downstream reads one concrete mode.
+    public func settlingTerminalMode(
+        _ terminalModeForNewSession: (HostTerminalSessionKey) -> TerminalMultiplexingMode
+    ) -> RestoreSurfacePlan {
+        RestoreSurfacePlan(
+            hostSessionID: hostSessionID,
+            key: key,
+            directory: directory,
+            action: action,
+            launchDirectoryFellBack: launchDirectoryFellBack,
+            launchTmuxSessionName: launchTmuxSessionName,
+            terminalMode: terminalMode ?? terminalModeForNewSession(key.normalized())
+        )
+    }
 
     public init(
         hostSessionID: UUID,
@@ -49,7 +69,8 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
         directory: URL,
         action: RestoreSurfaceAction,
         launchDirectoryFellBack: Bool = false,
-        launchTmuxSessionName: String? = nil
+        launchTmuxSessionName: String? = nil,
+        terminalMode: TerminalMultiplexingMode? = nil
     ) {
         self.hostSessionID = hostSessionID
         self.key = key
@@ -57,6 +78,7 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
         self.action = action
         self.launchDirectoryFellBack = launchDirectoryFellBack
         self.launchTmuxSessionName = launchTmuxSessionName
+        self.terminalMode = terminalMode
     }
 }
 
@@ -78,6 +100,17 @@ public struct RestorePlan: Sendable, Equatable {
         self.surfaces = surfaces
         self.selectedHostSessionID = selectedHostSessionID
         self.previousRunID = previousRunID
+    }
+
+    /// This plan with every surface's mode settled (see `RestoreSurfacePlan.settlingTerminalMode`).
+    public func settlingTerminalModes(
+        _ terminalModeForNewSession: (HostTerminalSessionKey) -> TerminalMultiplexingMode
+    ) -> RestorePlan {
+        RestorePlan(
+            surfaces: surfaces.map { $0.settlingTerminalMode(terminalModeForNewSession) },
+            selectedHostSessionID: selectedHostSessionID,
+            previousRunID: previousRunID
+        )
     }
 
     /// Whether this plan's prior run was already handled (restored or dismissed).
@@ -202,7 +235,8 @@ public struct TerminalRestorePlanner: Sendable {
                     action: decision.action,
                     launchDirectoryFellBack: decision.fellBack,
                     launchTmuxSessionName: ownLaunchName(
-                        row: row, action: decision.action, directory: decision.directory)
+                        row: row, action: decision.action, directory: decision.directory),
+                    terminalMode: terminalMode(row: row, action: decision.action)
                 )
             )
         }
@@ -236,6 +270,17 @@ public struct TerminalRestorePlanner: Sendable {
         return TmuxSessionNameSharing.displacedClaims(claims)
     }
 
+    /// A reattach puts the tile back inside a tmux session, so it is a tmux tile whatever its row
+    /// recorded. Any other action keeps the row's mode, `nil` leaving it to the store's resolver.
+    private func terminalMode(
+        row: TerminalSessionContinuityRow, action: RestoreSurfaceAction
+    )
+        -> TerminalMultiplexingMode?
+    {
+        if case .reattachTmux = action { return .tmuxPerSession }
+        return row.terminalMode
+    }
+
     /// A fresh name for a row that recorded a tmux name of its own but cannot reattach it, so
     /// its new shell stays apart from the directory-derived session its primary holds.
     private func ownLaunchName(
@@ -252,7 +297,8 @@ public struct TerminalRestorePlanner: Sendable {
 
     /// A row that shared its live session with the row that keeps it. It was a second view of
     /// that one shell, so whatever conversation it recorded is the keeper's to rejoin; it comes
-    /// back as a fresh shell on a name of its own, and nothing is killed.
+    /// back as a fresh shell on a name of its own, and nothing is killed. Only a tmux tile records
+    /// a live tmux name, so it stays a tmux tile.
     private func displacedSurface(
         row: TerminalSessionContinuityRow,
         resolved: ResolvedRestoreTarget
@@ -264,7 +310,8 @@ public struct TerminalRestorePlanner: Sendable {
             directory: directory,
             action: .freshShell,
             launchDirectoryFellBack: fellBack,
-            launchTmuxSessionName: TmuxSessionNameSharing.replacementName(for: directory)
+            launchTmuxSessionName: TmuxSessionNameSharing.replacementName(for: directory),
+            terminalMode: .tmuxPerSession
         )
     }
 

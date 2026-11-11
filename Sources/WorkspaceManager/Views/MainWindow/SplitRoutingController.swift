@@ -9,7 +9,6 @@ struct SplitRoutingController {
 
     func handle(
         notification: Notification,
-        terminalMultiplexingMode: TerminalMultiplexingMode,
         tileTreeStore: TileTreeStore,
         focusTerminal: @escaping (UUID) -> Void
     ) {
@@ -25,7 +24,6 @@ struct SplitRoutingController {
         let effects = router.route(
             .split(GhosttySplitIntent(request: request)),
             sourceSessionID: sourceSessionID,
-            terminalMultiplexingMode: terminalMultiplexingMode,
             tileTreeStore: tileTreeStore
         )
         apply(effects: effects, focusTerminal: focusTerminal)

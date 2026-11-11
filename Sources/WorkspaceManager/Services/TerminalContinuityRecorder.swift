@@ -22,7 +22,6 @@ private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "Te
 protocol TerminalContinuityWriting: Sendable {
     func recordTerminalSession(
         _ session: HostTerminalSession,
-        terminalMode: String,
         isActive: Bool,
         hooksSocketPath: String?
     ) async throws
@@ -37,7 +36,6 @@ final class TerminalContinuityRecorder {
     /// means the write would be a byte-identical upsert (modulo `last_seen_at`).
     private struct RecordedState: Equatable {
         let session: HostTerminalSession
-        let terminalMode: String
         let isActive: Bool
         let hooksSocketPath: String?
     }
@@ -68,13 +66,11 @@ final class TerminalContinuityRecorder {
     /// its dedup entry, so the same state offered again is written again.
     func record(
         _ session: HostTerminalSession,
-        terminalMode: String,
         isActive: Bool,
         hooksSocketPath: String?
     ) {
         let state = RecordedState(
             session: session,
-            terminalMode: terminalMode,
             isActive: isActive,
             hooksSocketPath: hooksSocketPath
         )
@@ -85,7 +81,6 @@ final class TerminalContinuityRecorder {
             do {
                 try await sink.recordTerminalSession(
                     session,
-                    terminalMode: terminalMode,
                     isActive: isActive,
                     hooksSocketPath: hooksSocketPath
                 )

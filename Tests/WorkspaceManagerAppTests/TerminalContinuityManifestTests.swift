@@ -41,6 +41,7 @@ struct TerminalContinuityManifestTests {
         let session = HostTerminalSession(
             key: .hostPath(directory.path),
             directory: directory,
+            terminalMode: .ghosttyManagedSplits,
             tmuxSessionNameOverride: "wm-alpha-probed"
         )
         let manifest = TerminalContinuityManifest(
@@ -54,7 +55,8 @@ struct TerminalContinuityManifestTests {
         )
 
         let decoded = try #require(TerminalContinuityManifest.decode(from: manifest.rawValue))
-        let restored = try #require(decoded.hostSessionSnapshot()?.sessions.first)
+        let restored = try #require(
+            decoded.hostSessionSnapshot(terminalModeForNewSession: bornAsSplits)?.sessions.first)
 
         #expect(restored.tmuxSessionNameOverride == "wm-alpha-probed")
         #expect(restored.effectiveTmuxSessionName == "wm-alpha-probed")
@@ -65,7 +67,11 @@ struct TerminalContinuityManifestTests {
     @Test("A manifest without the tmux name field still decodes")
     func manifestWithoutOverrideFieldDecodes() throws {
         let directory = try temporaryDirectory()
-        let session = HostTerminalSession(key: .hostPath(directory.path), directory: directory)
+        let session = HostTerminalSession(
+            key: .hostPath(directory.path),
+            directory: directory,
+            terminalMode: .ghosttyManagedSplits
+        )
         let manifest = TerminalContinuityManifest(
             targetKind: .workspace,
             targetID: UUID(),
@@ -81,10 +87,98 @@ struct TerminalContinuityManifestTests {
         )
 
         let decoded = try #require(TerminalContinuityManifest.decode(from: withoutField))
-        let restored = try #require(decoded.hostSessionSnapshot()?.sessions.first)
+        let restored = try #require(
+            decoded.hostSessionSnapshot(terminalModeForNewSession: bornAsSplits)?.sessions.first)
 
         #expect(restored.tmuxSessionNameOverride == nil)
         #expect(restored.effectiveTmuxSessionName == session.effectiveTmuxSessionName)
+    }
+
+    /// A settings change between write and restore must not relabel a tile: the record's
+    /// own mode wins over the manifest's and over what a session born now would get.
+    @Test("A tmux-born session restores as tmux from a manifest written under Ghostty splits")
+    func tmuxBornSessionRestoresAsTmux() throws {
+        let directory = try temporaryDirectory()
+        let session = HostTerminalSession(
+            key: .hostPath(directory.path),
+            directory: directory,
+            terminalMode: .tmuxPerSession
+        )
+        let manifest = TerminalContinuityManifest(
+            targetKind: .workspace,
+            targetID: UUID(),
+            rootURL: directory,
+            launchURL: directory,
+            terminalMode: .ghosttyManagedSplits,
+            sessions: [session],
+            activeSessionID: session.id
+        )
+
+        let decoded = try #require(TerminalContinuityManifest.decode(from: manifest.rawValue))
+        let restored = decoded.hostSessionSnapshot(terminalModeForNewSession: bornAsSplits)
+
+        #expect(restored?.sessions.map(\.terminalMode) == [.tmuxPerSession])
+    }
+
+    /// Manifests written before records carried a mode stamped one mode for every record.
+    @Test("A record without its own mode restores in the manifest's mode")
+    func recordWithoutModeTakesTheManifestsMode() throws {
+        let directory = try temporaryDirectory()
+        let session = HostTerminalSession(
+            key: .hostPath(directory.path),
+            directory: directory,
+            terminalMode: .ghosttyManagedSplits
+        )
+        let manifest = TerminalContinuityManifest(
+            targetKind: .workspace,
+            targetID: UUID(),
+            rootURL: directory,
+            launchURL: directory,
+            terminalMode: .tmuxPerSession,
+            sessions: [session],
+            activeSessionID: session.id
+        )
+        let legacy = try rewritingTerminalModes(of: manifest, manifest: "tmux_per_session", records: nil)
+
+        let decoded = try #require(TerminalContinuityManifest.decode(from: legacy))
+        let restored = decoded.hostSessionSnapshot(terminalModeForNewSession: bornAsSplits)
+
+        #expect(decoded.sessionRecords.map(\.terminalMode) == [nil])
+        #expect(restored?.sessions.map(\.terminalMode) == [.tmuxPerSession])
+    }
+
+    /// A mode this build doesn't know reads as absent rather than rejecting the manifest, and
+    /// with no mode left anywhere the session is born like any new one.
+    @Test("With no known mode recorded, a session restores in a new session's mode")
+    func noRecordedModeTakesANewSessionsMode() throws {
+        let directory = try temporaryDirectory()
+        let session = HostTerminalSession(
+            key: .hostPath(directory.path),
+            directory: directory,
+            terminalMode: .ghosttyManagedSplits
+        )
+        let manifest = TerminalContinuityManifest(
+            targetKind: .workspace,
+            targetID: UUID(),
+            rootURL: directory,
+            launchURL: directory,
+            terminalMode: .ghosttyManagedSplits,
+            sessions: [session],
+            activeSessionID: session.id
+        )
+        let unknown = try rewritingTerminalModes(of: manifest, manifest: nil, records: "zellij")
+
+        let decoded = try #require(TerminalContinuityManifest.decode(from: unknown))
+        var askedKeys: [HostTerminalSessionKey] = []
+        let restored = decoded.hostSessionSnapshot(terminalModeForNewSession: { key in
+            askedKeys.append(key)
+            return .tmuxPerSession
+        })
+
+        #expect(decoded.terminalMode == nil)
+        #expect(decoded.sessionRecords.map(\.terminalMode) == [nil])
+        #expect(restored?.sessions.map(\.terminalMode) == [.tmuxPerSession])
+        #expect(askedKeys == [session.key])
     }
 
     @Test("Launch directory restores only for matching target")
@@ -177,9 +271,17 @@ struct TerminalContinuityManifestTests {
     func hostSessionSnapshotRestoresTabsByScope() throws {
         let home = try temporaryDirectory()
         let repo = try temporaryDirectory()
-        let homeSession = HostTerminalSession(key: .defaultHome, directory: home)
-        let repoSession = HostTerminalSession(key: .repoPath(repo.path), directory: repo)
-        let secondRepoSession = HostTerminalSession(key: .repoPath(repo.path), directory: repo)
+        let homeSession = HostTerminalSession(key: .defaultHome, directory: home, terminalMode: .ghosttyManagedSplits)
+        let repoSession = HostTerminalSession(
+            key: .repoPath(repo.path),
+            directory: repo,
+            terminalMode: .ghosttyManagedSplits
+        )
+        let secondRepoSession = HostTerminalSession(
+            key: .repoPath(repo.path),
+            directory: repo,
+            terminalMode: .ghosttyManagedSplits
+        )
 
         let manifest = TerminalContinuityManifest(
             targetKind: .repo,
@@ -197,7 +299,7 @@ struct TerminalContinuityManifestTests {
         )
 
         let decoded = try #require(TerminalContinuityManifest.decode(from: manifest.rawValue))
-        let snapshot = try #require(decoded.hostSessionSnapshot())
+        let snapshot = try #require(decoded.hostSessionSnapshot(terminalModeForNewSession: bornAsSplits))
 
         #expect(snapshot.sessions.map(\.id) == [homeSession.id, repoSession.id, secondRepoSession.id])
         #expect(snapshot.activeSessionID == secondRepoSession.id)
@@ -209,10 +311,11 @@ struct TerminalContinuityManifestTests {
     func hostSessionSnapshotSkipsProviderBackedCommandSessions() throws {
         let home = try temporaryDirectory()
         let remoteWorkingDirectory = try temporaryDirectory()
-        let homeSession = HostTerminalSession(key: .defaultHome, directory: home)
+        let homeSession = HostTerminalSession(key: .defaultHome, directory: home, terminalMode: .ghosttyManagedSplits)
         let remoteSession = HostTerminalSession(
             key: .backendSession(providerID: "lume", instanceID: "vm-123"),
             directory: remoteWorkingDirectory,
+            terminalMode: .ghosttyManagedSplits,
             customCommand: "/usr/local/bin/lume ssh vm-123"
         )
 
@@ -231,7 +334,7 @@ struct TerminalContinuityManifestTests {
             updatedAt: Date(timeIntervalSince1970: 100)
         )
 
-        let snapshot = try #require(manifest.hostSessionSnapshot())
+        let snapshot = try #require(manifest.hostSessionSnapshot(terminalModeForNewSession: bornAsSplits))
 
         #expect(snapshot.sessions.map(\.id) == [homeSession.id])
         #expect(snapshot.activeSessionID == homeSession.id)
@@ -243,9 +346,17 @@ struct TerminalContinuityManifestTests {
     func hostSessionSnapshotExcludesArchivedWorkspaceScopes() throws {
         let home = try temporaryDirectory()
         let workspace = try temporaryDirectory()
-        let homeSession = HostTerminalSession(key: .defaultHome, directory: home)
-        let workspaceSession = HostTerminalSession(key: .hostPath(workspace.path), directory: workspace)
-        let secondWorkspaceSession = HostTerminalSession(key: .hostPath(workspace.path), directory: workspace)
+        let homeSession = HostTerminalSession(key: .defaultHome, directory: home, terminalMode: .ghosttyManagedSplits)
+        let workspaceSession = HostTerminalSession(
+            key: .hostPath(workspace.path),
+            directory: workspace,
+            terminalMode: .ghosttyManagedSplits
+        )
+        let secondWorkspaceSession = HostTerminalSession(
+            key: .hostPath(workspace.path),
+            directory: workspace,
+            terminalMode: .ghosttyManagedSplits
+        )
 
         let manifest = TerminalContinuityManifest(
             targetKind: .workspace,
@@ -263,13 +374,39 @@ struct TerminalContinuityManifestTests {
         )
 
         let snapshot = try #require(
-            manifest.hostSessionSnapshot(excludingScopeKeys: [.hostPath(workspace.path)])
+            manifest.hostSessionSnapshot(
+                excludingScopeKeys: [.hostPath(workspace.path)], terminalModeForNewSession: bornAsSplits)
         )
 
         #expect(snapshot.sessions.map(\.id) == [homeSession.id])
         #expect(snapshot.activeSessionID == homeSession.id)
         #expect(snapshot.activeSessionIDByScopeKey[.defaultHome] == homeSession.id)
         #expect(snapshot.activeSessionIDByScopeKey[.hostPath(workspace.path)] == nil)
+    }
+
+    /// Every record this build writes carries its own mode, so a new session's mode is only
+    /// consulted where a test strips it.
+    private func bornAsSplits(_: HostTerminalSessionKey) -> TerminalMultiplexingMode {
+        .ghosttyManagedSplits
+    }
+
+    /// The manifest's JSON with `terminalMode` set at the top level and in every record, or
+    /// dropped where `nil`.
+    private func rewritingTerminalModes(
+        of manifest: TerminalContinuityManifest,
+        manifest manifestMode: String?,
+        records recordMode: String?
+    ) throws -> String {
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(manifest.rawValue.utf8)) as? [String: Any])
+        object["terminalMode"] = manifestMode
+        let records = try #require(object["sessionRecords"] as? [[String: Any]])
+        object["sessionRecords"] = records.map { record in
+            var record = record
+            record["terminalMode"] = recordMode
+            return record
+        }
+        return String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
     }
 
     private func temporaryDirectory() throws -> URL {

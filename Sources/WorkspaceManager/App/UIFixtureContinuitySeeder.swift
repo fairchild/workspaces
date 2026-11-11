@@ -75,7 +75,11 @@
         /// no I/O — so the shape of what gets seeded is assertable without a database.
         static func seedPlan(homeDirectory: URL, now: Date) -> (session: HostTerminalSession, runStartedAt: Date) {
             let directory = seededWorkspaceDirectory(homeDirectory: homeDirectory)
-            let session = HostTerminalSession(key: .hostPath(directory.path), directory: directory)
+            let session = HostTerminalSession(
+                key: .hostPath(directory.path),
+                directory: directory,
+                terminalMode: .ghosttyManagedSplits
+            )
             return (session, now.addingTimeInterval(priorRunOffset))
         }
 
@@ -89,12 +93,7 @@
         ) async throws {
             let plan = seedPlan(homeDirectory: homeDirectory, now: now)
             let store = try LocalStateStore(databaseURL: databaseURL, runID: UUID(), runStartedAt: plan.runStartedAt)
-            try await store.recordTerminalSession(
-                plan.session,
-                terminalMode: "shell",
-                isActive: true,
-                hooksSocketPath: nil
-            )
+            try await store.recordTerminalSession(plan.session, isActive: true, hooksSocketPath: nil)
         }
 
         /// Fire hook: called from `WorkspaceManagerApp.init()`. No-op unless both

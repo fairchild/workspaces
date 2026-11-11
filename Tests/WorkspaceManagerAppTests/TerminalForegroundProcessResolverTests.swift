@@ -6,10 +6,11 @@ import WorkspaceManagerCore
 
 @Suite("TerminalForegroundProcessResolver")
 struct TerminalForegroundProcessResolverTests {
-    private func session() -> HostTerminalSession {
+    private func session(_ terminalMode: TerminalMultiplexingMode) -> HostTerminalSession {
         HostTerminalSession(
             key: .repoPath("/tmp/repo-\(UUID().uuidString)"),
-            directory: URL(fileURLWithPath: "/tmp/repo-\(UUID().uuidString)")
+            directory: URL(fileURLWithPath: "/tmp/repo-\(UUID().uuidString)"),
+            terminalMode: terminalMode
         )
     }
 
@@ -19,7 +20,6 @@ struct TerminalForegroundProcessResolverTests {
     ) -> TerminalForegroundProcessResolver {
         TerminalForegroundProcessResolver(
             probe: TmuxSessionProbe(runForOutput: { _, _, _ in tmuxOutput }, environment: [:]),
-            tmuxSessionName: { _ in "wm-repo-abcd1234" },
             cwdProgramName: { _ in cwdProgram }
         )
     }
@@ -48,26 +48,38 @@ struct TerminalForegroundProcessResolverTests {
     @Test("tmux mode prefers the exact per-pane command over the cwd program")
     func tmuxModePrefersPaneCommand() async {
         let resolver = resolver(tmuxOutput: "1 vim\n", cwdProgram: "python")
-        #expect(await resolver.foregroundName(for: session(), mode: .tmuxPerSession) == "vim")
+        #expect(await resolver.foregroundName(for: session(.tmuxPerSession)) == "vim")
     }
 
     @Test("tmux mode falls back to the cwd program when the pane query is unavailable")
     func tmuxModeFallsBackToCwd() async {
         let resolver = resolver(tmuxOutput: nil, cwdProgram: "python")
-        #expect(await resolver.foregroundName(for: session(), mode: .tmuxPerSession) == "python")
+        #expect(await resolver.foregroundName(for: session(.tmuxPerSession)) == "python")
+    }
+
+    @Test("A remote session in tmux mode resolves via the cwd program, never a host tmux pane")
+    func remoteSessionSkipsTheTmuxProbe() async {
+        let resolver = resolver(tmuxOutput: "1 vim\n", cwdProgram: "python")
+        let remote = HostTerminalSession(
+            key: .backendSession(providerID: "lume", instanceID: "vm-\(UUID().uuidString)"),
+            directory: URL(fileURLWithPath: "/tmp"),
+            terminalMode: .tmuxPerSession,
+            customCommand: "ssh vm"
+        )
+        #expect(await resolver.foregroundName(for: remote) == "python")
     }
 
     @Test("ghostty-splits mode (default) resolves via the cwd program")
     func ghosttyModeResolvesViaCwd() async {
         // No tmux query in this mode; the directory's running program still resolves.
         let resolver = resolver(tmuxOutput: "1 vim\n", cwdProgram: "python")
-        #expect(await resolver.foregroundName(for: session(), mode: .ghosttyManagedSplits) == "python")
+        #expect(await resolver.foregroundName(for: session(.ghosttyManagedSplits)) == "python")
     }
 
     @Test("A bare shell (no non-shell program, no tmux) resolves to nil for title fallback")
     func bareShellResolvesNil() async {
         let resolver = resolver(tmuxOutput: nil, cwdProgram: nil)
-        #expect(await resolver.foregroundName(for: session(), mode: .ghosttyManagedSplits) == nil)
+        #expect(await resolver.foregroundName(for: session(.ghosttyManagedSplits)) == nil)
     }
 
     // MARK: - cwd program selection (shell/agent filtering)

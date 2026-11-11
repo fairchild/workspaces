@@ -20,8 +20,12 @@ struct TerminalRestoreCoordinatorTests {
 
         let priorRun = try makeStore(at: db, runStartedAt: Self.priorRun)
         try await priorRun.recordTerminalSession(
-            HostTerminalSession(id: UUID(), key: .repoPath(directory.path), directory: directory),
-            terminalMode: "tmux_per_session",
+            HostTerminalSession(
+                id: UUID(),
+                key: .repoPath(directory.path),
+                directory: directory,
+                terminalMode: .tmuxPerSession
+            ),
             isActive: true,
             hooksSocketPath: nil
         )
@@ -54,8 +58,12 @@ struct TerminalRestoreCoordinatorTests {
 
         let priorRun = try makeStore(at: db, runStartedAt: Self.priorRun)
         try await priorRun.recordTerminalSession(
-            HostTerminalSession(id: UUID(), key: .repoPath(directory.path), directory: directory),
-            terminalMode: "tmux_per_session",
+            HostTerminalSession(
+                id: UUID(),
+                key: .repoPath(directory.path),
+                directory: directory,
+                terminalMode: .tmuxPerSession
+            ),
             isActive: true,
             hooksSocketPath: nil
         )
@@ -81,8 +89,12 @@ struct TerminalRestoreCoordinatorTests {
         // Only the current run records a session — there is no prior run to restore.
         let current = try makeStore(at: db, runStartedAt: Self.currentRun)
         try await current.recordTerminalSession(
-            HostTerminalSession(id: UUID(), key: .repoPath(directory.path), directory: directory),
-            terminalMode: "tmux_per_session",
+            HostTerminalSession(
+                id: UUID(),
+                key: .repoPath(directory.path),
+                directory: directory,
+                terminalMode: .tmuxPerSession
+            ),
             isActive: true,
             hooksSocketPath: nil
         )

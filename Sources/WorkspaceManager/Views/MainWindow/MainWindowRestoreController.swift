@@ -109,7 +109,8 @@ struct MainWindowRestoreController {
     ///
     /// A name another surface is reattaching to is never a candidate at all: a resume and a
     /// reattach surface can share a directory, and the derived name would then be the reattach
-    /// target (#1233).
+    /// target (#1233). A resume surface that launches without tmux has no candidate: its shell
+    /// joins no session, so nothing stands in its way.
     func tmuxSessionNamesToKill(
         in plan: RestorePlan,
         ownedTmuxSessionNames: Set<String>,
@@ -122,7 +123,7 @@ struct MainWindowRestoreController {
             }
         )
         let candidates = plan.surfaces.compactMap { surface -> String? in
-            guard case .resumeClaude = surface.action else { return nil }
+            guard case .resumeClaude = surface.action, surface.terminalMode == .tmuxPerSession else { return nil }
             let name = sessionName(surface.directory)
             return reattachTargets.contains(name) ? nil : name
         }
@@ -132,7 +133,7 @@ struct MainWindowRestoreController {
         )
     }
 
-    /// The directory-derived tmux names resume surfaces will `new-session -A`-launch on.
+    /// The tmux names resume surfaces in tmux mode will `new-session -A`-launch on.
     /// The wiring probes these after the pre-restore kill pass: a name still alive there
     /// was excluded from the kill list because another surface reattaches to it (shared
     /// directory, #1233), so the resume launch would join that live session.
@@ -140,12 +141,18 @@ struct MainWindowRestoreController {
         in plan: RestorePlan,
         sessionName: (URL) -> String = { GhosttyTerminalConfig.tmuxSessionName(for: $0) }
     ) -> Set<String> {
-        Set(
-            plan.surfaces.compactMap { surface -> String? in
-                guard case .resumeClaude = surface.action else { return nil }
-                return surface.launchTmuxSessionName ?? sessionName(surface.directory)
-            }
-        )
+        Set(plan.surfaces.compactMap { resumeLaunchSessionName(for: $0, sessionName: sessionName) })
+    }
+
+    /// The tmux session a resume surface's shell `new-session -A`-launches on, or `nil` for any
+    /// other surface and for one that launches without tmux. Expects the plan's modes settled
+    /// (`RestorePlan.settlingTerminalModes`); an unsettled mode counts as no tmux.
+    private func resumeLaunchSessionName(
+        for surface: RestoreSurfacePlan,
+        sessionName: (URL) -> String
+    ) -> String? {
+        guard case .resumeClaude = surface.action, surface.terminalMode == .tmuxPerSession else { return nil }
+        return surface.launchTmuxSessionName ?? sessionName(surface.directory)
     }
 
     /// What a restored surface launches with. Reattach and fresh surfaces are a plain
@@ -194,7 +201,9 @@ struct MainWindowRestoreController {
             effort = lastEfforts[agentSessionID]
         }
         guard let command = initialCommand(for: surface.action, effort: effort) else { return nil }
-        guard !liveSessionNames.contains(surface.launchTmuxSessionName ?? sessionName(surface.directory)) else {
+        if let launchName = resumeLaunchSessionName(for: surface, sessionName: sessionName),
+            liveSessionNames.contains(launchName)
+        {
             return nil
         }
         return command

@@ -89,11 +89,16 @@ final class TileTreeStore: ObservableObject {
     /// wiring asks it before killing anything (#1267).
     let tmuxOwnershipLedger = TmuxSessionOwnershipLedger()
 
-    /// Test seams for pane-scoped tmux session reclamation (#1232) and continuity
-    /// row recording (#1239): production resolves the real multiplexing mode and
-    /// terminates through the ownership ledger on the workspaces socket; tests inject
-    /// a fixed mode and a terminator wired to a stubbed tmux executable.
-    var resolveTerminalMultiplexingMode: () -> TerminalMultiplexingMode = { TerminalMultiplexingMode.resolve() }
+    /// The terminal mode a new primary session in `key`'s scope is born with, asked with the
+    /// normalized key the session will carry. Read only at birth: tabs and splits copy their
+    /// source, restores take their record, and every later decision reads the session's own
+    /// `terminalMode`. Production resolves the global setting; tests inject a fixed mode.
+    var terminalModeForNewSession: (HostTerminalSessionKey) -> TerminalMultiplexingMode = { _ in
+        TerminalMultiplexingMode.resolve()
+    }
+    /// Test seam for pane-scoped tmux session reclamation (#1232): production terminates
+    /// through the ownership ledger on the workspaces socket; tests inject a terminator
+    /// wired to a stubbed tmux executable.
     var terminateOwnedTmuxSession: (@MainActor (UUID) async -> TmuxOwnedSessionTerminator.Outcome)?
 
     init() {
@@ -263,6 +268,7 @@ final class TileTreeStore: ObservableObject {
         let result = coordinator.activate(
             key: key,
             directory: directory,
+            terminalMode: terminalModeForNewSession(key.normalized()),
             customCommand: customCommand,
             initialCommand: initialCommand
         )
@@ -278,10 +284,14 @@ final class TileTreeStore: ObservableObject {
     /// `adoptedHostSessionID` carries a reattach surface's recorded identity through
     /// to the session it creates, so the registry the hook listener consults is keyed
     /// by the id the surviving pane already exports (#1397).
+    ///
+    /// `recordedTerminalMode` is the mode the record carries; a record without one is
+    /// born like a new primary, in the resolver's mode.
     @discardableResult
     func createRestoredSession(
         key: HostTerminalSessionKey,
         directory: URL,
+        recordedTerminalMode: TerminalMultiplexingMode?,
         initialCommand: String? = nil,
         initialCommandDelivery: HostTerminalSession.InitialCommandDelivery = .prefill,
         tmuxSessionNameOverride: String? = nil,
@@ -290,10 +300,29 @@ final class TileTreeStore: ObservableObject {
         let session = coordinator.createSession(
             key: key,
             directory: directory,
+            terminalMode: recordedTerminalMode ?? terminalModeForNewSession(key.normalized()),
             initialCommand: initialCommand,
             initialCommandDelivery: initialCommandDelivery,
             tmuxSessionNameOverride: tmuxSessionNameOverride,
             adoptedID: adoptedHostSessionID
+        )
+        publishSnapshot()
+        return session
+    }
+
+    /// Binds a scope to a live tmux session found on the host by directory match (#1390). The
+    /// tile attaches to that session by name, so it is a tmux tile whatever a new one would be.
+    @discardableResult
+    func createAdoptedSession(
+        key: HostTerminalSessionKey,
+        directory: URL,
+        tmuxSessionName: String
+    ) -> HostTerminalSession {
+        let session = coordinator.createSession(
+            key: key,
+            directory: directory,
+            terminalMode: .tmuxPerSession,
+            tmuxSessionNameOverride: tmuxSessionName
         )
         publishSnapshot()
         return session
@@ -309,6 +338,7 @@ final class TileTreeStore: ObservableObject {
         let result = coordinator.ensureSession(
             key: key,
             directory: directory,
+            terminalMode: terminalModeForNewSession(key.normalized()),
             customCommand: customCommand,
             initialCommand: initialCommand
         )
@@ -338,17 +368,18 @@ final class TileTreeStore: ObservableObject {
         publishSnapshot()
     }
 
-    /// Restored records that would launch on one tmux name, given names of their own past the
-    /// keeper. A tab recorded before tabs had their own names shares its primary's, and both
+    /// Restored tmux-mode records that would launch on one tmux name, given names of their own
+    /// past the keeper. A tab recorded before tabs had their own names shares its primary's, and both
     /// relaunching onto it would keep showing one shell twice. Nothing is killed: the keeper
     /// rejoins the live session and the others start fresh shells. The keeper is the earliest
     /// record, the scope's primary: its surface created the shell, and the shell's
     /// `WORKSPACES_HOST_SESSION_ID` is set at creation, so the agent inside reports under that
     /// record's id and its status keeps reaching the tile that shows it.
     private func separatingSharedTmuxSessions(_ sessions: [HostTerminalSession]) -> [HostTerminalSession] {
-        guard resolveTerminalMultiplexingMode() == .tmuxPerSession else { return sessions }
-        let claims = sessions.filter { !$0.isRemote }.map {
-            TmuxSessionNameSharing.Claim(hostSessionID: $0.id, tmuxSessionName: $0.effectiveTmuxSessionName)
+        let claims = sessions.compactMap { session in
+            session.tmuxSessionName.map {
+                TmuxSessionNameSharing.Claim(hostSessionID: session.id, tmuxSessionName: $0)
+            }
         }
         let displaced = TmuxSessionNameSharing.displacedClaims(claims)
         guard !displaced.isEmpty else { return sessions }
@@ -361,6 +392,7 @@ final class TileTreeStore: ObservableObject {
                 id: session.id,
                 key: session.key,
                 directory: session.directoryURL,
+                terminalMode: session.terminalMode,
                 tmuxSessionNameOverride: TmuxSessionNaming.splitPaneName(
                     for: session.directoryURL,
                     paneSessionID: session.id
@@ -706,6 +738,12 @@ final class TileTreeStore: ObservableObject {
         return treesByPrimaryID[primarySessionID]
     }
 
+    /// The live session with `sessionID`, primary or split pane.
+    func session(withID sessionID: UUID) -> HostTerminalSession? {
+        coordinator.sessions.first { $0.id == sessionID }
+            ?? tileIDBySessionID[sessionID].flatMap { sessionByTileID[$0] }
+    }
+
     /// Resolves the session filling a leaf tile — the renderer's `.tile` → terminal binding.
     func session(forTile tileID: TileID) -> HostTerminalSession? {
         sessionByTileID[tileID]
@@ -760,6 +798,7 @@ final class TileTreeStore: ObservableObject {
             id: splitSessionID,
             key: primarySession.key,
             directory: primarySession.directoryURL,
+            terminalMode: primarySession.terminalMode,
             customCommand: primarySession.customCommand,
             tmuxSessionNameOverride: TmuxSessionNaming.splitPaneName(
                 for: primarySession.directoryURL,
@@ -1100,9 +1139,9 @@ final class TileTreeStore: ObservableObject {
         return splitSessions
     }
 
-    /// The tmux session a torn-down session must reclaim, or `nil` when nothing may die: no
-    /// override, an override that is not shaped like the app's own split-pane naming, or
-    /// non-tmux mode. A pane-scoped override is unreachable by directory derivation, and
+    /// The tmux session a torn-down session must reclaim, or `nil` when nothing may die: the
+    /// tile runs in no host tmux session, or its session's name is not shaped like the app's
+    /// own split-pane naming. A pane-scoped override is unreachable by directory derivation, and
     /// teardown ends its continuity row, so an unkilled one would be stranded with no reclaim
     /// path (#1232).
     ///
@@ -1113,9 +1152,8 @@ final class TileTreeStore: ObservableObject {
     /// owned session with no relationship to this app at all. Closing that tab would otherwise
     /// `kill-session` someone else's live shell.
     func paneScopedTmuxSessionNameToKill(for session: HostTerminalSession) -> String? {
-        guard let sessionName = session.tmuxSessionNameOverride,
-            TmuxSessionNaming.isPaneScopedName(sessionName, for: session.directoryURL),
-            resolveTerminalMultiplexingMode() == .tmuxPerSession
+        guard let sessionName = session.tmuxSessionName,
+            TmuxSessionNaming.isPaneScopedName(sessionName, for: session.directoryURL)
         else {
             return nil
         }
@@ -1128,10 +1166,11 @@ final class TileTreeStore: ObservableObject {
         ([session] + splitSessions(forPrimarySessionID: session.id)).allSatisfy(teardownLeavesTmuxSessionRunning)
     }
 
-    /// A local tmux-mode session whose teardown does not reclaim: the scope's directory-derived
-    /// one, or a scoped one this run never recorded launching, which teardown cannot attribute.
+    /// A tile in a host tmux session whose teardown does not reclaim it: the scope's
+    /// directory-derived one, or a scoped one this run never recorded launching, which
+    /// teardown cannot attribute.
     private func teardownLeavesTmuxSessionRunning(_ session: HostTerminalSession) -> Bool {
-        guard !session.isRemote, resolveTerminalMultiplexingMode() == .tmuxPerSession else { return false }
+        guard session.tmuxSessionName != nil else { return false }
         return paneScopedTmuxSessionNameToKill(for: session) == nil
             || tmuxOwnershipLedger.ownership(forHostSessionID: session.id) == nil
     }
@@ -1201,12 +1240,7 @@ final class TileTreeStore: ObservableObject {
     }
 
     private func recordTerminalSession(_ session: HostTerminalSession, isActive: Bool) {
-        continuityRecorder?.record(
-            session,
-            terminalMode: resolveTerminalMultiplexingMode().rawValue,
-            isActive: isActive,
-            hooksSocketPath: surfaceStore.hooksSocketPath
-        )
+        continuityRecorder?.record(session, isActive: isActive, hooksSocketPath: surfaceStore.hooksSocketPath)
     }
 
     private func recordTerminalSessionEnded(_ sessionID: UUID) {

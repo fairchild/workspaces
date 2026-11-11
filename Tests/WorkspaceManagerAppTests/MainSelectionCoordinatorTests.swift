@@ -36,6 +36,7 @@ struct MainSelectionCoordinatorTests {
         let activeSession = HostTerminalSession(
             key: .backendSession(providerID: LumeWorkspaceProvider.identifier, instanceID: "lume-route-123"),
             directory: URL(fileURLWithPath: "/tmp/workspaces/lume"),
+            terminalMode: .ghosttyManagedSplits,
             customCommand: "/usr/local/bin/lume ssh vm-123"
         )
 
