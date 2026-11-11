@@ -166,7 +166,7 @@ struct AutomationIntegrationLifecycleTests {
             )
         }
         // stop() lands once the start is waiting on the bind.
-        let binding = await yield(until: { lifecycle.startWaiters == 1 })
+        let binding = await mainQueueTurns(until: { lifecycle.startWaiters == 1 })
         await lifecycle.stop()
         let started = await starting.result
         let left = await leftovers(of: lifecycle, files: plane.files)
@@ -200,7 +200,7 @@ struct AutomationIntegrationLifecycleTests {
         let joining = Task {
             await lifecycle.configure(tileTreeStore: store, focusTerminal: { _ in }, requestCloseTerminal: { _ in })
         }
-        let joined = await yield(until: { lifecycle.startWaiters == 2 })
+        let joined = await mainQueueTurns(until: { lifecycle.startWaiters == 2 })
         // Nothing published yet means the stop below lands on the start, not on an ordinary shutdown.
         let publishedBeforeStop = lifecycle.socketPath
         await lifecycle.stop()
@@ -241,7 +241,7 @@ struct AutomationIntegrationLifecycleTests {
         }
         let starting = start()
         let joining = start()
-        let joined = await yield(until: { lifecycle.startWaiters == 2 })
+        let joined = await mainQueueTurns(until: { lifecycle.startWaiters == 2 })
         await lifecycle.stop()
         let results = [await starting.result, await joining.result]
         await otherLaunch.stop()
@@ -271,7 +271,7 @@ struct AutomationIntegrationLifecycleTests {
                 requestCloseTerminal: { _ in }
             )
         }
-        let binding = await yield(until: { lifecycle.startWaiters == 1 })
+        let binding = await mainQueueTurns(until: { lifecycle.startWaiters == 1 })
         // Each caller stops, then at once registers a handle and starts again, as a window would.
         func stopThenRestart() -> Task<(handle: String, socketPath: String), Error> {
             Task {
@@ -306,11 +306,15 @@ struct AutomationIntegrationLifecycleTests {
         #expect(left == .nothing)
     }
 
-    /// Yields until `condition` holds, so a test acts on the state it needs rather than on how far one
-    /// yield happened to get. Bounded by a count of yields, not a clock.
-    private func yield(until condition: () -> Bool) async -> Bool {
+    /// Takes main-queue turns until `condition` holds, so a test acts on the state it needs rather than on
+    /// how far one turn happened to get. A turn never leaves the main queue: the start tasks a test made are
+    /// already queued ahead of it, and whatever they hand off comes back behind it, so the check runs while
+    /// a start is still waiting on its bind. `Task.yield()` resumes through the global executor instead, and
+    /// on a busy pool the bind finishes and resumes the start before the check runs. Bounded by a count of
+    /// turns, not a clock.
+    private func mainQueueTurns(until condition: () -> Bool) async -> Bool {
         for _ in 0..<1_000 where !condition() {
-            await Task.yield()
+            await withCheckedContinuation { turn in DispatchQueue.main.async { turn.resume() } }
         }
         return condition()
     }
