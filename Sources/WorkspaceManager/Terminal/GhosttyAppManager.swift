@@ -81,23 +81,26 @@ final class GhosttyAppManager: NSObject {
     /// then, if it outlives `hangUpGrace`, resumed and killed.
     ///
     /// libghostty does not always report an exit: a command hung up while it is still
-    /// starting can be gone, reaped, with `ghostty_surface_process_exited` false for good,
-    /// and a command it failed to start never appears at all. A command this thread found
-    /// that is no longer its child has nothing left for the free to wait on, so its surface
-    /// is freed then; so is one with no command in sight once `killGrace` has run out.
+    /// starting can be gone, reaped, with `ghostty_surface_process_exited` false for good.
+    /// The free waits only on the pid libghostty recorded, so once the command this thread
+    /// found, pid and start time, has no process left, the free has nothing to wait on and
+    /// runs.
     ///
-    /// A command still this thread's child `killGrace` after SIGKILL is one SIGKILL cannot
-    /// reach, stuck in an uninterruptible wait. Its surface stays unfreed, and is freed by a
-    /// later drain if the command ever exits. Leaking one surface's memory and threads costs
-    /// less than freeing it, which would hold this thread, and with it every window, for as
-    /// long as the command lives.
+    /// Anything else is unknown, and an unknown surface is not freed. A command never found
+    /// may be a stopped `login` whose foreground group is empty; a pid that now names another
+    /// process would have libghostty hang up a stranger's group. Each pass looks again and
+    /// keeps signalling, and once `killGrace` after SIGKILL has passed the surface is logged
+    /// once and checked about once a second from then on. A command SIGKILL cannot end, stuck
+    /// in an uninterruptible wait, stays the same way. Leak beats freeze: one surface's memory
+    /// and threads cost less than holding this thread, and every window with it, for as long
+    /// as the command lives.
     private var retiredSurfaces: [RetiredSurface] = []
     private var drainingRetiredSurfaces = false
     var retiredSurfaceCount: Int { retiredSurfaces.count }
 
     /// How long a hung-up command gets to exit before it is resumed and killed.
     var hangUpGrace: Duration = .seconds(5)
-    /// How long a killed command gets to exit before its surface is left unfreed.
+    /// How long a killed command gets to exit before its surface is reported overdue.
     var killGrace: Duration = .seconds(2)
 
     /// One `ghostty_surface_free`: the surface by address only, since it is gone by the time
@@ -112,18 +115,18 @@ final class GhosttyAppManager: NSObject {
     var onSurfaceFreed: ((SurfaceFree) -> Void)?
 
     private struct RetiredSurface {
-        enum Shutdown { case hangingUp, killing, commandOutOfSight, abandoned }
+        enum Shutdown { case hangingUp, killing, overdue }
 
         let surface: ghostty_surface_t
         let callbackTarget: Unmanaged<GhosttySurfaceCallbackTarget>
         var shutdown = Shutdown.hangingUp
         var nextStepAt: ContinuousClock.Instant?
-        /// The command's pid, once a signal has reached it.
-        var command: pid_t?
+        /// The command, once a signal has gone to it.
+        var command: GhosttySurfaceChildProcess.Command?
 
         @MainActor var isReadyToFree: Bool {
-            ghostty_surface_process_exited(surface) || shutdown == .commandOutOfSight
-                || command.map { !GhosttySurfaceChildProcess.isChild($0) } ?? false
+            ghostty_surface_process_exited(surface)
+                || command.map { GhosttySurfaceChildProcess.fate(of: $0) == .gone } ?? false
         }
 
         @MainActor mutating func signal(_ signal: Int32) {
@@ -236,7 +239,8 @@ final class GhosttyAppManager: NSObject {
     /// command's exit, so retiring many surfaces never adds up to one long block. Until then
     /// the hang-up repeats, as libghostty's own does: `login` misses one that lands while it
     /// is still starting, and the command runs on. The graces start here rather than at
-    /// retirement, so time spent with the drain suspended doesn't count against them.
+    /// retirement, so time spent with the drain suspended doesn't count against them. Once
+    /// every surface left is overdue, passes slow to one each `overduePass`.
     private func drainRetiredSurfaces() async {
         defer { drainingRetiredSurfaces = false }
         while !mailboxDrainSuspended {
@@ -256,14 +260,21 @@ final class GhosttyAppManager: NSObject {
                 await Task.yield()
                 continue
             }
-            guard retiredSurfaces.contains(where: { $0.shutdown != .abandoned }) else { return }
+            guard !retiredSurfaces.isEmpty else { return }
             let now = ContinuousClock.now
-            for index in retiredSurfaces.indices {
+            let overduePassDue = now >= nextOverduePassAt
+            if overduePassDue { nextOverduePassAt = now + Self.overduePass }
+            for index in retiredSurfaces.indices
+            where overduePassDue || retiredSurfaces[index].shutdown != .overdue {
                 advanceShutdown(of: &retiredSurfaces[index], at: now)
             }
-            try? await Task.sleep(for: .milliseconds(10))
+            let onlyOverdue = retiredSurfaces.allSatisfy { $0.shutdown == .overdue }
+            try? await Task.sleep(for: .milliseconds(onlyOverdue ? 100 : 10))
         }
     }
+
+    private static let overduePass: Duration = .seconds(1)
+    private var nextOverduePassAt = ContinuousClock.now
 
     private func advanceShutdown(of retired: inout RetiredSurface, at now: ContinuousClock.Instant) {
         switch retired.shutdown {
@@ -278,26 +289,31 @@ final class GhosttyAppManager: NSObject {
             retired.nextStepAt = now + killGrace
             fallthrough
         case .killing:
-            guard let deadline = retired.nextStepAt, now >= deadline else {
-                retired.signal(SIGCONT)
-                retired.signal(SIGKILL)
-                return
-            }
-            guard let command = retired.command, GhosttySurfaceChildProcess.isChild(command) else {
-                retired.shutdown = .commandOutOfSight
-                return
-            }
-            retired.shutdown = .abandoned
+            retired.signal(SIGCONT)
+            retired.signal(SIGKILL)
+            guard let deadline = retired.nextStepAt, now >= deadline else { return }
+            retired.shutdown = .overdue
             let address = UInt(bitPattern: retired.surface)
+            let reason = Self.overdueReason(retired.command.map(GhosttySurfaceChildProcess.fate(of:)))
             log.error(
                 """
-                [GhosttyAppManager] leaving surface \(address, privacy: .public) \
-                unfreed: its command survived SIGKILL, and freeing it would hold the main thread until \
-                the command exits
+                [GhosttyAppManager] leaving surface \(address, privacy: .public) unfreed for now: \
+                \(reason, privacy: .public), and freeing it could hold the main thread until the \
+                command exits
                 """
             )
-        case .commandOutOfSight, .abandoned:
-            break
+        case .overdue:
+            retired.signal(SIGCONT)
+            retired.signal(SIGKILL)
+        }
+    }
+
+    private static func overdueReason(_ fate: GhosttySurfaceChildProcess.Fate?) -> String {
+        switch fate {
+        case nil: "its command was never found"
+        case .replaced: "its command's pid now names another process"
+        case .exited: "its command exited and was never reaped"
+        case .running, .gone: "its command survived SIGKILL"
         }
     }
 
