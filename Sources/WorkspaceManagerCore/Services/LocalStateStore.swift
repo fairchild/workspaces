@@ -797,8 +797,12 @@ public actor LocalStateStore {
     /// much as the selected tab is, so `is_active` (the selected tab in its scope)
     /// plays no part here. A row whose holder died stays open and is included.
     /// Placeholder rows no surface ever recorded are not tiles and are skipped.
-    public func fetchPreviousRunSessions(limit: Int = 100) async throws -> [TerminalSessionContinuityRow] {
-        let cappedLimit = max(0, limit)
+    ///
+    /// Restore reads the whole set: which rows share a tmux name, and which one is a
+    /// scope's selected tab, are facts about every row, so a cut taken before planning
+    /// would decide them from part of the run. `limit` is for callers that page.
+    public func fetchPreviousRunSessions(limit: Int? = nil) async throws -> [TerminalSessionContinuityRow] {
+        let sqlLimit = limit.map { max(0, $0) } ?? -1
         let currentRunStartedAt = runStartedAt
         return try await dbPool.read { db -> [TerminalSessionContinuityRow] in
             let rows = try Row.fetchAll(
@@ -875,7 +879,8 @@ public actor LocalStateStore {
                     ORDER BY ts.last_seen_at DESC
                     LIMIT ?
                     """,
-                arguments: [currentRunStartedAt, Self.placeholderTerminalMode, cappedLimit]
+                // SQLite reads a negative LIMIT as no limit.
+                arguments: [currentRunStartedAt, Self.placeholderTerminalMode, sqlLimit]
             )
             return rows.compactMap(TerminalSessionContinuityRow.init(row:))
         }
