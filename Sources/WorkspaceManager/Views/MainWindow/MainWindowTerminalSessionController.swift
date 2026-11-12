@@ -183,7 +183,7 @@ struct MainWindowTerminalSessionController {
         sessionID: UUID,
         tileTreeStore: TileTreeStore
     ) -> TerminalCloseConfirmation {
-        let session = tileTreeStore.sessions.first(where: { $0.id == sessionID })
+        let session = tileTreeStore.allLiveSessions.first(where: { $0.id == sessionID })
         let title =
             session.map {
                 tileTreeStore.tabTitleOverride(for: $0.id)

@@ -317,6 +317,30 @@ struct TileTreeStoreTests {
             controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains("will end it"))
     }
 
+    /// A split pane's own close reads the pane, not its tab: a pane-scoped session the
+    /// ledger has not attributed is left running by teardown, and one it has is ended.
+    @Test("A split pane's close prompt reads the pane's own tmux session")
+    func closePromptReadsTheSplitPane() throws {
+        let store = TileTreeStore()
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
+        let controller = MainWindowTerminalSessionController()
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
+        #expect(
+            controller.closeConfirmation(sessionID: split.id, tileTreeStore: store).message.contains("keeps running"))
+
+        store.tmuxOwnershipLedger.record(
+            hostSessionID: split.id,
+            identity: TmuxLiveSession(
+                sessionID: "$9", name: try #require(split.tmuxSessionNameOverride),
+                createdAt: Date(timeIntervalSince1970: 100), serverPID: 4242),
+            launchedAt: Date(timeIntervalSince1970: 100)
+        )
+        #expect(
+            controller.closeConfirmation(sessionID: split.id, tileTreeStore: store).message.contains("will end it"))
+    }
+
     /// Tabs recorded before they had names of their own share their primary's. Relaunching
     /// both onto it would carry the mirror forward, so the primary — whose surface created the
     /// shell, and whose id the agent inside reports under — keeps the live session, the rest
