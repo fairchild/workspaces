@@ -272,6 +272,29 @@ struct TileTreeStoreTests {
             controller.closeConfirmation(sessionID: bornAfter.id, tileTreeStore: store).message.contains("will end it"))
     }
 
+    /// #1826: the prompt follows what the tile's launch did. A tmux-mode tile on a machine
+    /// without tmux runs a plain shell that ends with the tile, whatever its mode says.
+    @Test("The close prompt's wording follows whether the tile actually launched through tmux")
+    func closePromptFollowsTheRealizedLaunch() throws {
+        let store = TileTreeStore()
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
+        let controller = MainWindowTerminalSessionController()
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let launchedInTmux = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        let other = URL(fileURLWithPath: "/Users/test/code/other")
+        let launchedPlain = store.activateSession(key: .repoPath(other.path), directory: other).session
+        store.surfaceStore.noteLaunch(sessionID: launchedInTmux.id, throughTmux: true)
+        store.surfaceStore.noteLaunch(sessionID: launchedPlain.id, throughTmux: false)
+
+        #expect(launchedPlain.terminalMode == .tmuxPerSession)
+        #expect(
+            controller.closeConfirmation(sessionID: launchedInTmux.id, tileTreeStore: store).message
+                .contains("keeps running"))
+        #expect(
+            controller.closeConfirmation(sessionID: launchedPlain.id, tileTreeStore: store).message
+                .contains("will end it"))
+    }
+
     @Test("The close prompt warns when closing a tab ends one of its splits")
     func closePromptCountsSplits() throws {
         let store = TileTreeStore()

@@ -537,8 +537,8 @@ final class TileTreeStore: ObservableObject {
     }
 
     @discardableResult
-    func retireSessions(inScope scopeKey: HostTerminalSessionKey) -> [UUID] {
-        let primarySessionIDs = coordinator.sessions(inScope: scopeKey).map(\.id)
+    func retireSessions(inScope scopeKey: HostTerminalSessionKey, keeping kept: Set<UUID> = []) -> [UUID] {
+        let primarySessionIDs = coordinator.sessions(inScope: scopeKey).map(\.id).filter { !kept.contains($0) }
         guard !primarySessionIDs.isEmpty else { return [] }
 
         var retiredSessionIDs: [UUID] = []
@@ -560,21 +560,6 @@ final class TileTreeStore: ObservableObject {
         return retiredSessionIDs
     }
 
-    /// Why a terminal is going away, which decides whether its own tmux session may die.
-    ///
-    /// A user closing the tile is the only cause that reclaims it. A process exit is the tmux
-    /// client ending, and the client ends either because the session is already gone or because
-    /// it detached from a session that is still running work — so killing on exit has nothing
-    /// to gain and a detached session to lose.
-    ///
-    /// A close the user asked for can still arrive as a process exit: Ghostty skips the
-    /// confirmation when it believes the terminal is at a prompt and reports the surface as
-    /// exited. `noteCloseRequested` marks the request so that exit still counts as the user's.
-    enum TerminalCloseCause {
-        case userClosed
-        case processExited
-    }
-
     private var closeRequestedSessionIDs: Set<UUID> = []
 
     func noteCloseRequested(_ sessionID: UUID) {
@@ -585,22 +570,88 @@ final class TileTreeStore: ObservableObject {
         closeRequestedSessionIDs.remove(sessionID)
     }
 
-    @discardableResult
-    func handleProcessExit(for sessionID: UUID, cause: TerminalCloseCause = .processExited) -> Bool {
-        var removed = false
-        let wasRequested = closeRequestedSessionIDs.remove(sessionID) != nil
-        let reclaimsOwnTmuxSession = cause == .userClosed || wasRequested
+    /// Asks the tile's tmux socket what remains once its client is gone. Production reads
+    /// this run's socket; tests point it at an isolated server or answer directly.
+    var tmuxHolderState: @Sendable (String) async -> TmuxHolderState = { sessionName in
+        await TmuxHolderProbe().holderState(forSessionNamed: sessionName)
+    }
 
+    /// Exits whose tmux question is still out, each with the classification task answering it.
+    private var exitClassifications: [UUID: Task<Void, Never>] = [:]
+    /// tmux servers, by pid, that this run has seen die under a tile. Later tiles of the same
+    /// server read as having lost their holder even after their siblings have been cleared.
+    private var lostTmuxServerPIDs: Set<Int> = []
+    /// While an exit is tearing tiles down, the sessions whose rows it ends. Their rows are
+    /// written once the exit has a reason, so no row is written ended and then reopened.
+    private var collectedRowEndings: [UUID]?
+
+    /// Removes an exited tile and records how it ended.
+    ///
+    /// `cause` is the reason when the caller already knows it: a user close, or a teardown
+    /// that is the user's. `nil` is a process exit, which reads its reason from what is left.
+    ///
+    /// A user's close is the only reason that reclaims the tile's own tmux session. A process
+    /// exit is the tmux client ending, and the client ends either because the session is
+    /// already gone or because it left a session that is still running work — so killing on
+    /// exit has nothing to gain and a running session to lose. A close the user asked for can
+    /// still arrive as a process exit: Ghostty skips the confirmation when it believes the
+    /// terminal is at a prompt and reports the surface as exited. `noteCloseRequested` marks the
+    /// request so that exit still counts as the user's.
+    ///
+    /// The tile leaves at once, as every close always has. A process exit of a tile that
+    /// launched through tmux then asks the tmux socket, off the main actor, which reason it
+    /// was, and only then writes the rows of every session the exit tore down (see
+    /// `TerminalSessionExit.classifyProcessExit`). A quit while the question is out leaves those
+    /// rows open, so the next launch can still offer them.
+    @discardableResult
+    func handleProcessExit(for sessionID: UUID, cause: TerminalSessionExit? = nil) -> Bool {
+        let wasRequested = closeRequestedSessionIDs.remove(sessionID) != nil
+        let knownExit: TerminalSessionExit? = wasRequested ? .userClosed : cause
+        let exitingSession = allLiveSessions.first(where: { $0.id == sessionID })
+        let launchedThroughTmux = surfaceStore.launchedThroughTmux(sessionID: sessionID) == true
+        let serverHeldOtherSessions =
+            !exitClassifications.isEmpty
+            || allLiveSessions.contains {
+                $0.id != sessionID && surfaceStore.launchedThroughTmux(sessionID: $0.id) == true
+            }
+        let serverPID = tmuxOwnershipLedger.ownership(forHostSessionID: sessionID)?.identity.serverPID
+
+        collectedRowEndings = []
+        let removed = removeExitedTile(sessionID, reclaimingTmuxSession: knownExit == .userClosed)
+        let rowEndings = collectedRowEndings ?? []
+        collectedRowEndings = nil
+        guard removed else { return false }
+
+        let exitedAt = Date()
+        if let knownExit {
+            recordRowEndings(rowEndings, exitingSessionID: sessionID, exit: knownExit, at: exitedAt)
+        } else if launchedThroughTmux, let tmuxSessionName = exitingSession?.effectiveTmuxSessionName {
+            classifyExit(
+                sessionID,
+                tmuxSessionName: tmuxSessionName,
+                serverPID: serverPID,
+                serverHeldOtherSessions: serverHeldOtherSessions,
+                rowEndings: rowEndings,
+                exitedAt: exitedAt
+            )
+        } else {
+            recordRowEndings(rowEndings, exitingSessionID: sessionID, exit: .shellExited, at: exitedAt)
+        }
+        return true
+    }
+
+    private func removeExitedTile(_ sessionID: UUID, reclaimingTmuxSession: Bool) -> Bool {
+        var removed = false
         if let primarySessionID = primaryIDBySplitSessionID[sessionID] {
             closeSplitPane(
-                sessionID, primarySessionID: primarySessionID, reclaimingTmuxSession: reclaimsOwnTmuxSession)
+                sessionID, primarySessionID: primarySessionID, reclaimingTmuxSession: reclaimingTmuxSession)
             removed = true
         }
 
         if let removedSession = coordinator.remove(sessionID: sessionID) {
             // A tab or a restored split pane carries a pane-scoped override; closing it is the
             // same reclaim as closing a pane.
-            if reclaimsOwnTmuxSession {
+            if reclaimingTmuxSession {
                 killPaneScopedTmuxSession(for: removedSession)
             }
             removeSplitState(forPrimarySessionID: sessionID)
@@ -611,8 +662,56 @@ final class TileTreeStore: ObservableObject {
         if removed {
             publishSnapshot()
         }
-
         return removed
+    }
+
+    private func classifyExit(
+        _ sessionID: UUID,
+        tmuxSessionName: String,
+        serverPID: Int?,
+        serverHeldOtherSessions: Bool,
+        rowEndings: [UUID],
+        exitedAt: Date
+    ) {
+        let holderState = tmuxHolderState
+        exitClassifications[sessionID] = Task { @MainActor [weak self] in
+            let state = await holderState(tmuxSessionName)
+            guard let self else { return }
+            let serverWasShared =
+                serverHeldOtherSessions || (serverPID.map(self.lostTmuxServerPIDs.contains) ?? false)
+            let exit = TerminalSessionExit.classifyProcessExit(
+                tmuxHolder: state, serverHeldOtherSessions: serverWasShared)
+            if exit == .holderLost, let serverPID {
+                self.lostTmuxServerPIDs.insert(serverPID)
+            }
+            log.info(
+                "[TileTreeStore] session \(sessionID.uuidString, privacy: .public) exited: tmux \(tmuxSessionName, privacy: .public) \(String(describing: state), privacy: .public), reason \(String(describing: exit), privacy: .public)"
+            )
+            self.recordRowEndings(rowEndings, exitingSessionID: sessionID, exit: exit, at: exitedAt)
+            self.exitClassifications.removeValue(forKey: sessionID)
+        }
+    }
+
+    /// Writes what an exit leaves on each row it tore down. The exiting tile takes the exit's
+    /// own reason. Split panes torn down with their tab lose the same holder when it was lost;
+    /// otherwise their teardown ended them, as closing a tab always has.
+    private func recordRowEndings(
+        _ sessionIDs: [UUID],
+        exitingSessionID: UUID,
+        exit: TerminalSessionExit,
+        at exitedAt: Date
+    ) {
+        for sessionID in sessionIDs {
+            let rowExit = sessionID == exitingSessionID || exit == .holderLost ? exit : .shellExited
+            continuityRecorder?.recordExit(sessionID, rowExit, at: exitedAt)
+        }
+    }
+
+    /// Resumes once every process exit still waiting on tmux has written its rows.
+    func waitForExitClassifications() async {
+        while let pending = exitClassifications.values.first {
+            await pending.value
+        }
     }
 
     /// Handles process-exit cleanup and resolves which session should receive focus.
@@ -620,7 +719,7 @@ final class TileTreeStore: ObservableObject {
     @discardableResult
     func handleProcessExitAndResolveFocusTarget(
         for sessionID: UUID,
-        cause: TerminalCloseCause = .processExited,
+        cause: TerminalSessionExit? = nil,
         defaultHomeDirectory: URL
     ) -> UUID? {
         guard handleProcessExit(for: sessionID, cause: cause) else {
@@ -1169,8 +1268,14 @@ final class TileTreeStore: ObservableObject {
     /// A tile in a host tmux session whose teardown does not reclaim it: the scope's
     /// directory-derived one, or a scoped one this run never recorded launching, which
     /// teardown cannot attribute.
+    ///
+    /// "In a host tmux session" is what the tile's launch did, not its mode: a tmux-mode
+    /// tile on a machine without tmux runs a plain shell that ends with the tile. The mode
+    /// answers only for a tile with no launch this run.
     private func teardownLeavesTmuxSessionRunning(_ session: HostTerminalSession) -> Bool {
-        guard session.tmuxSessionName != nil else { return false }
+        let launchedThroughTmux =
+            surfaceStore.launchedThroughTmux(sessionID: session.id) ?? (session.tmuxSessionName != nil)
+        guard launchedThroughTmux, session.tmuxSessionName != nil else { return false }
         return paneScopedTmuxSessionNameToKill(for: session) == nil
             || tmuxOwnershipLedger.ownership(forHostSessionID: session.id) == nil
     }
@@ -1244,6 +1349,11 @@ final class TileTreeStore: ObservableObject {
     }
 
     private func recordTerminalSessionEnded(_ sessionID: UUID) {
+        surfaceStore.forgetLaunch(sessionID: sessionID)
+        if collectedRowEndings != nil {
+            collectedRowEndings?.append(sessionID)
+            return
+        }
         continuityRecorder?.recordEnded(sessionID)
     }
 

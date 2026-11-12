@@ -26,6 +26,7 @@ protocol TerminalContinuityWriting: Sendable {
         hooksSocketPath: String?
     ) async throws
     func markTerminalSessionEnded(hostSessionID: UUID, endedAt: Date) async throws
+    func markTerminalSessionHolderLost(hostSessionID: UUID, lostAt: Date) async throws
 }
 
 extension LocalStateStore: TerminalContinuityWriting {}
@@ -102,11 +103,35 @@ final class TerminalContinuityRecorder {
         lastWrittenBySessionID.removeValue(forKey: sessionID)
     }
 
+    /// Writes what a tile ending with `exit` leaves on its row: ended, holder lost, or
+    /// nothing. `exitedAt` is when the tile went away, which a classified exit learns
+    /// only after asking tmux, so the caller captures it at the exit itself.
+    func recordExit(_ sessionID: UUID, _ exit: TerminalSessionExit, at exitedAt: Date) {
+        switch exit.rowOutcome {
+        case .end:
+            recordEnded(sessionID, at: exitedAt)
+        case .markHolderLost:
+            lastWrittenBySessionID.removeValue(forKey: sessionID)
+            let sink = sink
+            operations.yield {
+                do {
+                    try await sink.markTerminalSessionHolderLost(hostSessionID: sessionID, lostAt: exitedAt)
+                } catch {
+                    log.error(
+                        "[TerminalContinuityRecorder] holder-lost write failed for \(sessionID.uuidString, privacy: .public): \(String(describing: error), privacy: .public)"
+                    )
+                }
+            }
+        case .keepOpen:
+            lastWrittenBySessionID.removeValue(forKey: sessionID)
+        }
+    }
+
     /// Ends the session's continuity row. The close moment is captured here, at
-    /// enqueue, so a backed-up queue cannot shift the recorded close time.
-    func recordEnded(_ sessionID: UUID) {
+    /// enqueue, unless the caller already captured it, so a backed-up queue cannot
+    /// shift the recorded close time.
+    func recordEnded(_ sessionID: UUID, at endedAt: Date = Date()) {
         lastWrittenBySessionID.removeValue(forKey: sessionID)
-        let endedAt = Date()
         let sink = sink
         operations.yield {
             do {

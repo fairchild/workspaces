@@ -61,7 +61,30 @@ final class SurfaceStore: ObservableObject {
     /// previews and in tests that never reach tmux.
     var tmuxOwnershipLedger: TmuxSessionOwnershipLedger?
 
+    /// Whether each session's terminal launched through tmux, as its surface was built.
+    ///
+    /// The session's mode says what was asked for; this says what ran. A tmux-mode tile on
+    /// a machine without tmux launches a plain shell, and every decision about what ending
+    /// it does — the close prompt, how a process exit is read — follows the realized launch.
+    /// It outlives the surface on purpose: a process exit evicts the surface before anything
+    /// asks how it had launched. `TileTreeStore` forgets an entry when its session leaves.
+    private var launchedThroughTmuxBySessionID: [UUID: Bool] = [:]
+
     // MARK: - Access
+
+    /// Whether `sessionID`'s terminal launched through tmux, or `nil` when no surface has
+    /// launched for it this run.
+    func launchedThroughTmux(sessionID: UUID) -> Bool? {
+        launchedThroughTmuxBySessionID[sessionID]
+    }
+
+    func noteLaunch(sessionID: UUID, throughTmux: Bool) {
+        launchedThroughTmuxBySessionID[sessionID] = throughTmux
+    }
+
+    func forgetLaunch(sessionID: UUID) {
+        launchedThroughTmuxBySessionID.removeValue(forKey: sessionID)
+    }
 
     func surface(for tileID: TileID) -> (any Surface)? {
         surfaces[tileID]
@@ -113,6 +136,7 @@ final class SurfaceStore: ObservableObject {
             contextMenuProvider: contextMenuProvider
         )
         let sessionID = session.id
+        noteLaunch(sessionID: sessionID, throughTmux: created.surfaceView.tmuxLaunchScript != nil)
         created.surfaceView.onTerminalTitleChanged = { [weak self] _ in
             self?.onTerminalTitleChanged?(sessionID)
         }
