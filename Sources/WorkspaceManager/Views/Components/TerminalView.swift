@@ -90,7 +90,6 @@ struct PersistentHostTerminalContainerView: View {
     let tileID: TileID
     let session: HostTerminalSession
     @ObservedObject var surfaceStore: SurfaceStore
-    var onProcessExit: (() -> Void)?
     var onCloseConfirmationRequired: (() -> Void)?
     var contextMenuProvider: (() -> NSMenu?)?
     let chromePolicy: TerminalPaneChromePolicy = .current
@@ -108,13 +107,7 @@ struct PersistentHostTerminalContainerView: View {
                 session: session,
                 surfaceStore: surfaceStore,
                 contextMenuProvider: contextMenuProvider,
-                onCloseConfirmationRequired: onCloseConfirmationRequired,
-                onProcessExit: {
-                    log.info(
-                        "[GhosttyTerminal] Process exited for host session \(session.id.uuidString, privacy: .public)"
-                    )
-                    onProcessExit?()
-                }
+                onCloseConfirmationRequired: onCloseConfirmationRequired
             )
         }
     }
@@ -132,13 +125,11 @@ private struct PersistentHostGhosttyRepresentable: NSViewRepresentable {
     let surfaceStore: SurfaceStore
     var contextMenuProvider: (() -> NSMenu?)?
     var onCloseConfirmationRequired: (() -> Void)?
-    var onProcessExit: (() -> Void)?
 
     func makeNSView(context: Context) -> GhosttyTerminalScrollContainerView {
         let surfaceView = surfaceStore.terminalSurface(
             for: tileID,
             session: session,
-            onProcessExit: onProcessExit,
             onCloseConfirmationRequired: onCloseConfirmationRequired,
             contextMenuProvider: contextMenuProvider
         ).surfaceView

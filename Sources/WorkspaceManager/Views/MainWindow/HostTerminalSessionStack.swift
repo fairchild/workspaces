@@ -16,7 +16,6 @@ struct HostTerminalSessionStack: View {
     var onCloseTab: ((UUID) -> Void)?
     var onRenameTab: ((UUID, String?) -> Void)?
     var onCloseConfirmationRequired: ((UUID) -> Void)?
-    var onTerminalProcessExit: ((UUID) -> Void)?
     var contextMenuProvider: ((HostTerminalSession) -> NSMenu?)?
 
     private var activeSession: HostTerminalSession? {
@@ -45,7 +44,6 @@ struct HostTerminalSessionStack: View {
                         surfaceStore: surfaceStore,
                         onSetSplitRatio: onSetSplitRatio,
                         onCloseConfirmationRequired: onCloseConfirmationRequired,
-                        onTerminalProcessExit: onTerminalProcessExit,
                         contextMenuProvider: contextMenuProvider
                     )
                 } else {
@@ -54,7 +52,6 @@ struct HostTerminalSessionStack: View {
                         session: activeSession,
                         surfaceStore: surfaceStore,
                         onCloseConfirmationRequired: onCloseConfirmationRequired,
-                        onTerminalProcessExit: onTerminalProcessExit,
                         contextMenuProvider: contextMenuProvider
                     )
                     .id(activeSession.id)

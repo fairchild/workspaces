@@ -54,6 +54,11 @@ final class SurfaceStore: ObservableObject {
     var onTerminalSurfaceInvalidated: (@MainActor (UUID) -> Void)?
     /// Fired when a terminal surface's libghostty title changes, so the tab strip / subtitle refresh.
     var onTerminalTitleChanged: (@MainActor (UUID) -> Void)?
+    /// Where a terminal's process exit goes, by session id, once the store has evicted the surface.
+    /// Every surface carries the exit hook from creation, so a surface realized before SwiftUI
+    /// renders it — a prewarm or a reattach of an unvisited scope — reports its exit the same way.
+    /// Only the surface current for its tile reaches it (`processExitHandler(for:)`).
+    var onTerminalProcessExit: (@MainActor (UUID) -> Void)?
 
     /// Where this store records which tmux session ended up backing each surface it
     /// launched, and whether that launch created the session or joined one already
@@ -116,19 +121,17 @@ final class SurfaceStore: ObservableObject {
     // MARK: - Terminal
 
     /// Get-or-create the terminal surface bound to `tileID`. On reuse the per-render callbacks are
-    /// refreshed; on creation `onSurfaceCreated` fires. The process-exit callback is wrapped to evict
-    /// the surface before invoking the caller's handler, matching the legacy store.
+    /// refreshed; on creation `onSurfaceCreated` fires and the surface gets its process-exit hook,
+    /// which it keeps for life whether or not it is ever rendered.
     @discardableResult
     func terminalSurface(
         for tileID: TileID,
         session: HostTerminalSession,
-        onProcessExit: (() -> Void)? = nil,
         onCloseConfirmationRequired: (() -> Void)? = nil,
         contextMenuProvider: (() -> NSMenu?)? = nil
     ) -> TerminalSurface {
         if let existing = surfaces[tileID] as? TerminalSurface, existing.session.id == session.id {
             existing.update(
-                onProcessExit: processExitHandler(for: existing, onProcessExit: onProcessExit),
                 onCloseConfirmationRequired: onCloseConfirmationRequired,
                 contextMenuProvider: contextMenuProvider
             )
@@ -144,15 +147,10 @@ final class SurfaceStore: ObservableObject {
             session: session,
             hooksSocketPath: hooksSocketPath,
             automationEnvironment: automationEnvironmentProvider?(session),
-            onProcessExit: nil,
             onCloseConfirmationRequired: onCloseConfirmationRequired,
             contextMenuProvider: contextMenuProvider
         )
-        created.update(
-            onProcessExit: processExitHandler(for: created, onProcessExit: onProcessExit),
-            onCloseConfirmationRequired: onCloseConfirmationRequired,
-            contextMenuProvider: contextMenuProvider
-        )
+        created.surfaceView.onProcessExit = processExitHandler(for: created)
         let sessionID = session.id
         noteLaunch(sessionID: sessionID, throughTmux: created.surfaceView.tmuxLaunchScript != nil)
         created.surfaceView.onTerminalTitleChanged = { [weak self] _ in
@@ -165,17 +163,16 @@ final class SurfaceStore: ObservableObject {
         return created
     }
 
-    private func processExitHandler(
-        for surface: TerminalSurface,
-        onProcessExit: (() -> Void)?
-    ) -> () -> Void {
+    private func processExitHandler(for surface: TerminalSurface) -> () -> Void {
         { [weak self, weak surface] in
             Task { @MainActor in
                 // A queued exit from a replaced view must not evict its replacement or
                 // close the preserved session. A restart keeps both tile and session IDs.
                 guard let self, let surface, self.surfaces[surface.tileID] === surface else { return }
+                let sessionID = surface.session.id
+                log.info("[SurfaceStore] process exited for host session \(sessionID.uuidString, privacy: .public)")
                 self.invalidate(tileID: surface.tileID)
-                onProcessExit?()
+                self.onTerminalProcessExit?(sessionID)
             }
         }
     }

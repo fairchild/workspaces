@@ -701,7 +701,6 @@ struct ContentView: View {
             onCloseTerminalTab: closeTerminalTab(sessionID:),
             onRenameTerminalTab: renameTerminalTab(sessionID:title:),
             onTerminalCloseConfirmationRequired: requestCloseConfirmationForTerminalTab(sessionID:),
-            onTerminalProcessExit: handleTerminalProcessExit(sessionID:),
             selectedCodePreview: $viewState.selectedCodePreview,
             isTerminalPanelVisible: $viewState.isTerminalPanelVisible,
             onFileSelected: handleCodePreviewSelection,
@@ -1003,6 +1002,7 @@ struct ContentView: View {
     private var splitViewWithLifecycleHandlers: some View {
         splitViewWithToolbar
             .onAppear {
+                tileTreeStore.surfaceStore.onTerminalProcessExit = handleTerminalProcessExit(sessionID:)
                 launchWorkLifetime.noteWindowAppeared()
                 automationWindowLifetime.noteWindowAppeared()
                 adoptionWorkLifetime.noteWindowAppeared()
