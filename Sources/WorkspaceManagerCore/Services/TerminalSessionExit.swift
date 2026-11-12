@@ -54,6 +54,34 @@ public enum TerminalSessionExit: Sendable, Equatable {
         }
     }
 
+    /// Whether a tile ending this way kills its own tmux session.
+    ///
+    /// Only a person closing the tile asks for its work to end. Every other reason is the
+    /// tmux client ending, which happens because the session is already gone or because
+    /// the client left a session still running work, so killing on it has nothing to gain
+    /// and a running session to lose.
+    public var reclaimsTmuxSession: Bool {
+        switch self {
+        case .userClosed:
+            return true
+        case .shellExited, .holderLost, .detached, .undetermined:
+            return false
+        }
+    }
+
+    /// The reason a split pane gets when it is torn down because its tab ended this way.
+    ///
+    /// A pane goes with its tab and shares what happened to it: closed with it, lost with
+    /// the same server, left running beside it, or as unknown as the tab is. A tab whose
+    /// shell ended takes its panes with it, and their rows end as closing a tab always
+    /// has ended them.
+    public var collateralExit: TerminalSessionExit {
+        switch self {
+        case .userClosed, .shellExited, .holderLost, .detached, .undetermined:
+            return self
+        }
+    }
+
     /// The reason a process exit gets, from what tmux says once the client is gone.
     ///
     /// `tmuxHolder` is `nil` for a tile that did not launch through tmux — its shell was

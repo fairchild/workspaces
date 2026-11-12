@@ -170,6 +170,22 @@ struct TileExitClassificationTests {
         #expect(await harness.rowWrites(for: tab.id).isEmpty)
     }
 
+    @Test("Split panes torn down with a tab whose client detached stay open with it")
+    func splitPanesStayOpenWithADetachedTab() async throws {
+        let harness = makeHarness(answer: .sessionPresent(serverPID: 4242))
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = harness.store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        let split = try #require(harness.store.splitFocusedTile(inTabContaining: primary.id))
+        for session in [primary, split] {
+            harness.store.surfaceStore.noteLaunch(sessionID: session.id, throughTmux: true)
+        }
+
+        #expect(harness.store.handleProcessExit(for: primary.id))
+
+        #expect(await harness.rowWrites(for: primary.id).isEmpty)
+        #expect(await harness.rowWrites(for: split.id).isEmpty)
+    }
+
     @Test("Split panes torn down with a tab whose holder died keep their rows too")
     func splitPanesShareTheirTabsLostHolder() async throws {
         let harness = makeHarness(answer: .serverGone)

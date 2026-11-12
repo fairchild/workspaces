@@ -587,19 +587,20 @@ final class TileTreeStore: ObservableObject {
     /// `cause` is the reason when the caller already knows it: a user close, or a teardown
     /// that is the user's. `nil` is a process exit, which reads its reason from what is left.
     ///
-    /// A user's close is the only reason that reclaims the tile's own tmux session. A process
-    /// exit is the tmux client ending, and the client ends either because the session is
-    /// already gone or because it left a session that is still running work — so killing on
-    /// exit has nothing to gain and a running session to lose. A close the user asked for can
-    /// still arrive as a process exit: Ghostty skips the confirmation when it believes the
-    /// terminal is at a prompt and reports the surface as exited. `noteCloseRequested` marks the
-    /// request so that exit still counts as the user's.
+    /// What the exit does to the tile's tmux session and to the rows it tears down is the
+    /// reason's own policy (`TerminalSessionExit.reclaimsTmuxSession`, `collateralExit`,
+    /// `rowOutcome`). A close the user asked for can still arrive as a process exit: Ghostty
+    /// skips the confirmation when it believes the terminal is at a prompt and reports the
+    /// surface as exited. `noteCloseRequested` marks the request so that exit still counts as
+    /// the user's.
     ///
-    /// The tile leaves at once, as every close always has. A process exit of a tile that
-    /// launched through tmux then asks the tmux socket, off the main actor, which reason it
-    /// was, and only then writes the rows of every session the exit tore down (see
-    /// `TerminalSessionExit.classifyProcessExit`). A quit while the question is out leaves those
-    /// rows open, so the next launch can still offer them.
+    /// The tile leaves at once, as every close always has, and the reason comes after. A
+    /// process exit of a tile that launched through tmux asks the tmux socket, off the main
+    /// actor, which reason it was, and only then writes the rows of every session the exit
+    /// tore down (see `TerminalSessionExit.classifyProcessExit`). A process exit reclaims no
+    /// tmux session, so removing first decides nothing the reason would change; keeping the
+    /// tile on screen while the reason is learned is a separate change. A quit while the
+    /// question is out leaves those rows open, so the next launch can still offer them.
     @discardableResult
     func handleProcessExit(for sessionID: UUID, cause: TerminalSessionExit? = nil) -> Bool {
         let wasRequested = closeRequestedSessionIDs.remove(sessionID) != nil
@@ -608,7 +609,7 @@ final class TileTreeStore: ObservableObject {
         let launch = surfaceStore.launch(sessionID: sessionID)
 
         collectedRowEndings = []
-        let removed = removeExitedTile(sessionID, reclaimingTmuxSession: knownExit == .userClosed)
+        let removed = removeExitedTile(sessionID, reclaimingTmuxSession: knownExit?.reclaimsTmuxSession ?? false)
         let rowEndings = collectedRowEndings ?? []
         collectedRowEndings = nil
         guard removed else { return false }
@@ -676,8 +677,7 @@ final class TileTreeStore: ObservableObject {
     }
 
     /// Writes what an exit leaves on each row it tore down. The exiting tile takes the exit's
-    /// own reason. Split panes torn down with their tab lose the same holder when it was lost;
-    /// otherwise their teardown ended them, as closing a tab always has.
+    /// own reason, and split panes torn down with it take `collateralExit`.
     private func recordRowEndings(
         _ sessionIDs: [UUID],
         exitingSessionID: UUID,
@@ -685,7 +685,7 @@ final class TileTreeStore: ObservableObject {
         at exitedAt: Date
     ) {
         for sessionID in sessionIDs {
-            let rowExit = sessionID == exitingSessionID || exit == .holderLost ? exit : .shellExited
+            let rowExit = sessionID == exitingSessionID ? exit : exit.collateralExit
             continuityRecorder?.recordExit(sessionID, rowExit, at: exitedAt)
         }
     }

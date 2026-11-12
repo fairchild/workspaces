@@ -249,4 +249,20 @@ struct TerminalSessionExitTests {
     func userCloseEndsTheRow() {
         #expect(TerminalSessionExit.userClosed.rowOutcome == .end)
     }
+
+    private static let everyExit: [TerminalSessionExit] = [
+        .userClosed, .shellExited, .holderLost, .detached, .undetermined,
+    ]
+
+    @Test("Only a user close reclaims the tile's own tmux session")
+    func onlyAUserCloseReclaims() {
+        #expect(Self.everyExit.filter(\.reclaimsTmuxSession) == [.userClosed])
+    }
+
+    @Test("Split panes torn down with their tab keep or end their rows as the tab does")
+    func panesFollowTheirTab() {
+        for exit in Self.everyExit {
+            #expect(exit.collateralExit.rowOutcome == exit.rowOutcome, "\(exit)")
+        }
+    }
 }
