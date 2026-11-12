@@ -50,7 +50,7 @@ class AppCaptureWindowTests(unittest.TestCase):
         self.products = self.root / "products"
         self.products.mkdir()
         self.binary = self.products / "WorkspaceManager"
-        self.binary.symlink_to(shutil.which("sleep"))
+        write_executable(self.binary, '#!/bin/sh\nexec sleep "$@"\n')
         self.pid_file = self.root / "app.pid"
 
         self.home = self.root / "home"
