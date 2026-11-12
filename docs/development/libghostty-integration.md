@@ -390,6 +390,20 @@ cache is a purge via the named entrypoint:
    tick, on a main-actor turn of its own. A `ghostty_surface_free` call anywhere else
    can deadlock the same way.
 
+   The free has to stay on the main thread at this pin: `Surface.deinit` closes the
+   renderer's CVDisplayLink, which `renderer/DisplayLink.zig` allows only there, and
+   `App.deleteSurface` edits the app's surface list without a lock. The `io` thread it
+   joins sends the command SIGHUP and polls every 10 ms until the command has exited,
+   which held the main thread ~16 ms per surface, ~100 ms under background QoS, and
+   seconds for a batch (#1897). So `GhosttyAppManager` hangs the command up itself
+   (`GhosttySurfaceChildProcess`) when the surface retires, and again every 10 ms, since
+   `login` misses one that lands while it is still starting. The free waits, without
+   holding the main thread, for `ghostty_surface_process_exited`, falling back after
+   `hangUpGrace`, and frees one surface per main-actor turn. Re-read `Surface.deinit`
+   and `Exec.zig`'s `killPid` when bumping the pin.
+   `GhosttySurfaceFreeMainThreadTests` holds a command stopped across its hang-up and
+   fails if the hang-up waits for the free or the free waits for the command.
+
 ## CI Contract
 
 Both workflows build GhosttyKit before lint/build/test:

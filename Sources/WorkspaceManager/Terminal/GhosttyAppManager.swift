@@ -53,7 +53,7 @@ final class GhosttyAppManager: NSObject {
             if retiredSurfaces.isEmpty {
                 GhosttyThreadingBridge.enqueueOnMain { self.tick() }
             } else {
-                GhosttyThreadingBridge.enqueueOnMain { self.freeRetiredSurfaces() }
+                drainRetiredSurfacesIfNeeded()
             }
         }
     }
@@ -73,12 +73,30 @@ final class GhosttyAppManager: NSObject {
     /// mailbox never returns. So each free runs right after a tick, on a main-actor turn of its
     /// own rather than inside whatever released the view, where a tick's callbacks could
     /// re-enter that caller.
+    ///
+    /// The free must run on this thread, and the `io` thread it joins exits only once the
+    /// surface's command has: it sends SIGHUP and sleeps in 10 ms steps until the command is
+    /// gone. So retired surfaces' commands are hung up here instead, and each free waits,
+    /// without holding this thread, until libghostty reports its command exited.
     private var retiredSurfaces: [RetiredSurface] = []
+    private var drainingRetiredSurfaces = false
     var retiredSurfaceCount: Int { retiredSurfaces.count }
+
+    /// How long a hung-up command gets to exit before its surface is freed anyway, and the
+    /// free waits for the command on this thread as it would have without the hang-up.
+    static let hangUpGrace: Duration = .seconds(5)
+
+    /// Told how long each `ghostty_surface_free` held this thread.
+    var onSurfaceFreed: ((ghostty_surface_t, Duration) -> Void)?
 
     private struct RetiredSurface {
         let surface: ghostty_surface_t
         let callbackTarget: Unmanaged<GhosttySurfaceCallbackTarget>
+        var freeAnywayAt: ContinuousClock.Instant?
+
+        var isReadyToFree: Bool {
+            ghostty_surface_process_exited(surface) || freeAnywayAt.map { ContinuousClock.now >= $0 } ?? false
+        }
     }
 
     private override init() {
@@ -170,20 +188,46 @@ final class GhosttyAppManager: NSObject {
     }
 
     func retireSurface(_ surface: ghostty_surface_t, callbackTarget: Unmanaged<GhosttySurfaceCallbackTarget>) {
+        GhosttySurfaceChildProcess.hangUp(surface)
         retiredSurfaces.append(RetiredSurface(surface: surface, callbackTarget: callbackTarget))
-        guard retiredSurfaces.count == 1, !mailboxDrainSuspended else { return }
-        GhosttyThreadingBridge.enqueueOnMain { self.freeRetiredSurfaces() }
+        drainRetiredSurfacesIfNeeded()
     }
 
-    private func freeRetiredSurfaces() {
+    private func drainRetiredSurfacesIfNeeded() {
+        guard !drainingRetiredSurfaces, !retiredSurfaces.isEmpty, !mailboxDrainSuspended else { return }
+        drainingRetiredSurfaces = true
+        Task { @MainActor in
+            await drainRetiredSurfaces()
+            drainingRetiredSurfaces = false
+        }
+    }
+
+    /// One free per main-actor turn, each right after the tick that may have delivered its
+    /// command's exit, so retiring many surfaces never adds up to one long block. Until then
+    /// the hang-up repeats, as libghostty's own does: `login` misses one that lands while it
+    /// is still starting, and the command runs on. The grace starts here rather than at
+    /// retirement, so time spent with the drain suspended doesn't count against it.
+    private func drainRetiredSurfaces() async {
         while !retiredSurfaces.isEmpty, !mailboxDrainSuspended {
-            let retired = retiredSurfaces.removeFirst()
             tick()
-            ghostty_surface_free(retired.surface)
-            // A callback may have queued main-actor work holding this userdata's address
-            // before the free; release only after that work has run.
-            let callbackTarget = retired.callbackTarget
-            GhosttyThreadingBridge.enqueueOnMain { callbackTarget.release() }
+            if let index = retiredSurfaces.firstIndex(where: \.isReadyToFree) {
+                let retired = retiredSurfaces.remove(at: index)
+                let freeStarted = ContinuousClock.now
+                ghostty_surface_free(retired.surface)
+                onSurfaceFreed?(retired.surface, ContinuousClock.now - freeStarted)
+                // A callback may have queued main-actor work holding this userdata's address
+                // before the free; release only after that work has run.
+                let callbackTarget = retired.callbackTarget
+                GhosttyThreadingBridge.enqueueOnMain { callbackTarget.release() }
+                await Task.yield()
+                continue
+            }
+            let freeAnywayAt = ContinuousClock.now + Self.hangUpGrace
+            for index in retiredSurfaces.indices {
+                GhosttySurfaceChildProcess.hangUp(retiredSurfaces[index].surface)
+                retiredSurfaces[index].freeAnywayAt = retiredSurfaces[index].freeAnywayAt ?? freeAnywayAt
+            }
+            try? await Task.sleep(for: .milliseconds(10))
         }
     }
 
