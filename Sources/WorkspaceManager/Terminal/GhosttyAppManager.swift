@@ -86,8 +86,16 @@ final class GhosttyAppManager: NSObject {
     /// free waits for the command on this thread as it would have without the hang-up.
     static let hangUpGrace: Duration = .seconds(5)
 
-    /// Told how long each `ghostty_surface_free` held this thread.
-    var onSurfaceFreed: ((ghostty_surface_t, Duration) -> Void)?
+    /// One `ghostty_surface_free`: the surface by address only, since it is gone by the time
+    /// anyone hears of it, when the free began and how long it held this thread.
+    struct SurfaceFree {
+        let surfaceAddress: UInt
+        let started: ContinuousClock.Instant
+        let held: Duration
+    }
+
+    /// Told of each `ghostty_surface_free` once it returns.
+    var onSurfaceFreed: ((SurfaceFree) -> Void)?
 
     private struct RetiredSurface {
         let surface: ghostty_surface_t
@@ -196,10 +204,7 @@ final class GhosttyAppManager: NSObject {
     private func drainRetiredSurfacesIfNeeded() {
         guard !drainingRetiredSurfaces, !retiredSurfaces.isEmpty, !mailboxDrainSuspended else { return }
         drainingRetiredSurfaces = true
-        Task { @MainActor in
-            await drainRetiredSurfaces()
-            drainingRetiredSurfaces = false
-        }
+        Task { @MainActor in await drainRetiredSurfaces() }
     }
 
     /// One free per main-actor turn, each right after the tick that may have delivered its
@@ -208,13 +213,17 @@ final class GhosttyAppManager: NSObject {
     /// is still starting, and the command runs on. The grace starts here rather than at
     /// retirement, so time spent with the drain suspended doesn't count against it.
     private func drainRetiredSurfaces() async {
+        defer { drainingRetiredSurfaces = false }
         while !retiredSurfaces.isEmpty, !mailboxDrainSuspended {
             tick()
             if let index = retiredSurfaces.firstIndex(where: \.isReadyToFree) {
                 let retired = retiredSurfaces.remove(at: index)
-                let freeStarted = ContinuousClock.now
+                let started = ContinuousClock.now
                 ghostty_surface_free(retired.surface)
-                onSurfaceFreed?(retired.surface, ContinuousClock.now - freeStarted)
+                onSurfaceFreed?(
+                    SurfaceFree(
+                        surfaceAddress: UInt(bitPattern: retired.surface), started: started,
+                        held: ContinuousClock.now - started))
                 // A callback may have queued main-actor work holding this userdata's address
                 // before the free; release only after that work has run.
                 let callbackTarget = retired.callbackTarget

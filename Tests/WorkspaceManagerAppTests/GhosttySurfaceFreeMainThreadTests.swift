@@ -42,8 +42,8 @@ extension GhosttySurfaceMailboxDeadlockTests {
             // Stopped, `login` cannot exit until it is resumed; the script under it still runs.
             try #require(kill(command, SIGSTOP) == 0)
             let freed = FreeRecord()
-            manager.onSurfaceFreed = { freedSurface, held in
-                if freedSurface == surface { freed.held = held }
+            manager.onSurfaceFreed = { free in
+                if free.surfaceAddress == UInt(bitPattern: surface) { freed.held = free.held }
             }
             defer { manager.onSurfaceFreed = nil }
             let resumed = Self.resume(command, after: Self.exitDelay, checking: marker)
