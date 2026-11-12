@@ -50,7 +50,7 @@ class AppCaptureWindowTests(unittest.TestCase):
         self.products = self.root / "products"
         self.products.mkdir()
         self.binary = self.products / "WorkspaceManager"
-        write_executable(self.binary, '#!/bin/sh\nexec sleep "$@"\n')
+        write_executable(self.binary, "#!/usr/bin/env python3\nimport sys, time\ntime.sleep(float(sys.argv[1]))\n")
         self.pid_file = self.root / "app.pid"
 
         self.home = self.root / "home"
