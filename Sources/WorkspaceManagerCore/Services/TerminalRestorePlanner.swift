@@ -44,8 +44,18 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
     /// recorded mode. `nil` when the row names no mode this build knows; the session then
     /// takes the resolver's mode like a new primary.
     public let terminalMode: TerminalMultiplexingMode?
+    /// Whether this row was the selected tab in its scope. Restore creates every open
+    /// tile, and this decides which one each scope comes back on.
+    public let isSelectedInScope: Bool
 
     public var id: UUID { hostSessionID }
+
+    /// A surface that only rejoins a tmux session still running. It needs no decision
+    /// from anyone, so launch brings it back without asking.
+    public var isReattach: Bool {
+        if case .reattachTmux = action { return true }
+        return false
+    }
 
     /// This surface with its mode settled: a surface whose row named no mode takes the mode a
     /// new session in its scope would get, so everything downstream reads one concrete mode.
@@ -59,7 +69,8 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
             action: action,
             launchDirectoryFellBack: launchDirectoryFellBack,
             launchTmuxSessionName: launchTmuxSessionName,
-            terminalMode: terminalMode ?? terminalModeForNewSession(key.normalized())
+            terminalMode: terminalMode ?? terminalModeForNewSession(key.normalized()),
+            isSelectedInScope: isSelectedInScope
         )
     }
 
@@ -70,7 +81,8 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
         action: RestoreSurfaceAction,
         launchDirectoryFellBack: Bool = false,
         launchTmuxSessionName: String? = nil,
-        terminalMode: TerminalMultiplexingMode? = nil
+        terminalMode: TerminalMultiplexingMode? = nil,
+        isSelectedInScope: Bool = false
     ) {
         self.hostSessionID = hostSessionID
         self.key = key
@@ -79,6 +91,7 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
         self.launchDirectoryFellBack = launchDirectoryFellBack
         self.launchTmuxSessionName = launchTmuxSessionName
         self.terminalMode = terminalMode
+        self.isSelectedInScope = isSelectedInScope
     }
 }
 
@@ -108,6 +121,17 @@ public struct RestorePlan: Sendable, Equatable {
     ) -> RestorePlan {
         RestorePlan(
             surfaces: surfaces.map { $0.settlingTerminalMode(terminalModeForNewSession) },
+            selectedHostSessionID: selectedHostSessionID,
+            previousRunID: previousRunID
+        )
+    }
+
+    /// This plan narrowed to the surfaces `isIncluded` keeps, with the same run identity
+    /// and focus target. Launch splits a plan into what it rejoins silently and what it
+    /// offers, and both halves describe the same prior run.
+    public func filteringSurfaces(_ isIncluded: (RestoreSurfacePlan) -> Bool) -> RestorePlan {
+        RestorePlan(
+            surfaces: surfaces.filter(isIncluded),
             selectedHostSessionID: selectedHostSessionID,
             previousRunID: previousRunID
         )
@@ -209,7 +233,7 @@ public struct TerminalRestorePlanner: Sendable {
         // directory from resuming the same conversation into two panes.
         var usedAgentSessionIDs: Set<String> = []
         let restorable = rows.compactMap { row -> (TerminalSessionContinuityRow, ResolvedRestoreTarget)? in
-            guard row.endedAt == nil, row.isActive, let resolved = resolveTarget(row) else { return nil }
+            guard row.endedAt == nil, let resolved = resolveTarget(row) else { return nil }
             return (row, resolved)
         }
         let displaced = displacedFromSharedTmuxSessions(restorable.map { $0.0 })
@@ -236,7 +260,8 @@ public struct TerminalRestorePlanner: Sendable {
                     launchDirectoryFellBack: decision.fellBack,
                     launchTmuxSessionName: ownLaunchName(
                         row: row, action: decision.action, directory: decision.directory),
-                    terminalMode: terminalMode(row: row, action: decision.action)
+                    terminalMode: terminalMode(row: row, action: decision.action),
+                    isSelectedInScope: row.isActive
                 )
             )
         }
@@ -311,7 +336,8 @@ public struct TerminalRestorePlanner: Sendable {
             action: .freshShell,
             launchDirectoryFellBack: fellBack,
             launchTmuxSessionName: TmuxSessionNameSharing.replacementName(for: directory),
-            terminalMode: .tmuxPerSession
+            terminalMode: .tmuxPerSession,
+            isSelectedInScope: row.isActive
         )
     }
 

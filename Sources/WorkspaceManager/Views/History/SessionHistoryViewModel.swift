@@ -47,7 +47,7 @@ final class SessionHistoryViewModel: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         do {
-            let rows = try await store.fetchContinuitySessions(activeOnly: false, limit: pageSize, offset: offset)
+            let rows = try await store.fetchContinuitySessions(openOnly: false, limit: pageSize, offset: offset)
             let page = rows.map { SessionHistoryItem.make(from: $0, resumability: resumability) }
             items.append(contentsOf: page)
             offset += rows.count

@@ -256,17 +256,75 @@ struct TerminalRestorePlannerTests {
         }
     }
 
-    @Test("Ended or inactive rows are excluded")
-    func endedOrInactiveExcluded() {
+    @Test("Ended rows are excluded")
+    func endedRowsExcluded() {
         let planner = makePlanner()
+        let plan = planner.plan(rows: [makeRow(endedAt: Self.baseDate)], layout: nil)
+        #expect(plan.surfaces.isEmpty)
+    }
+
+    /// `is_active` is the selected tab in its scope. A background tab and a split pane are
+    /// open tiles with it unset, and each comes back as its own tab in its scope; the flag
+    /// only decides which tab the scope lands on.
+    @Test("A background tab and a split pane from the previous run are planned")
+    func backgroundTabAndSplitPanePlanned() throws {
+        let directory = "/repo"
+        let directoryURL = URL(fileURLWithPath: directory)
+        let selectedID = UUID()
+        let backgroundTabID = UUID()
+        let splitPaneID = UUID()
+        let primaryName = TmuxSessionNaming.defaultName(for: directoryURL)
+        let tabName = TmuxSessionNaming.splitPaneName(for: directoryURL, paneSessionID: backgroundTabID)
+        let splitName = TmuxSessionNaming.splitPaneName(for: directoryURL, paneSessionID: splitPaneID)
+        let live: Set<String> = [primaryName, tabName, splitName]
+        let planner = makePlanner(tmuxAlive: { live.contains($0) })
+
         let plan = planner.plan(
             rows: [
-                makeRow(endedAt: Self.baseDate),
-                makeRow(isActive: false),
+                makeRow(
+                    hostSessionID: selectedID, directoryPath: directory, terminalMode: .tmuxPerSession,
+                    tmuxSessionName: primaryName, isActive: true),
+                makeRow(
+                    hostSessionID: backgroundTabID, directoryPath: directory, terminalMode: .tmuxPerSession,
+                    tmuxSessionName: tabName, isActive: false),
+                makeRow(
+                    hostSessionID: splitPaneID, directoryPath: directory, terminalMode: .tmuxPerSession,
+                    tmuxSessionName: splitName, isActive: false),
             ],
             layout: nil
         )
-        #expect(plan.surfaces.isEmpty)
+
+        let byID = Dictionary(uniqueKeysWithValues: plan.surfaces.map { ($0.hostSessionID, $0) })
+        #expect(Set(byID.keys) == [selectedID, backgroundTabID, splitPaneID])
+        for surface in plan.surfaces {
+            #expect(surface.key == .repoPath(directory))
+        }
+        #expect(byID[selectedID]?.action == .reattachTmux(sessionName: primaryName))
+        #expect(byID[backgroundTabID]?.action == .reattachTmux(sessionName: tabName))
+        #expect(byID[splitPaneID]?.action == .reattachTmux(sessionName: splitName))
+        #expect(byID[selectedID]?.isSelectedInScope == true)
+        #expect(byID[backgroundTabID]?.isSelectedInScope == false)
+        #expect(byID[splitPaneID]?.isSelectedInScope == false)
+    }
+
+    @Test("A tile whose tmux server died plans the rung that can still bring it back")
+    func holderLostRowPlansResume() {
+        let planner = makePlanner(
+            tmuxAlive: { _ in false },
+            transcriptResumable: { _, _ in true }
+        )
+        let row = TerminalSessionContinuityRow(
+            hostSessionID: UUID(), sessionKey: "repoPath(/repo)", targetKind: "repo", targetID: nil,
+            targetPath: "/repo", backendIdentifier: nil, backendInstanceID: nil, directoryPath: "/repo",
+            terminalMode: .tmuxPerSession, tmuxSessionName: "wm-repo", customCommandPresent: false,
+            isActive: false, createdAt: Self.baseDate, lastSeenAt: Self.baseDate, endedAt: nil,
+            holderLostAt: Self.baseDate, agentSessionID: Self.sessionOne,
+            agentKind: AgentKind.claudeCode.rawValue, agentRunState: "idle", agentCwd: "/repo",
+            agentModelDisplayName: nil, agentEventAt: Self.baseDate)
+
+        let plan = planner.plan(rows: [row], layout: nil)
+
+        #expect(plan.surfaces.map(\.action) == [.resumeClaude(agentSessionID: Self.sessionOne)])
     }
 
     @Test("Rows whose target no longer resolves are dropped")
