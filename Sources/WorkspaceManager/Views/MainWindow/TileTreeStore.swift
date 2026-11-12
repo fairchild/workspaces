@@ -578,9 +578,6 @@ final class TileTreeStore: ObservableObject {
 
     /// Exits whose tmux question is still out, each with the classification task answering it.
     private var exitClassifications: [UUID: Task<Void, Never>] = [:]
-    /// tmux servers, by pid, that this run has seen die under a tile. Later tiles of the same
-    /// server read as having lost their holder even after their siblings have been cleared.
-    private var lostTmuxServerPIDs: Set<Int> = []
     /// While an exit is tearing tiles down, the sessions whose rows it ends. Their rows are
     /// written once the exit has a reason, so no row is written ended and then reopened.
     private var collectedRowEndings: [UUID]?
@@ -608,13 +605,7 @@ final class TileTreeStore: ObservableObject {
         let wasRequested = closeRequestedSessionIDs.remove(sessionID) != nil
         let knownExit: TerminalSessionExit? = wasRequested ? .userClosed : cause
         let exitingSession = allLiveSessions.first(where: { $0.id == sessionID })
-        let launchedThroughTmux = surfaceStore.launchedThroughTmux(sessionID: sessionID) == true
-        let serverHeldOtherSessions =
-            !exitClassifications.isEmpty
-            || allLiveSessions.contains {
-                $0.id != sessionID && surfaceStore.launchedThroughTmux(sessionID: $0.id) == true
-            }
-        let serverPID = tmuxOwnershipLedger.ownership(forHostSessionID: sessionID)?.identity.serverPID
+        let launch = surfaceStore.launch(sessionID: sessionID)
 
         collectedRowEndings = []
         let removed = removeExitedTile(sessionID, reclaimingTmuxSession: knownExit == .userClosed)
@@ -625,12 +616,11 @@ final class TileTreeStore: ObservableObject {
         let exitedAt = Date()
         if let knownExit {
             recordRowEndings(rowEndings, exitingSessionID: sessionID, exit: knownExit, at: exitedAt)
-        } else if launchedThroughTmux, let tmuxSessionName = exitingSession?.effectiveTmuxSessionName {
+        } else if let launch, launch.throughTmux, let tmuxSessionName = exitingSession?.effectiveTmuxSessionName {
             classifyExit(
                 sessionID,
                 tmuxSessionName: tmuxSessionName,
-                serverPID: serverPID,
-                serverHeldOtherSessions: serverHeldOtherSessions,
+                launchServerPID: launch.tmuxServerPID,
                 rowEndings: rowEndings,
                 exitedAt: exitedAt
             )
@@ -668,8 +658,7 @@ final class TileTreeStore: ObservableObject {
     private func classifyExit(
         _ sessionID: UUID,
         tmuxSessionName: String,
-        serverPID: Int?,
-        serverHeldOtherSessions: Bool,
+        launchServerPID: Int?,
         rowEndings: [UUID],
         exitedAt: Date
     ) {
@@ -677,13 +666,7 @@ final class TileTreeStore: ObservableObject {
         exitClassifications[sessionID] = Task { @MainActor [weak self] in
             let state = await holderState(tmuxSessionName)
             guard let self else { return }
-            let serverWasShared =
-                serverHeldOtherSessions || (serverPID.map(self.lostTmuxServerPIDs.contains) ?? false)
-            let exit = TerminalSessionExit.classifyProcessExit(
-                tmuxHolder: state, serverHeldOtherSessions: serverWasShared)
-            if exit == .holderLost, let serverPID {
-                self.lostTmuxServerPIDs.insert(serverPID)
-            }
+            let exit = TerminalSessionExit.classifyProcessExit(tmuxHolder: state, launchServerPID: launchServerPID)
             log.info(
                 "[TileTreeStore] session \(sessionID.uuidString, privacy: .public) exited: tmux \(tmuxSessionName, privacy: .public) \(String(describing: state), privacy: .public), reason \(String(describing: exit), privacy: .public)"
             )

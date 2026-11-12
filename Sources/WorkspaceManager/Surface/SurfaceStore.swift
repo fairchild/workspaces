@@ -61,29 +61,44 @@ final class SurfaceStore: ObservableObject {
     /// previews and in tests that never reach tmux.
     var tmuxOwnershipLedger: TmuxSessionOwnershipLedger?
 
-    /// Whether each session's terminal launched through tmux, as its surface was built.
+    /// How each session's terminal launched, as its surface was built.
     ///
     /// The session's mode says what was asked for; this says what ran. A tmux-mode tile on
     /// a machine without tmux launches a plain shell, and every decision about what ending
     /// it does — the close prompt, how a process exit is read — follows the realized launch.
     /// It outlives the surface on purpose: a process exit evicts the surface before anything
     /// asks how it had launched. `TileTreeStore` forgets an entry when its session leaves.
-    private var launchedThroughTmuxBySessionID: [UUID: Bool] = [:]
+    private var launchesBySessionID: [UUID: TerminalLaunch] = [:]
+
+    /// What one surface's launch did.
+    struct TerminalLaunch: Equatable {
+        /// Whether the shell exec'd the tmux launch script.
+        let throughTmux: Bool
+        /// The pid of the tmux server the launch landed on, once the ownership read found
+        /// its session. `nil` until then, and for a launch that recorded no ownership.
+        var tmuxServerPID: Int?
+    }
 
     // MARK: - Access
+
+    /// How `sessionID`'s terminal launched, or `nil` when no surface has launched for it
+    /// this run.
+    func launch(sessionID: UUID) -> TerminalLaunch? {
+        launchesBySessionID[sessionID]
+    }
 
     /// Whether `sessionID`'s terminal launched through tmux, or `nil` when no surface has
     /// launched for it this run.
     func launchedThroughTmux(sessionID: UUID) -> Bool? {
-        launchedThroughTmuxBySessionID[sessionID]
+        launchesBySessionID[sessionID]?.throughTmux
     }
 
-    func noteLaunch(sessionID: UUID, throughTmux: Bool) {
-        launchedThroughTmuxBySessionID[sessionID] = throughTmux
+    func noteLaunch(sessionID: UUID, throughTmux: Bool, tmuxServerPID: Int? = nil) {
+        launchesBySessionID[sessionID] = TerminalLaunch(throughTmux: throughTmux, tmuxServerPID: tmuxServerPID)
     }
 
     func forgetLaunch(sessionID: UUID) {
-        launchedThroughTmuxBySessionID.removeValue(forKey: sessionID)
+        launchesBySessionID.removeValue(forKey: sessionID)
     }
 
     func surface(for tileID: TileID) -> (any Surface)? {
@@ -373,6 +388,7 @@ final class SurfaceStore: ObservableObject {
             guard let match = live.first(where: { $0.name == sessionName }) else { continue }
             let ownership = ledger.record(
                 hostSessionID: session.id, identity: match, launchedAt: launchedAt)
+            launchesBySessionID[session.id]?.tmuxServerPID = match.serverPID
             log.info(
                 "[SurfaceStore] tmux \(match.name, privacy: .public) (\(match.sessionID, privacy: .public)) backs session \(session.id.uuidString, privacy: .public), \(ownership.provenance == .createdByThisLaunch ? "created by this launch" : "adopted from an existing session", privacy: .public)"
             )

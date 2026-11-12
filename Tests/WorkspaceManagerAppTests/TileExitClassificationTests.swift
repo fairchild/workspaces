@@ -78,7 +78,7 @@ struct TileExitClassificationTests {
 
     @Test("A shell that exited on a live server ends its row")
     func shellExitOnLiveServerEndsTheRow() async throws {
-        let harness = makeHarness(answer: .sessionGone)
+        let harness = makeHarness(answer: .sessionGone(serverPID: 4242))
         let (_, tab) = try openTwoTmuxTiles(harness.store)
 
         #expect(harness.store.handleProcessExit(for: tab.id))
@@ -113,7 +113,7 @@ struct TileExitClassificationTests {
     /// whoever detached it, so the tile goes and the row stays open for the next launch.
     @Test("A tile whose client detached from a running session leaves its row open")
     func detachLeavesTheRowOpen() async throws {
-        let harness = makeHarness(answer: .sessionPresent)
+        let harness = makeHarness(answer: .sessionPresent(serverPID: 4242))
         let (_, tab) = try openTwoTmuxTiles(harness.store)
 
         #expect(harness.store.handleProcessExit(for: tab.id))
@@ -135,10 +135,10 @@ struct TileExitClassificationTests {
         #expect(await harness.probeCalls.sessionNames.isEmpty)
     }
 
-    /// tmux exits a server whose last session ended. With no other tile on it, a server that
-    /// is gone is that ending, not a kill.
-    @Test("The only tmux tile on a server that is now gone ends as a shell exit")
-    func loneTileOnGoneServerIsAShellExit() async throws {
+    /// The launch script keeps the server running when empty, so a server that is gone was
+    /// killed whether or not other tiles were on it.
+    @Test("The only tmux tile on a server that was killed keeps its row, marked holder lost")
+    func loneTileOnGoneServerLosesItsHolder() async throws {
         let harness = makeHarness(answer: .serverGone)
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let lone = harness.store.activateSession(key: .repoPath(directory.path), directory: directory).session
@@ -146,30 +146,28 @@ struct TileExitClassificationTests {
 
         #expect(harness.store.handleProcessExit(for: lone.id))
 
-        #expect(await harness.rowWrites(for: lone.id) == [.ended(lone.id)])
+        #expect(await harness.rowWrites(for: lone.id) == [.holderLost(lone.id)])
     }
 
-    /// Once one tile of a server is known to have lost its holder, its siblings' exits read the
-    /// same way even after the first has been cleared away.
-    @Test("Every tile of a server that died loses its holder, whatever order the exits land in")
-    func siblingsOfALostServerAllLoseTheirHolder() async throws {
-        let harness = makeHarness(answer: .serverGone)
-        let (primary, tab) = try openTwoTmuxTiles(harness.store)
-        for session in [primary, tab] {
-            harness.store.tmuxOwnershipLedger.record(
-                hostSessionID: session.id,
-                identity: TmuxLiveSession(
-                    sessionID: "$1", name: session.effectiveTmuxSessionName,
-                    createdAt: Date(timeIntervalSince1970: 100), serverPID: 4242),
-                launchedAt: Date(timeIntervalSince1970: 100)
-            )
-        }
+    @Test("A tile whose tmux server restarted under it loses its holder, though its name is gone")
+    func restartedServerIsALostHolder() async throws {
+        let harness = makeHarness(answer: .sessionGone(serverPID: 9999))
+        let (_, tab) = try openTwoTmuxTiles(harness.store)
+        harness.store.surfaceStore.noteLaunch(sessionID: tab.id, throughTmux: true, tmuxServerPID: 4242)
 
         #expect(harness.store.handleProcessExit(for: tab.id))
-        #expect(await harness.rowWrites(for: tab.id) == [.holderLost(tab.id)])
-        #expect(harness.store.handleProcessExit(for: primary.id))
 
-        #expect(await harness.rowWrites(for: primary.id) == [.holderLost(primary.id)])
+        #expect(await harness.rowWrites(for: tab.id) == [.holderLost(tab.id)])
+    }
+
+    @Test("A tmux that does not answer leaves the row open")
+    func unansweredProbeLeavesTheRowOpen() async throws {
+        let harness = makeHarness(answer: .unanswered)
+        let (_, tab) = try openTwoTmuxTiles(harness.store)
+
+        #expect(harness.store.handleProcessExit(for: tab.id))
+
+        #expect(await harness.rowWrites(for: tab.id).isEmpty)
     }
 
     @Test("Split panes torn down with a tab whose holder died keep their rows too")

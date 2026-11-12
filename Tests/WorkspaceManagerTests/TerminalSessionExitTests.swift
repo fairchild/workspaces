@@ -3,8 +3,9 @@
 //  WorkspaceManagerTests
 //
 //  How a tmux-backed tile's exit is read, against a real tmux server on an isolated
-//  socket label. Each test starts its own server, ends it by pid, and never names the
-//  app's shared socket.
+//  socket label, set up as the app's launch script leaves it: no config file, and kept
+//  running when empty. Each test starts its own server, ends it by pid, and never names
+//  the app's shared socket.
 //
 
 import Darwin
@@ -18,22 +19,29 @@ struct TerminalSessionExitTests {
     /// One throwaway tmux server on a label nothing else uses.
     private struct IsolatedTmuxServer: Sendable {
         let label: String
-        let serverPID: pid_t?
+        let serverPID: Int?
+        let socketPath: String
 
-        /// Starts a server whose `keeperSession` keeps it running.
-        static func start(keeperSession: String) throws -> IsolatedTmuxServer {
-            let label = "wstest-\(UUID().uuidString.prefix(8).lowercased())"
-            try tmux(label, ["new-session", "-d", "-s", keeperSession, "sleep 600"])
-            let pid = try tmux(label, ["display-message", "-p", "-t", "=\(keeperSession)", "#{pid}"]).output
+        /// Starts a server holding `session`, with `exit-empty` off as the app's launch
+        /// script sets it. `label` reuses a socket whose earlier server is gone.
+        static func start(session: String, label: String = Self.freshLabel()) throws -> IsolatedTmuxServer {
+            try tmux(
+                label, ["new-session", "-d", "-s", session, "sleep 600", ";", "set-option", "-s", "exit-empty", "off"])
+            let answer = try tmux(label, ["display-message", "-p", "#{pid}\t#{socket_path}"]).output
+            let fields = answer.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\t").map(String.init)
             return IsolatedTmuxServer(
-                label: label, serverPID: pid_t(pid.trimmingCharacters(in: .whitespacesAndNewlines)))
+                label: label, serverPID: fields.first.flatMap { Int($0) }, socketPath: fields.last ?? "")
+        }
+
+        static func freshLabel() -> String {
+            "wstest-\(UUID().uuidString.prefix(8).lowercased())"
         }
 
         @discardableResult
         static func tmux(_ label: String, _ arguments: [String]) throws -> (status: Int32, output: String) {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = ["tmux", "-L", label] + arguments
+            process.arguments = ["tmux", "-f", "/dev/null", "-L", label] + arguments
             process.environment = TmuxSessionProbe.defaultEnvironment
             let output = Pipe()
             process.standardOutput = output
@@ -49,14 +57,24 @@ struct TerminalSessionExitTests {
             try Self.tmux(label, arguments)
         }
 
+        /// Kills the server by pid and unlinks its socket file, which a killed server leaves.
         func killServer() {
             guard let serverPID else { return }
-            kill(serverPID, SIGKILL)
+            kill(pid_t(serverPID), SIGKILL)
+            if socketPath.contains("wstest-") {
+                try? FileManager.default.removeItem(atPath: socketPath)
+            }
         }
 
         func serverIsGone() -> Bool {
             guard let serverPID else { return true }
-            return kill(serverPID, 0) != 0
+            return kill(pid_t(serverPID), 0) != 0
+        }
+
+        /// Kills the server by pid and waits until it is gone.
+        func killServerAndWait() async -> Bool {
+            killServer()
+            return await waitUntil(timeout: 10) { serverIsGone() }
         }
     }
 
@@ -77,13 +95,12 @@ struct TerminalSessionExitTests {
     }
 
     private func classify(
-        _ server: IsolatedTmuxServer, session: String, serverHeldOtherSessions: Bool
+        _ label: String, session: String, launchServerPID: Int?
     ) async
         -> (TmuxHolderState, TerminalSessionExit)
     {
-        let state = await TmuxHolderProbe(socketLabel: server.label).holderState(forSessionNamed: session)
-        let exit = TerminalSessionExit.classifyProcessExit(
-            tmuxHolder: state, serverHeldOtherSessions: serverHeldOtherSessions)
+        let state = await TmuxHolderProbe(socketLabel: label).holderState(forSessionNamed: session)
+        let exit = TerminalSessionExit.classifyProcessExit(tmuxHolder: state, launchServerPID: launchServerPID)
         return (state, exit)
     }
 
@@ -92,16 +109,34 @@ struct TerminalSessionExitTests {
         .enabled(if: tmuxIsInstalled, "tmux is not installed")
     )
     func shellExitOnLiveServerEndsTheRow() async throws {
-        let server = try IsolatedTmuxServer.start(keeperSession: "keeper")
+        let server = try IsolatedTmuxServer.start(session: "keeper")
         defer { server.killServer() }
         try server.tmux(["new-session", "-d", "-s", "tile", "sleep 600"])
         try server.tmux(["kill-session", "-t", "=tile"])
 
-        let (state, exit) = await classify(server, session: "tile", serverHeldOtherSessions: true)
+        let (state, exit) = await classify(server.label, session: "tile", launchServerPID: server.serverPID)
 
-        #expect(state == .sessionGone)
+        #expect(state == .sessionGone(serverPID: server.serverPID))
         #expect(exit == .shellExited)
         #expect(exit.rowOutcome == .end)
+    }
+
+    /// With `exit-empty` off, the server outlives the tile's session, so the last session
+    /// ending is told apart from the server dying.
+    @Test(
+        "The last session ending reads as the shell's exit",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed")
+    )
+    func lastSessionEndingIsTheShells() async throws {
+        let server = try IsolatedTmuxServer.start(session: "tile")
+        defer { server.killServer() }
+        try server.tmux(["kill-session", "-t", "=tile"])
+
+        let (state, exit) = await classify(server.label, session: "tile", launchServerPID: server.serverPID)
+
+        #expect(!server.serverIsGone())
+        #expect(state == .sessionGone(serverPID: server.serverPID))
+        #expect(exit == .shellExited)
     }
 
     @Test(
@@ -109,13 +144,12 @@ struct TerminalSessionExitTests {
         .enabled(if: tmuxIsInstalled, "tmux is not installed")
     )
     func serverDeathKeepsTheRow() async throws {
-        let server = try IsolatedTmuxServer.start(keeperSession: "keeper")
+        let server = try IsolatedTmuxServer.start(session: "keeper")
         defer { server.killServer() }
         try server.tmux(["new-session", "-d", "-s", "tile", "sleep 600"])
-        server.killServer()
-        #expect(await waitUntil(timeout: 10) { server.serverIsGone() })
+        #expect(await server.killServerAndWait())
 
-        let (state, exit) = await classify(server, session: "tile", serverHeldOtherSessions: true)
+        let (state, exit) = await classify(server.label, session: "tile", launchServerPID: server.serverPID)
 
         #expect(state == .serverGone)
         #expect(exit == .holderLost)
@@ -123,53 +157,92 @@ struct TerminalSessionExitTests {
     }
 
     @Test(
+        "The only tile on a server that was killed stays restorable",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed")
+    )
+    func loneTileServerDeathKeepsTheRow() async throws {
+        let server = try IsolatedTmuxServer.start(session: "tile")
+        defer { server.killServer() }
+        #expect(await server.killServerAndWait())
+
+        let (state, exit) = await classify(server.label, session: "tile", launchServerPID: nil)
+
+        #expect(state == .serverGone)
+        #expect(exit == .holderLost)
+    }
+
+    /// A server started on the socket after the tile's own died answers for the name, maybe
+    /// with a session of the same name. It is not the tile's holder.
+    @Test(
+        "A server that restarted under the tile reads as a lost holder",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed")
+    )
+    func restartedServerIsALostHolder() async throws {
+        let original = try IsolatedTmuxServer.start(session: "tile")
+        defer { original.killServer() }
+        #expect(await original.killServerAndWait())
+        let replacement = try IsolatedTmuxServer.start(session: "tile", label: original.label)
+        defer { replacement.killServer() }
+        #expect(replacement.serverPID != original.serverPID)
+
+        let (state, exit) = await classify(original.label, session: "tile", launchServerPID: original.serverPID)
+
+        #expect(state == .sessionPresent(serverPID: replacement.serverPID))
+        #expect(exit == .holderLost)
+    }
+
+    @Test(
         "A client that left a running session keeps the row open",
         .enabled(if: tmuxIsInstalled, "tmux is not installed")
     )
     func detachedSessionKeepsTheRowOpen() async throws {
-        let server = try IsolatedTmuxServer.start(keeperSession: "tile")
+        let server = try IsolatedTmuxServer.start(session: "tile")
         defer { server.killServer() }
 
-        let (state, exit) = await classify(server, session: "tile", serverHeldOtherSessions: false)
+        let (state, exit) = await classify(server.label, session: "tile", launchServerPID: server.serverPID)
 
-        #expect(state == .sessionPresent)
+        #expect(state == .sessionPresent(serverPID: server.serverPID))
         #expect(exit == .detached)
         #expect(exit.rowOutcome == .keepOpen)
     }
 
-    /// tmux exits its server when the last session ends, which from outside looks exactly
-    /// like the server being killed. Without another tile on the server, the exit is the
-    /// shell's.
-    @Test(
-        "The last session ending reads as the shell's exit, not a lost holder",
-        .enabled(if: tmuxIsInstalled, "tmux is not installed")
-    )
-    func lastSessionEndingIsTheShells() async throws {
-        let server = try IsolatedTmuxServer.start(keeperSession: "tile")
-        defer { server.killServer() }
-        try server.tmux(["kill-session", "-t", "=tile"])
-        #expect(await waitUntil(timeout: 10) { server.serverIsGone() })
+    @Test("A probe that reaches a server as it dies reads the server as gone")
+    func dyingServerMessagesReadAsServerGone() {
+        for stderr in [
+            "server exited unexpectedly",
+            "lost server",
+            "no server running on /private/tmp/tmux-501/x",
+            "error connecting to /private/tmp/tmux-501/x (No such file or directory)",
+        ] {
+            let state = TmuxHolderProbe.holderState(exitCode: 1, stdout: "", stderr: stderr, sessionName: "tile")
+            #expect(state == .serverGone, "\(stderr)")
+        }
+    }
 
-        let (state, exit) = await classify(server, session: "tile", serverHeldOtherSessions: false)
-
-        #expect(state == .serverGone)
-        #expect(exit == .shellExited)
+    @Test("The probe reads the server's pid first and the session names after it")
+    func probeOutputParses() {
+        #expect(
+            TmuxHolderProbe.holderState(exitCode: 0, stdout: "4242\nkeeper\ntile\n", stderr: "", sessionName: "tile")
+                == .sessionPresent(serverPID: 4242))
+        #expect(
+            TmuxHolderProbe.holderState(exitCode: 0, stdout: "4242\n", stderr: "", sessionName: "tile")
+                == .sessionGone(serverPID: 4242))
     }
 
     @Test("A tile that did not launch through tmux ends as a shell exit")
     func plainShellExitEndsTheRow() {
-        let exit = TerminalSessionExit.classifyProcessExit(tmuxHolder: nil, serverHeldOtherSessions: true)
+        let exit = TerminalSessionExit.classifyProcessExit(tmuxHolder: nil, launchServerPID: nil)
         #expect(exit == .shellExited)
     }
 
-    @Test("An unanswered probe reads as the shell's exit")
-    func unansweredProbeEndsTheRow() {
+    @Test("An unanswered probe keeps the row open, as its own reason")
+    func unansweredProbeKeepsTheRow() {
         let state = TmuxHolderProbe.holderState(
             exitCode: 1, stdout: "", stderr: "unknown option -- Z", sessionName: "tile")
+        let exit = TerminalSessionExit.classifyProcessExit(tmuxHolder: state, launchServerPID: 4242)
         #expect(state == .unanswered)
-        #expect(
-            TerminalSessionExit.classifyProcessExit(tmuxHolder: state, serverHeldOtherSessions: true)
-                == .shellExited)
+        #expect(exit == .undetermined)
+        #expect(exit.rowOutcome == .keepOpen)
     }
 
     @Test("A user close ends the row")

@@ -28,6 +28,10 @@ public enum TerminalSessionExit: Sendable, Equatable {
     /// detach. The work the row describes is alive, so the row stays open and the next
     /// launch reattaches it.
     case detached
+    /// tmux gave no answer about what is left, so nothing is known about the tile's
+    /// work. Ending the row cannot be undone and keeping it costs one restore offer, so
+    /// the row stays open.
+    case undetermined
 
     /// What a tile ending this way leaves on its continuity row.
     public enum RowOutcome: Sendable, Equatable {
@@ -35,7 +39,7 @@ public enum TerminalSessionExit: Sendable, Equatable {
         case end
         /// Set `holder_lost_at` and leave the row open.
         case markHolderLost
-        /// Write nothing; the row stays open as it is.
+        /// Leave the row open with nothing new recorded about why.
         case keepOpen
     }
 
@@ -45,7 +49,7 @@ public enum TerminalSessionExit: Sendable, Equatable {
             return .end
         case .holderLost:
             return .markHolderLost
-        case .detached:
+        case .detached, .undetermined:
             return .keepOpen
         }
     }
@@ -53,39 +57,44 @@ public enum TerminalSessionExit: Sendable, Equatable {
     /// The reason a process exit gets, from what tmux says once the client is gone.
     ///
     /// `tmuxHolder` is `nil` for a tile that did not launch through tmux — its shell was
-    /// the process, so its exit is the shell's. A tmux client exits for one of three
-    /// reasons, and the server and session that remain say which.
+    /// the process, so its exit is the shell's.
     ///
-    /// A server that is gone has two causes tmux does not tell apart from outside: it
-    /// was killed, or its last session ended and it exited because it was empty. Only
-    /// the first is a lost holder. `serverHeldOtherSessions` separates them — a server
-    /// that also held another tile's session was not empty when this one ended — and
-    /// without it the exit reads as the shell's, which is what ending a lone tile
-    /// usually is.
-    ///
-    /// A probe that got no answer reads as the shell's exit too: keeping the row on a
-    /// guess would bring back tiles nobody can account for.
+    /// For a tmux tile the answer alone decides. The app's launch script turns
+    /// `exit-empty` off on its socket's server, so the server outlives its last session
+    /// and a server that is gone was killed or crashed: the holder was lost. A server
+    /// that answers names the session as still there (a detach) or gone (the shell
+    /// ended). `launchServerPID` is the server the tile launched on, when the app
+    /// recorded it; a server answering with another pid was started after the tile's
+    /// own died, so the holder was lost whatever that server holds now.
     public static func classifyProcessExit(
         tmuxHolder: TmuxHolderState?,
-        serverHeldOtherSessions: Bool
+        launchServerPID: Int?
     ) -> TerminalSessionExit {
+        guard let tmuxHolder else { return .shellExited }
         switch tmuxHolder {
-        case nil, .sessionGone, .unanswered:
-            return .shellExited
-        case .sessionPresent:
-            return .detached
+        case .unanswered:
+            return .undetermined
         case .serverGone:
-            return serverHeldOtherSessions ? .holderLost : .shellExited
+            return .holderLost
+        case .sessionPresent(let serverPID), .sessionGone(let serverPID):
+            if let launchServerPID, let serverPID, serverPID != launchServerPID {
+                return .holderLost
+            }
+            if case .sessionPresent = tmuxHolder {
+                return .detached
+            }
+            return .shellExited
         }
     }
 }
 
 /// What a tmux socket says about one session after a client left it.
 public enum TmuxHolderState: Sendable, Equatable {
-    /// The server answered and still holds the session.
-    case sessionPresent
+    /// The server answered and still holds the session. `serverPID` is the answering
+    /// server's pid, when tmux reported it.
+    case sessionPresent(serverPID: Int?)
     /// The server answered and the session is gone.
-    case sessionGone
+    case sessionGone(serverPID: Int?)
     /// No server is running on the socket.
     case serverGone
     /// tmux did not answer: missing, wedged, or an error this probe does not read.
@@ -94,9 +103,9 @@ public enum TmuxHolderState: Sendable, Equatable {
 
 /// Asks one tmux socket whether its server and a named session are still there.
 ///
-/// It reads and never starts anything: `list-sessions` on a socket with no server
-/// exits non-zero without creating one. The label is a parameter so a test can point
-/// it at an isolated server.
+/// It reads and never starts anything: on a socket with no server, the commands exit
+/// non-zero without creating one. The label is a parameter so a test can point it at an
+/// isolated server.
 public struct TmuxHolderProbe: Sendable {
     public let socketLabel: String
     private let environment: [String: String]
@@ -109,11 +118,17 @@ public struct TmuxHolderProbe: Sendable {
         self.environment = environment
     }
 
+    /// One tmux call: the server's pid, then every session name. A server with no
+    /// sessions still answers the pid, which `exit-empty off` makes an ordinary state.
     public func holderState(forSessionNamed sessionName: String) async -> TmuxHolderState {
         do {
             let result = try await ProcessRunner.run(
                 executable: "/usr/bin/env",
-                arguments: ["tmux", "-L", socketLabel, "list-sessions", "-F", "#{session_name}"],
+                arguments: [
+                    "tmux", "-L", socketLabel,
+                    "display-message", "-p", "#{pid}", ";",
+                    "list-sessions", "-F", "#{session_name}",
+                ],
                 environment: environment,
                 timeout: 5
             )
@@ -128,9 +143,19 @@ public struct TmuxHolderProbe: Sendable {
         }
     }
 
-    /// Reads `list-sessions -F '#{session_name}'`. tmux reports a socket with no server
-    /// as "no server running on <path>", or "error connecting to <path>" when the socket
-    /// file is missing or refuses; both mean nothing holds sessions there.
+    /// What tmux prints when no server holds the socket. "no server running on <path>"
+    /// and "error connecting to <path>" come from a socket with no server or no socket
+    /// file. A probe that reaches a server as it dies reads "server exited unexpectedly"
+    /// or "lost server" instead; the server is gone all the same.
+    static let serverGoneMessages = [
+        "no server running",
+        "error connecting to",
+        "server exited unexpectedly",
+        "lost server",
+    ]
+
+    /// Reads `display-message -p '#{pid}' ; list-sessions -F '#{session_name}'`: the
+    /// first line is the server's pid, the rest are session names.
     static func holderState(
         exitCode: Int32,
         stdout: String,
@@ -138,10 +163,13 @@ public struct TmuxHolderProbe: Sendable {
         sessionName: String
     ) -> TmuxHolderState {
         guard exitCode == 0 else {
-            let noServer = stderr.contains("no server running") || stderr.contains("error connecting to")
-            return noServer ? .serverGone : .unanswered
+            let serverGone = serverGoneMessages.contains { stderr.contains($0) }
+            return serverGone ? .serverGone : .unanswered
         }
-        let names = stdout.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
-        return names.contains(sessionName) ? .sessionPresent : .sessionGone
+        var lines = stdout.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let serverPID = lines.isEmpty ? nil : Int(lines.removeFirst().trimmingCharacters(in: .whitespaces))
+        return lines.contains(sessionName)
+            ? .sessionPresent(serverPID: serverPID)
+            : .sessionGone(serverPID: serverPID)
     }
 }
