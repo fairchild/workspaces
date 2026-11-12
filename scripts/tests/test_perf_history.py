@@ -236,6 +236,28 @@ class PerfHistoryTests(unittest.TestCase):
             self.assertEqual(written["runs_requested"], 3)
             self.assertNotIn("/Users/", paths["latest_json"].read_text())
 
+    def test_record_summary_sanitizes_keys_spaces_traversal_and_leaves_free_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            summary = debug_summary()
+            summary["categorical_fields"] = {
+                "root": {"/Users/someone/proj/a": 2, "/Users/other/proj/a": 1, "plain": 4},
+            }
+            summary["artifacts"] = {
+                "spaced": "/Users/some one/My Perf/out",
+                "traversal": str(root / ".." / "escape" / "x.log"),
+                "command": "/statusline",
+                "text": "ran /Users/someone/x slowly",
+            }
+            paths = record_summary(summary=summary, root_dir=root, timestamp="2026-08-07T10:00:00-0700")
+            written = json.loads(paths["latest_json"].read_text())
+            self.assertEqual(written["categorical_fields"]["root"], {"a": 3, "plain": 4})
+            self.assertEqual(written["artifacts"]["spaced"], "out")
+            self.assertEqual(written["artifacts"]["traversal"], "x.log")
+            self.assertEqual(written["artifacts"]["command"], "/statusline")
+            self.assertEqual(written["artifacts"]["text"], "ran /Users/someone/x slowly")
+            self.assertNotIn("/Users/some", json.dumps(written["categorical_fields"]))
+
     def test_dashboard_renders_without_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             text = render_dashboard([], installed_summary(), "2026-08-07T10:00:00-0700", Path(tmpdir))

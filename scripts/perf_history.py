@@ -385,23 +385,52 @@ def render_dashboard(
     return "\n".join(lines) + "\n"
 
 
+MACHINE_ROOTS = frozenset({"Users", "home", "private", "var", "tmp", "Volumes", "opt", "Library"})
+
+
+def looks_like_machine_path(value: str) -> bool:
+    if not value.startswith("/"):
+        return False
+    first = value[1:].split("/", 1)[0]
+    if first in MACHINE_ROOTS:
+        return True
+    return not any(ch.isspace() for ch in value) and "/" in value[1:]
+
+
+def sanitize_path_string(value: str, root_dir: Path) -> str:
+    if not looks_like_machine_path(value):
+        return value
+    path = Path(os.path.normpath(value))
+    for root in (root_dir, root_dir.resolve()):
+        try:
+            return path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+    return path.name or "."
+
+
 def sanitize_paths(value: Any, root_dir: Path) -> Any:
-    """Rewrite absolute path strings so committed summaries carry no machine paths (#1891).
+    """Rewrite absolute path strings, in keys and values, so committed summaries carry no machine paths (#1891).
 
     Paths inside root_dir become repo-relative; any other absolute path becomes its basename.
+    Keys that collapse to the same string have their numeric values summed.
     """
     if isinstance(value, dict):
-        return {key: sanitize_paths(item, root_dir) for key, item in value.items()}
+        out: dict[Any, Any] = {}
+        for key, item in value.items():
+            new_key = sanitize_path_string(key, root_dir) if isinstance(key, str) else key
+            new_item = sanitize_paths(item, root_dir)
+            if new_key in out:
+                old = out[new_key]
+                numeric = (int, float)
+                if isinstance(old, numeric) and isinstance(new_item, numeric) and not isinstance(old, bool):
+                    new_item = old + new_item
+            out[new_key] = new_item
+        return out
     if isinstance(value, list):
         return [sanitize_paths(item, root_dir) for item in value]
-    if isinstance(value, str) and value.startswith("/") and not any(ch.isspace() for ch in value):
-        path = Path(value)
-        for root in (root_dir, root_dir.resolve()):
-            try:
-                return path.relative_to(root).as_posix() or "."
-            except ValueError:
-                continue
-        return path.name or "."
+    if isinstance(value, str):
+        return sanitize_path_string(value, root_dir)
     return value
 
 
