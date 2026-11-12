@@ -70,17 +70,18 @@ extension GhosttySurfaceMailboxDeadlockTests {
             let ticksWhileStopped = manager.tickCount - ticks
             let freeBeganWhileStopped = freed.started != nil
             observation.release()
-            let resumedAt = await resumed.value
+            let resumption = await resumed.value
             await waitUntil(.seconds(20)) { freed.started != nil }
 
             let hungUpAt = try #require(observation.hungUpAt, "the command was not hung up while it was stopped")
+            #expect(resumption.released, "the main thread never got back to release the stopped command")
             #expect(!freeBeganBeforeHangUpSeen, "the free began before the hang-up was seen")
             #expect(ticksWhileStopped >= 10, "the main thread stopped ticking while the command was stopped")
             #expect(!freeBeganWhileStopped, "the free began while the command was still stopped")
             let started = try #require(freed.started, "the retired surface was never freed")
             let held = try #require(freed.held)
             #expect(hungUpAt < started, "the hang-up came from the free itself")
-            #expect(resumedAt < started, "the surface was freed before its command could exit")
+            #expect(resumption.at < started, "the surface was freed before its command could exit")
             #expect(held < Self.freeHoldBound, "the free held the main thread \(held)")
         }
 
@@ -190,10 +191,11 @@ extension GhosttySurfaceMailboxDeadlockTests {
 
         /// From off the main thread, so a free that blocks it cannot hold the command stopped
         /// for good: records when `marker` appears, waits for the test to release the command,
-        /// and resumes it, each wait bounded. Returns when it resumed the command.
+        /// and resumes it, each wait bounded. Returns when it resumed the command, and whether
+        /// the test had released it by then.
         nonisolated private static func resume(
             _ command: pid_t, onceHungUp marker: URL, _ observation: HangUpObservation
-        ) -> Task<ContinuousClock.Instant, Never> {
+        ) -> Task<(at: ContinuousClock.Instant, released: Bool), Never> {
             Task.detached {
                 let hungUpBy = ContinuousClock.now + .seconds(20)
                 while ContinuousClock.now < hungUpBy {
@@ -203,13 +205,13 @@ extension GhosttySurfaceMailboxDeadlockTests {
                     }
                     try? await Task.sleep(for: .milliseconds(5))
                 }
-                let releasedBy = ContinuousClock.now + .seconds(5)
+                let releasedBy = ContinuousClock.now + .seconds(30)
                 while !observation.isReleased, ContinuousClock.now < releasedBy {
                     try? await Task.sleep(for: .milliseconds(5))
                 }
-                let resumedAt = ContinuousClock.now
+                let resumed = (at: ContinuousClock.now, released: observation.isReleased)
                 kill(command, SIGCONT)
-                return resumedAt
+                return resumed
             }
         }
 
