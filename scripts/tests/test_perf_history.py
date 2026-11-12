@@ -14,6 +14,7 @@ metrics fail).
 from __future__ import annotations
 
 import csv
+import json
 import subprocess
 import sys
 import tempfile
@@ -216,6 +217,24 @@ class PerfHistoryTests(unittest.TestCase):
             self.assertIn("# Performance Dashboard", dashboard)
             self.assertIn("| Timestamp | Scenario |", dashboard)
             self.assertIn("## Recording Cadence", dashboard)
+
+    def test_record_summary_strips_absolute_paths_from_latest_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            summary = debug_summary()
+            summary["artifacts"] = {
+                "output_dir": "/Users/someone/perf/out",
+                "log_files": ["/tmp/perf-1/run-1.log", str(root / "docs" / "performance" / "x.log")],
+                "nested": [{"p": "/var/folders/ab/T/run-2.log"}],
+                "runs_requested": 3,
+            }
+            paths = record_summary(summary=summary, root_dir=root, timestamp="2026-08-07T10:00:00-0700")
+            written = json.loads(paths["latest_json"].read_text())["artifacts"]
+            self.assertEqual(written["output_dir"], "out")
+            self.assertEqual(written["log_files"], ["run-1.log", "docs/performance/x.log"])
+            self.assertEqual(written["nested"], [{"p": "run-2.log"}])
+            self.assertEqual(written["runs_requested"], 3)
+            self.assertNotIn("/Users/", paths["latest_json"].read_text())
 
     def test_dashboard_renders_without_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

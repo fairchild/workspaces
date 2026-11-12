@@ -59,12 +59,12 @@ Sources:
 
 ### Smoke
 
-- screenshot: `/Users/fairchild/.codex/worktrees/f880/workspaces/output/dev-smoke/dev-smoke-20260316-030420.png`
-- launch log: `/Users/fairchild/.codex/worktrees/f880/workspaces/.dev-data/logs/launch-dev-20260316-030417.log`
+- screenshot: `<repo>/output/dev-smoke/dev-smoke-20260316-030420.png`
+- launch log: `<repo>/.dev-data/logs/launch-dev-20260316-030417.log`
 
 ### Focus trace
 
-Log: `/Users/fairchild/.codex/worktrees/f880/workspaces/.dev-data/logs/launch-dev-20260316-031310.log`
+Log: `<repo>/.dev-data/logs/launch-dev-20260316-031310.log`
 
 Key sequence:
 
@@ -75,7 +75,7 @@ Key sequence:
 
 ### Sheet trace
 
-Log: `/Users/fairchild/.codex/worktrees/f880/workspaces/.dev-data/logs/launch-dev-20260316-031820.log`
+Log: `<repo>/.dev-data/logs/launch-dev-20260316-031820.log`
 
 Key sequence:
 

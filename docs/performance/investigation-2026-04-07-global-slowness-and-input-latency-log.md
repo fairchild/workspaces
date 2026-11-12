@@ -41,9 +41,9 @@ Setup:
 
 - ran `host_perf_probe.py`
 - directories:
-  - `/Users/fairchild/code/workspaces`
-  - `/Users/fairchild/.worktrees/workspaces/codex/workspaces-perf-optimization`
-  - `/Users/fairchild`
+  - `<repo>`
+  - `<home>/.worktrees/workspaces/codex/workspaces-perf-optimization`
+  - `<home>`
 
 Artifacts:
 
@@ -422,7 +422,7 @@ Change:
 
 Artifacts:
 
-- `/Users/fairchild/Downloads/workspaces-report-2026-04-08-204228.zip`
+- `<home>/Downloads/workspaces-report-2026-04-08-204228.zip`
 - local packaged app build output from `./scripts/build-release.sh --no-sign`
 - packaged bundle path:
   - `build/WorkspaceManager.app/Contents/Resources/ghostty`
@@ -481,8 +481,8 @@ Status: complete
 
 Artifacts:
 
-- diagnostic bundle: `/Users/fairchild/Downloads/workspaces-report-2026-04-08-230216.zip`
-- Ghostty crash envelope: `/Users/fairchild/.local/state/ghostty/crash/e3b21dee-c40d-47b3-70d2-9647f49a9155.ghosttycrash`
+- diagnostic bundle: `<home>/Downloads/workspaces-report-2026-04-08-230216.zip`
+- Ghostty crash envelope: `<home>/.local/state/ghostty/crash/e3b21dee-c40d-47b3-70d2-9647f49a9155.ghosttycrash`
 
 Result:
 

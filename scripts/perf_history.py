@@ -385,7 +385,28 @@ def render_dashboard(
     return "\n".join(lines) + "\n"
 
 
+def sanitize_paths(value: Any, root_dir: Path) -> Any:
+    """Rewrite absolute path strings so committed summaries carry no machine paths (#1891).
+
+    Paths inside root_dir become repo-relative; any other absolute path becomes its basename.
+    """
+    if isinstance(value, dict):
+        return {key: sanitize_paths(item, root_dir) for key, item in value.items()}
+    if isinstance(value, list):
+        return [sanitize_paths(item, root_dir) for item in value]
+    if isinstance(value, str) and value.startswith("/") and not any(ch.isspace() for ch in value):
+        path = Path(value)
+        for root in (root_dir, root_dir.resolve()):
+            try:
+                return path.relative_to(root).as_posix() or "."
+            except ValueError:
+                continue
+        return path.name or "."
+    return value
+
+
 def record_summary(summary: dict[str, Any], root_dir: Path, timestamp: str) -> dict[str, Path]:
+    summary = sanitize_paths(summary, root_dir)
     perf_dir = root_dir / "docs" / "performance"
     perf_dir.mkdir(parents=True, exist_ok=True)
     history_csv_path = perf_dir / "metrics-history.csv"
