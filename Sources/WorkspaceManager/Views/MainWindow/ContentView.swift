@@ -3040,7 +3040,7 @@ struct ContentView: View {
                 )
             }
             hostSessionLog.info(
-                "[HostSession] Created restored session \(session.id.uuidString, privacy: .public) key=\(surface.key.debugDescription, privacy: .public) path=\(session.directoryPath, privacy: .public) adopted=\(adoptedHostSessionID != nil, privacy: .public) (total sessions=\(tileTreeStore.sessions.count, privacy: .public))"
+                "[HostSession] Created restored session \(session.id.uuidString, privacy: .public) from row \(surface.hostSessionID.uuidString, privacy: .public) key=\(surface.key.debugDescription, privacy: .public) path=\(session.directoryPath, privacy: .public) adopted=\(adoptedHostSessionID != nil, privacy: .public) (total sessions=\(tileTreeStore.sessions.count, privacy: .public))"
             )
             activatedByHostSessionID[surface.hostSessionID] = session
         }
