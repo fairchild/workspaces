@@ -73,7 +73,8 @@ struct MainWindowRestoreController {
         for plan: RestorePlan,
         handledRunID: String,
         seedKey: HostTerminalSessionKey,
-        seedDirectory: URL
+        seedDirectory: URL,
+        seedIsPresent: Bool
     ) -> PlanDisposition {
         if plan.surfaces.isEmpty {
             return .noRestorableSurfaces
@@ -82,7 +83,9 @@ struct MainWindowRestoreController {
         if plan.wasHandled(handledRunID: handledRunID.isEmpty ? nil : handledRunID) {
             return .alreadyHandled(previousRunID: plan.previousRunID)
         }
-        if !plan.offersMoreThanLaunchSeed(seedKey: seedKey, seedDirectory: seedDirectory) {
+        if !plan.offersMoreThanLaunchSeed(
+            seedKey: seedKey, seedDirectory: seedDirectory, seedIsPresent: seedIsPresent)
+        {
             return .onlyDuplicatesLaunchSeed
         }
         return .offer

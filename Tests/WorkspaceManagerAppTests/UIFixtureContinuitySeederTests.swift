@@ -120,7 +120,8 @@ struct UIFixtureContinuitySeederTests {
             for: plan,
             handledRunID: "",
             seedKey: .defaultHome,
-            seedDirectory: homeDirectory
+            seedDirectory: homeDirectory,
+            seedIsPresent: true
         )
         #expect(disposition == .offer)
     }

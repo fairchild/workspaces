@@ -663,12 +663,16 @@ struct TerminalRestorePlannerTests {
         let seedFresh = RestorePlan(
             surfaces: [surface(key: .defaultHome, action: .freshShell)],
             selectedHostSessionID: nil)
-        #expect(!seedFresh.offersMoreThanLaunchSeed(seedKey: .defaultHome, seedDirectory: seedDirectory))
+        #expect(
+            !seedFresh.offersMoreThanLaunchSeed(
+                seedKey: .defaultHome, seedDirectory: seedDirectory, seedIsPresent: true))
 
         let seedResume = RestorePlan(
             surfaces: [surface(key: .defaultHome, action: .resumeClaude(agentSessionID: "s1"))],
             selectedHostSessionID: nil)
-        #expect(seedResume.offersMoreThanLaunchSeed(seedKey: .defaultHome, seedDirectory: seedDirectory))
+        #expect(
+            seedResume.offersMoreThanLaunchSeed(
+                seedKey: .defaultHome, seedDirectory: seedDirectory, seedIsPresent: true))
 
         let withRepo = RestorePlan(
             surfaces: [
@@ -676,7 +680,8 @@ struct TerminalRestorePlannerTests {
                 surface(key: .repoPath("/code/repo"), action: .freshShell),
             ],
             selectedHostSessionID: nil)
-        #expect(withRepo.offersMoreThanLaunchSeed(seedKey: .defaultHome, seedDirectory: seedDirectory))
+        #expect(
+            withRepo.offersMoreThanLaunchSeed(seedKey: .defaultHome, seedDirectory: seedDirectory, seedIsPresent: true))
 
         // A seed-key fresh shell at a DIFFERENT directory is a real restore, not a
         // seed duplicate (the default host directory can change between runs).
@@ -689,6 +694,6 @@ struct TerminalRestorePlannerTests {
             selectedHostSessionID: nil)
         #expect(
             differentDirectory.offersMoreThanLaunchSeed(
-                seedKey: .defaultHome, seedDirectory: seedDirectory))
+                seedKey: .defaultHome, seedDirectory: seedDirectory, seedIsPresent: true))
     }
 }

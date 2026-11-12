@@ -147,21 +147,28 @@ public struct RestorePlan: Sendable, Equatable {
 
     /// Whether the plan restores anything beyond what a fresh launch already
     /// provides. Startup seeds a plain shell on `seedKey` at `seedDirectory`
-    /// before restore runs, so a plan consisting only of fresh shells matching
-    /// both duplicates the seed and is not worth a banner. A fresh shell on the
-    /// seed key at a different directory is still a real restore (the default
-    /// host directory can change between runs) and keeps the banner.
+    /// before restore runs, so a plan consisting of exactly one fresh shell matching
+    /// both duplicates the seed and is not worth a banner.
+    ///
+    /// The seed stands in for one tile, and only while it is still there:
+    /// `seedIsPresent` is false once an earlier restore pass retired it, and then
+    /// every surface is a real restore. Two fresh shells on the seed key are two
+    /// tiles, one more than the seed covers. A fresh shell on the seed key at a
+    /// different directory is still a real restore (the default host directory can
+    /// change between runs).
     public func offersMoreThanLaunchSeed(
         seedKey: HostTerminalSessionKey,
-        seedDirectory: URL
+        seedDirectory: URL,
+        seedIsPresent: Bool
     ) -> Bool {
+        guard seedIsPresent else { return !surfaces.isEmpty }
         let normalizedSeedPath = seedDirectory.standardizedFileURL.resolvingSymlinksInPath().path
-        return surfaces.contains { surface in
-            surface.action != .freshShell
-                || surface.key != seedKey
-                || surface.directory.standardizedFileURL.resolvingSymlinksInPath().path
-                    != normalizedSeedPath
+        let duplicatesSeed = surfaces.filter { surface in
+            surface.action == .freshShell
+                && surface.key == seedKey
+                && surface.directory.standardizedFileURL.resolvingSymlinksInPath().path == normalizedSeedPath
         }
+        return !(surfaces.count == 1 && duplicatesSeed.count == 1)
     }
 }
 

@@ -2857,11 +2857,15 @@ struct ContentView: View {
             await executeRestore(launchSplit.reattach)
         }
         let plan = launchSplit.offered
+        let restoredSessionIDs = restoreState.restoredSessionIDs
         switch restoreController.disposition(
             for: plan,
             handledRunID: restoreHandledRunID,
             seedKey: .defaultHome,
-            seedDirectory: resolvedDefaultHostDirectory
+            seedDirectory: resolvedDefaultHostDirectory,
+            seedIsPresent: tileTreeStore.sessions(inScope: .defaultHome).contains {
+                !restoredSessionIDs.contains($0.id)
+            }
         ) {
         case .noRestorableSurfaces:
             restoreLog.info("[Restore] nothing to offer from previous run")

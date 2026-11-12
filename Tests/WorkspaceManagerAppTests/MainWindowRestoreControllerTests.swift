@@ -49,13 +49,15 @@ struct MainWindowRestoreControllerTests {
 
     private func disposition(
         for plan: RestorePlan,
-        handledRunID: String = ""
+        handledRunID: String = "",
+        seedIsPresent: Bool = true
     ) -> MainWindowRestoreController.PlanDisposition {
         controller.disposition(
             for: plan,
             handledRunID: handledRunID,
             seedKey: .defaultHome,
-            seedDirectory: seedDirectory
+            seedDirectory: seedDirectory,
+            seedIsPresent: seedIsPresent
         )
     }
 
@@ -122,6 +124,25 @@ struct MainWindowRestoreControllerTests {
         ])
 
         #expect(disposition(for: seedOnly) == .onlyDuplicatesLaunchSeed)
+    }
+
+    /// Home held a tab that rejoined at launch and one that can only start fresh. The rejoin
+    /// retired the seed, so nothing on screen stands in for the fresh one.
+    @Test("A fresh Home tile is offered when the launch seed is no longer there")
+    func freshHomeTileIsOfferedOnceTheSeedIsGone() {
+        let seedOnly = plan([surface(action: .freshShell, key: .defaultHome, directory: seedDirectory)])
+
+        #expect(disposition(for: seedOnly, seedIsPresent: false) == .offer)
+    }
+
+    @Test("Two fresh Home tiles are both offered: the seed stands in for one")
+    func twoFreshHomeTilesAreOffered() {
+        let twoSeeds = plan([
+            surface(action: .freshShell, key: .defaultHome, directory: seedDirectory),
+            surface(action: .freshShell, key: .defaultHome, directory: seedDirectory),
+        ])
+
+        #expect(disposition(for: twoSeeds) == .offer)
     }
 
     /// A fresh shell on the seed key at a *different* directory is a real restore — the default
