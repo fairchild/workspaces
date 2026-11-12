@@ -12,6 +12,7 @@
 
 import Darwin
 import Foundation
+import GhosttyKit
 import Testing
 
 @testable import WorkspaceManager
@@ -58,6 +59,57 @@ extension GhosttySurfaceMailboxDeadlockTests {
             #expect(held < Self.exitDelay / 2, "the free held the main thread \(held), waiting on the command's exit")
         }
 
+        @Test("A foreground pipeline whose first process has exited still leads back to the surface's command")
+        func pipelineWithAnExitedLeader() async throws {
+            let manager = GhosttyAppManager.shared
+            let pidFile = FileManager.default.temporaryDirectory.appendingPathComponent("pipeline-\(UUID().uuidString)")
+            // With job control on, the pipeline is the pty's foreground group and its first
+            // process leads it; once that process exits the group id names no process.
+            let script = try Self.script(
+                """
+                #!/bin/bash
+                set -m
+                echo $$ > "\(pidFile.path)"
+                { printf '\\033]2;pipeline\\007' >&2; exec sleep 0.2; } | sleep 120
+                """)
+            defer {
+                try? FileManager.default.removeItem(at: script)
+                try? FileManager.default.removeItem(at: pidFile)
+            }
+            var view: GhosttySurfaceView? = GhosttySurfaceView(customCommand: script.path)
+            let surface = try #require(view?.surface, "the view needs a Ghostty surface to free")
+            await waitUntil(.seconds(30)) { view?.hasObservedPromptReadySignal == true }
+            try #require(view?.hasObservedPromptReadySignal == true, "the pipeline never started")
+            let recorded = (try? String(contentsOf: pidFile, encoding: .utf8)) ?? ""
+            let scriptPID = try #require(
+                pid_t(recorded.trimmingCharacters(in: .whitespacesAndNewlines)), "the script never recorded its pid")
+            let command = getsid(scriptPID)
+            try #require(command > 0, "the script's session is unreadable")
+            var foreground: pid_t { pid_t(truncatingIfNeeded: ghostty_surface_foreground_pid(surface)) }
+            await waitUntil(.seconds(30)) { foreground > 0 && foreground != command }
+            let pipeline = foreground
+            try #require(pipeline > 0 && pipeline != command, "the pipeline never took the foreground")
+            await waitUntil(.seconds(30)) { getsid(pipeline) == -1 }
+            try #require(getsid(pipeline) == -1 && foreground == pipeline, "the pipeline's first process never exited")
+
+            #expect(GhosttySurfaceChildProcess.pid(of: surface) == command)
+
+            let freed = FreeRecord()
+            manager.onSurfaceFreed = { free in
+                if free.surfaceAddress == UInt(bitPattern: surface) { freed.started = free.started }
+            }
+            defer { manager.onSurfaceFreed = nil }
+            let retired = ContinuousClock.now
+            let released = WeakView(view)
+            autoreleasepool { view = nil }
+            try #require(released.view == nil, "the view outlived its last reference")
+            await waitUntil(.seconds(60)) { freed.started != nil }
+            let started = try #require(freed.started, "the retired surface was never freed")
+            #expect(
+                started - retired < GhosttyAppManager.hangUpGrace,
+                "the free waited out the hang-up grace, so the hang-up never reached the command")
+        }
+
         /// Off the main thread, since a free that does the hang-up itself holds it until then.
         nonisolated private static func resume(
             _ command: pid_t, after delay: Duration, checking marker: URL
@@ -73,17 +125,21 @@ extension GhosttySurfaceMailboxDeadlockTests {
         /// Runs in the command's process group, so it receives the same hang-up, and leaves
         /// `marker` behind when it does. The title it sets marks the trap as installed.
         private static func hangUpMarkerScript(marker: URL) throws -> URL {
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent("hang-up-\(UUID().uuidString).sh")
-            let script = """
+            try script(
+                """
                 #!/bin/sh
                 trap ': > "\(marker.path)"; exit 0' HUP
                 printf '\\033]2;trap set\\007'
                 while :; do sleep 1; done
+                """)
+        }
 
-                """
+        private static func script(_ body: String) throws -> URL {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("surface-free-\(UUID().uuidString).sh")
             let created = FileManager.default.createFile(
-                atPath: url.path, contents: Data(script.utf8), attributes: [.posixPermissions: 0o755])
-            try #require(created, "the hang-up script could not be written")
+                atPath: url.path, contents: Data((body + "\n").utf8), attributes: [.posixPermissions: 0o755])
+            try #require(created, "the script could not be written")
             return url
         }
 
@@ -98,6 +154,7 @@ extension GhosttySurfaceMailboxDeadlockTests {
 
 @MainActor
 private final class FreeRecord {
+    var started: ContinuousClock.Instant?
     var held: Duration?
 }
 
