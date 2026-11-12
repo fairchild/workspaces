@@ -399,11 +399,15 @@ cache is a purge via the named entrypoint:
    `GhosttyAppManager` ends the command itself before the free. It hangs the command up
    (`GhosttySurfaceChildProcess`) when the surface retires, and again every 10 ms,
    since `login` misses one that lands while it is still starting. A command still
-   alive after `hangUpGrace` (5 s) is sent SIGCONT and SIGKILL. A surface is freed only
+   alive after `hangUpGrace` (5 s) is sent SIGCONT and SIGKILL. A surface is freed
    once `ghostty_surface_process_exited` is true, one per main-actor turn, and the
-   waiting happens off the main thread. A command that outlives `killGrace` (2 s) after
-   that leaves its surface unfreed and logged: a leaked surface costs less than a main
-   thread held until the command exits.
+   waiting happens off the main thread. libghostty does not always report an exit: a
+   command hung up while still starting can be gone and reaped with the flag false for
+   good, and one it failed to start never appears. So a surface is also freed once the
+   command it found is no longer this process's child, or when no command is in sight at
+   `killGrace` (2 s) after the kill. A command still a child then survived SIGKILL; its
+   surface stays unfreed and logged, since a leaked surface costs less than a main thread
+   held until the command exits.
 
    The command is found through the pty's foreground process group: the session of any
    live member is the command libghostty spawned, kept only while it is this process's

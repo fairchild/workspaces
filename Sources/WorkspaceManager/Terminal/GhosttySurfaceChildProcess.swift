@@ -27,11 +27,18 @@ enum GhosttySurfaceChildProcess {
     }
 
     /// Sends `signal` to the command's process group, the group libghostty's own teardown
-    /// hangs up. Does nothing before the command has a pid on the pty, or once it has exited.
+    /// hangs up, and returns the command's pid if it went. `nil`, sending nothing, before the
+    /// command has a pid on the pty or once it has exited.
     @MainActor
-    static func send(_ signal: Int32, to surface: ghostty_surface_t) {
-        guard let pid = pid(of: surface) else { return }
-        _ = killpg(pid, signal)
+    @discardableResult
+    static func send(_ signal: Int32, to surface: ghostty_surface_t) -> pid_t? {
+        guard let pid = pid(of: surface), killpg(pid, signal) == 0 else { return nil }
+        return pid
+    }
+
+    /// Whether `pid` is still a child of this process, exited but not yet reaped included.
+    static func isChild(_ pid: pid_t) -> Bool {
+        parentPID(of: pid) == getpid()
     }
 
     private static func members(ofGroup group: pid_t) -> [pid_t] {
