@@ -403,21 +403,29 @@ cache is a purge via the named entrypoint:
    once `ghostty_surface_process_exited` is true, one per main-actor turn, and the
    waiting happens off the main thread. libghostty does not always report an exit: a
    command hung up while still starting can be gone and reaped with the flag false for
-   good, and one it failed to start never appears. So a surface is also freed once the
-   command it found is no longer this process's child, or when no command is in sight at
-   `killGrace` (2 s) after the kill. A command still a child then survived SIGKILL; its
-   surface stays unfreed and logged, since a leaked surface costs less than a main thread
-   held until the command exits.
+   good. So a surface is also freed once the command it found, recorded as pid and
+   start time (`kinfo_proc` `p_starttime`), has no process left: libghostty's teardown
+   then finds no group to wait on.
+
+   Anything else is unknown and stays unfreed. A command never found may be a stopped
+   `login` whose foreground group has emptied; a pid now held by a later process, or
+   under another parent, would have libghostty's teardown hang up a stranger's group.
+   Each pass looks again and keeps signalling; `killGrace` (2 s) after the kill the
+   surface is logged once with its reason and checked about once a second from then
+   on. A command SIGKILL cannot end stays the same way. Leak beats freeze: a leaked
+   surface costs less than a main thread held until the command exits.
 
    The command is found through the pty's foreground process group: the session of any
    live member is the command libghostty spawned, kept only while it is this process's
    child. libghostty's own teardown signals `getpgid` of the pid it recorded, which is
-   the same group. Re-read `Surface.deinit`, `Exec.zig`'s `killPid` and
+   the same group. Re-read `Surface.deinit`, `Exec.zig`'s `threadExit`, `killPid` and
    `processExitCommon`, and `pty.zig`'s `setsid` when bumping the pin.
    `GhosttySurfaceFreeMainThreadTests` covers the order of events while a command is
    held stopped (hang-up first, the main thread ticking, the free only after the command
-   exits), a stopped command killed after its grace, and a foreground pipeline whose
-   first process has exited.
+   exits), a hang-up-immune command that only SIGKILL ends, a stopped command whose
+   foreground group has emptied (never freed while it lives), and a foreground pipeline
+   whose first process has exited. `GhosttySurfaceChildProcessTests` covers the identity
+   check on synthetic process records.
 
 ## CI Contract
 
