@@ -175,7 +175,7 @@ Never `rm -rf` build state.
   ready. A worker's claim is not evidence.
 - **Opus** — implements slices 1–3 (Swift UI + Core + tests + fixture
   plumbing). One worker per slice, sequential, in this worktree
-  (`/Users/fairchild/workspaces/workspaces/leftsort`).
+  (`<worktrees>/leftsort`).
 - **Sonnet** — only for fully mechanical follow-ups (e.g. PR-body formatting,
   retargeting stacked PRs).
 - **Michael** — merges. Authority contract: Fable reviews and flips ready;
