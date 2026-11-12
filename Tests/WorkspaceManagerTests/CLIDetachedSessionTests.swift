@@ -47,6 +47,7 @@ struct CLIDetachedSessionTests {
         var environment: [String: String] {
             [
                 "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
+                ConversationRecordStore.directoryEnvironmentKey: root.appendingPathComponent("conversations").path,
                 "WORKSPACES_SYNTHETIC_ROOT": root.appendingPathComponent("workspaces").path,
                 "TMUX_TMPDIR": root.path,
                 TmuxSessionControl.socketLabelEnvironmentKey: socketLabel,
@@ -953,6 +954,45 @@ struct CLIDetachedSessionTests {
         let resume = try fixture.run(["ws", "resume", launch.handle], extraEnvironment: environment)
         #expect(resume.status == 1)
         #expect(resume.stderr.contains("nothing took up conversation"))
+    }
+
+    @Test(
+        "ws launch writes the conversation record and the launch record together",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func launchWritesTheConversationRecord() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+
+        let launch = try launchResult(
+            fixture.run(
+                [
+                    "ws", "launch", fixture.workspaceSelector, "--cmd", "claude --model claude-opus-5-5 --effort low",
+                    "--json",
+                ],
+                extraEnvironment: environment
+            )
+        )
+
+        let launches = fixture.root.appendingPathComponent("config/workspaces-cli/launches")
+        let launchRecord = try #require(
+            AgentLaunchRecordStore(directory: launches).load(socketLabel: fixture.socketLabel, handle: launch.handle)
+        )
+        let conversationID = try #require(launchRecord.identity?.conversationID)
+        let record = try #require(
+            ConversationRecordStore(directory: fixture.root.appendingPathComponent("conversations"))
+                .load(conversationID: conversationID)
+        )
+        #expect(launch.conversationID == conversationID)
+        #expect(record.observedBy == .wsLaunch)
+        #expect(record.launch == .init(handle: launch.handle, model: "claude-opus-5-5", effort: "low"))
+        #expect(record.cwd == launchRecord.workspacePath)
+        #expect(record.workspacePath == launchRecord.workspacePath)
+        #expect(record.socketLabel == fixture.socketLabel)
+        #expect(record.lastSeenIn?.hostSessionID == nil)
+        #expect(record.lastSeenIn?.tmux?.name == launch.handle)
+        #expect(record.lastSeenIn?.tmux?.sessionID.hasPrefix("$") == true)
     }
 
     @Test("Resuming a handle nothing was launched under says so")

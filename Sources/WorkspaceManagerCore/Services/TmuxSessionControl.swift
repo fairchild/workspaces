@@ -336,6 +336,15 @@ public struct TmuxSessionControl: Sendable {
         ["tmux", "-L", socketLabel, "send-keys", "-t", paneTarget(handle), "C-u"]
     }
 
+    /// The identity the server gave the session: its own pid, the session's id and creation
+    /// time, and the name. Tab-separated, because a name can hold spaces.
+    public static func sessionIdentityArguments(socketLabel: String, handle: String) -> [String] {
+        [
+            "tmux", "-L", socketLabel, "display-message", "-p", "-t", paneTarget(handle),
+            "#{pid}\t#{session_id}\t#{session_created}\t#{session_name}",
+        ]
+    }
+
     public static func hasSessionArguments(socketLabel: String, handle: String) -> [String] {
         ["tmux", "-L", socketLabel, "has-session", "-t", "=\(handle)"]
     }
@@ -480,6 +489,26 @@ public struct TmuxSessionControl: Sendable {
             result.success
         else { return nil }
         return Int(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Where the server says the session is, or `nil` when it did not answer.
+    public func sessionIdentity(handle: String) async -> ConversationRecord.TmuxSession? {
+        guard
+            let result = await run(
+                "/usr/bin/env",
+                Self.sessionIdentityArguments(socketLabel: socketLabel, handle: handle),
+                environment
+            ),
+            result.success
+        else { return nil }
+        let fields = result.stdout.trimmingCharacters(in: .newlines).split(separator: "\t", maxSplits: 3)
+        guard fields.count == 4, let pid = Int(fields[0]) else { return nil }
+        return ConversationRecord.TmuxSession(
+            serverPID: pid,
+            sessionID: String(fields[1]),
+            createdAt: TimeInterval(fields[2]).map { Date(timeIntervalSince1970: $0) },
+            name: String(fields[3])
+        )
     }
 
     /// Empties the line at a shell prompt, so what is typed next is the whole command. The

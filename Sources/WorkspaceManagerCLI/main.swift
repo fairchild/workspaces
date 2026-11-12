@@ -11,9 +11,15 @@ import WorkspaceManagerCore
 @main
 struct WorkspaceManagerCLI {
     static func main() async {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        // Ahead of everything else, because Claude runs this for every session on the
+        // machine, and outside WorkSpaces it has to cost no more than a process start.
+        if arguments == ["conversation", "observe"] {
+            Darwin.exit(ConversationHookObserver.run())
+        }
         let app = CLIApp()
         do {
-            let exitCode = try await app.run(arguments: Array(CommandLine.arguments.dropFirst()))
+            let exitCode = try await app.run(arguments: arguments)
             Darwin.exit(exitCode)
         } catch {
             writeStderr("error: \(error.localizedDescription)")
@@ -28,6 +34,7 @@ private final class CLIApp {
 
     private let stateStore = CLIStateStore()
     private let launchRecords = AgentLaunchRecordStore()
+    private let conversationRecords = ConversationRecordStore()
     private let workspaceService: WorkspaceService = .shared
     private let gitService: GitService = .shared
 
@@ -76,6 +83,10 @@ private final class CLIApp {
             return try await runDoctor(state: state)
         case "automation":
             return try runAutomation(arguments: tail)
+        case "conversation":
+            throw CLIError(
+                "Usage: workspaces conversation observe (a Claude SessionStart hook; reads the payload on stdin)"
+            )
         default:
             throw CLIError("Unknown command '\(command)'. Run 'workspaces help'.")
         }
@@ -343,6 +354,37 @@ private final class CLIApp {
         )
     }
 
+    /// The Conversation record for a launch, written beside its Launch Record. A launch has no
+    /// tile yet, so the record says where it was seen by tmux session alone; the SessionStart
+    /// hook adds the rest once the agent is running.
+    private func recordConversation(
+        _ identity: AgentLaunchIdentity,
+        handle: String,
+        workspace: WorkspaceRecord,
+        control: TmuxSessionControl
+    ) async {
+        let tmux = await control.sessionIdentity(handle: handle)
+        let workspaceCreatedAt =
+            (try? FileManager.default.attributesOfItem(atPath: workspace.path))?[.creationDate] as? Date
+        let observation = ConversationObservation(
+            conversationID: identity.conversationID,
+            cwd: workspace.path,
+            workspacePath: workspace.path,
+            workspaceCreatedAt: workspaceCreatedAt,
+            socketLabel: control.socketLabel,
+            observedBy: .wsLaunch,
+            launch: .init(handle: handle, model: identity.requestedModel, effort: identity.requestedEffort),
+            lastSeenIn: tmux.map { .init(hostSessionID: nil, tmux: $0) }
+        )
+        do {
+            if try conversationRecords.record(observation, lockBudget: .seconds(2)) == .lockBusy {
+                writeStderr("warning: the conversation record was busy, so this launch is not in it yet.")
+            }
+        } catch {
+            writeStderr("warning: the conversation record was not saved: \(error.localizedDescription).")
+        }
+    }
+
     /// `workspaces ws launch <workspace> [--cmd "<command>"] [--name <label>] [--json]` — the
     /// detached counterpart to `open`. It returns a handle instead of attaching, so a caller
     /// that started an agent can go on to do something else and come back through `ws read`.
@@ -447,6 +489,9 @@ private final class CLIApp {
                 "warning: the session is running, but its launch record was not saved: "
                     + "\(error.localizedDescription). 'ws check' and 'ws resume' will not know it."
             )
+        }
+        if let identity = plan.identity {
+            await recordConversation(identity, handle: handle, workspace: workspace, control: control)
         }
         if let earlierConversation, earlierConversation != plan.identity?.conversationID {
             writeStderr(
