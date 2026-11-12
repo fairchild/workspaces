@@ -18,6 +18,9 @@ import WorkspaceManagerCore
 struct MainWindowRestoreState: Equatable {
     private(set) var plan: RestorePlan?
     private(set) var bannerDismissed = false
+    /// Host sessions restore created this launch. A later restore pass keeps them: they are
+    /// the tiles it brought back, not seeds standing in for them.
+    private(set) var restoredSessionIDs: Set<UUID> = []
 
     /// The plan the banner should show, or `nil` when there is nothing to offer — no plan, an
     /// empty one, or one the user already acted on this launch.
@@ -32,6 +35,10 @@ struct MainWindowRestoreState: Equatable {
 
     mutating func dismissBanner() {
         bannerDismissed = true
+    }
+
+    mutating func noteRestored(_ sessionIDs: Set<UUID>) {
+        restoredSessionIDs.formUnion(sessionIDs)
     }
 }
 
@@ -66,6 +73,27 @@ struct MainWindowRestoreController {
             return .onlyDuplicatesLaunchSeed
         }
         return .offer
+    }
+
+    /// The two parts launch handles differently: surfaces that only rejoin a tmux session still
+    /// running, which come back without asking, and everything else, which the banner offers.
+    /// Both parts keep the plan's run identity and focus target.
+    func launchSplit(of plan: RestorePlan) -> (reattach: RestorePlan, offered: RestorePlan) {
+        (plan.filteringSurfaces(\.isReattach), plan.filteringSurfaces { !$0.isReattach })
+    }
+
+    /// The sessions to activate, in order, after a restore pass created `created` (keyed by
+    /// each surface's recorded host-session id): every scope's selected tab, then the surface
+    /// the window had focused, so the last activation is the one the window lands on. Surfaces
+    /// this pass did not create are left out.
+    func selectionOrder(in plan: RestorePlan, created: [UUID: HostTerminalSession]) -> [UUID] {
+        var order = plan.surfaces
+            .filter { $0.isSelectedInScope && $0.hostSessionID != plan.selectedHostSessionID }
+            .compactMap { created[$0.hostSessionID]?.id }
+        if let selected = plan.selectedHostSessionID, let session = created[selected] {
+            order.append(session.id)
+        }
+        return order
     }
 
     /// The prior-run id that acting on this plan should persist, or `nil` when the plan has no

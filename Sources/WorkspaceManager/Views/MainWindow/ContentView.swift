@@ -2831,9 +2831,13 @@ struct ContentView: View {
         pathNormalizationCache.normalize(rawPath)
     }
 
-    /// Cold-start restore (experimental, opt-in): compute what could be restored
-    /// from the previous run and, when non-empty, surface the restore banner.
-    /// A no-op unless the `restoreSessionsOnLaunch` flag is enabled.
+    /// Cold-start restore (experimental, opt-in): bring back the previous run's
+    /// open tiles. Tiles whose tmux session is still running rejoin it at once,
+    /// with no banner: reattaching by name is what the default manifest path
+    /// already does, and it asks nothing of anyone. The banner offers only the
+    /// rest — tiles to resume or start fresh — and dismissing it leaves the
+    /// rejoined tiles where they are. A no-op unless the `restoreSessionsOnLaunch`
+    /// flag is enabled.
     @MainActor
     private func computeRestorePlanIfEnabled() async {
         guard restoreSessionsOnLaunchEnabled, let localStateStore else { return }
@@ -2842,10 +2846,18 @@ struct ContentView: View {
             homeDirectoryPath: resolvedDefaultHostDirectory.path,
             normalizePath: RestorePathNormalization.normalize
         ).build(repos: repos)
-        let plan = await TerminalRestoreCoordinator(
+        let previousRunPlan = await TerminalRestoreCoordinator(
             localStateStore: localStateStore,
             normalizePath: RestorePathNormalization.normalize
         ).makePlan(index: index)
+        let launchSplit = restoreController.launchSplit(of: previousRunPlan)
+        if !launchSplit.reattach.surfaces.isEmpty {
+            restoreLog.info(
+                "[Restore] reattaching \(launchSplit.reattach.surfaces.count, privacy: .public) surface(s) whose tmux session is still running"
+            )
+            await executeRestore(launchSplit.reattach)
+        }
+        let plan = launchSplit.offered
         switch restoreController.disposition(
             for: plan,
             handledRunID: restoreHandledRunID,
@@ -2853,7 +2865,7 @@ struct ContentView: View {
             seedDirectory: resolvedDefaultHostDirectory
         ) {
         case .noRestorableSurfaces:
-            restoreLog.info("[Restore] no restorable surfaces from previous run")
+            restoreLog.info("[Restore] nothing to offer from previous run")
         case .alreadyHandled(let previousRunID):
             restoreLog.info(
                 "[Restore] suppressed banner: previous run \(previousRunID ?? "?", privacy: .public) already handled"
@@ -2905,6 +2917,9 @@ struct ContentView: View {
     @MainActor
     private func executeRestore(_ recordedPlan: RestorePlan) async {
         let plan = recordedPlan.settlingTerminalModes(tileTreeStore.terminalModeForNewSession)
+        // Sessions an earlier restore pass this launch created are restored tiles, not seeds:
+        // nothing below retires them or counts their tmux names as this launch's to reclaim.
+        let restoredSessionIDs = restoreState.restoredSessionIDs
         // #3: the restore plan owns every key it restores. Retire any session a
         // pre-restore seed (the default-home fallback) left on those keys, so a
         // resume/reattach surface is created fresh and the coordinator's key-reuse
@@ -2919,14 +2934,14 @@ struct ContentView: View {
         // `sessions` is primaries only, and a split seed is no less this launch's to
         // retire than a primary one.
         var ownedHostSessionIDsByTmuxName: [String: [UUID]] = [:]
-        for session in tileTreeStore.allLiveSessions {
+        for session in tileTreeStore.allLiveSessions where !restoredSessionIDs.contains(session.id) {
             guard let tmuxSessionName = session.tmuxSessionName else { continue }
             ownedHostSessionIDsByTmuxName[tmuxSessionName, default: []].append(session.id)
         }
         let ownedTmuxSessionNames = Set(ownedHostSessionIDsByTmuxName.keys)
 
         for key in restoreController.ownedSessionKeys(in: plan) {
-            _ = tileTreeStore.retireSessions(inScope: key)
+            _ = tileTreeStore.retireSessions(inScope: key, keeping: restoredSessionIDs)
         }
 
         // Same ownership, tmux layer: kill this launch's own seed so the resume surface
@@ -3037,9 +3052,12 @@ struct ContentView: View {
             )
             activatedByHostSessionID[surface.hostSessionID] = session
         }
+        restoreState.noteRestored(Set(activatedByHostSessionID.values.map(\.id)))
 
-        if let selected = plan.selectedHostSessionID, let target = activatedByHostSessionID[selected] {
-            _ = tileTreeStore.activateExistingSession(sessionID: target.id)
+        // Each scope comes back on the tab it had selected, then the window on the surface
+        // it had focused.
+        for sessionID in restoreController.selectionOrder(in: plan, created: activatedByHostSessionID) {
+            _ = tileTreeStore.activateExistingSession(sessionID: sessionID)
         }
         restoreLog.info("[Restore] executed \(plan.surfaces.count, privacy: .public) surface(s)")
         await reattachPreviouslyOpenSurfaces(trigger: .restore)

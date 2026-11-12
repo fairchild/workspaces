@@ -531,4 +531,83 @@ struct MainWindowRestoreControllerTests {
         #expect(controller.adoptedHostSessionID(for: resume) == nil)
         #expect(controller.adoptedHostSessionID(for: fresh) == nil)
     }
+
+    // MARK: - What launch does without asking
+
+    /// With the restore flag on, tiles whose tmux session is still running rejoin at launch,
+    /// and the banner offers only what needs a decision. A run with nothing but reattach rows
+    /// raises no banner at all.
+    @Test("A flag-on launch with only reattach rows shows no banner and reattaches them")
+    func reattachOnlyLaunchRaisesNoBanner() {
+        let primary = surface(action: .reattachTmux(sessionName: "wm-alpha"))
+        let backgroundTab = surface(action: .reattachTmux(sessionName: "wm-alpha-tab"))
+        let previousRun = plan([primary, backgroundTab])
+
+        let split = controller.launchSplit(of: previousRun)
+
+        #expect(split.reattach.surfaces == [primary, backgroundTab])
+        #expect(split.reattach.previousRunID == previousRun.previousRunID)
+        #expect(disposition(for: split.offered) == .noRestorableSurfaces)
+        var state = MainWindowRestoreState()
+        state.offer(split.offered)
+        #expect(state.bannerPlan == nil)
+    }
+
+    @Test("The banner lists only the surfaces to resume or start fresh")
+    func bannerOffersOnlyWhatNeedsADecision() {
+        let reattach = surface(action: .reattachTmux(sessionName: "wm-alpha"))
+        let resume = surface(action: .resumeClaude(agentSessionID: "a"))
+        let fresh = surface(action: .freshShell, key: .hostPath("/Users/dev/code/beta"))
+
+        let split = controller.launchSplit(of: plan([reattach, resume, fresh]))
+
+        #expect(split.reattach.surfaces == [reattach])
+        #expect(split.offered.surfaces == [resume, fresh])
+        #expect(disposition(for: split.offered) == .offer)
+    }
+
+    /// Dismissing the banner records the run as handled and hides it; the tiles that already
+    /// rejoined are restore's own and the next pass keeps them.
+    @Test("Dismissing the banner keeps the tiles that reattached")
+    func dismissKeepsReattachedTiles() {
+        var state = MainWindowRestoreState()
+        let reattachedSessionIDs: Set<UUID> = [UUID(), UUID()]
+        state.noteRestored(reattachedSessionIDs)
+        state.offer(plan([surface(action: .resumeClaude(agentSessionID: "a"))]))
+
+        state.dismissBanner()
+
+        #expect(state.bannerPlan == nil)
+        #expect(state.restoredSessionIDs == reattachedSessionIDs)
+    }
+
+    @Test("Each scope lands on its selected tab, then the window on its focused surface")
+    func selectionFollowsTheRecordedSelection() {
+        let alpha = HostTerminalSessionKey.hostPath("/Users/dev/code/alpha")
+        let beta = HostTerminalSessionKey.hostPath("/Users/dev/code/beta")
+        let alphaSelected = RestoreSurfacePlan(
+            hostSessionID: UUID(), key: alpha, directory: seedDirectory, action: .freshShell, isSelectedInScope: true)
+        let alphaBackground = RestoreSurfacePlan(
+            hostSessionID: UUID(), key: alpha, directory: seedDirectory, action: .freshShell)
+        let betaSelected = RestoreSurfacePlan(
+            hostSessionID: UUID(), key: beta, directory: seedDirectory, action: .freshShell, isSelectedInScope: true)
+        let target = RestorePlan(
+            surfaces: [alphaBackground, alphaSelected, betaSelected],
+            selectedHostSessionID: alphaSelected.hostSessionID
+        )
+        var created: [UUID: HostTerminalSession] = [:]
+        for planned in target.surfaces {
+            created[planned.hostSessionID] = HostTerminalSession(
+                key: planned.key, directory: planned.directory, terminalMode: .tmuxPerSession)
+        }
+
+        let order = controller.selectionOrder(in: target, created: created)
+
+        #expect(
+            order
+                == [
+                    created[betaSelected.hostSessionID]?.id,
+                    created[alphaSelected.hostSessionID]?.id,
+                ].compactMap { $0 })
+    }
 }
