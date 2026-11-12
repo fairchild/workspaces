@@ -4,8 +4,9 @@ Directed prompts produce bugs; "review this" produces checklists. Pick the patte
 
 ## Mechanics
 
-- `codex exec -c model="gpt-5.6-sol" -c model_reasoning_effort="xhigh" --skip-git-repo-check "<prompt>" < /dev/null`
-  — tell the prompt which diff to read (`git diff main...HEAD`, `git show HEAD`); plain `exec`
+- Select `codex_model` once with the shared `codex-cli` skill, then run
+  `codex exec --model "${codex_model:?select a model first}" --sandbox read-only -c model_reasoning_effort='"xhigh"' "<prompt>" </dev/null`.
+  Tell the prompt which diff to read (`git diff <base-sha> <head-sha>`, `git show <sha>`); plain `exec`
   doesn't infer it. (`codex exec review --base main` exists but cannot combine with a custom prompt.)
 - **`< /dev/null` is load-bearing.** When stdin is not a TTY, `codex exec` appends whatever
   arrives there to the prompt — so from a background task, a hook, or CI it prints
@@ -13,13 +14,22 @@ Directed prompts produce bugs; "review this" produces checklists. Pick the patte
   the review starts. Observed cost: a 40-minute silent stall that looked like a long xhigh run
   (#1251). A stalled run writes a ~39-byte log and no findings; a live one passes 75 KB within
   three minutes, so size is the cheap liveness check when you are unsure which you have.
-- 8–12 min typical at xhigh; set Bash timeout ≥ 600s. On timeout the session survives:
+- Prior xhigh runs took 8–12 min; allow a suitable timeout. If the timed-out
+  session was saved, continue it with:
   ```bash
-  codex exec resume --last "Output your final verdict now — findings ranked, merge-ready or not."
+  codex exec --model "${codex_model:?select a model first}" \
+    -c model_reasoning_effort='"xhigh"' resume <session-id> \
+    "Output your final verdict now — findings ranked, merge-ready or not." </dev/null
   ```
+- Capture the exact session ID from the original run and confirm that process
+  has stopped before resuming. `--last` can pick another concurrent review.
+  Pass the selected model and effort again; a session ID alone can pick up an
+  older model from the CLI configuration.
 - Ask for output shape: "findings ranked (blocker/important/minor) with file:line and a concrete
   failure scenario; say explicitly if nothing blocks merge."
-- Invite verification ("run the relevant tests", "prove it") — codex will run filtered `swift test`
+- Invite verification ("run the relevant tests", "prove it"). Use a scratch worktree
+  with workspace-write access when tests need writes; read-only review cannot
+  promise a test run. Codex can run filtered `swift test`
   and normalized diffs itself. On audits, also ask for a "what looks sound" list; cite the
   negative results in the PR.
 
