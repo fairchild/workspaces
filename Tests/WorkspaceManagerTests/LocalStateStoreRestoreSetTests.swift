@@ -136,7 +136,7 @@ struct LocalStateStoreRestoreSetTests {
     /// `ensureTerminalSessionRow` gives an early agent event a row to point at. No tile
     /// recorded it, so restore must not invent one; once a surface records the same id,
     /// it is an ordinary tile.
-    @Test("Placeholder rows from early agent events stay out of the restore set")
+    @Test("Placeholder rows from early agent events are not open tiles to either reader")
     func placeholderRowsAreNotTiles() async throws {
         let directory = try TemporaryStoreDirectory()
         defer { directory.cleanup() }
@@ -166,9 +166,12 @@ struct LocalStateStoreRestoreSetTests {
         }
         try await previous.recordTerminalSession(session(upgraded), isActive: false, hooksSocketPath: nil)
 
-        let rows = try await openCurrent().fetchPreviousRunSessions()
+        let current = try openCurrent()
+        let rows = try await current.fetchPreviousRunSessions()
+        let listed = try await current.fetchContinuitySessions(openOnly: true, limit: 100)
 
         #expect(rows.map(\.hostSessionID) == [upgraded])
+        #expect(listed.map(\.hostSessionID) == [upgraded])
     }
 
     @Test("Retention keeps a background tab's latest agent event")

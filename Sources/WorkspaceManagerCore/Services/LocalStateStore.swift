@@ -643,6 +643,14 @@ public actor LocalStateStore {
     /// so no migration has to rewrite them to be told apart.
     static let placeholderTerminalMode = "unknown"
 
+    /// The SQL condition for an open tile: a row some surface recorded that has not
+    /// ended. Every reader that asks which tiles are open uses this one condition, and
+    /// adds run selection and the stale-staging filter itself where it needs them.
+    /// `alias` is the `terminal_sessions` table's name in the caller's query.
+    static func openTile(_ alias: String) -> String {
+        "(\(alias).ended_at IS NULL AND \(alias).terminal_mode != '\(placeholderTerminalMode)')"
+    }
+
     private static func ensureTerminalSessionRow(
         _ db: Database,
         hostSessionID: UUID,
@@ -720,10 +728,10 @@ public actor LocalStateStore {
     /// terminal sessions, each joined with the latest agent status event recorded
     /// for that host session (or `nil` agent fields when none exists). Rows are
     /// ordered newest `last_seen_at` first. Pass `openOnly: true` to restrict to
-    /// sessions that have not been marked ended, selected tab or not — after a
-    /// crash or reboot the previous run's sessions typically remain open, which is
-    /// what a cold-start restore wants to enumerate. Rows the startup sweep has
-    /// staged as stale are on their way to ending and are left out.
+    /// open tiles (`openTile`), selected tab or not — after a crash or reboot the
+    /// previous run's sessions typically remain open, which is what a cold-start
+    /// restore wants to enumerate. Rows the startup sweep has staged as stale are on
+    /// their way to ending and are left out.
     public func fetchContinuitySessions(
         openOnly: Bool = false,
         limit: Int = 50,
@@ -775,7 +783,7 @@ public actor LocalStateStore {
                             ) AS event_rank
                         FROM agent_status_events
                     ) ae ON ae.host_session_id = ts.host_session_id AND ae.event_rank = 1
-                    WHERE (? = 0 OR (ts.ended_at IS NULL AND ts.stale_since IS NULL))
+                    WHERE (? = 0 OR (\(Self.openTile("ts")) AND ts.stale_since IS NULL))
                     ORDER BY ts.last_seen_at DESC
                     LIMIT ? OFFSET ?
                     """,
@@ -793,10 +801,12 @@ public actor LocalStateStore {
     /// session set instead of an all-time backlog of stale open rows. Returns
     /// `[]` on first launch and for pre-v2 rows (NULL `run_id`).
     ///
-    /// Open means not ended: a background tab and a split pane are open tiles as
-    /// much as the selected tab is, so `is_active` (the selected tab in its scope)
-    /// plays no part here. A row whose holder died stays open and is included.
-    /// Placeholder rows no surface ever recorded are not tiles and are skipped.
+    /// Open is `openTile`: a background tab and a split pane are open tiles as much
+    /// as the selected tab is, so `is_active` (the selected tab in its scope) plays
+    /// no part here. A row whose holder died stays open and is included. Placeholder
+    /// rows no surface ever recorded are not tiles and are skipped. The startup sweep
+    /// never stages the previous run's rows, so the stale filter keeps nothing out
+    /// today; it is stated so this reader and `fetchContinuitySessions` agree.
     ///
     /// Restore reads the whole set: which rows share a tmux name, and which one is a
     /// scope's selected tab, are facts about every row, so a cut taken before planning
@@ -874,13 +884,13 @@ public actor LocalStateStore {
                         ORDER BY run_started_at DESC
                         LIMIT 1
                     )
-                    AND ts.ended_at IS NULL
-                    AND ts.terminal_mode != ?
+                    AND \(Self.openTile("ts"))
+                    AND ts.stale_since IS NULL
                     ORDER BY ts.last_seen_at DESC
                     LIMIT ?
                     """,
                 // SQLite reads a negative LIMIT as no limit.
-                arguments: [currentRunStartedAt, Self.placeholderTerminalMode, sqlLimit]
+                arguments: [currentRunStartedAt, sqlLimit]
             )
             return rows.compactMap(TerminalSessionContinuityRow.init(row:))
         }
@@ -1055,8 +1065,8 @@ public actor LocalStateStore {
             // reader fall back to an older run's stale never-ended crash rows and
             // offer the wrong restore set — a cleanly-closed prior run must read
             // as "nothing to restore", not as an older run's leftovers. When the
-            // prior run still has open rows, those anchor the reader and its
-            // ended rows prune normally. (The EXISTS probe checks open rows,
+            // prior run still has open tiles, those anchor the reader and its
+            // ended rows prune normally. (The EXISTS probe checks open tiles,
             // which this statement never deletes, so it is stable mid-delete.)
             try db.execute(
                 sql: """
@@ -1073,14 +1083,14 @@ public actor LocalStateStore {
                           OR EXISTS (
                               SELECT 1 FROM terminal_sessions anchor
                               WHERE anchor.run_id = terminal_sessions.run_id
-                                AND anchor.ended_at IS NULL
+                                AND \(Self.openTile("anchor"))
                           )
                       )
                     """,
                 arguments: [sessionCutoff, currentRunStartedAt])
             let deletedEndedSessions = db.changesCount
 
-            // Aged agent events, except the latest per still-open session. The
+            // Aged agent events, except the latest per open tile. The
             // ROW_NUMBER projection mirrors fetchContinuitySessions /
             // fetchPreviousRunSessions, so the row each reader joins as "latest"
             // is exactly the row this keeps.
@@ -1099,7 +1109,7 @@ public actor LocalStateStore {
                               FROM agent_status_events ae
                               JOIN terminal_sessions ts
                                   ON ts.host_session_id = ae.host_session_id
-                              WHERE ts.ended_at IS NULL
+                              WHERE \(Self.openTile("ts"))
                           )
                           WHERE event_rank = 1
                       )
