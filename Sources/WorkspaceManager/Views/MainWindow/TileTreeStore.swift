@@ -554,20 +554,38 @@ final class TileTreeStore: ObservableObject {
             retiredSessionIDs.append(primarySessionID)
         }
 
+        for sessionID in retiredSessionIDs {
+            closeRequests.removeValue(forKey: sessionID)
+        }
         if !retiredSessionIDs.isEmpty {
             publishSnapshot()
         }
         return retiredSessionIDs
     }
 
-    private var closeRequestedSessionIDs: Set<UUID> = []
+    /// Closes a session's surface on its way out with its retiring scope. Ghostty may report
+    /// the surface as exited rather than closed; the request is marked first so that exit
+    /// still reads as the retirement.
+    func closeForRetirement(sessionID: UUID) async throws {
+        noteCloseRequested(sessionID, as: .retired)
+        _ = try await surfaceStore.closeForSessionRetirement(sessionID: sessionID)
+    }
 
-    func noteCloseRequested(_ sessionID: UUID) {
-        closeRequestedSessionIDs.insert(sessionID)
+    /// Closes asked for and not yet seen through, each with the reason its exit takes.
+    private var closeRequests: [UUID: TerminalSessionExit] = [:]
+
+    func noteCloseRequested(_ sessionID: UUID, as exit: TerminalSessionExit = .userClosed) {
+        closeRequests[sessionID] = exit
     }
 
     func forgetCloseRequest(_ sessionID: UUID) {
-        closeRequestedSessionIDs.remove(sessionID)
+        closeRequests.removeValue(forKey: sessionID)
+    }
+
+    /// Drops every close still waiting. The confirmation sheet shows one request at a time,
+    /// so cancelling it withdraws every close that was waiting on it, not only the one shown.
+    func forgetCloseRequests() {
+        closeRequests.removeAll()
     }
 
     /// Asks the tile's tmux socket what remains once its client is gone. Production reads
@@ -576,8 +594,16 @@ final class TileTreeStore: ObservableObject {
         await TmuxHolderProbe().holderState(forSessionNamed: sessionName)
     }
 
-    /// Exits whose tmux question is still out, each with the classification task answering it.
-    private var exitClassifications: [UUID: Task<Void, Never>] = [:]
+    /// A process exit whose tmux question is still out: what it tore down, and the task
+    /// answering it. A close that arrives meanwhile takes it over (`handleProcessExit`).
+    private struct PendingExit {
+        let token = UUID()
+        let session: HostTerminalSession?
+        let rowEndings: [UUID]
+        var task: Task<Void, Never>?
+    }
+
+    private var pendingExits: [UUID: PendingExit] = [:]
     /// While an exit is tearing tiles down, the sessions whose rows it ends. Their rows are
     /// written once the exit has a reason, so no row is written ended and then reopened.
     private var collectedRowEndings: [UUID]?
@@ -592,7 +618,9 @@ final class TileTreeStore: ObservableObject {
     /// `rowOutcome`). A close the user asked for can still arrive as a process exit: Ghostty
     /// skips the confirmation when it believes the terminal is at a prompt and reports the
     /// surface as exited. `noteCloseRequested` marks the request so that exit still counts as
-    /// the user's.
+    /// the user's. A close that arrives after the tile has already left on a process exit
+    /// whose reason is still being asked takes that exit over: its reason is the one the
+    /// rows get, and the late answer writes nothing.
     ///
     /// The tile leaves at once, as every close always has, and the reason comes after. A
     /// process exit of a tile that launched through tmux asks the tmux socket, off the main
@@ -603,8 +631,11 @@ final class TileTreeStore: ObservableObject {
     /// question is out leaves those rows open, so the next launch can still offer them.
     @discardableResult
     func handleProcessExit(for sessionID: UUID, cause: TerminalSessionExit? = nil) -> Bool {
-        let wasRequested = closeRequestedSessionIDs.remove(sessionID) != nil
-        let knownExit: TerminalSessionExit? = wasRequested ? .userClosed : cause
+        let knownExit = closeRequests.removeValue(forKey: sessionID) ?? cause
+        if let knownExit, let pending = pendingExits.removeValue(forKey: sessionID) {
+            overridePendingExit(sessionID, pending, with: knownExit)
+            return false
+        }
         let exitingSession = allLiveSessions.first(where: { $0.id == sessionID })
         let launch = surfaceStore.launch(sessionID: sessionID)
 
@@ -620,6 +651,7 @@ final class TileTreeStore: ObservableObject {
         } else if let launch, launch.throughTmux, let tmuxSessionName = exitingSession?.effectiveTmuxSessionName {
             classifyExit(
                 sessionID,
+                session: exitingSession,
                 tmuxSessionName: tmuxSessionName,
                 launchServerPID: launch.tmuxServerPID,
                 rowEndings: rowEndings,
@@ -658,22 +690,40 @@ final class TileTreeStore: ObservableObject {
 
     private func classifyExit(
         _ sessionID: UUID,
+        session: HostTerminalSession?,
         tmuxSessionName: String,
         launchServerPID: Int?,
         rowEndings: [UUID],
         exitedAt: Date
     ) {
         let holderState = tmuxHolderState
-        exitClassifications[sessionID] = Task { @MainActor [weak self] in
+        var pending = PendingExit(session: session, rowEndings: rowEndings)
+        let token = pending.token
+        pending.task = Task { @MainActor [weak self] in
             let state = await holderState(tmuxSessionName)
-            guard let self else { return }
+            guard let self, self.pendingExits[sessionID]?.token == token else { return }
+            self.pendingExits.removeValue(forKey: sessionID)
             let exit = TerminalSessionExit.classifyProcessExit(tmuxHolder: state, launchServerPID: launchServerPID)
             log.info(
                 "[TileTreeStore] session \(sessionID.uuidString, privacy: .public) exited: tmux \(tmuxSessionName, privacy: .public) \(String(describing: state), privacy: .public), reason \(String(describing: exit), privacy: .public)"
             )
             self.recordRowEndings(rowEndings, exitingSessionID: sessionID, exit: exit, at: exitedAt)
-            self.exitClassifications.removeValue(forKey: sessionID)
         }
+        pendingExits[sessionID] = pending
+    }
+
+    /// A close that reached a tile already gone on a process exit whose reason is still out.
+    /// The close is what the person or the app decided, so it is the reason the rows get; the
+    /// probe's later answer finds its exit taken and writes nothing.
+    private func overridePendingExit(_ sessionID: UUID, _ pending: PendingExit, with exit: TerminalSessionExit) {
+        pending.task?.cancel()
+        if exit.reclaimsTmuxSession, let session = pending.session {
+            killPaneScopedTmuxSession(for: session)
+        }
+        log.info(
+            "[TileTreeStore] session \(sessionID.uuidString, privacy: .public) closed while its exit was being read: reason \(String(describing: exit), privacy: .public)"
+        )
+        recordRowEndings(pending.rowEndings, exitingSessionID: sessionID, exit: exit, at: Date())
     }
 
     /// Writes what an exit leaves on each row it tore down. The exiting tile takes the exit's
@@ -692,8 +742,8 @@ final class TileTreeStore: ObservableObject {
 
     /// Resumes once every process exit still waiting on tmux has written its rows.
     func waitForExitClassifications() async {
-        while let pending = exitClassifications.values.first {
-            await pending.value
+        while let pending = pendingExits.values.first {
+            await pending.task?.value
         }
     }
 

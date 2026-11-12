@@ -1167,9 +1167,7 @@ struct ContentView: View {
                     forceCloseTerminalTab(sessionID: confirmation.sessionID)
                 }
                 Button("Cancel", role: .cancel) {
-                    if let sessionID = viewState.terminalCloseConfirmation?.sessionID {
-                        tileTreeStore.forgetCloseRequest(sessionID)
-                    }
+                    tileTreeStore.forgetCloseRequests()
                     viewState.terminalCloseConfirmation = nil
                 }
             } message: {
@@ -1769,7 +1767,7 @@ struct ContentView: View {
     private func retireTerminalSessions(inScope scopeKey: HostTerminalSessionKey) async throws {
         let sessionIDs = tileTreeStore.terminalSessionIDs(inScope: scopeKey)
         for sessionID in sessionIDs {
-            try await tileTreeStore.surfaceStore.closeForSessionRetirement(sessionID: sessionID)
+            try await tileTreeStore.closeForRetirement(sessionID: sessionID)
         }
 
         let retiredSessionIDs = tileTreeStore.retireSessions(inScope: scopeKey)
@@ -1795,7 +1793,7 @@ struct ContentView: View {
                     .didKill
             },
             closeForRetirement: { sessionID in
-                _ = try await tileTreeStore.surfaceStore.closeForSessionRetirement(sessionID: sessionID)
+                try await tileTreeStore.closeForRetirement(sessionID: sessionID)
             },
             retireSessions: { key in
                 tileTreeStore.retireSessions(inScope: key)

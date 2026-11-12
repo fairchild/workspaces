@@ -251,7 +251,7 @@ struct TerminalSessionExitTests {
     }
 
     private static let everyExit: [TerminalSessionExit] = [
-        .userClosed, .shellExited, .holderLost, .detached, .undetermined,
+        .userClosed, .retired, .shellExited, .holderLost, .detached, .undetermined,
     ]
 
     @Test("Only a user close reclaims the tile's own tmux session")

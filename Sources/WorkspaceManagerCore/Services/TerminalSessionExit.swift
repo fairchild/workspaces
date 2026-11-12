@@ -18,6 +18,10 @@ import Foundation
 public enum TerminalSessionExit: Sendable, Equatable {
     /// The person closed the tile.
     case userClosed
+    /// The app closed the tile along with its scope: a workspace archived or a repo
+    /// removed. The tile is gone for good, and what happens to its tmux session is the
+    /// retiring path's decision, not the close's.
+    case retired
     /// The tile's own shell ended: a plain shell exiting, or the tile's tmux session
     /// ending on a server that is still running.
     case shellExited
@@ -45,7 +49,7 @@ public enum TerminalSessionExit: Sendable, Equatable {
 
     public var rowOutcome: RowOutcome {
         switch self {
-        case .userClosed, .shellExited:
+        case .userClosed, .retired, .shellExited:
             return .end
         case .holderLost:
             return .markHolderLost
@@ -64,7 +68,7 @@ public enum TerminalSessionExit: Sendable, Equatable {
         switch self {
         case .userClosed:
             return true
-        case .shellExited, .holderLost, .detached, .undetermined:
+        case .retired, .shellExited, .holderLost, .detached, .undetermined:
             return false
         }
     }
@@ -77,7 +81,7 @@ public enum TerminalSessionExit: Sendable, Equatable {
     /// has ended them.
     public var collateralExit: TerminalSessionExit {
         switch self {
-        case .userClosed, .shellExited, .holderLost, .detached, .undetermined:
+        case .userClosed, .retired, .shellExited, .holderLost, .detached, .undetermined:
             return self
         }
     }

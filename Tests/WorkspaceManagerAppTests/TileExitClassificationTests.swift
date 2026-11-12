@@ -26,6 +26,8 @@ struct TileExitClassificationTests {
         let store: TileTreeStore
         let sink: ContinuityWriteLog
         let probeCalls: ProbeCalls
+        /// Every tmux session the store asked to kill, by host-session id.
+        let reclaims: ProbeCalls
 
         func rowWrites(for sessionID: UUID) async -> [ContinuityWriteOperation] {
             await store.waitForExitClassifications()
@@ -49,8 +51,12 @@ struct TileExitClassificationTests {
             await probeCalls.append(name)
             return answer
         }
-        store.terminateOwnedTmuxSession = { _ in .notLive }
-        return Harness(store: store, sink: sink, probeCalls: probeCalls)
+        let reclaims = ProbeCalls()
+        store.terminateOwnedTmuxSession = { hostSessionID in
+            await reclaims.append(hostSessionID.uuidString)
+            return .notLive
+        }
+        return Harness(store: store, sink: sink, probeCalls: probeCalls, reclaims: reclaims)
     }
 
     /// Two tmux tiles in one scope, both launched through tmux.
@@ -264,5 +270,61 @@ struct TileExitClassificationTests {
         answer.finish()
 
         #expect(await harness.rowWrites(for: tab.id) == [.holderLost(tab.id)])
+    }
+
+    /// Gates the store's tmux question so a test can act while the answer is still out.
+    private func gateProbe(_ store: TileTreeStore) -> AsyncStream<TmuxHolderState>.Continuation {
+        let (answers, answer) = AsyncStream.makeStream(of: TmuxHolderState.self)
+        store.tmuxHolderState = { _ in
+            for await state in answers { return state }
+            return .unanswered
+        }
+        return answer
+    }
+
+    @Test("A close that arrives while the exit's reason is still out wins, and the late answer writes nothing")
+    func closeDuringClassificationWins() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let answer = gateProbe(harness.store)
+        let (_, tab) = try openTwoTmuxTiles(harness.store)
+
+        #expect(harness.store.handleProcessExit(for: tab.id))
+        #expect(!harness.store.handleProcessExit(for: tab.id, cause: .userClosed))
+        answer.yield(.serverGone)
+        answer.finish()
+
+        #expect(await harness.rowWrites(for: tab.id) == [.ended(tab.id)])
+        for _ in 0..<100 where await harness.reclaims.sessionNames.isEmpty { await Task.yield() }
+        #expect(await harness.reclaims.sessionNames == [tab.id.uuidString])
+    }
+
+    /// The confirmation sheet shows one close at a time. Cancelling it withdraws every close that
+    /// was waiting, so none of them later turns a lost holder into a close.
+    @Test("Cancelling the close sheet withdraws every close waiting on it")
+    func cancellingTheSheetWithdrawsEveryWaitingClose() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let (primary, tab) = try openTwoTmuxTiles(harness.store)
+        harness.store.noteCloseRequested(primary.id)
+        harness.store.noteCloseRequested(tab.id)
+
+        harness.store.forgetCloseRequests()
+        #expect(harness.store.handleProcessExit(for: tab.id))
+        #expect(harness.store.handleProcessExit(for: primary.id))
+
+        #expect(await harness.rowWrites(for: tab.id) == [.holderLost(tab.id)])
+        #expect(await harness.rowWrites(for: primary.id) == [.holderLost(primary.id)])
+    }
+
+    @Test("A retirement that lands as a process exit ends the row, asks tmux nothing and kills nothing")
+    func retirementArrivingAsExitEndsTheRow() async throws {
+        let harness = makeHarness(answer: .sessionPresent(serverPID: 4242))
+        let (_, tab) = try openTwoTmuxTiles(harness.store)
+        harness.store.noteCloseRequested(tab.id, as: .retired)
+
+        #expect(harness.store.handleProcessExit(for: tab.id))
+
+        #expect(await harness.rowWrites(for: tab.id) == [.ended(tab.id)])
+        #expect(await harness.probeCalls.sessionNames.isEmpty)
+        #expect(await harness.reclaims.sessionNames.isEmpty)
     }
 }
