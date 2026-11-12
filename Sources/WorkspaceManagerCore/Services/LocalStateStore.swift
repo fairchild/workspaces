@@ -1150,6 +1150,141 @@ public actor LocalStateStore {
         )
     }
 
+    // MARK: - Conversation index
+
+    /// Replaces the whole index with `entries`, read from the Conversation record files. The
+    /// files are the truth and this table a lookup over them, so dropping it loses nothing.
+    public func rebuildConversationIndex(_ entries: [ConversationIndexEntry]) async throws {
+        try await dbPool.write { db in
+            try db.execute(sql: "DELETE FROM conversation_index")
+            for entry in entries {
+                try Self.upsertConversationIndexEntry(entry, in: db)
+            }
+        }
+    }
+
+    /// Brings the index level with `entries` by touching only what changed: a file whose
+    /// modification time moved is read again, and a file that is gone leaves the index.
+    public func syncConversationIndex(_ entries: [ConversationIndexEntry]) async throws {
+        try await dbPool.write { db in
+            let indexed = try Row.fetchAll(db, sql: "SELECT conversation_id, file_mtime FROM conversation_index")
+                .reduce(into: [String: String]()) { $0[$1["conversation_id"]] = $1["file_mtime"] }
+            let current = Set(entries.map(\.conversationID))
+            for gone in indexed.keys where !current.contains(gone) {
+                try db.execute(sql: "DELETE FROM conversation_index WHERE conversation_id = ?", arguments: [gone])
+            }
+            for entry in entries where indexed[entry.conversationID] != Self.isoString(entry.fileModifiedAt) {
+                try Self.upsertConversationIndexEntry(entry, in: db)
+            }
+        }
+    }
+
+    public func fetchConversationIndex() async throws -> [ConversationIndexEntry] {
+        try await dbPool.read { db in
+            try Row.fetchAll(db, sql: "SELECT * FROM conversation_index ORDER BY conversation_id")
+                .compactMap(ConversationIndexEntry.init(row:))
+        }
+    }
+
+    /// The conversation a tile holds now: the one seen in it most recently.
+    public func fetchCurrentConversation(hostSessionID: UUID) async throws -> ConversationIndexEntry? {
+        try await dbPool.read { db in
+            try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT * FROM conversation_index
+                    WHERE host_session_id = ?
+                    ORDER BY observed_at DESC, conversation_id DESC
+                    LIMIT 1
+                    """,
+                arguments: [hostSessionID.uuidString]
+            ).flatMap(ConversationIndexEntry.init(row:))
+        }
+    }
+
+    /// Each Claude conversation the current and previous runs' tiles reported, newest sighting
+    /// per tile, for the one-time migration into Conversation records.
+    public func fetchRecentConversationSightings() async throws -> [ConversationSighting] {
+        let currentRunID = runID
+        let currentRunStartedAt = runStartedAt
+        return try await dbPool.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT ae.host_session_id, ae.agent_session_id, ae.cwd, ae.event_at
+                    FROM (
+                        SELECT
+                            host_session_id, agent_session_id, cwd, event_at,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY host_session_id, agent_session_id
+                                ORDER BY event_at DESC, id DESC
+                            ) AS sighting_rank
+                        FROM agent_status_events
+                        WHERE agent_session_id IS NOT NULL AND agent_kind = ?
+                    ) ae
+                    JOIN terminal_sessions ts ON ts.host_session_id = ae.host_session_id
+                    WHERE ae.sighting_rank = 1
+                    AND (
+                        ts.run_id = ?
+                        OR ts.run_id = (
+                            SELECT run_id FROM terminal_sessions
+                            WHERE run_started_at IS NOT NULL AND run_started_at < ?
+                            ORDER BY run_started_at DESC
+                            LIMIT 1
+                        )
+                    )
+                    ORDER BY ae.event_at
+                    """,
+                arguments: [AgentKind.claudeCode.rawValue, currentRunID, currentRunStartedAt]
+            ).compactMap { row in
+                guard let hostSessionID = UUID(uuidString: row["host_session_id"]),
+                    let observedAt = Self.date(fromISOString: row["event_at"])
+                else { return nil }
+                return ConversationSighting(
+                    hostSessionID: hostSessionID,
+                    conversationID: row["agent_session_id"],
+                    cwd: row["cwd"],
+                    observedAt: observedAt
+                )
+            }
+        }
+    }
+
+    public func metadataValue(forKey key: String) async throws -> String? {
+        try await dbPool.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM local_state_metadata WHERE key = ?", arguments: [key])
+        }
+    }
+
+    public func setMetadataValue(_ value: String, forKey key: String) async throws {
+        try await dbPool.write { db in
+            try Self.writeMetadataValue(db, key: key, value: value)
+        }
+    }
+
+    private static func upsertConversationIndexEntry(_ entry: ConversationIndexEntry, in db: Database) throws {
+        try db.execute(
+            sql: """
+                INSERT INTO conversation_index (
+                    conversation_id, harness, host_session_id, tmux_server_pid, tmux_session_id,
+                    cwd, observed_at, file_mtime
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    harness = excluded.harness,
+                    host_session_id = excluded.host_session_id,
+                    tmux_server_pid = excluded.tmux_server_pid,
+                    tmux_session_id = excluded.tmux_session_id,
+                    cwd = excluded.cwd,
+                    observed_at = excluded.observed_at,
+                    file_mtime = excluded.file_mtime
+                """,
+            arguments: [
+                entry.conversationID, entry.harness, entry.hostSessionID?.uuidString, entry.tmuxServerPID,
+                entry.tmuxSessionID, entry.cwd, isoString(entry.observedAt), isoString(entry.fileModifiedAt),
+            ]
+        )
+    }
+
     /// Standalone `PRAGMA quick_check` probe. Returns `true` when SQLite reports a
     /// structurally sound database (`["ok"]`).
     public func checkIntegrity() async throws -> Bool {
@@ -1166,6 +1301,7 @@ public actor LocalStateStore {
             "agent_status_events",
             "diagnostic_events",
             "diagnostic_exports",
+            "conversation_index",
         ]
 
         let counts = try await dbPool.read { db -> [String: Int] in
@@ -1394,7 +1530,31 @@ public actor LocalStateStore {
                     ALTER TABLE terminal_sessions ADD COLUMN holder_lost_at TEXT;
                     """)
         }
+        registerConversationIndexMigration(in: &migrator)
         return migrator
+    }
+
+    /// A lookup over the Conversation record files, rebuilt from them at launch and kept
+    /// level by the record watcher. Nothing else writes it.
+    private static func registerConversationIndexMigration(in migrator: inout DatabaseMigrator) {
+        migrator.registerMigration("conversation_index") { db in
+            try db.execute(
+                sql: """
+                    CREATE TABLE IF NOT EXISTS conversation_index (
+                        conversation_id TEXT PRIMARY KEY NOT NULL,
+                        harness TEXT NOT NULL,
+                        host_session_id TEXT,
+                        tmux_server_pid INTEGER,
+                        tmux_session_id TEXT,
+                        cwd TEXT NOT NULL,
+                        observed_at TEXT NOT NULL,
+                        file_mtime TEXT NOT NULL
+                    ) STRICT;
+
+                    CREATE INDEX IF NOT EXISTS idx_conversation_index_host_session
+                        ON conversation_index(host_session_id, observed_at DESC);
+                    """)
+        }
     }
 
     private static func targetFields(
