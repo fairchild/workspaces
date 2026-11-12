@@ -18,9 +18,18 @@ import WorkspaceManagerCore
 struct MainWindowRestoreState: Equatable {
     private(set) var plan: RestorePlan?
     private(set) var bannerDismissed = false
+    /// The whole previous-run plan launch started from, before it was split into what
+    /// rejoins at once and what the banner offers. Selection is restored against it.
+    private(set) var launchPlan: RestorePlan?
+    /// Every session restore created this launch, keyed by the host-session id its row
+    /// recorded, across every restore pass.
+    private(set) var restoredByRecordedID: [UUID: HostTerminalSession] = [:]
+
     /// Host sessions restore created this launch. A later restore pass keeps them: they are
     /// the tiles it brought back, not seeds standing in for them.
-    private(set) var restoredSessionIDs: Set<UUID> = []
+    var restoredSessionIDs: Set<UUID> {
+        Set(restoredByRecordedID.values.map(\.id))
+    }
 
     /// The plan the banner should show, or `nil` when there is nothing to offer — no plan, an
     /// empty one, or one the user already acted on this launch.
@@ -37,8 +46,12 @@ struct MainWindowRestoreState: Equatable {
         bannerDismissed = true
     }
 
-    mutating func noteRestored(_ sessionIDs: Set<UUID>) {
-        restoredSessionIDs.formUnion(sessionIDs)
+    mutating func noteLaunchPlan(_ plan: RestorePlan) {
+        launchPlan = plan
+    }
+
+    mutating func noteRestored(_ created: [UUID: HostTerminalSession]) {
+        restoredByRecordedID.merge(created) { _, latest in latest }
     }
 }
 
@@ -82,13 +95,18 @@ struct MainWindowRestoreController {
         (plan.filteringSurfaces(\.isReattach), plan.filteringSurfaces { !$0.isReattach })
     }
 
-    /// The sessions to activate, in order, after a restore pass created `created` (keyed by
-    /// each surface's recorded host-session id): every scope's selected tab, then the surface
-    /// the window had focused, so the last activation is the one the window lands on. Surfaces
-    /// this pass did not create are left out.
+    /// The sessions to activate, in order, once restore has created `created` (keyed by each
+    /// surface's recorded host-session id): every scope's selected tab, then the surface the
+    /// window had focused, so the last activation is the one the window lands on. Surfaces not
+    /// yet created are left out.
+    ///
+    /// One tab per scope: should two rows of a scope both say selected, the plan's first —
+    /// the newest — wins.
     func selectionOrder(in plan: RestorePlan, created: [UUID: HostTerminalSession]) -> [UUID] {
+        var selectedScopes: Set<HostTerminalSessionKey> = []
         var order = plan.surfaces
-            .filter { $0.isSelectedInScope && $0.hostSessionID != plan.selectedHostSessionID }
+            .filter { $0.isSelectedInScope && selectedScopes.insert($0.key).inserted }
+            .filter { $0.hostSessionID != plan.selectedHostSessionID }
             .compactMap { created[$0.hostSessionID]?.id }
         if let selected = plan.selectedHostSessionID, let session = created[selected] {
             order.append(session.id)

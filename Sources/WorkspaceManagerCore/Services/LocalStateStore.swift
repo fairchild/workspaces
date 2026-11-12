@@ -473,18 +473,33 @@ public actor LocalStateStore {
     /// Records that the tmux server holding a session's processes died under it.
     ///
     /// The row stays open: losing a holder is not the person ending the tile, so the
-    /// next run's restore set still carries it and offers what can come back. An ended
-    /// row is left alone, and the first loss time wins, as with `ended_at`.
+    /// next run's restore set still carries it and offers what can come back. Its tile is
+    /// gone from the window, so the row stops being its scope's selected tab. An ended row
+    /// is left alone, and the first loss time wins, as with `ended_at`.
     public func markTerminalSessionHolderLost(hostSessionID: UUID, lostAt: Date = Date()) async throws {
         let now = Self.isoString(lostAt)
         try await dbPool.write { db in
             try db.execute(
                 sql: """
                     UPDATE terminal_sessions
-                    SET holder_lost_at = ?, last_seen_at = ?
+                    SET holder_lost_at = ?, is_active = 0, last_seen_at = ?
                     WHERE host_session_id = ? AND ended_at IS NULL AND holder_lost_at IS NULL
                     """,
                 arguments: [now, now, hostSessionID.uuidString])
+        }
+    }
+
+    /// Records that an open row's tile left the window while its work stayed, so the row is
+    /// no longer its scope's selected tab. The row stays open and nothing else changes.
+    public func markTerminalSessionDeselected(hostSessionID: UUID) async throws {
+        try await dbPool.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE terminal_sessions
+                    SET is_active = 0
+                    WHERE host_session_id = ? AND ended_at IS NULL
+                    """,
+                arguments: [hostSessionID.uuidString])
         }
     }
 

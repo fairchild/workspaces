@@ -33,7 +33,7 @@ struct TileExitClassificationTests {
             await store.waitForExitClassifications()
             await store.continuityRecorder?.waitUntilDrained()
             return await sink.operations.filter {
-                $0 == .ended(sessionID) || $0 == .holderLost(sessionID)
+                $0 == .ended(sessionID) || $0 == .holderLost(sessionID) || $0 == .deselected(sessionID)
             }
         }
     }
@@ -124,7 +124,7 @@ struct TileExitClassificationTests {
 
         #expect(harness.store.handleProcessExit(for: tab.id))
 
-        #expect(await harness.rowWrites(for: tab.id).isEmpty)
+        #expect(await harness.rowWrites(for: tab.id) == [.deselected(tab.id)])
         #expect(!harness.store.sessions.contains { $0.id == tab.id })
     }
 
@@ -173,7 +173,7 @@ struct TileExitClassificationTests {
 
         #expect(harness.store.handleProcessExit(for: tab.id))
 
-        #expect(await harness.rowWrites(for: tab.id).isEmpty)
+        #expect(await harness.rowWrites(for: tab.id) == [.deselected(tab.id)])
     }
 
     @Test("Split panes torn down with a tab whose client detached stay open with it")
@@ -188,8 +188,8 @@ struct TileExitClassificationTests {
 
         #expect(harness.store.handleProcessExit(for: primary.id))
 
-        #expect(await harness.rowWrites(for: primary.id).isEmpty)
-        #expect(await harness.rowWrites(for: split.id).isEmpty)
+        #expect(await harness.rowWrites(for: primary.id) == [.deselected(primary.id)])
+        #expect(await harness.rowWrites(for: split.id) == [.deselected(split.id)])
     }
 
     @Test("Split panes torn down with a tab whose holder died keep their rows too")
@@ -262,7 +262,7 @@ struct TileExitClassificationTests {
         #expect(!harness.store.sessions.contains { $0.id == tab.id })
         await harness.store.continuityRecorder?.waitUntilDrained()
         let beforeAnswer = await harness.sink.operations.filter {
-            $0 == .ended(tab.id) || $0 == .holderLost(tab.id)
+            $0 == .ended(tab.id) || $0 == .holderLost(tab.id) || $0 == .deselected(tab.id)
         }
         #expect(beforeAnswer.isEmpty)
 

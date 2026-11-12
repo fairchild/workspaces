@@ -2848,6 +2848,7 @@ struct ContentView: View {
             localStateStore: localStateStore,
             normalizePath: RestorePathNormalization.normalize
         ).makePlan(index: index)
+        restoreState.noteLaunchPlan(previousRunPlan)
         let launchSplit = restoreController.launchSplit(of: previousRunPlan)
         if !launchSplit.reattach.surfaces.isEmpty {
             restoreLog.info(
@@ -3050,11 +3051,14 @@ struct ContentView: View {
             )
             activatedByHostSessionID[surface.hostSessionID] = session
         }
-        restoreState.noteRestored(Set(activatedByHostSessionID.values.map(\.id)))
+        restoreState.noteRestored(activatedByHostSessionID)
 
-        // Each scope comes back on the tab it had selected, then the window on the surface
-        // it had focused.
-        for sessionID in restoreController.selectionOrder(in: plan, created: activatedByHostSessionID) {
+        // Each scope comes back on the tab it had selected, then the window on the surface it
+        // had focused. Both read the whole launch plan and every session restored this launch,
+        // so the banner's pass lands where the window was, not on what that pass created.
+        for sessionID in restoreController.selectionOrder(
+            in: restoreState.launchPlan ?? plan, created: restoreState.restoredByRecordedID)
+        {
             _ = tileTreeStore.activateExistingSession(sessionID: sessionID)
         }
         restoreLog.info("[Restore] executed \(plan.surfaces.count, privacy: .public) surface(s)")

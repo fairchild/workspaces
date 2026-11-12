@@ -571,8 +571,11 @@ struct MainWindowRestoreControllerTests {
     @Test("Dismissing the banner keeps the tiles that reattached")
     func dismissKeepsReattachedTiles() {
         var state = MainWindowRestoreState()
-        let reattachedSessionIDs: Set<UUID> = [UUID(), UUID()]
-        state.noteRestored(reattachedSessionIDs)
+        let reattached = (0..<2).map { _ in
+            HostTerminalSession(key: .defaultHome, directory: seedDirectory, terminalMode: .tmuxPerSession)
+        }
+        let reattachedSessionIDs = Set(reattached.map(\.id))
+        state.noteRestored(Dictionary(uniqueKeysWithValues: reattached.map { (UUID(), $0) }))
         state.offer(plan([surface(action: .resumeClaude(agentSessionID: "a"))]))
 
         state.dismissBanner()
@@ -609,5 +612,56 @@ struct MainWindowRestoreControllerTests {
                     created[betaSelected.hostSessionID]?.id,
                     created[alphaSelected.hostSessionID]?.id,
                 ].compactMap { $0 })
+    }
+
+    @Test("A scope with two rows both marked selected lands on the newer one only")
+    func oneSelectedTabPerScope() {
+        let alpha = HostTerminalSessionKey.hostPath("/Users/dev/code/alpha")
+        let newer = RestoreSurfacePlan(
+            hostSessionID: UUID(), key: alpha, directory: seedDirectory, action: .freshShell, isSelectedInScope: true)
+        let older = RestoreSurfacePlan(
+            hostSessionID: UUID(), key: alpha, directory: seedDirectory, action: .freshShell, isSelectedInScope: true)
+        let plan = RestorePlan(surfaces: [newer, older], selectedHostSessionID: nil)
+        var created: [UUID: HostTerminalSession] = [:]
+        for planned in plan.surfaces {
+            created[planned.hostSessionID] = HostTerminalSession(
+                key: planned.key, directory: planned.directory, terminalMode: .tmuxPerSession)
+        }
+
+        #expect(
+            controller.selectionOrder(in: plan, created: created)
+                == [created[newer.hostSessionID]?.id].compactMap { $0 })
+    }
+
+    /// The selected tab rejoined silently at launch; a background tab waited on the banner.
+    /// Restoring from the banner must land the window back on the selected tab, not on the
+    /// tab that pass happened to create.
+    @Test("The banner's pass lands on the selection the silent pass brought back")
+    func bannerPassKeepsTheLaunchSelection() {
+        let alpha = HostTerminalSessionKey.hostPath("/Users/dev/code/alpha")
+        let selected = RestoreSurfacePlan(
+            hostSessionID: UUID(), key: alpha, directory: seedDirectory,
+            action: .reattachTmux(sessionName: "wm-alpha"), isSelectedInScope: true)
+        let background = RestoreSurfacePlan(
+            hostSessionID: UUID(), key: alpha, directory: seedDirectory,
+            action: .resumeClaude(agentSessionID: "11111111-1111-4111-8111-111111111111"))
+        let launchPlan = RestorePlan(
+            surfaces: [selected, background], selectedHostSessionID: selected.hostSessionID)
+        let split = controller.launchSplit(of: launchPlan)
+        let rejoined = HostTerminalSession(key: alpha, directory: seedDirectory, terminalMode: .tmuxPerSession)
+        let resumed = HostTerminalSession(key: alpha, directory: seedDirectory, terminalMode: .tmuxPerSession)
+        var state = MainWindowRestoreState()
+        state.noteLaunchPlan(launchPlan)
+
+        state.noteRestored([selected.hostSessionID: rejoined])
+        state.noteRestored([background.hostSessionID: resumed])
+        let bannerPassOnly = controller.selectionOrder(
+            in: split.offered, created: [background.hostSessionID: resumed])
+        let acrossPasses = controller.selectionOrder(
+            in: state.launchPlan ?? split.offered, created: state.restoredByRecordedID)
+
+        #expect(bannerPassOnly.last != rejoined.id)
+        #expect(acrossPasses.last == rejoined.id)
+        #expect(state.restoredSessionIDs == [rejoined.id, resumed.id])
     }
 }

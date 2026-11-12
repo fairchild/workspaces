@@ -112,6 +112,27 @@ struct LocalStateStoreRestoreSetTests {
         #expect(rows[rejoined.id]?.endedAt == nil)
     }
 
+    /// A tile that left the window with its work still alive keeps its row open, but the row
+    /// is no longer its scope's selected tab: the scope selects a neighbour, and two rows of
+    /// one scope both claiming selection would land the next launch on the older one.
+    @Test("A row left open when its tile goes is no longer its scope's selected tab")
+    func rowsLeftOpenAreDeselected() async throws {
+        let directory = try TemporaryStoreDirectory()
+        defer { directory.cleanup() }
+        let (previous, openCurrent) = try stores(in: directory.url)
+        let lost = session()
+        let detached = session()
+        try await previous.recordTerminalSession(lost, isActive: true, hooksSocketPath: nil)
+        try await previous.recordTerminalSession(detached, isActive: true, hooksSocketPath: nil)
+
+        try await previous.markTerminalSessionHolderLost(hostSessionID: lost.id, lostAt: Date())
+        try await previous.markTerminalSessionDeselected(hostSessionID: detached.id)
+
+        let rows = try await openCurrent().fetchPreviousRunSessions()
+        #expect(Set(rows.map(\.hostSessionID)) == [lost.id, detached.id])
+        #expect(rows.allSatisfy { !$0.isActive && $0.endedAt == nil })
+    }
+
     /// `ensureTerminalSessionRow` gives an early agent event a row to point at. No tile
     /// recorded it, so restore must not invent one; once a surface records the same id,
     /// it is an ordinary tile.
