@@ -237,12 +237,25 @@ def measure_main_thread(pid: int, seconds: int, label: str) -> MainThreadSample:
     return sample
 
 
+OPEN_TILES_IN_LATEST_RUN = (
+    "select count(*) from terminal_sessions"
+    " where ended_at is null and terminal_mode != 'unknown'"
+    " and run_id = (select run_id from terminal_sessions where run_started_at is not null"
+    " order by run_started_at desc limit 1);"
+)
+
+
 def count_active_sessions(data_dir: Path) -> int | None:
+    """Open tiles of the most recent run, as LocalStateStore.openTile counts them.
+
+    is_active marks only each scope's selected tab, so it would miss background tabs
+    and split panes.
+    """
     store = data_dir / "local-state.sqlite"
     if not store.exists() or not shutil.which("sqlite3"):
         return None
     completed = subprocess.run(
-        ["sqlite3", str(store), "select count(*) from terminal_sessions where is_active=1;"],
+        ["sqlite3", str(store), OPEN_TILES_IN_LATEST_RUN],
         capture_output=True,
         text=True,
         check=False,
