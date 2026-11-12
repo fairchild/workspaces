@@ -24,6 +24,8 @@ extension GhosttySurfaceMailboxDeadlockTests {
     @MainActor
     struct GhosttySurfaceFreeMainThreadTests {
         private static let exitDelay: Duration = .seconds(2)
+        /// Far below the seconds a free held the main thread while it waited on a command.
+        private static let freeHoldBound: Duration = .milliseconds(500)
 
         @Test("Retiring a surface hangs up its command at once, and freeing it never waits on the command's exit")
         func retiringASlowToExitCommand() async throws {
@@ -106,8 +108,61 @@ extension GhosttySurfaceMailboxDeadlockTests {
             await waitUntil(.seconds(60)) { freed.started != nil }
             let started = try #require(freed.started, "the retired surface was never freed")
             #expect(
-                started - retired < GhosttyAppManager.hangUpGrace,
+                started - retired < manager.hangUpGrace,
                 "the free waited out the hang-up grace, so the hang-up never reached the command")
+        }
+
+        @Test("A command still alive after its grace is killed, and its free never holds the main thread for it")
+        func aCommandThatOutlivesItsGrace() async throws {
+            let manager = GhosttyAppManager.shared
+            let script = try Self.script(
+                """
+                #!/bin/sh
+                trap '' HUP
+                printf '\\033]2;ignoring hang-ups\\007'
+                while kill -0 "$PPID" 2>/dev/null; do sleep 0.1; done
+                """)
+            defer { try? FileManager.default.removeItem(at: script) }
+            var view: GhosttySurfaceView? = GhosttySurfaceView(customCommand: script.path)
+            let surface = try #require(view?.surface, "the view needs a Ghostty surface to free")
+            await waitUntil(.seconds(30)) { view?.hasObservedPromptReadySignal == true }
+            try #require(view?.hasObservedPromptReadySignal == true, "the script never started")
+            let command = try #require(GhosttySurfaceChildProcess.pid(of: surface), "the surface's command has no pid")
+
+            // Stopped, `login` holds its hang-up until it is resumed, and the script ignores its own.
+            try #require(kill(command, SIGSTOP) == 0)
+            let watchdog = Self.watchdog(resuming: command, after: .seconds(40))
+            let grace = (hangUp: manager.hangUpGrace, kill: manager.killGrace)
+            manager.hangUpGrace = .milliseconds(300)
+            manager.killGrace = .seconds(10)
+            defer { (manager.hangUpGrace, manager.killGrace) = grace }
+            let freed = FreeRecord()
+            manager.onSurfaceFreed = { free in
+                if free.surfaceAddress == UInt(bitPattern: surface) {
+                    (freed.started, freed.held) = (free.started, free.held)
+                }
+            }
+            defer { manager.onSurfaceFreed = nil }
+            let retired = ContinuousClock.now
+            let released = WeakView(view)
+            autoreleasepool { view = nil }
+            try #require(released.view == nil, "the view outlived its last reference")
+            await waitUntil(.seconds(30)) { freed.started != nil }
+            watchdog.cancel()
+            let resumedByWatchdog = await watchdog.value
+            if freed.started == nil {
+                kill(command, SIGCONT)
+                await waitUntil(.seconds(30)) { freed.started != nil }
+            }
+
+            #expect(!resumedByWatchdog, "the command stayed stopped until the test's watchdog resumed it")
+            let started = try #require(
+                freed.started, "the stopped command was never ended, so its surface was never freed")
+            let held = try #require(freed.held)
+            #expect(
+                started - retired >= manager.hangUpGrace,
+                "the surface was freed before its command could have been killed")
+            #expect(held < Self.freeHoldBound, "the free held the main thread \(held)")
         }
 
         /// Off the main thread, since a free that does the hang-up itself holds it until then.
@@ -119,6 +174,18 @@ extension GhosttySurfaceMailboxDeadlockTests {
                 let hungUp = FileManager.default.fileExists(atPath: marker.path)
                 kill(command, SIGCONT)
                 return hungUp
+            }
+        }
+
+        /// Resumes `command` after `timeout` unless cancelled first, from off the main thread, so
+        /// a test whose free blocks the main thread on a stopped command still ends. True if it
+        /// had to.
+        nonisolated private static func watchdog(resuming command: pid_t, after timeout: Duration) -> Task<Bool, Never>
+        {
+            Task.detached {
+                do { try await Task.sleep(for: timeout) } catch { return false }
+                kill(command, SIGCONT)
+                return true
             }
         }
 

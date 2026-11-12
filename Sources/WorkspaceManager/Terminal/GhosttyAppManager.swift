@@ -76,15 +76,23 @@ final class GhosttyAppManager: NSObject {
     ///
     /// The free must run on this thread, and the `io` thread it joins exits only once the
     /// surface's command has: it sends SIGHUP and sleeps in 10 ms steps until the command is
-    /// gone. So retired surfaces' commands are hung up here instead, and each free waits,
-    /// without holding this thread, until libghostty reports its command exited.
+    /// gone, however long that takes. So retired surfaces' commands are ended here instead,
+    /// and a surface is freed only once libghostty reports its command exited: hung up first,
+    /// then, if it outlives `hangUpGrace`, resumed and killed.
+    ///
+    /// A command still alive `killGrace` after that is one this thread cannot end: none of
+    /// its foreground group is left to lead back to it, or it is stuck where SIGKILL cannot
+    /// reach. Its surface stays unfreed, and is freed by a later drain if the command ever
+    /// exits. Leaking one surface's memory and threads costs less than freeing it, which
+    /// would hold this thread, and with it every window, for as long as the command lives.
     private var retiredSurfaces: [RetiredSurface] = []
     private var drainingRetiredSurfaces = false
     var retiredSurfaceCount: Int { retiredSurfaces.count }
 
-    /// How long a hung-up command gets to exit before its surface is freed anyway, and the
-    /// free waits for the command on this thread as it would have without the hang-up.
-    static let hangUpGrace: Duration = .seconds(5)
+    /// How long a hung-up command gets to exit before it is resumed and killed.
+    var hangUpGrace: Duration = .seconds(5)
+    /// How long a killed command gets to exit before its surface is left unfreed.
+    var killGrace: Duration = .seconds(2)
 
     /// One `ghostty_surface_free`: the surface by address only, since it is gone by the time
     /// anyone hears of it, when the free began and how long it held this thread.
@@ -98,13 +106,12 @@ final class GhosttyAppManager: NSObject {
     var onSurfaceFreed: ((SurfaceFree) -> Void)?
 
     private struct RetiredSurface {
+        enum Shutdown { case hangingUp, killing, abandoned }
+
         let surface: ghostty_surface_t
         let callbackTarget: Unmanaged<GhosttySurfaceCallbackTarget>
-        var freeAnywayAt: ContinuousClock.Instant?
-
-        var isReadyToFree: Bool {
-            ghostty_surface_process_exited(surface) || freeAnywayAt.map { ContinuousClock.now >= $0 } ?? false
-        }
+        var shutdown = Shutdown.hangingUp
+        var nextStepAt: ContinuousClock.Instant?
     }
 
     private override init() {
@@ -196,7 +203,7 @@ final class GhosttyAppManager: NSObject {
     }
 
     func retireSurface(_ surface: ghostty_surface_t, callbackTarget: Unmanaged<GhosttySurfaceCallbackTarget>) {
-        GhosttySurfaceChildProcess.hangUp(surface)
+        GhosttySurfaceChildProcess.send(SIGHUP, to: surface)
         retiredSurfaces.append(RetiredSurface(surface: surface, callbackTarget: callbackTarget))
         drainRetiredSurfacesIfNeeded()
     }
@@ -210,13 +217,13 @@ final class GhosttyAppManager: NSObject {
     /// One free per main-actor turn, each right after the tick that may have delivered its
     /// command's exit, so retiring many surfaces never adds up to one long block. Until then
     /// the hang-up repeats, as libghostty's own does: `login` misses one that lands while it
-    /// is still starting, and the command runs on. The grace starts here rather than at
-    /// retirement, so time spent with the drain suspended doesn't count against it.
+    /// is still starting, and the command runs on. The graces start here rather than at
+    /// retirement, so time spent with the drain suspended doesn't count against them.
     private func drainRetiredSurfaces() async {
         defer { drainingRetiredSurfaces = false }
-        while !retiredSurfaces.isEmpty, !mailboxDrainSuspended {
+        while !mailboxDrainSuspended {
             tick()
-            if let index = retiredSurfaces.firstIndex(where: \.isReadyToFree) {
+            if let index = retiredSurfaces.firstIndex(where: { ghostty_surface_process_exited($0.surface) }) {
                 let retired = retiredSurfaces.remove(at: index)
                 let started = ContinuousClock.now
                 ghostty_surface_free(retired.surface)
@@ -231,12 +238,44 @@ final class GhosttyAppManager: NSObject {
                 await Task.yield()
                 continue
             }
-            let freeAnywayAt = ContinuousClock.now + Self.hangUpGrace
+            guard retiredSurfaces.contains(where: { $0.shutdown != .abandoned }) else { return }
+            let now = ContinuousClock.now
             for index in retiredSurfaces.indices {
-                GhosttySurfaceChildProcess.hangUp(retiredSurfaces[index].surface)
-                retiredSurfaces[index].freeAnywayAt = retiredSurfaces[index].freeAnywayAt ?? freeAnywayAt
+                advanceShutdown(of: &retiredSurfaces[index], at: now)
             }
             try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private func advanceShutdown(of retired: inout RetiredSurface, at now: ContinuousClock.Instant) {
+        switch retired.shutdown {
+        case .hangingUp:
+            let deadline = retired.nextStepAt ?? now + hangUpGrace
+            retired.nextStepAt = deadline
+            guard now >= deadline else {
+                GhosttySurfaceChildProcess.send(SIGHUP, to: retired.surface)
+                return
+            }
+            retired.shutdown = .killing
+            retired.nextStepAt = now + killGrace
+            fallthrough
+        case .killing:
+            guard let deadline = retired.nextStepAt, now >= deadline else {
+                GhosttySurfaceChildProcess.send(SIGCONT, to: retired.surface)
+                GhosttySurfaceChildProcess.send(SIGKILL, to: retired.surface)
+                return
+            }
+            retired.shutdown = .abandoned
+            let address = UInt(bitPattern: retired.surface)
+            log.error(
+                """
+                [GhosttyAppManager] leaving surface \(address, privacy: .public) \
+                unfreed: its command survived SIGKILL or could not be found, and freeing it would hold \
+                the main thread until the command exits
+                """
+            )
+        case .abandoned:
+            break
         }
     }
 

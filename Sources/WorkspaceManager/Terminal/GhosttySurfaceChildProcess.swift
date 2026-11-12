@@ -2,9 +2,9 @@
 //  GhosttySurfaceChildProcess.swift
 //  WorkspaceManager
 //
-//  The process libghostty spawned for a surface, and the hang-up that ends it. Freeing a
+//  The process libghostty spawned for a surface, and the signals that end it. Freeing a
 //  surface joins its io thread, which sends that process group SIGHUP and polls every 10 ms
-//  until the process is gone. Hanging up before the free lets the free find it gone.
+//  until the process is gone. Ending it before the free lets the free find it gone.
 //
 
 import Darwin
@@ -26,12 +26,12 @@ enum GhosttySurfaceChildProcess {
         return leader
     }
 
-    /// The signal libghostty's own teardown sends, to the same process group. Does nothing
-    /// before the command has a pid on the pty, or once it has exited.
+    /// Sends `signal` to the command's process group, the group libghostty's own teardown
+    /// hangs up. Does nothing before the command has a pid on the pty, or once it has exited.
     @MainActor
-    static func hangUp(_ surface: ghostty_surface_t) {
+    static func send(_ signal: Int32, to surface: ghostty_surface_t) {
         guard let pid = pid(of: surface) else { return }
-        _ = killpg(pid, SIGHUP)
+        _ = killpg(pid, signal)
     }
 
     private static func members(ofGroup group: pid_t) -> [pid_t] {
