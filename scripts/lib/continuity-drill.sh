@@ -89,6 +89,7 @@ describe_pass() {
     esac
     case "$1" in
         *-server) PASS_KILL_ORDER="server-first" ;;
+        *-restart) PASS_KILL_ORDER="restart" ;;
         *) PASS_KILL_ORDER="app-first" ;;
     esac
 }
