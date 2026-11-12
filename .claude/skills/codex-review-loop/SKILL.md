@@ -1,6 +1,6 @@
 ---
 name: codex-review-loop
-description: Pre-PR review loop — self-reflect, then a directed codex CLI (gpt-5.6-sol xhigh) review, then react with attributed commits. Use before opening any substantive PR or when asked to "run the review loop" / "codex review this". Skip for metadata/docs-only diffs.
+description: Pre-PR review loop — self-reflect, then a directed Codex CLI review using the current model, then react with attributed commits. Use before opening any substantive PR or when asked to "run the review loop" / "codex review this". Skip for metadata/docs-only diffs.
 ---
 
 # Codex Review Loop
@@ -27,8 +27,14 @@ docs-only diffs.
 
 2. **Codex, directed.**
 
+   Select `codex_model` with the shared `codex-cli` skill before dispatch. Its
+   [model policy](https://github.com/fairchild/dotclaude/blob/main/skills/codex-cli/SKILL.md)
+   owns current-model discovery and the dated fallback. Reuse that selection for
+   this session; never copy a model pin into this loop.
+
    ```bash
-   codex exec -c model="gpt-5.6-sol" -c model_reasoning_effort="xhigh" --skip-git-repo-check "<prompt>" < /dev/null
+   codex exec --model "${codex_model:?select a model with codex-cli first}" \
+     --sandbox read-only -c model_reasoning_effort='"xhigh"' "<prompt>" </dev/null
    ```
 
    Keep the `< /dev/null`: without a TTY on stdin, `codex exec` waits for more prompt text and
@@ -55,7 +61,7 @@ docs-only diffs.
    introduced a finding — run `git log <base>..HEAD -- <files>` before acting. Pre-existing
    findings become issues, not scope creep. Declining a finding is valid; say why in the PR.
 
-4. **React with attribution.** Fix commits open with `In response to codex (gpt-5.6-sol, xhigh) ...`;
+4. **React with attribution.** Fix commits open with `In response to codex (<actual model>, <actual effort>) ...`;
    the PR body carries a `## Review loop` section listing each finding and its disposition.
    Never fold review reactions silently into other commits — attribution is how the loop's
    value is measured.

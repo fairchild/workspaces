@@ -78,9 +78,13 @@ gitignored):
    `.agents/inbox/brief-<issue>.md`. Name the branch the app created
    (`workspace/<workspace-name>`) in the brief's "you are on branch" line.
 2. Write `.agents/inbox/tile-start`:
+   Select the model with the shared `codex-cli` skill before writing this file.
+   Replace `<selected-model-id>` below with that exact ID in the file itself;
+   the tile shell does not inherit the coordinator's local variables.
    ```bash
+   codex_model='<selected-model-id>'
    echo "[worker-<issue>] started $(date)" | tee .agents/inbox/worker.log
-   codex exec --cd . -c model='"gpt-5.6-sol"' -c model_reasoning_effort='"high"' \
+   codex exec --cd . --model "${codex_model:?select a model with codex-cli first}" -c model_reasoning_effort='"high"' \
      --dangerously-bypass-approvals-and-sandbox \
      "$(cat .agents/inbox/brief-<issue>.md)" </dev/null 2>&1 | tee -a .agents/inbox/worker.log
    echo "[worker-<issue>] finished $(date)" | tee -a .agents/inbox/worker.log

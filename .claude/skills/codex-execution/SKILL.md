@@ -1,6 +1,6 @@
 ---
 name: codex-execution
-description: Dispatch codex CLI (gpt-5.6-sol xhigh) as the implementing agent for a well-specified issue — codex commits locally in a dedicated worktree, the orchestrator reviews, gates, and ships. Use when delegating implementation work to codex ("dispatch to codex", "codex implements"), especially when Claude subagent capacity is constrained. Complements codex-review-loop (codex as reviewer).
+description: Dispatch Codex CLI using the current model as the implementing agent for a well-specified issue — Codex commits locally in a dedicated worktree, the orchestrator reviews, gates, and ships. Use when delegating implementation work to Codex ("dispatch to codex", "codex implements"), especially when Claude subagent capacity is constrained. Complements codex-review-loop (Codex as reviewer).
 ---
 
 # Codex as Execution Agent
@@ -14,22 +14,26 @@ mutation checks, ~208k tokens; the orchestrator review found one real gap.
 
 ## Dispatch
 
+Select `codex_model` once per session with the shared `codex-cli` skill. Its
+[model policy](https://github.com/fairchild/dotclaude/blob/main/skills/codex-cli/SKILL.md)
+owns current-model discovery and the dated fallback; this skill owns the
+WorkSpaces implementation contract. Pass the selected ID explicitly so a stale
+CLI config pin cannot override it.
+
 ```bash
 git -C <repo> fetch origin main   # ALWAYS — a stale origin/main base costs a
                                   # surprise rebase later (bit twice in W6)
 git -C <repo> worktree add -b codex/<slug> <worktree-path> origin/main
 codex exec --cd <worktree-path> \
-  -c model='"gpt-5.6-sol"' -c model_reasoning_effort='"xhigh"' \
+  --model "${codex_model:?select a model with codex-cli first}" -c model_reasoning_effort='"xhigh"' \
   --dangerously-bypass-approvals-and-sandbox \
   "$(cat brief.md)" </dev/null
 ```
 
-**Model pin: `gpt-5.6-sol`.** Marketing names and dispatchable ids diverge —
-ChatGPT-account codex rejects bare `gpt-5.6` ("model is not supported when
-using Codex with a ChatGPT account"). On that error, don't guess ids: read the
-CLI's own configured default (`rg '^model' <codex home>/config.toml` — the
-runtime's config is the known-good id), dispatch with that, and update this
-pin in the same arc.
+**Use the selected exact ID.** If Codex rejects a model or effort, check the
+account's advertised catalog per `codex-cli` and report the blocker. A saved
+configuration default is not evidence of current availability. Never guess an
+alias or silently fall back to an older model.
 
 **Foreground-synchronous, stdin closed.** A backgrounded codex hangs on
 "Reading additional input from stdin…" with zero output — this stalled three
@@ -71,7 +75,7 @@ non-negotiables:
 ## Orchestrator gating (after codex returns)
 
 1. Read `CODEX_REPORT.md` + the full diff; react with attributed commits
-   (`In response to my (…) review of the codex (gpt-5.6-sol, xhigh) implementation`).
+   (`In response to my (…) review of the codex (<actual model>, <actual effort>) implementation`).
    **Stage explicit paths, never `git add -A`** — a sweep in a worktree
    commits the untracked report (now also gitignored, but the habit matters).
 2. Rebase onto current `origin/main`; **clean stale build state before
