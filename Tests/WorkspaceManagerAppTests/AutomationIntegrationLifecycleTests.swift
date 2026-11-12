@@ -157,6 +157,7 @@ struct AutomationIntegrationLifecycleTests {
         let plane = try makeScratchPlane()
         defer { try? FileManager.default.removeItem(at: plane.root) }
         let lifecycle = AutomationIntegrationLifecycle(files: plane.files, isOperatorEnabled: { true })
+        let gate = StartWaitGate(holding: 1, on: lifecycle)
 
         let starting = Task {
             try await lifecycle.startIfNeeded(
@@ -165,9 +166,10 @@ struct AutomationIntegrationLifecycleTests {
                 requestCloseTerminal: { _ in }
             )
         }
-        // stop() lands once the start is waiting on the bind.
-        let binding = await yield(until: { lifecycle.startWaiters == 1 })
+        // stop() runs to completion while the start is held waiting on the bind.
+        let binding = await gate.entered()
         await lifecycle.stop()
+        gate.release()
         let started = await starting.result
         let left = await leftovers(of: lifecycle, files: plane.files)
         // Stop again before asserting, so a start that published anyway cannot leave its listener bound.
@@ -191,19 +193,21 @@ struct AutomationIntegrationLifecycleTests {
             isOperatorEnabled: { true }
         )
         let store = TileTreeStore()
+        let gate = StartWaitGate(holding: 2, on: lifecycle)
 
-        // The first pass starts the listener and the second joins that start; both are waiting on the
-        // bind when stop() lands.
+        // The first pass starts the listener and the second joins that start; both are held waiting on
+        // the bind while stop() runs.
         let starting = Task {
             await lifecycle.configure(tileTreeStore: store, focusTerminal: { _ in }, requestCloseTerminal: { _ in })
         }
         let joining = Task {
             await lifecycle.configure(tileTreeStore: store, focusTerminal: { _ in }, requestCloseTerminal: { _ in })
         }
-        let joined = await yield(until: { lifecycle.startWaiters == 2 })
+        let joined = await gate.entered()
         // Nothing published yet means the stop below lands on the start, not on an ordinary shutdown.
         let publishedBeforeStop = lifecycle.socketPath
         await lifecycle.stop()
+        gate.release()
         await starting.value
         await joining.value
         let left = await leftovers(of: lifecycle, files: plane.files)
@@ -229,6 +233,7 @@ struct AutomationIntegrationLifecycleTests {
             requestCloseTerminal: { _ in }
         )
         let lifecycle = AutomationIntegrationLifecycle(files: plane.files, isOperatorEnabled: { true })
+        let gate = StartWaitGate(holding: 2, on: lifecycle)
 
         func start() -> Task<String, Error> {
             Task {
@@ -241,8 +246,9 @@ struct AutomationIntegrationLifecycleTests {
         }
         let starting = start()
         let joining = start()
-        let joined = await yield(until: { lifecycle.startWaiters == 2 })
+        let joined = await gate.entered()
         await lifecycle.stop()
+        gate.release()
         let results = [await starting.result, await joining.result]
         await otherLaunch.stop()
         let left = await leftovers(of: lifecycle, files: plane.files)
@@ -263,6 +269,7 @@ struct AutomationIntegrationLifecycleTests {
         let plane = try makeScratchPlane()
         defer { try? FileManager.default.removeItem(at: plane.root) }
         let lifecycle = AutomationIntegrationLifecycle(files: plane.files, isOperatorEnabled: { true })
+        let gate = StartWaitGate(holding: 1, on: lifecycle)
 
         let starting = Task {
             try await lifecycle.startIfNeeded(
@@ -271,7 +278,7 @@ struct AutomationIntegrationLifecycleTests {
                 requestCloseTerminal: { _ in }
             )
         }
-        let binding = await yield(until: { lifecycle.startWaiters == 1 })
+        let binding = await gate.entered()
         // Each caller stops, then at once registers a handle and starts again, as a window would.
         func stopThenRestart() -> Task<(handle: String, socketPath: String), Error> {
             Task {
@@ -287,8 +294,11 @@ struct AutomationIntegrationLifecycleTests {
         }
         let first = stopThenRestart()
         let second = stopThenRestart()
-        let cancelled = await starting.result
         let restarts = [await first.result, await second.result]
+        // The first start is let go only once both stops and restarts are done, so it resumes into the plane
+        // started after them, which it must leave alone.
+        gate.release()
+        let cancelled = await starting.result
         let handlesResolve = restarts.compactMap { try? $0.get().handle }.map {
             lifecycle.handleRegistry.resolve($0) != nil
         }
@@ -304,15 +314,6 @@ struct AutomationIntegrationLifecycleTests {
         #expect(running.credential?.socketPath == plane.files.socketURL.path)
         #expect(running.lockHeld)
         #expect(left == .nothing)
-    }
-
-    /// Yields until `condition` holds, so a test acts on the state it needs rather than on how far one
-    /// yield happened to get. Bounded by a count of yields, not a clock.
-    private func yield(until condition: () -> Bool) async -> Bool {
-        for _ in 0..<1_000 where !condition() {
-            await Task.yield()
-        }
-        return condition()
     }
 
     /// What a stop left on its plane: the credential, the published socket path, and whether the socket
@@ -430,5 +431,40 @@ private final class APIDecision: @unchecked Sendable {
     var value: Bool {
         get { lock.withLock { storage } }
         set { lock.withLock { storage = newValue } }
+    }
+}
+
+/// Holds the first `holding` callers that begin waiting on a lifecycle's start until the test releases
+/// them, so a stop lands while they wait however fast the bind completes. Callers after those, such as a
+/// restart once the stop is done, pass straight through.
+@MainActor
+private final class StartWaitGate {
+    private let holding: Int
+    private var held: [CheckedContinuation<Void, Never>] = []
+    private var isOpen = false
+
+    init(holding: Int, on lifecycle: AutomationIntegrationLifecycle) {
+        self.holding = holding
+        lifecycle.startWaitHook = { [weak self] in await self?.hold() }
+    }
+
+    private func hold() async {
+        guard !isOpen, held.count < holding else { return }
+        await withCheckedContinuation { held.append($0) }
+    }
+
+    /// Whether all `holding` callers are held. A held caller stays put, so polling cannot miss it; the
+    /// bound is a count of sleeps, not a clock.
+    func entered() async -> Bool {
+        for _ in 0..<1_000 where held.count < holding {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return held.count == holding
+    }
+
+    func release() {
+        isOpen = true
+        held.forEach { $0.resume() }
+        held.removeAll()
     }
 }

@@ -35,9 +35,10 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     /// Callers of a `stop()` already tearing down, resumed when it finishes, or nil while no stop is. A
     /// second stop returns with the first instead of tearing down again behind a start that followed it.
     private var stopWaiters: [CheckedContinuation<Void, Never>]?
-    /// Callers suspended on the start in flight. Exists for tests that must land a stop while a start
-    /// is still binding, rather than trusting a yield to get them there.
-    private(set) var startWaiters = 0
+    /// Run by each caller as it begins waiting on the start in flight, before it looks at the bind. Exists
+    /// for tests that must land a stop while a start is still waiting: a hook that suspends holds the
+    /// caller there however fast the bind completes. Nil outside tests.
+    var startWaitHook: (@MainActor () async -> Void)?
     /// Where this launch's socket, audit log and operator credential live.
     let files: AutomationPlaneFiles
     /// Read by configure passes on the MainActor and by the listener off it, on every request.
@@ -336,8 +337,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     private func waitForStart(
         _ start: (task: Task<AutomationListener, Error>, stops: Int)
     ) async throws -> AutomationListener {
-        startWaiters += 1
-        defer { startWaiters -= 1 }
+        await startWaitHook?()
         let bound = await start.task.result
         guard stops == start.stops else { throw CancellationError() }
         return try bound.get()
