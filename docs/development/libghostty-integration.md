@@ -395,14 +395,25 @@ cache is a purge via the named entrypoint:
    `App.deleteSurface` edits the app's surface list without a lock. The `io` thread it
    joins sends the command SIGHUP and polls every 10 ms until the command has exited,
    which held the main thread ~16 ms per surface, ~100 ms under background QoS, and
-   seconds for a batch (#1897). So `GhosttyAppManager` hangs the command up itself
-   (`GhosttySurfaceChildProcess`) when the surface retires, and again every 10 ms, since
-   `login` misses one that lands while it is still starting. The free waits, without
-   holding the main thread, for `ghostty_surface_process_exited`, falling back after
-   `hangUpGrace`, and frees one surface per main-actor turn. Re-read `Surface.deinit`
-   and `Exec.zig`'s `killPid` when bumping the pin.
-   `GhosttySurfaceFreeMainThreadTests` holds a command stopped across its hang-up and
-   fails if the hang-up waits for the free or the free waits for the command.
+   seconds for a batch, or for as long as a stopped command stayed stopped (#1897). So
+   `GhosttyAppManager` ends the command itself before the free. It hangs the command up
+   (`GhosttySurfaceChildProcess`) when the surface retires, and again every 10 ms,
+   since `login` misses one that lands while it is still starting. A command still
+   alive after `hangUpGrace` (5 s) is sent SIGCONT and SIGKILL. A surface is freed only
+   once `ghostty_surface_process_exited` is true, one per main-actor turn, and the
+   waiting happens off the main thread. A command that outlives `killGrace` (2 s) after
+   that leaves its surface unfreed and logged: a leaked surface costs less than a main
+   thread held until the command exits.
+
+   The command is found through the pty's foreground process group: the session of any
+   live member is the command libghostty spawned, kept only while it is this process's
+   child. libghostty's own teardown signals `getpgid` of the pid it recorded, which is
+   the same group. Re-read `Surface.deinit`, `Exec.zig`'s `killPid` and
+   `processExitCommon`, and `pty.zig`'s `setsid` when bumping the pin.
+   `GhosttySurfaceFreeMainThreadTests` covers the order of events while a command is
+   held stopped (hang-up first, the main thread ticking, the free only after the command
+   exits), a stopped command killed after its grace, and a foreground pipeline whose
+   first process has exited.
 
 ## CI Contract
 
