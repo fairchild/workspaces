@@ -76,7 +76,8 @@ struct GhosttyTerminalConfig {
         hostSessionID: UUID? = nil,
         hooksSocketPath: String? = nil,
         automationEnvironment: AutomationTerminalEnvironment? = nil,
-        tmuxSessionName: String? = nil
+        tmuxSessionName: String? = nil,
+        conversationsDirectory: URL = ConversationRecordsLocation.directory
     ) {
         self.fontSize = fontSize
         self.workingDirectory = workingDirectory.path
@@ -92,6 +93,7 @@ struct GhosttyTerminalConfig {
         if let hooksSocketPath, let hostSessionID {
             environment["WORKSPACES_HOOKS_SOCKET"] = hooksSocketPath
             environment["WORKSPACES_HOST_SESSION_ID"] = hostSessionID.uuidString
+            environment[ConversationRecordStore.directoryEnvironmentKey] = conversationsDirectory.path
             if let commandStatusHookPath = ClaudeIntegrationLifecycle.bundledCommandStatusHookPath() {
                 environment["WORKSPACES_COMMAND_STATUS_ZSH"] = commandStatusHookPath
             }

@@ -281,6 +281,7 @@ verify_bundle_identity "$APP_BUNDLE"
 [[ -f "$APP_BUNDLE/Contents/Resources/Assets.car" ]] || fail "Missing compiled asset catalog Assets.car"
 [[ -f "$APP_BUNDLE/Contents/Resources/HookForwarders/event-forwarder.sh" ]] || fail "Missing Claude hook event forwarder"
 [[ -f "$APP_BUNDLE/Contents/Resources/HookForwarders/statusline.sh" ]] || fail "Missing Claude status-line forwarder"
+[[ -f "$APP_BUNDLE/Contents/Resources/HookForwarders/conversation-observer.sh" ]] || fail "Missing Claude conversation observer"
 for compose_resource in compose.yaml Dockerfile .dockerignore; do
     [[ -f "$APP_BUNDLE/Contents/Resources/ComposeSandbox/$compose_resource" ]] \
         || fail "Missing Compose sandbox resource: $compose_resource"

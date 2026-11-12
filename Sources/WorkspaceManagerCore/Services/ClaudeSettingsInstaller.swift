@@ -4,7 +4,8 @@
 //
 //  Concrete, non-destructive installer for WorkSpaces-owned Claude Code settings.
 //  It patches two files:
-//    - ~/.claude/settings.json: hook command forwarder and status-line command
+//    - ~/.claude/settings.json: hook command forwarder, SessionStart conversation
+//      observer, and status-line command
 //    - ~/.claude.json: preferred notification channel
 //
 
@@ -58,6 +59,10 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         "TaskCompleted",
     ]
 
+    /// The observer runs only where a conversation's id can change: start, resume, clear, and
+    /// compact all arrive as SessionStart. Async, so Claude never waits on it.
+    static let conversationObserverEventName = "SessionStart"
+
     /// Events WorkSpaces used to subscribe to but no longer does. The installer
     /// scrubs its own forwarder from these on each pass; third-party handlers
     /// under the same event are left untouched. `PostToolBatch` duplicates
@@ -69,6 +74,7 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
 
     private let homeDirectory: URL
     private let eventForwarderScriptPath: String?
+    private let conversationObserverScriptPath: String?
     private let statusLineForwarderPath: String?
     private let statusLineRefreshInterval: Int
     private let backupDirectory: URL
@@ -81,10 +87,12 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         eventForwarderScriptPath: String? = nil,
         statusLineForwarderPath: String? = nil,
         statusLineRefreshInterval: Int = 5000,
-        backupDirectory: URL? = nil
+        backupDirectory: URL? = nil,
+        conversationObserverScriptPath: String? = nil
     ) {
         self.homeDirectory = homeDirectory
         self.eventForwarderScriptPath = eventForwarderScriptPath
+        self.conversationObserverScriptPath = conversationObserverScriptPath
         self.statusLineForwarderPath = statusLineForwarderPath
         self.statusLineRefreshInterval = statusLineRefreshInterval
         self.backupDirectory =
@@ -217,7 +225,8 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     }
 
     private func planSettingsPatch(_ current: [String: AnyCodable]) -> PatchPlan {
-        guard eventForwarderScriptPath != nil || statusLineForwarderPath != nil else {
+        guard eventForwarderScriptPath != nil || statusLineForwarderPath != nil || conversationObserverScriptPath != nil
+        else {
             return PatchPlan(merged: current, lines: [])
         }
 
@@ -351,6 +360,27 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
 
         }
 
+        if let conversationObserverScriptPath {
+            let observer = CommandContribution(rawPath: homeRelativeCommand(conversationObserverScriptPath))
+            let event = Self.conversationObserverEventName
+            var groups = normalizedClaudeHookGroups(from: hooks[event])
+            let stale = scrubHandlers(in: groups) { handler in
+                isStaleConversationObserverHook(handler, contribution: observer)
+            }
+            groups = stale.groups
+            if stale.removedCount > 0 {
+                lines.append("replace an earlier conversation observer command in \(event)")
+            }
+            let present = groups.contains { group in
+                claudeGroupContainsHandler(group) { isCanonicalWorkspacesCommandHook($0, contribution: observer) }
+            }
+            if !present {
+                groups.append(["hooks": [["type": "command", "command": observer.command, "async": true]]])
+                lines.append("add conversation observer to \(event) using \(observer.command)")
+            }
+            hooks[event] = groups
+        }
+
         if let statusLineForwarderPath {
             let statusLineCommand = CommandContribution(
                 rawPath: homeRelativeCommand(statusLineForwarderPath)
@@ -369,7 +399,7 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
             }
         }
 
-        if eventForwarderScriptPath != nil {
+        if eventForwarderScriptPath != nil || conversationObserverScriptPath != nil {
             dict["hooks"] = AnyCodable(hooks)
         }
 
@@ -560,6 +590,18 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         return unquoted.hasSuffix("/HookForwarders/event-forwarder.sh")
     }
 
+    /// Any WorkSpaces conversation observer other than this install's canonical command — an
+    /// unescaped spelling of it, or a copy extracted somewhere else — so one SessionStart
+    /// never runs two observers.
+    private func isStaleConversationObserverHook(
+        _ handler: [String: Any],
+        contribution: CommandContribution
+    ) -> Bool {
+        guard (handler["type"] as? String) == "command" else { return false }
+        guard let command = handler["command"] as? String, command != contribution.command else { return false }
+        return unquoteSingleQuotedCommand(command).hasSuffix("/conversation-observer.sh")
+    }
+
     /// Strip a single layer of POSIX single quotes (and `'\''` escapes) so a
     /// quoted command path can be suffix-matched. Returns the input unchanged when
     /// it is not single-quoted.
@@ -642,6 +684,7 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     /// settings.json is only patched when there is a forwarder to register.
     private func isPatched(_ target: Target) -> Bool {
         target == .userClaudeJSON || eventForwarderScriptPath != nil || statusLineForwarderPath != nil
+            || conversationObserverScriptPath != nil
     }
 
     /// A missing or blank file reads as `{}`: there is nothing in it to lose. Any

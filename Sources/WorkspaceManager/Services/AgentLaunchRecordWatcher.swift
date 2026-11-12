@@ -2,10 +2,10 @@
 //  AgentLaunchRecordWatcher.swift
 //  WorkspaceManager
 //
-//  Tells a window when the CLI has written a launch record, by watching the directory the
-//  records live in. A record lands by atomic rename, which is a write to the directory, so
-//  one kernel event covers it. Bursts are coalesced: a launcher fanning out workers should
-//  cost one pass, not one per worker.
+//  Says when a record has landed in a directory of records: the CLI's launch records for a
+//  window, and Conversation records for the app's conversation index. A record lands by
+//  atomic rename, which is a write to the directory, so one kernel event covers it. Bursts
+//  are coalesced: a launcher fanning out workers should cost one pass, not one per worker.
 //
 
 import Foundation
@@ -38,7 +38,7 @@ final class AgentLaunchRecordWatcher {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let descriptor = open(directory.path, O_EVTONLY | O_CLOEXEC)
         guard descriptor >= 0 else {
-            log.notice("Not watching launch records: could not open \(self.directory.path, privacy: .public)")
+            log.notice("Not watching records: could not open \(self.directory.path, privacy: .public)")
             return
         }
         let source = DispatchSource.makeFileSystemObjectSource(
