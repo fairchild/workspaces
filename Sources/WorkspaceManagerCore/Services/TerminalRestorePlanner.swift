@@ -289,7 +289,9 @@ public struct TerminalRestorePlanner: Sendable {
                 }
             }
             .compactMap { _, row -> TmuxSessionNameSharing.Claim? in
-                guard let name = row.tmuxSessionName, isTmuxSessionAlive(name) else { return nil }
+                guard row.holderLostAt == nil, let name = row.tmuxSessionName, isTmuxSessionAlive(name) else {
+                    return nil
+                }
                 return TmuxSessionNameSharing.Claim(hostSessionID: row.hostSessionID, tmuxSessionName: name)
             }
         return TmuxSessionNameSharing.displacedClaims(claims)
@@ -308,13 +310,18 @@ public struct TerminalRestorePlanner: Sendable {
 
     /// A fresh name for a row that recorded a tmux name of its own but cannot reattach it, so
     /// its new shell stays apart from the directory-derived session its primary holds.
+    ///
+    /// A row whose holder was lost gets one even when it recorded the directory-derived name.
+    /// Whatever answers to that name now was started after its server died, by another tile
+    /// or another launch, and two such rows would otherwise both launch onto the one name.
     private func ownLaunchName(
         row: TerminalSessionContinuityRow, action: RestoreSurfaceAction, directory: URL
     )
         -> String?
     {
         if case .reattachTmux = action { return nil }
-        guard let recorded = row.tmuxSessionName, recorded != TmuxSessionNaming.defaultName(for: directory) else {
+        guard let recorded = row.tmuxSessionName else { return nil }
+        guard row.holderLostAt != nil || recorded != TmuxSessionNaming.defaultName(for: directory) else {
             return nil
         }
         return TmuxSessionNameSharing.replacementName(for: directory)
@@ -342,13 +349,16 @@ public struct TerminalRestorePlanner: Sendable {
     }
 
     /// The restore ladder: live tmux → resumable Claude transcript → fresh shell.
+    ///
+    /// A row whose holder was lost never takes the first rung: the session it ran in died
+    /// with its server, so a live session under its recorded name is someone else's.
     private func decideAction(
         row: TerminalSessionContinuityRow,
         resolved: ResolvedRestoreTarget,
         usedAgentSessionIDs: Set<String>,
         recordedAgentSessionIDs: Set<String>
     ) -> (action: RestoreSurfaceAction, directory: URL, fellBack: Bool) {
-        if let tmuxSessionName = row.tmuxSessionName, isTmuxSessionAlive(tmuxSessionName) {
+        if row.holderLostAt == nil, let tmuxSessionName = row.tmuxSessionName, isTmuxSessionAlive(tmuxSessionName) {
             let (directory, fellBack) = nearestValidDirectory(row: row, resolved: resolved)
             return (.reattachTmux(sessionName: tmuxSessionName), directory, fellBack)
         }

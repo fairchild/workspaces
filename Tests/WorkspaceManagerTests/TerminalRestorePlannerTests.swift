@@ -307,24 +307,51 @@ struct TerminalRestorePlannerTests {
         #expect(byID[splitPaneID]?.isSelectedInScope == false)
     }
 
-    @Test("A tile whose tmux server died plans the rung that can still bring it back")
-    func holderLostRowPlansResume() {
-        let planner = makePlanner(
-            tmuxAlive: { _ in false },
-            transcriptResumable: { _, _ in true }
-        )
-        let row = TerminalSessionContinuityRow(
+    private func holderLostRow(
+        tmuxSessionName: String = TmuxSessionNaming.defaultName(for: URL(fileURLWithPath: "/repo")),
+        holderLostAt: Date? = Self.baseDate,
+        agentSessionID: String? = Self.sessionOne
+    ) -> TerminalSessionContinuityRow {
+        TerminalSessionContinuityRow(
             hostSessionID: UUID(), sessionKey: "repoPath(/repo)", targetKind: "repo", targetID: nil,
             targetPath: "/repo", backendIdentifier: nil, backendInstanceID: nil, directoryPath: "/repo",
-            terminalMode: .tmuxPerSession, tmuxSessionName: "wm-repo", customCommandPresent: false,
+            terminalMode: .tmuxPerSession, tmuxSessionName: tmuxSessionName, customCommandPresent: false,
             isActive: false, createdAt: Self.baseDate, lastSeenAt: Self.baseDate, endedAt: nil,
-            holderLostAt: Self.baseDate, agentSessionID: Self.sessionOne,
+            holderLostAt: holderLostAt, agentSessionID: agentSessionID,
             agentKind: AgentKind.claudeCode.rawValue, agentRunState: "idle", agentCwd: "/repo",
             agentModelDisplayName: nil, agentEventAt: Self.baseDate)
+    }
 
-        let plan = planner.plan(rows: [row], layout: nil)
+    /// The session a holder-lost row ran in died with its server. A live session under its
+    /// recorded name was started since, by another tile or launch, and is not this tile's.
+    @Test("A tile whose tmux server died resumes on a name of its own, even when its old name is live again")
+    func holderLostRowPlansResume() throws {
+        let recordedName = TmuxSessionNaming.defaultName(for: URL(fileURLWithPath: "/repo"))
+        let planner = makePlanner(
+            tmuxAlive: { $0 == recordedName },
+            transcriptResumable: { _, _ in true }
+        )
 
-        #expect(plan.surfaces.map(\.action) == [.resumeClaude(agentSessionID: Self.sessionOne)])
+        let lost = try #require(planner.plan(rows: [holderLostRow()], layout: nil).surfaces.first)
+        let unmarked = try #require(planner.plan(rows: [holderLostRow(holderLostAt: nil)], layout: nil).surfaces.first)
+
+        #expect(lost.action == .resumeClaude(agentSessionID: Self.sessionOne))
+        #expect(lost.launchTmuxSessionName != nil)
+        #expect(lost.launchTmuxSessionName != recordedName)
+        #expect(unmarked.action == .reattachTmux(sessionName: recordedName))
+    }
+
+    @Test("Two tiles whose server died on one shared name come back on two names of their own")
+    func holderLostRowsNeverShareAName() {
+        let planner = makePlanner(tmuxAlive: { _ in false }, transcriptResumable: { _, _ in false })
+
+        let plan = planner.plan(
+            rows: [holderLostRow(agentSessionID: nil), holderLostRow(agentSessionID: nil)], layout: nil)
+
+        let names = plan.surfaces.compactMap(\.launchTmuxSessionName)
+        #expect(plan.surfaces.map(\.action) == [.freshShell, .freshShell])
+        #expect(names.count == 2)
+        #expect(Set(names).count == 2)
     }
 
     @Test("Rows whose target no longer resolves are dropped")
