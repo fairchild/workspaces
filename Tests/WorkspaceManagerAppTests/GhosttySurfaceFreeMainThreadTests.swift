@@ -4,10 +4,11 @@
 //
 //  Guards the main thread against waiting on a closed terminal's command (#1897).
 //  `ghostty_surface_free` runs on the main thread and joins the surface's io thread, which
-//  hangs up the command and exits only once the command has. The test holds the command
-//  (the `login` wrapper) stopped, so it cannot exit, and resumes it seconds later: a free
-//  that does the hang-up itself holds the main thread until then. A script in the command's
-//  process group records when the hang-up arrives.
+//  hangs up the command and exits only once the command has. These tests hold the command
+//  (the `login` wrapper) stopped, so it cannot exit, and check the order of events around
+//  it: the hang-up arrives while the main thread runs on, and the free begins only after
+//  the command exits or is killed. A watchdog off the main thread resumes the command if a
+//  free blocks the main thread on it.
 //
 
 import Darwin
@@ -23,12 +24,13 @@ extension GhosttySurfaceMailboxDeadlockTests {
     @Suite("GhosttySurface free and the main thread")
     @MainActor
     struct GhosttySurfaceFreeMainThreadTests {
-        private static let exitDelay: Duration = .seconds(2)
         /// Far below the seconds a free held the main thread while it waited on a command.
         private static let freeHoldBound: Duration = .milliseconds(500)
 
-        @Test("Retiring a surface hangs up its command at once, and freeing it never waits on the command's exit")
-        func retiringASlowToExitCommand() async throws {
+        @Test(
+            "Retiring a surface hangs up its command while the main thread runs on, and frees it once the command exits"
+        )
+        func retiringAStoppedCommand() async throws {
             let manager = GhosttyAppManager.shared
             let marker = FileManager.default.temporaryDirectory.appendingPathComponent("hung-up-\(UUID().uuidString)")
             let script = try Self.hangUpMarkerScript(marker: marker)
@@ -44,21 +46,42 @@ extension GhosttySurfaceMailboxDeadlockTests {
 
             // Stopped, `login` cannot exit until it is resumed; the script under it still runs.
             try #require(kill(command, SIGSTOP) == 0)
+            let grace = manager.hangUpGrace
+            manager.hangUpGrace = .seconds(60)
+            defer { manager.hangUpGrace = grace }
             let freed = FreeRecord()
             manager.onSurfaceFreed = { free in
-                if free.surfaceAddress == UInt(bitPattern: surface) { freed.held = free.held }
+                if free.surfaceAddress == UInt(bitPattern: surface) {
+                    (freed.started, freed.held) = (free.started, free.held)
+                }
             }
             defer { manager.onSurfaceFreed = nil }
-            let resumed = Self.resume(command, after: Self.exitDelay, checking: marker)
+            let observation = HangUpObservation()
+            let resumed = Self.resume(command, onceHungUp: marker, observation)
             let released = WeakView(view)
             autoreleasepool { view = nil }
             try #require(released.view == nil, "the view outlived its last reference")
-            await waitUntil(.seconds(60)) { freed.held != nil }
-            let hungUpBeforeResume = await resumed.value
 
-            #expect(hungUpBeforeResume, "the command was not hung up until after it was resumed")
-            let held = try #require(freed.held, "the retired surface was never freed")
-            #expect(held < Self.exitDelay / 2, "the free held the main thread \(held), waiting on the command's exit")
+            // Only a main thread free of the free gets here before the command is resumed.
+            await waitUntil(.seconds(20)) { observation.hungUpAt != nil }
+            let freeBeganBeforeHangUpSeen = freed.started != nil
+            let ticks = manager.tickCount
+            await waitUntil(.seconds(5)) { manager.tickCount - ticks >= 10 || freed.started != nil }
+            let ticksWhileStopped = manager.tickCount - ticks
+            let freeBeganWhileStopped = freed.started != nil
+            observation.release()
+            let resumedAt = await resumed.value
+            await waitUntil(.seconds(20)) { freed.started != nil }
+
+            let hungUpAt = try #require(observation.hungUpAt, "the command was not hung up while it was stopped")
+            #expect(!freeBeganBeforeHangUpSeen, "the free began before the hang-up was seen")
+            #expect(ticksWhileStopped >= 10, "the main thread stopped ticking while the command was stopped")
+            #expect(!freeBeganWhileStopped, "the free began while the command was still stopped")
+            let started = try #require(freed.started, "the retired surface was never freed")
+            let held = try #require(freed.held)
+            #expect(hungUpAt < started, "the hang-up came from the free itself")
+            #expect(resumedAt < started, "the surface was freed before its command could exit")
+            #expect(held < Self.freeHoldBound, "the free held the main thread \(held)")
         }
 
         @Test("A foreground pipeline whose first process has exited still leads back to the surface's command")
@@ -165,15 +188,28 @@ extension GhosttySurfaceMailboxDeadlockTests {
             #expect(held < Self.freeHoldBound, "the free held the main thread \(held)")
         }
 
-        /// Off the main thread, since a free that does the hang-up itself holds it until then.
+        /// From off the main thread, so a free that blocks it cannot hold the command stopped
+        /// for good: records when `marker` appears, waits for the test to release the command,
+        /// and resumes it, each wait bounded. Returns when it resumed the command.
         nonisolated private static func resume(
-            _ command: pid_t, after delay: Duration, checking marker: URL
-        ) -> Task<Bool, Never> {
+            _ command: pid_t, onceHungUp marker: URL, _ observation: HangUpObservation
+        ) -> Task<ContinuousClock.Instant, Never> {
             Task.detached {
-                try? await Task.sleep(for: delay)
-                let hungUp = FileManager.default.fileExists(atPath: marker.path)
+                let hungUpBy = ContinuousClock.now + .seconds(20)
+                while ContinuousClock.now < hungUpBy {
+                    if FileManager.default.fileExists(atPath: marker.path) {
+                        observation.hungUpAt = ContinuousClock.now
+                        break
+                    }
+                    try? await Task.sleep(for: .milliseconds(5))
+                }
+                let releasedBy = ContinuousClock.now + .seconds(5)
+                while !observation.isReleased, ContinuousClock.now < releasedBy {
+                    try? await Task.sleep(for: .milliseconds(5))
+                }
+                let resumedAt = ContinuousClock.now
                 kill(command, SIGCONT)
-                return hungUp
+                return resumedAt
             }
         }
 
@@ -223,6 +259,22 @@ extension GhosttySurfaceMailboxDeadlockTests {
 private final class FreeRecord {
     var started: ContinuousClock.Instant?
     var held: Duration?
+}
+
+/// Written from the test's off-main resumer and read on the main thread.
+private final class HangUpObservation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seen: ContinuousClock.Instant?
+    private var released = false
+
+    var hungUpAt: ContinuousClock.Instant? {
+        get { lock.withLock { seen } }
+        set { lock.withLock { seen = newValue } }
+    }
+
+    var isReleased: Bool { lock.withLock { released } }
+
+    func release() { lock.withLock { released = true } }
 }
 
 private struct WeakView {
