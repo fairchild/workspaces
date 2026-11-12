@@ -3031,20 +3031,9 @@ struct ContentView: View {
                     "[Restore] surface \(surface.hostSessionID.uuidString, privacy: .public) resume target is a live session; attaching without the resume command"
                 )
             }
-            // One session per continuity row (never key-reuse): sibling rows sharing
-            // a key — a primary and its recorded split panes — each launch on their
-            // own recorded tmux target (#1232). A reattach surface also takes back the
-            // row's host-session id, because the processes it is rejoining still post
-            // agent updates under it (#1397).
             let adoptedHostSessionID = restoreController.adoptedHostSessionID(for: surface)
-            let session = tileTreeStore.createRestoredSession(
-                key: surface.key,
-                directory: surface.directory,
-                recordedTerminalMode: surface.terminalMode,
-                initialCommand: initialCommand,
-                tmuxSessionNameOverride: restoreController.tmuxSessionNameOverride(for: surface),
-                adoptedHostSessionID: adoptedHostSessionID
-            )
+            let session = restoreController.realize(
+                surface, in: tileTreeStore, initialCommand: initialCommand)
             if let adoptedHostSessionID, session.id != adoptedHostSessionID {
                 restoreLog.notice(
                     "[Restore] host session \(adoptedHostSessionID.uuidString, privacy: .public) is already live; reattach surface launched under \(session.id.uuidString, privacy: .public) instead"

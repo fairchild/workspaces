@@ -563,11 +563,17 @@ struct MainWindowRestoreControllerTests {
         let primary = surface(action: .reattachTmux(sessionName: "wm-alpha"))
         let backgroundTab = surface(action: .reattachTmux(sessionName: "wm-alpha-tab"))
         let previousRun = plan([primary, backgroundTab])
+        let store = TileTreeStore()
 
         let split = controller.launchSplit(of: previousRun)
+        let created = split.reattach.surfaces.map {
+            controller.realize($0, in: store, initialCommand: nil)
+        }
 
-        #expect(split.reattach.surfaces == [primary, backgroundTab])
         #expect(split.reattach.previousRunID == previousRun.previousRunID)
+        #expect(created.map(\.id) == [primary.hostSessionID, backgroundTab.hostSessionID])
+        #expect(created.map(\.tmuxSessionName) == ["wm-alpha", "wm-alpha-tab"])
+        #expect(Set(store.allLiveSessions.map(\.id)) == Set(created.map(\.id)))
         #expect(disposition(for: split.offered) == .noRestorableSurfaces)
         var state = MainWindowRestoreState()
         state.offer(split.offered)

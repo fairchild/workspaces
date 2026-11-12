@@ -287,4 +287,24 @@ struct MainWindowRestoreController {
         guard case .reattachTmux = surface.action else { return nil }
         return surface.hostSessionID
     }
+
+    /// Creates the tile one plan surface restores. Each continuity row gets a session of its
+    /// own, never a key reuse: sibling rows sharing a key — a primary and its recorded split
+    /// panes — each launch on their own tmux target (#1232). A reattach surface takes back
+    /// its recorded host-session id and tmux name.
+    @MainActor
+    func realize(
+        _ surface: RestoreSurfacePlan,
+        in tileTreeStore: TileTreeStore,
+        initialCommand: String?
+    ) -> HostTerminalSession {
+        tileTreeStore.createRestoredSession(
+            key: surface.key,
+            directory: surface.directory,
+            recordedTerminalMode: surface.terminalMode,
+            initialCommand: initialCommand,
+            tmuxSessionNameOverride: tmuxSessionNameOverride(for: surface),
+            adoptedHostSessionID: adoptedHostSessionID(for: surface)
+        )
+    }
 }
