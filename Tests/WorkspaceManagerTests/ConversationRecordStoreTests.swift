@@ -102,6 +102,48 @@ struct ConversationRecordStoreTests {
         }
     }
 
+    /// What the previous build (S4, acf18978) writes as `lastSeenIn`: its projection of the
+    /// sightings, which knows the holder, the tmux session's id, server, creation time and
+    /// name, and `outsideTmux`, and nothing this build adds.
+    private static func previousBuildPlace(_ written: [String: Any]) -> [String: Any] {
+        let seen = written["lastSeenIn"] as? [String: Any] ?? [:]
+        var place: [String: Any] = [:]
+        place["hostSessionID"] = seen["hostSessionID"]
+        place["outsideTmux"] = seen["outsideTmux"]
+        if let tmux = seen["tmux"] as? [String: Any] {
+            place["tmux"] = tmux.filter { ["serverPID", "sessionID", "createdAt", "name"].contains($0.key) }
+        }
+        return place
+    }
+
+    @Test(
+        "A record whose lastSeenIn the previous build rewrote still names its harness and socket, from its sightings"
+    )
+    func previousBuildProjectionIsReadFromSightings() throws {
+        let harness = ProcessIdentity(pid: 4321, startedAtMicroseconds: 1_800_000_000_123_456)
+        let tmux = ConversationRecord.TmuxSession(
+            serverPID: 77, sessionID: "$3", createdAt: Date(timeIntervalSince1970: 1_799_999_000), name: "wm-a",
+            socketPath: "/tmp/tmux-501/workspaces", serverStartedAtMicroseconds: 1_799_998_000_000_000)
+        try withStore { store in
+            try store.record(
+                observation(
+                    at: 1_800_000_000,
+                    lastSeenIn: .init(
+                        hostSessionID: Self.tile.uuidString, tmux: tmux, harness: harness,
+                        harnessObservedAt: Date(timeIntervalSince1970: 1_800_000_000))))
+            let url = try #require(store.fileURL(conversationID: Self.conversationID))
+            var written = try object(at: url)
+            written["lastSeenIn"] = Self.previousBuildPlace(written)
+            try JSONSerialization.data(withJSONObject: written).write(to: url)
+            #expect((try object(at: url)["lastSeenIn"] as? [String: Any])?["harness"] == nil)
+
+            let seen = try #require(store.load(conversationID: Self.conversationID)?.lastSeenIn)
+            #expect(seen.harness == harness)
+            #expect(seen.tmux == tmux)
+            #expect(store.all().first?.lastSeenIn?.harness == harness)
+        }
+    }
+
     @Test("An unreadable record is skipped")
     func unreadableRecordIsSkipped() throws {
         try withStore { store in

@@ -201,7 +201,12 @@ enum ConversationRecordJSON {
     private static let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
     private static let whole = Date.ISO8601FormatStyle()
 
+    /// The record a file holds, with `lastSeenIn` read from its sightings by this build's
+    /// rules. A build that predates a location fact rewrites `lastSeenIn` without it while
+    /// keeping it in each sighting, so the stored `lastSeenIn` is only what the last writer knew.
     static func record(from object: [String: Any]) -> ConversationRecord? {
+        var object = object
+        LocationHistory(object: object).write(into: &object)
         guard let rawID = object["conversationID"] as? String,
             let conversationID = ConversationRecord.normalizedID(rawID),
             let harness = object["harness"] as? String,
