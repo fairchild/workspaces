@@ -1248,14 +1248,16 @@ extension TileExitClassificationTests {
 
         let pass = Task { try await store.closeAndRetireSessions(inScope: tab.key) }
         await held.waitForCall(1)
-        let teardown = Task { await teardown(tab, in: store, tmuxKilled: false) { _ in }.teardown(scopeKey: tab.key) }
+        let teardownPass = Task {
+            await teardown(tab, in: store, tmuxKilled: false) { _ in }.teardown(scopeKey: tab.key)
+        }
         await held.waitForCall(2)
 
         held.fail(1)
         await #expect(throws: GhosttySurfaceRetirementCloseError.self) { try await pass.value }
         #expect(store.handleProcessExit(for: tab.id))
         held.fail(2)
-        _ = await teardown.value
+        _ = await teardownPass.value
 
         #expect(await harness.rowWrites(for: tab.id) == [.ended(tab.id)])
         #expect(await harness.probeCalls.sessionNames.isEmpty)
