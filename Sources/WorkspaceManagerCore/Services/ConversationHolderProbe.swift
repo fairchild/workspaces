@@ -141,12 +141,12 @@ public struct ConversationHolderProbe: Sendable {
 
     public func probe(_ record: ConversationRecord) async -> HolderProbe {
         guard let table = await readProcessTable() else { return .unknown("Could not read the process table") }
-        let records = records
+        let all = records?.all() ?? []
         let context = HolderProbeContext(
             processTable: table,
             inspector: inspector,
             recordedSession: recordedSession,
-            currentConversation: { identity in Self.currentConversation(of: identity, in: records?.all() ?? []) }
+            currentConversation: { identity in Self.currentConversation(of: identity, in: all) }
         )
         return await adapter.holders(of: record, in: context)
     }

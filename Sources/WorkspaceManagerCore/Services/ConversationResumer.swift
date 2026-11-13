@@ -529,18 +529,35 @@ public struct ConversationResumer: Sendable {
     /// Until the `--here` run under `handle` has recorded itself and exec'd into the harness.
     /// `false` if it did not within ten seconds: it failed, refused, or has not run yet.
     private func waitForHandOff(of conversationID: String, in handle: String, since startedAt: Date) async -> Bool {
+        var handleSession: ConversationRecord.TmuxSession?
+        var askedHandle = false
         for _ in 0..<100 {
             if let seen = records.load(conversationID: conversationID)?.lastSeenIn,
                 let harness = seen.harness, let observedAt = seen.harnessObservedAt, observedAt >= startedAt,
-                seen.tmux.map({ $0.name == nil || $0.name == handle }) == true,
-                inspector.isRunning(harness), let arguments = inspector.arguments(harness.pid),
+                let tmux = seen.tmux, inspector.isRunning(harness), let arguments = inspector.arguments(harness.pid),
                 !Self.isResumeVerb(arguments)
             {
-                return true
+                if tmux.name == nil, !askedHandle {
+                    handleSession = await control.sessionIdentity(handle: handle)
+                    askedHandle = true
+                }
+                if Self.sighting(tmux, isIn: handle, handleSession: handleSession) { return true }
             }
             try? await Task.sleep(for: .milliseconds(100))
         }
         return false
+    }
+
+    /// A sighting is in `handle` when it carries the handle's name, or, when the hook could
+    /// not learn a name, when it is the handle's session on the handle's server.
+    static func sighting(
+        _ tmux: ConversationRecord.TmuxSession,
+        isIn handle: String,
+        handleSession: ConversationRecord.TmuxSession?
+    ) -> Bool {
+        if let name = tmux.name { return name == handle }
+        guard let handleSession else { return false }
+        return tmux.serverPID == handleSession.serverPID && tmux.sessionID == handleSession.sessionID
     }
 
     static func isResumeVerb(_ arguments: [String]) -> Bool {

@@ -284,6 +284,21 @@ struct ConversationResumerTests {
         }
         #expect(world.records.load(conversationID: world.conversationID)?.observedBy == .hook)
     }
+
+    @Test("A sighting counts as in the handle by the handle's name, or with no name, by its server and session")
+    func sightingIsInTheHandle() {
+        let named = ConversationRecord.TmuxSession(serverPID: 7, sessionID: "$1", name: "wm-a")
+        let unnamed = ConversationRecord.TmuxSession(serverPID: 7, sessionID: "$1")
+        let handleSession = ConversationRecord.TmuxSession(serverPID: 7, sessionID: "$1", name: "wm-a")
+        let otherSession = ConversationRecord.TmuxSession(serverPID: 7, sessionID: "$2", name: "wm-a")
+        let otherServer = ConversationRecord.TmuxSession(serverPID: 8, sessionID: "$1", name: "wm-a")
+        #expect(ConversationResumer.sighting(named, isIn: "wm-a", handleSession: nil))
+        #expect(!ConversationResumer.sighting(named, isIn: "wm-b", handleSession: handleSession))
+        #expect(ConversationResumer.sighting(unnamed, isIn: "wm-a", handleSession: handleSession))
+        #expect(!ConversationResumer.sighting(unnamed, isIn: "wm-a", handleSession: nil))
+        #expect(!ConversationResumer.sighting(unnamed, isIn: "wm-a", handleSession: otherSession))
+        #expect(!ConversationResumer.sighting(unnamed, isIn: "wm-a", handleSession: otherServer))
+    }
 }
 
 extension ProcessInspector {
