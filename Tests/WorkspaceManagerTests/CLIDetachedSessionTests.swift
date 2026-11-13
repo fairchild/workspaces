@@ -859,7 +859,8 @@ struct CLIDetachedSessionTests {
     private func sessionNamingTheRecordsDirectory(
         _ handle: String,
         fixture: Fixture,
-        environment: [String: String]
+        environment: [String: String],
+        directory: URL? = nil
     ) async throws -> (socket: String, serverPID: Int32, session: String) {
         let key = ConversationRecordStore.directoryEnvironmentKey
         try startSession(handle, running: "env -u \(key) sleep 120", fixture: fixture, environment: environment)
@@ -868,7 +869,7 @@ struct CLIDetachedSessionTests {
         try await TmuxSessionControl(
             socketLabel: fixture.socketLabel,
             environment: tmuxEnvironment,
-            sessionEnvironment: [key: fixture.root.appendingPathComponent("conversations").path]
+            sessionEnvironment: [key: (directory ?? fixture.root.appendingPathComponent("conversations")).path]
         ).adoptSessionEnvironment(handle: handle)
         let process = Process()
         let output = Pipe()
@@ -956,6 +957,29 @@ struct CLIDetachedSessionTests {
             script, tmux: "\(tmux.socket),\(tmux.serverPID),\(tmux.session)",
             conversationID: here, fixture: fixture)
         #expect(records.load(conversationID: here) != nil)
+    }
+
+    @Test(
+        "A hook reads a records directory ending in a newline from the session byte for byte",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func hookReadsATrailingNewlineFromTheSession() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let script = try installHookScript(in: fixture)
+        let directory = fixture.root.appendingPathComponent("conversations\n")
+        let tmux = try await sessionNamingTheRecordsDirectory(
+            "wm-newline-00000000", fixture: fixture, environment: environment, directory: directory)
+
+        let conversationID = UUID().uuidString.lowercased()
+        _ = try runHook(
+            script, tmux: "\(tmux.socket),\(tmux.serverPID),\(tmux.session)",
+            conversationID: conversationID, fixture: fixture)
+
+        #expect(ConversationRecordStore(directory: directory).load(conversationID: conversationID) != nil)
+        let trimmed = fixture.root.appendingPathComponent("conversations")
+        #expect(ConversationRecordStore(directory: trimmed).load(conversationID: conversationID) == nil)
     }
 
     @Test(

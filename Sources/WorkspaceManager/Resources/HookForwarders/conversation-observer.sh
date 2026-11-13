@@ -9,6 +9,8 @@
 # it exits before starting anything. A shell older than its tmux session's
 # environment lacks the key; the session still has it, if the server answering
 # on `$TMUX`'s socket is the one `$TMUX` names and it answers within a second.
+# The answer is read whole and only the one newline tmux ends it with is
+# dropped, so a directory whose name ends in newlines keeps them.
 # The answer goes through a file, not a pipe: a tmux client hands its output
 # descriptor to the server, so a stopped server would hold a pipe open. The
 # file sits in a private directory this shell names before `mkdir -m 700`
@@ -57,7 +59,8 @@ adopt_session_directory() {
     trap end_lookup EXIT
     local answer=""
     if ask_session "$socket" "$session"; then
-        answer="$(<"$lookup_out")"
+        IFS= read -r -d '' answer <"$lookup_out"
+        answer="${answer%$'\n'}"
     fi
     end_lookup
     trap - EXIT TERM INT HUP
