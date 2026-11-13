@@ -19,7 +19,8 @@ struct CLIConversationResumeTests {
 
     /// Stands in for claude: says what it was started with (also into `STUB_LOG`, for a run
     /// whose output lands in a pane), runs the SessionStart hook for each id in
-    /// `STUB_HOOK_IDS` the way claude does (a child of this process), and for each id in
+    /// `STUB_HOOK_IDS` the way claude does (a child of this process, running `STUB_HOOK_COMMAND`
+    /// in a shell when it is set, as claude runs a settings hook), and for each id in
     /// `STUB_NESTED_HOOK_IDS` from beneath another program it started, as a tool claude runs
     /// can, then exits, or stays
     /// alive when `STUB_STAY` is set, as an agent holding its conversation does. It stays at
@@ -45,8 +46,13 @@ struct CLIConversationResumeTests {
         printf 'stub config=%s\n' "${CLAUDE_CONFIG_DIR-unset}"
         printf 'stub pwd=%s\n' "$(pwd -P)"
         for id in $STUB_HOOK_IDS; do
-          printf '{"session_id":"%s","cwd":"%s","transcript_path":"%s/%s.jsonl"}' \
-            "$id" "$PWD" "$STUB_TRANSCRIPTS" "$id" | "$STUB_HOOK_CLI" conversation observe
+          payload=$(printf '{"session_id":"%s","cwd":"%s","transcript_path":"%s/%s.jsonl"}' \
+            "$id" "$PWD" "$STUB_TRANSCRIPTS" "$id")
+          if [ -n "$STUB_HOOK_COMMAND" ]; then
+            printf '%s' "$payload" | /bin/sh -c "$STUB_HOOK_COMMAND"
+          else
+            printf '%s' "$payload" | "$STUB_HOOK_CLI" conversation observe
+          fi
         done
         for id in $STUB_NESTED_HOOK_IDS; do
           printf '{"session_id":"%s","cwd":"%s","transcript_path":"%s/%s.jsonl"}' \
@@ -370,12 +376,13 @@ struct CLIConversationResumeTests {
     }
 
     /// Starts the stub with `arguments` the way a person runs claude in a plain terminal, with
-    /// no tmux, and its SessionStart hook run once for each of `conversations`, then from
-    /// beneath another program for each of `nested`.
+    /// no tmux, and its SessionStart hook run once for each of `conversations`, through
+    /// `hookCommand` when one is given, then from beneath another program for each of `nested`.
     private func startBareAgent(
         in fixture: Fixture,
         arguments: [String] = [],
         hooking conversations: [String],
+        hookCommand: String? = nil,
         nested: [String] = []
     ) async throws -> Process {
         try FileManager.default.createDirectory(at: fixture.transcripts, withIntermediateDirectories: true)
@@ -391,13 +398,15 @@ struct CLIConversationResumeTests {
                 "STUB_HOOK_IDS": conversations.joined(separator: " "),
                 "STUB_NESTED_HOOK_IDS": nested.joined(separator: " "),
                 "STUB_HOOK_CLI": fixture.binary.path,
+                "STUB_HOOK_COMMAND": hookCommand ?? "",
                 "STUB_TRANSCRIPTS": fixture.transcripts.path,
             ],
             output: fixture.root.appendingPathComponent("agent.log")
         )
         let last = try #require(conversations.last)
         try await waitUntil(launches: Double(1 + conversations.count + nested.count)) {
-            fixture.records.load(conversationID: last)?.lastSeenIn?.harness != nil
+            fixture.records.load(conversationID: last)?.lastSeenIn.map { $0.harness != nil || $0.harnessUnnamed }
+                == true
                 && nested.allSatisfy { fixture.records.load(conversationID: $0) != nil }
         }
         return agent
@@ -418,6 +427,57 @@ struct CLIConversationResumeTests {
         let result = try JSONDecoder().decode(ConversationResumeResult.self, from: Data(resume.stdout.utf8))
         #expect(result.holders.map(\.pid) == [agent.processIdentifier])
         #expect(result.holders.first?.foundBy == .recordedHarness)
+    }
+
+    /// The forwarder as the app extracts it, naming this fixture's CLI, and a link to it under
+    /// another name, as a person might add to their own hooks.
+    private func installForwarder(in fixture: Fixture) throws -> (installed: URL, link: URL) {
+        let template = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/WorkspaceManager/Resources/HookForwarders/conversation-observer.sh"),
+            encoding: .utf8
+        )
+        let hooks = fixture.root.appendingPathComponent("hooks")
+        try FileManager.default.createDirectory(at: hooks, withIntermediateDirectories: true)
+        let installed = hooks.appendingPathComponent(ConversationHookObserver.forwarderName)
+        try template.replacingOccurrences(of: "@WORKSPACES_CLI@", with: fixture.binary.path)
+            .write(to: installed, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: installed.path)
+        let link = hooks.appendingPathComponent("observe-link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: installed)
+        return (installed, link)
+    }
+
+    /// Outside tmux, a hook that names its claude is all that guards a bare one. A hook that
+    /// cannot name it says so, and that conversation refuses rather than reading as free.
+    @Test(
+        "A hook run through the installed forwarder names its claude; one run through a link says it could not",
+        arguments: ["installed", "link"]
+    )
+    func hookThatCannotNameItsClaudeRefuses(path: String) async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let forwarder = try installForwarder(in: fixture)
+        let conversationID = UUID().uuidString.lowercased()
+        let agent = try await startBareAgent(
+            in: fixture, hooking: [conversationID],
+            hookCommand: (path == "installed" ? forwarder.installed : forwarder.link).path)
+        defer { Self.kill([agent]) }
+        let seen = try #require(fixture.records.load(conversationID: conversationID)?.lastSeenIn)
+
+        let resume = try fixture.run(["conversation", "resume", conversationID, "--here"])
+        #expect(!resume.stdout.contains("stub argv"))
+        if path == "installed" {
+            #expect(seen.harness?.pid == agent.processIdentifier)
+            #expect(resume.status == 3)
+            #expect(resume.stdout.contains("pid \(agent.processIdentifier)"))
+        } else {
+            #expect(seen.harness == nil && seen.harnessUnnamed)
+            #expect(resume.status == 1)
+            #expect(resume.stderr.contains("could not name the claude it ran under"))
+            #expect(resume.stderr.contains("a second agent cannot be ruled out"))
+        }
     }
 
     /// A harness whose parent never collects it, as an orchestrator that starts the verb and

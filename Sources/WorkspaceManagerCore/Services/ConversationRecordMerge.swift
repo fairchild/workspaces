@@ -161,8 +161,8 @@ struct Sighting {
         } else {
             self.tmux = .unknown
         }
-        if let harness = seen.harness {
-            object[Self.harnessAttribute] = harness.recorded
+        if let harness = seen.harness.map(\.recorded) ?? (seen.harnessUnnamed ? Self.unnamedHarness : nil) {
+            object[Self.harnessAttribute] = harness
             object["\(Self.harnessAttribute)ObservedAt"] = object["observedAt"]
         }
         guard holder != nil || self.tmux != .unknown else { return nil }
@@ -175,6 +175,10 @@ struct Sighting {
     /// The harness process, kept beside the place rather than inside its tmux session: a
     /// conversation outside tmux has one too.
     static let harnessAttribute = "harness"
+    /// The harness a hook ran under and could not name. It is the attribute's value rather
+    /// than a mark of its own, so the newest hook's answer, a process or none it could name,
+    /// is the one the record keeps.
+    static let unnamedHarness = "unnamed"
 
     init?(object: [String: Any]) {
         guard let at = ConversationRecordJSON.date(object["observedAt"]) else { return nil }

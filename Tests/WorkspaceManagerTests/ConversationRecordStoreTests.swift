@@ -144,6 +144,28 @@ struct ConversationRecordStoreTests {
         }
     }
 
+    /// A hook that could not name its claude is an answer, not a silence: the newest hook's
+    /// answer, a process or none it could name, is the one the record keeps.
+    @Test("The newest hook's answer about its claude wins, whether it named one or could not")
+    func newestHookAnswerAboutTheHarnessWins() throws {
+        let harness = ProcessIdentity(pid: 4321, startedAtMicroseconds: 1_800_000_000_123_456)
+        let named = ConversationRecord.LastSeenIn(hostSessionID: nil, outsideTmux: true, harness: harness)
+        let unnamed = ConversationRecord.LastSeenIn(hostSessionID: nil, outsideTmux: true, harnessUnnamed: true)
+        try withStore { store in
+            try store.record(observation(at: 1_800_000_000, lastSeenIn: named))
+            try store.record(observation(at: 1_800_000_060, lastSeenIn: unnamed))
+            let afterUnnamed = try #require(store.load(conversationID: Self.conversationID)?.lastSeenIn)
+            #expect(afterUnnamed.harness == nil && afterUnnamed.harnessUnnamed)
+
+            try store.record(observation(at: 1_800_000_120, lastSeenIn: named))
+            let afterNamed = try #require(store.load(conversationID: Self.conversationID)?.lastSeenIn)
+            #expect(afterNamed.harness == harness && !afterNamed.harnessUnnamed)
+
+            try store.record(observation(at: 1_800_000_180, lastSeenIn: .init(hostSessionID: nil, outsideTmux: true)))
+            #expect(store.load(conversationID: Self.conversationID)?.lastSeenIn?.harness == harness)
+        }
+    }
+
     @Test("An unreadable record is skipped")
     func unreadableRecordIsSkipped() throws {
         try withStore { store in

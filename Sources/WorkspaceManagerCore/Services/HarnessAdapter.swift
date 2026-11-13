@@ -175,7 +175,18 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
     /// session it was last seen in is asked, and any claude there is counted, since it may be
     /// this conversation under an id its arguments do not carry. A holder is placed in that
     /// session only while the session's server says it runs there.
+    /// A conversation whose newest hook could not name its claude, and that nothing else
+    /// holds, is unknown: that claude may still run, and nothing says when it exits.
     public func holders(of record: ConversationRecord, in context: HolderProbeContext) async -> HolderProbe {
+        let found = await namedHolders(of: record, in: context)
+        guard found == .free, record.lastSeenIn?.harnessUnnamed == true else { return found }
+        return .unknown(
+            "The hook that last saw conversation \(record.conversationID) start could not name the claude it ran "
+                + "under, as happens when the hook command reaches \(ConversationHookObserver.forwarderName) through a "
+                + "link, a script or a shim, so whether that claude still runs is unknown")
+    }
+
+    private func namedHolders(of record: ConversationRecord, in context: HolderProbeContext) async -> HolderProbe {
         let id = record.conversationID
         let table = context.processTable
         let seen = record.lastSeenIn

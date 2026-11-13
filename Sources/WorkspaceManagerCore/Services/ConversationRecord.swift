@@ -75,26 +75,31 @@ public struct ConversationRecord: Equatable, Sendable {
     ///
     /// `harness` is the process that ran the conversation when it was seen there, and
     /// `harnessObservedAt` when that was; a process that later started another conversation
-    /// has a newer sighting in that conversation's record.
+    /// has a newer sighting in that conversation's record. `harnessUnnamed` says a hook saw it
+    /// there and could not name the claude it ran under, which a sighting with no harness at
+    /// all, from a writer that never looks, does not say.
     public struct LastSeenIn: Equatable, Sendable {
         public var hostSessionID: String?
         public var tmux: TmuxSession?
         public var outsideTmux: Bool
         public var harness: ProcessIdentity?
         public var harnessObservedAt: Date?
+        public var harnessUnnamed: Bool
 
         public init(
             hostSessionID: String?,
             tmux: TmuxSession? = nil,
             outsideTmux: Bool = false,
             harness: ProcessIdentity? = nil,
-            harnessObservedAt: Date? = nil
+            harnessObservedAt: Date? = nil,
+            harnessUnnamed: Bool = false
         ) {
             self.hostSessionID = hostSessionID
             self.tmux = tmux
             self.outsideTmux = tmux == nil && outsideTmux
             self.harness = harness
             self.harnessObservedAt = harnessObservedAt
+            self.harnessUnnamed = harness == nil && harnessUnnamed
         }
     }
 
@@ -247,12 +252,14 @@ enum ConversationRecordJSON {
                 serverStartedAtMicroseconds: (tmux["serverStartedAt"] as? NSNumber)?.int64Value
             )
         }
+        let harness = object[Sighting.harnessAttribute] as? String
         return .init(
             hostSessionID: object["hostSessionID"] as? String,
             tmux: tmux,
             outsideTmux: object["outsideTmux"] as? Bool == true,
-            harness: (object["harness"] as? String).flatMap(ProcessIdentity.init(recorded:)),
-            harnessObservedAt: date(object["harnessObservedAt"])
+            harness: harness.flatMap(ProcessIdentity.init(recorded:)),
+            harnessObservedAt: date(object["harnessObservedAt"]),
+            harnessUnnamed: harness == Sighting.unnamedHarness
         )
     }
 }

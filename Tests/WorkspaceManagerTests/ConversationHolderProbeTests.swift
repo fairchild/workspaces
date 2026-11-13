@@ -386,6 +386,29 @@ struct ConversationHolderProbeTests {
         )
     }
 
+    @Test(
+        "A conversation whose hook could not name its claude is unknown until something holds it",
+        arguments: ["unnamed", "unnamed-held", "never-asked"]
+    )
+    func unnamedHarnessIsUnknown(sighting: String) async throws {
+        let record = Self.record(
+            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true, harnessUnnamed: sighting != "never-asked"))
+        let listing = sighting == "unnamed-held" ? "70 1 claude --resume \(Self.id)" : "1 0 /sbin/launchd"
+        let probe = await ClaudeHarnessAdapter().holders(of: record, in: Self.context(try Self.table(listing)))
+        switch sighting {
+        case "unnamed":
+            guard case .unknown(let detail) = probe else {
+                Issue.record("expected unknown, got \(probe)")
+                return
+            }
+            #expect(detail.contains("could not name the claude it ran under"))
+        case "unnamed-held":
+            #expect(probe == .held([.init(pid: 70, foundBy: .arguments, startedAt: nil)], recordedSessionGone: false))
+        default:
+            #expect(probe == .free)
+        }
+    }
+
     @Test("A recorded harness the kernel cannot be asked about is unknown, never free")
     func unreadableHarnessIsUnknown() async throws {
         let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
