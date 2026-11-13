@@ -285,6 +285,30 @@ struct ConversationResumerTests {
         #expect(world.records.load(conversationID: world.conversationID)?.observedBy == .hook)
     }
 
+    /// A sighting stamped later than now, as a skewed clock writes, in a place this resume
+    /// contradicts outranks the one it writes, and the record would go on naming no harness.
+    @Test("A resume whose sighting the record does not show as the holder refuses, and nothing starts")
+    func outrankedSightingRefuses() async throws {
+        let world = try World()
+        defer { world.teardown() }
+        try world.recordConversation()
+        try world.records.record(
+            ConversationObservation(
+                conversationID: world.conversationID,
+                observedAt: Date().addingTimeInterval(3_600),
+                observedBy: .hook,
+                lastSeenIn: .init(hostSessionID: nil, tmux: .init(serverPID: 1, sessionID: "$1"))))
+
+        do {
+            _ = try await world.resumer(processTable: Self.quietTable).resume(
+                conversationID: world.conversationID, target: .here)
+            Issue.record("the resume went ahead")
+        } catch ConversationResumer.Refusal.unrecorded(_, let reason) {
+            #expect(reason.contains("names another process"))
+        }
+        #expect(world.execs.invocations.isEmpty)
+    }
+
     @Test("A sighting counts as in the handle by the handle's name, or with no name, by its server and session")
     func sightingIsInTheHandle() {
         let named = ConversationRecord.TmuxSession(serverPID: 7, sessionID: "$1", name: "wm-a")
