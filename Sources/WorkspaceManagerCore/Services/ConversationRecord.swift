@@ -153,24 +153,17 @@ public enum ConversationHost {
 enum ConversationRecordJSON {
     static func date(_ value: Any?) -> Date? {
         guard let string = value as? String else { return nil }
-        return fractional.date(from: string) ?? whole.date(from: string)
+        return (try? Date(string, strategy: fractional)) ?? (try? Date(string, strategy: whole))
     }
 
     static func string(_ date: Date) -> String {
-        fractional.string(from: date)
+        date.formatted(fractional)
     }
 
-    nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
-
-    nonisolated(unsafe) private static let whole: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
+    /// Format styles are values, so the hook, the recorder, and the index's database closures
+    /// can share these across threads; a shared `ISO8601DateFormatter` is not safe to.
+    private static let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    private static let whole = Date.ISO8601FormatStyle()
 
     static func record(from object: [String: Any]) -> ConversationRecord? {
         guard let rawID = object["conversationID"] as? String,
