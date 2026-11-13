@@ -592,6 +592,36 @@ struct CLIConversationResumeTests {
         #expect(record.lastSeenIn?.outsideTmux == true)
     }
 
+    /// The resume runs on a thread that blocks most signals, under a test runner that ignores
+    /// SIGTERM; a harness that kept either would never hear its tile close or its terminal resize.
+    @Test("--here starts the harness with no signal blocked or ignored, so a TERM ends it")
+    func hereStartsTheHarnessWithDefaultSignals() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = try recordConversation(in: fixture)
+        let agent = try fixture.start(
+            ["conversation", "resume", conversationID, "--here"], extraEnvironment: ["STUB_STAY": "1"],
+            output: fixture.root.appendingPathComponent("agent.log"))
+        defer { Self.kill([agent]) }
+        try await waitUntil(launches: 2) { try await !holders(of: conversationID, in: fixture).isEmpty }
+
+        let mask = Process()
+        let output = Pipe()
+        mask.executableURL = URL(fileURLWithPath: "/bin/ps")
+        mask.arguments = ["-o", "sigmask=", "-p", "\(agent.processIdentifier)"]
+        mask.standardOutput = output
+        try mask.run()
+        let blocked = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        mask.waitUntilExit()
+        #expect(blocked.trimmingCharacters(in: .whitespacesAndNewlines) == "0")
+
+        Darwin.kill(agent.processIdentifier, SIGTERM)
+        try await waitUntil(launches: 1) { !agent.isRunning }
+        #expect(!agent.isRunning)
+        #expect(agent.terminationReason == .uncaughtSignal)
+        #expect(agent.terminationStatus == SIGTERM)
+    }
+
     @Test("A config home recorded as the default is not exported, so claude finds its own settings")
     func explicitDefaultConfigHomeIsNotExported() throws {
         let fixture = try makeFixture()

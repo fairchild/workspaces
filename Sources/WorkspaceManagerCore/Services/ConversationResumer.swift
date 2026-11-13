@@ -70,17 +70,36 @@ public enum HarnessExec {
     /// Becomes the harness. `handOff` runs once the harness binary is found and the directory
     /// entered, so what it records is only ever followed by the exec itself. Returns only by
     /// throwing, when the process could not be replaced.
+    ///
+    /// The exec is `posix_spawn` with `POSIX_SPAWN_SETEXEC`, which keeps this pid as `execve`
+    /// does and also sets the new image's signal state. This code runs on a concurrency worker
+    /// thread whose mask blocks most signals, and a mask survives an exec, as does a signal
+    /// whatever started this process ignored. The harness starts with nothing blocked and
+    /// every signal at its default, so a closed tile's HUP, a resize's WINCH and a TERM reach it.
     public static func replaceProcess(with invocation: HarnessInvocation, handOff: () -> Void) throws -> Never {
         guard let name = invocation.arguments.first, let path = resolve(name, in: invocation.environment["PATH"])
         else { throw Failure.notOnPath(invocation.arguments.first ?? "") }
         guard chdir(invocation.directory) == 0 else { throw Failure.directory(invocation.directory, errno) }
+
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        var everySignal = sigset_t()
+        sigfillset(&everySignal)
+        posix_spawnattr_setsigdefault(&attributes, &everySignal)
+        var nothingBlocked = sigset_t()
+        sigemptyset(&nothingBlocked)
+        posix_spawnattr_setsigmask(&attributes, &nothingBlocked)
+        posix_spawnattr_setflags(
+            &attributes, Int16(POSIX_SPAWN_SETEXEC | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
+
         handOff()
         fflush(stdout)
         fflush(stderr)
         var argv = invocation.arguments.map { strdup($0) } + [nil]
         var envp = invocation.environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
-        execve(path, &argv, &envp)
-        throw Failure.exec(path, errno)
+        let code = posix_spawn(nil, path, nil, &attributes, &argv, &envp)
+        throw Failure.exec(path, code)
     }
 
     static func resolve(_ name: String, in path: String?) -> String? {
