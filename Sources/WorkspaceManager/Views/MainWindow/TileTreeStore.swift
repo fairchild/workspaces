@@ -753,10 +753,14 @@ final class TileTreeStore: ObservableObject {
     /// a pane taking the tab's `collateralExit`. A close that reaches any one of the rows
     /// first is that row's reason and settles it alone.
     private struct TileExit {
+        /// This exit, as distinct from a later exit of a tile that holds the same session.
+        let id = UUID()
         let exitedAt: Date
         /// The rows still waiting on a reason.
         var unsettled: [HostTerminalSession]
-        /// The tmux question a process exit asks, while it is out.
+        /// The tmux question a process exit asks, while it is out. Its answer settles only
+        /// this exit: once the task is cancelled, or the session's exit is another one, the
+        /// answer writes nothing.
         var classification: Task<Void, Never>?
     }
 
@@ -835,10 +839,11 @@ final class TileTreeStore: ObservableObject {
     private func classifyExit(_ sessionID: UUID, tmuxSessionName: String, launchServerPID: Int?) {
         let holderState = tmuxHolderState
         let keepsServerWhenEmpty = tmuxServerKeepsRunningWhenEmpty
+        guard let thisExit = tileExits[sessionID]?.id else { return }
         tileExits[sessionID]?.classification = Task { @MainActor [weak self] in
             let state = await holderState(tmuxSessionName)
             let serverKeepsRunningWhenEmpty = await keepsServerWhenEmpty(launchServerPID)
-            guard let self, self.tileExits[sessionID] != nil else { return }
+            guard let self, !Task.isCancelled, self.tileExits[sessionID]?.id == thisExit else { return }
             let exit = TerminalSessionExit.classifyProcessExit(
                 tmuxHolder: state,
                 launchServerPID: launchServerPID,
@@ -888,6 +893,12 @@ final class TileTreeStore: ObservableObject {
         if exit.reclaimsTmuxSession {
             killPaneScopedTmuxSession(for: session)
         }
+    }
+
+    /// The tmux question `sessionID`'s current exit has out, if any. Tests hold it to see a
+    /// cancelled question's late answer land.
+    func exitClassification(for sessionID: UUID) -> Task<Void, Never>? {
+        tileExits[sessionID]?.classification
     }
 
     /// Resumes once every process exit still waiting on tmux has settled its rows.

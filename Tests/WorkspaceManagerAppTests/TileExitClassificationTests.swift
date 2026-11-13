@@ -703,6 +703,76 @@ struct TileExitClassificationTests {
         #expect(await harness.rowWrites(for: added.id) == [])
     }
 
+    /// Holds each tmux question until the test answers it, and answers even a question whose
+    /// task was cancelled, as a tmux process already running does.
+    @MainActor
+    private final class HeldProbe {
+        private var calls = 0
+        private var waiting: [Int: CheckedContinuation<TmuxHolderState, Never>] = [:]
+
+        func read() async -> TmuxHolderState {
+            calls += 1
+            let call = calls
+            return await withCheckedContinuation { waiting[call] = $0 }
+        }
+
+        func waitForCall(_ call: Int) async -> Bool {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+            while waiting[call] == nil, ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+            return waiting[call] != nil
+        }
+
+        func answer(_ call: Int, _ state: TmuxHolderState) {
+            waiting.removeValue(forKey: call)?.resume(returning: state)
+        }
+    }
+
+    /// Confirming the tab cancels its exit's tmux question, and a restore then brings the
+    /// session back in a new tile that gains a pane and exits in turn. The old question's
+    /// answer arrives last but one: it belongs to an exit that is gone, so it settles nothing,
+    /// and the new exit keeps waiting for its own answer.
+    @Test("A cancelled exit's late answer settles nothing, even for a later exit of the same session")
+    func cancelledClassificationLeavesALaterExitAlone() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let probe = HeldProbe()
+        harness.store.tmuxHolderState = { _ in await probe.read() }
+        let (primary, split, otherTab) = try openSplitTab(harness.store)
+        let store = harness.store
+        let sheet = CloseSheet(store)
+        sheet.raise(primary.id)
+        #expect(store.handleProcessExit(for: primary.id))
+        let oldClassification = try #require(store.exitClassification(for: primary.id))
+        #expect(await probe.waitForCall(1))
+        sheet.close()
+        #expect(oldClassification.isCancelled)
+
+        let replacement = store.createRestoredSession(
+            key: primary.key, directory: primary.directoryURL, recordedTerminalMode: primary.terminalMode,
+            tmuxSessionNameOverride: primary.tmuxSessionName, adoptedHostSessionID: primary.id)
+        let added = try #require(store.splitFocusedTile(inTabContaining: replacement.id))
+        store.surfaceStore.noteLaunch(sessionID: replacement.id, throughTmux: true, tmuxServerPID: 4242)
+        #expect(store.handleProcessExit(for: replacement.id))
+        let newClassification = try #require(store.exitClassification(for: replacement.id))
+        #expect(await probe.waitForCall(2))
+
+        probe.answer(1, .sessionGone(serverPID: 4242))
+        await oldClassification.value
+        #expect(!newClassification.isCancelled)
+        await store.continuityRecorder?.waitUntilDrained()
+        #expect(await harness.sink.operations.filter { $0 == .ended(added.id) }.isEmpty)
+
+        probe.answer(2, .sessionPresent(serverPID: 4242))
+        await newClassification.value
+        #expect(store.handleProcessExit(for: otherTab.id, cause: .userClosed))
+
+        #expect(await harness.rowWrites(for: primary.id) == [.ended(primary.id), .deselected(primary.id)])
+        #expect(await harness.rowWrites(for: split.id) == [.ended(split.id)])
+        #expect(await harness.rowWrites(for: added.id) == [.deselected(added.id)])
+        #expect(await harness.reclaimed(awaiting: 2) == [split.id.uuidString, otherTab.id.uuidString])
+    }
+
     @Test("A retirement that lands as a process exit ends the row, asks tmux nothing and kills nothing")
     func retirementArrivingAsExitEndsTheRow() async throws {
         let harness = makeHarness(answer: .sessionPresent(serverPID: 4242))
