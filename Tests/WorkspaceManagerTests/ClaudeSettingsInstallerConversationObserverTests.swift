@@ -120,6 +120,37 @@ struct ClaudeSettingsInstallerConversationObserverTests {
         }
     }
 
+    @Test("An observer whose script is gone reads as not installed, and install removes it")
+    func missingObserverScriptIsRemoved() async throws {
+        try await withHome { home in
+            let present = home.appendingPathComponent("present/conversation-observer.sh")
+            try FileManager.default.createDirectory(
+                at: present.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("#!/bin/sh\n".utf8).write(to: present)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: present.path)
+            let missing = "~/.local/share/workspaces/hook-forwarders/conversation-observer.sh"
+            let settings: [String: Any] = [
+                "hooks": [
+                    "SessionStart": [
+                        ["hooks": [["type": "command", "command": missing, "async": true]]],
+                        ["hooks": [["type": "command", "command": present.path, "async": true]]],
+                    ]
+                ]
+            ]
+            try JSONSerialization.data(withJSONObject: settings).write(
+                to: home.appendingPathComponent(".claude/settings.json"))
+            let installer = ClaudeSettingsInstaller(homeDirectory: home, eventForwarderScriptPath: eventForwarder)
+
+            #expect(await !installer.isInstalled())
+            try await installer.install()
+
+            let commands = try sessionStartHandlers(home: home).compactMap { $0["command"] as? String }
+            #expect(!commands.contains(missing))
+            #expect(commands.contains(present.path))
+            #expect(await installer.isInstalled())
+        }
+    }
+
     @Test("Without an observer path the installer writes no observer")
     func noObserverPathWritesNone() async throws {
         try await withHome { home in

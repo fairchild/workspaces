@@ -233,6 +233,7 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         var dict = current
         var lines: [String] = []
         var hooks = (current["hooks"]?.value as? [String: Any]) ?? [:]
+        var removedMissingObserver = false
 
         if let eventForwarderScriptPath {
             let eventForwarder = CommandContribution(
@@ -379,6 +380,14 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
                 lines.append("add conversation observer to \(event) using \(observer.command)")
             }
             hooks[event] = groups
+        } else if let groups = hooks[Self.conversationObserverEventName] {
+            let missing = scrubHandlers(
+                in: normalizedClaudeHookGroups(from: groups), where: isMissingConversationObserverHook)
+            if missing.removedCount > 0 {
+                hooks[Self.conversationObserverEventName] = missing.groups
+                removedMissingObserver = true
+                lines.append("remove a conversation observer whose script is missing")
+            }
         }
 
         if let statusLineForwarderPath {
@@ -399,7 +408,7 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
             }
         }
 
-        if eventForwarderScriptPath != nil || conversationObserverScriptPath != nil {
+        if eventForwarderScriptPath != nil || conversationObserverScriptPath != nil || removedMissingObserver {
             dict["hooks"] = AnyCodable(hooks)
         }
 
@@ -612,6 +621,20 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
             !isCanonicalConversationObserverHook(handler, contribution: contribution)
         else { return false }
         return unquoteSingleQuotedCommand(command).hasSuffix("/conversation-observer.sh")
+    }
+
+    /// A WorkSpaces conversation observer whose script is not there to run, which a build
+    /// that does not own the observer leaves behind when the copy it names has gone. Claude
+    /// would run the missing command on every SessionStart.
+    private func isMissingConversationObserverHook(_ handler: [String: Any]) -> Bool {
+        guard (handler["type"] as? String) == "command", let command = handler["command"] as? String else {
+            return false
+        }
+        let path = unquoteSingleQuotedCommand(command)
+        guard path.hasSuffix("/conversation-observer.sh") else { return false }
+        let expanded =
+            path.hasPrefix("~/") ? homeDirectory.appendingPathComponent(String(path.dropFirst(2))).path : path
+        return !FileManager.default.isExecutableFile(atPath: expanded)
     }
 
     /// Strip a single layer of POSIX single quotes (and `'\''` escapes) so a

@@ -294,14 +294,31 @@ struct ClaudeIntegrationLifecycleTests {
         #expect(didPublishInstaller)
     }
 
-    @Test("Only an app in an Applications folder owns the machine-wide conversation observer")
-    func observerOwnership() {
-        let owner = ClaudeIntegrationLifecycle.ownsMachineWideObserver
-        #expect(owner(URL(fileURLWithPath: "/Applications/WorkSpaces.app")))
-        #expect(owner(URL(fileURLWithPath: "/Users/someone/Applications/WorkSpaces.app")))
-        #expect(!owner(URL(fileURLWithPath: "/Users/someone/code/workspaces/.build/arm64-apple-macosx/debug")))
-        #expect(!owner(URL(fileURLWithPath: "/Users/someone/code/workspaces/build/WorkSpaces.app")))
-        #expect(!owner(URL(fileURLWithPath: "/private/tmp/evidence-1234/WorkSpaces.app")))
+    static let ownershipCases: [(String, Bool)] = [
+        ("/Applications/WorkSpaces.app", true),
+        ("/Applications/Utilities/WorkSpaces.app", true),
+        ("/Applications/Setapp/WorkSpaces.app", true),
+        ("/Users/someone/Applications/WorkSpaces.app", true),
+        ("/Users/someone/Applications/Tools/WorkSpaces.app", true),
+        ("/Applications", false),
+        ("/Applications/WorkSpaces", false),
+        ("/private/tmp/dev/Applications/WorkSpaces.app", false),
+        ("/tmp/dev/Applications/WorkSpaces.app", false),
+        ("/private/tmp/evidence-1234/WorkSpaces.app", false),
+        ("/private/var/folders/xy/abc/T/AppTranslocation/0A1B2C3D/d/WorkSpaces.app", false),
+        ("/Applications/.build/WorkSpaces.app", false),
+        ("/Users/someone/code/workspaces/.build/arm64-apple-macosx/debug", false),
+        ("/Users/someone/code/workspaces/build/WorkSpaces.app", false),
+        ("/Users/other/Applications/WorkSpaces.app", false),
+    ]
+
+    @Test(
+        "Only an app installed under an Applications folder owns the machine-wide conversation observer",
+        arguments: ownershipCases)
+    func observerOwnership(path: String, owns: Bool) {
+        #expect(
+            ClaudeIntegrationLifecycle.ownsMachineWideObserver(
+                bundleURL: URL(fileURLWithPath: path), homeDirectory: URL(fileURLWithPath: "/Users/someone")) == owns)
     }
 
     @Test("A dev build names the installed observer without rewriting it, and the installed app rewrites it")

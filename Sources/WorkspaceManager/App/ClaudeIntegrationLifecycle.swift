@@ -346,14 +346,27 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         )
     }
 
-    /// The installed app is an `.app` in an Applications folder, where `install-local.sh` and
-    /// the release put it. Debug binaries under `.build`, packaged evidence and test bundles,
-    /// and a checkout's `build/` copy all live elsewhere, and a CLI path written from one of
-    /// them stops working when that tree is cleaned, silencing the observer for every Claude
-    /// on the machine.
-    nonisolated static func ownsMachineWideObserver(bundleURL: URL) -> Bool {
-        bundleURL.pathExtension == "app"
-            && bundleURL.deletingLastPathComponent().lastPathComponent == "Applications"
+    /// The installed app is an `.app` anywhere under `/Applications` or `~/Applications`, at
+    /// any depth (`Utilities`, `Setapp`), where `install-local.sh`, the release and app
+    /// managers put it. Debug binaries under `.build`, packaged evidence and test bundles, a
+    /// checkout's `build/` copy, and a translocated launch all live elsewhere or move, and a
+    /// CLI path written from one of them stops working when that tree goes, silencing the
+    /// observer for every Claude on the machine. The path is resolved first, so a link from
+    /// an Applications folder into a build tree does not count.
+    nonisolated static func ownsMachineWideObserver(
+        bundleURL: URL,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> Bool {
+        guard bundleURL.pathExtension == "app" else { return false }
+        let components = bundleURL.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        guard !components.contains(where: { $0 == ".build" || $0 == "AppTranslocation" }) else { return false }
+        let roots = [
+            URL(fileURLWithPath: "/Applications"),
+            homeDirectory.appendingPathComponent("Applications"),
+        ].map { $0.resolvingSymlinksInPath().standardizedFileURL.pathComponents }
+        return roots.contains { root in
+            components.count > root.count && Array(components.prefix(root.count)) == root
+        }
     }
 
     nonisolated static func writeConversationObserverScript(
