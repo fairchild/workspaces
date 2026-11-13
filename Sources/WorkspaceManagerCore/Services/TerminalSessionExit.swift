@@ -94,31 +94,39 @@ public enum TerminalSessionExit: Sendable, Equatable {
     /// `tmuxHolder` is `nil` for a tile that did not launch through tmux — its shell was
     /// the process, so its exit is the shell's.
     ///
-    /// For a tmux tile the answer alone decides. The app's launch script turns
-    /// `exit-empty` off on its socket's server, so the server outlives its last session
-    /// and a server that is gone was killed or crashed: the holder was lost. A server
-    /// that answers names the session as still there (a detach) or gone (the shell
-    /// ended). `launchServerPID` is the server the tile launched on, when the app
-    /// recorded it; a server answering with another pid was started after the tile's
-    /// own died, so the holder was lost whatever that server holds now.
+    /// For a tmux tile, what is left decides, and only an answer that rules the other
+    /// cases out ends the row:
+    ///
+    /// - **No server.** The app's launch script turns `exit-empty` off, so on a tmux that
+    ///   honours it (`serverKeepsRunningWhenEmpty`) the server outlives its last session
+    ///   and a server that is gone was killed or crashed: the holder was lost. On a tmux
+    ///   without the option (before 2.7), or before a launch has learned which, the last
+    ///   shell ending also takes the server down, so the exit is undetermined.
+    /// - **A server that answers.** `launchServerPID` is the server the tile launched on,
+    ///   once the app recorded it. A server with another pid was started after the tile's
+    ///   own died, so the holder was lost whatever it holds now. The same server still
+    ///   holding the session is a detach; the same server without it is the shell ending.
+    ///   Without both pids the server cannot be told from a replacement, so a missing
+    ///   session is undetermined, and a present one is still a detach.
     public static func classifyProcessExit(
         tmuxHolder: TmuxHolderState?,
-        launchServerPID: Int?
+        launchServerPID: Int?,
+        serverKeepsRunningWhenEmpty: Bool?
     ) -> TerminalSessionExit {
         guard let tmuxHolder else { return .shellExited }
         switch tmuxHolder {
         case .unanswered:
             return .undetermined
         case .serverGone:
-            return .holderLost
-        case .sessionPresent(let serverPID), .sessionGone(let serverPID):
+            return serverKeepsRunningWhenEmpty == true ? .holderLost : .undetermined
+        case .sessionPresent(let serverPID):
             if let launchServerPID, let serverPID, serverPID != launchServerPID {
                 return .holderLost
             }
-            if case .sessionPresent = tmuxHolder {
-                return .detached
-            }
-            return .shellExited
+            return .detached
+        case .sessionGone(let serverPID):
+            guard let launchServerPID, let serverPID else { return .undetermined }
+            return serverPID == launchServerPID ? .shellExited : .holderLost
         }
     }
 }
@@ -208,5 +216,62 @@ public struct TmuxHolderProbe: Sendable {
         return lines.contains(sessionName)
             ? .sessionPresent(serverPID: serverPID)
             : .sessionGone(serverPID: serverPID)
+    }
+}
+
+/// Whether a tmux socket's server can be kept running once its last session ends.
+///
+/// tmux added `exit-empty` in 2.7. Without it an empty server exits, so a server that is
+/// gone cannot be told killed from emptied (`TerminalSessionExit.classifyProcessExit`).
+/// The answer belongs to the tmux binary, so it is learned once per socket label, while
+/// a server is up to ask, and kept.
+public actor TmuxExitEmptyCapability {
+    /// Asks a label's server, answering `nil` when no server answered.
+    public typealias Reader = @Sendable (_ socketLabel: String) async -> Bool?
+
+    private let read: Reader
+    private var known: [String: Bool] = [:]
+
+    public init(read: @escaping Reader = TmuxExitEmptyCapability.readFromServer) {
+        self.read = read
+    }
+
+    /// Asks the label's server, unless it has already answered.
+    public func learn(onSocket socketLabel: String) async {
+        guard known[socketLabel] == nil, let supported = await read(socketLabel) else { return }
+        known[socketLabel] = supported
+    }
+
+    /// What the label's server answered, or `nil` before one has.
+    public func isSupported(onSocket socketLabel: String) -> Bool? {
+        known[socketLabel]
+    }
+
+    /// `show-options -s exit-empty` on the label's server. It starts no server.
+    public static let readFromServer: Reader = { socketLabel in
+        let arguments = ["tmux", "-L", socketLabel, "show-options", "-s", "exit-empty"]
+        guard TmuxLiveSocketGuard.permits(tmuxArguments: arguments) else { return nil }
+        do {
+            let result = try await ProcessRunner.run(
+                executable: "/usr/bin/env",
+                arguments: arguments,
+                environment: TmuxSessionProbe.defaultEnvironment,
+                timeout: 5
+            )
+            return isSupported(exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr)
+        } catch {
+            return nil
+        }
+    }
+
+    /// A server that prints the option has it. tmux before 2.7 rejects the name ("unknown
+    /// option" there, "invalid option" in later releases for any name they lack); any other
+    /// failure, such as no server running, answers nothing.
+    static func isSupported(exitCode: Int32, stdout: String, stderr: String) -> Bool? {
+        if exitCode == 0 {
+            return stdout.contains("exit-empty")
+        }
+        let rejected = ["unknown option", "invalid option"].contains { stderr.contains($0) }
+        return rejected ? false : nil
     }
 }

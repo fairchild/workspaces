@@ -620,6 +620,14 @@ final class TileTreeStore: ObservableObject {
         await TmuxHolderProbe().holderState(forSessionNamed: sessionName)
     }
 
+    /// Whether this run's tmux keeps a server running once its last session ends, as the
+    /// launch script asks it to (`exit-empty`). `nil` until a launch has learned it. Tests
+    /// answer directly.
+    lazy var tmuxServerKeepsRunningWhenEmpty: @Sendable () async -> Bool? = {
+        [capability = surfaceStore.tmuxExitEmptyCapability] in
+        await capability.isSupported(onSocket: TmuxSessionProbe.socketLabel)
+    }
+
     /// A tile that left the tree on an exit, holding every row it took until that row has a
     /// reason.
     ///
@@ -711,12 +719,18 @@ final class TileTreeStore: ObservableObject {
 
     private func classifyExit(_ sessionID: UUID, tmuxSessionName: String, launchServerPID: Int?) {
         let holderState = tmuxHolderState
+        let keepsServerWhenEmpty = tmuxServerKeepsRunningWhenEmpty
         tileExits[sessionID]?.classification = Task { @MainActor [weak self] in
             let state = await holderState(tmuxSessionName)
+            let serverKeepsRunningWhenEmpty = await keepsServerWhenEmpty()
             guard let self, self.tileExits[sessionID] != nil else { return }
-            let exit = TerminalSessionExit.classifyProcessExit(tmuxHolder: state, launchServerPID: launchServerPID)
+            let exit = TerminalSessionExit.classifyProcessExit(
+                tmuxHolder: state,
+                launchServerPID: launchServerPID,
+                serverKeepsRunningWhenEmpty: serverKeepsRunningWhenEmpty
+            )
             log.info(
-                "[TileTreeStore] session \(sessionID.uuidString, privacy: .public) exited: tmux \(tmuxSessionName, privacy: .public) \(String(describing: state), privacy: .public), reason \(String(describing: exit), privacy: .public)"
+                "[TileTreeStore] session \(sessionID.uuidString, privacy: .public) exited: tmux \(tmuxSessionName, privacy: .public) \(String(describing: state), privacy: .public), keeps running when empty \(String(describing: serverKeepsRunningWhenEmpty), privacy: .public), reason \(String(describing: exit), privacy: .public)"
             )
             self.settle(sessionID, inExit: sessionID, as: exit)
         }

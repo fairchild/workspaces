@@ -62,6 +62,7 @@ struct TileExitClassificationTests {
             await probeCalls.append(name)
             return answer
         }
+        store.tmuxServerKeepsRunningWhenEmpty = { true }
         let reclaims = ProbeCalls()
         store.terminateOwnedTmuxSession = { hostSessionID in
             await reclaims.append(hostSessionID.uuidString)
@@ -93,14 +94,42 @@ struct TileExitClassificationTests {
         #expect(await harness.probeCalls.sessionNames == [tab.effectiveTmuxSessionName])
     }
 
-    @Test("A shell that exited on a live server ends its row")
+    @Test("A shell that exited on the server it launched on ends its row")
     func shellExitOnLiveServerEndsTheRow() async throws {
         let harness = makeHarness(answer: .sessionGone(serverPID: 4242))
         let (_, tab) = try openTwoTmuxTiles(harness.store)
+        harness.store.surfaceStore.noteLaunch(sessionID: tab.id, throughTmux: true, tmuxServerPID: 4242)
 
         #expect(harness.store.handleProcessExit(for: tab.id))
 
         #expect(await harness.rowWrites(for: tab.id) == [.ended(tab.id)])
+    }
+
+    /// The launch learns its server's pid only once the ownership read finds its session. A
+    /// server answering before then may be a replacement, so the name missing there leaves
+    /// the row as it was.
+    @Test("A session missing before the launch's server was recorded leaves the row open")
+    func sessionGoneWithoutLaunchServerLeavesTheRowOpen() async throws {
+        let harness = makeHarness(answer: .sessionGone(serverPID: 9999))
+        let (_, tab) = try openTwoTmuxTiles(harness.store)
+
+        #expect(harness.store.handleProcessExit(for: tab.id))
+
+        #expect(await harness.rowWrites(for: tab.id) == [.deselected(tab.id)])
+    }
+
+    /// Before tmux 2.7 an empty server exits, so a last shell ending takes the server too.
+    @Test("A gone server on a tmux not known to keep empty servers leaves the row open, unmarked")
+    func goneServerWithoutExitEmptyLeavesTheRowOpen() async throws {
+        for keepsRunningWhenEmpty: Bool? in [false, nil] {
+            let harness = makeHarness(answer: .serverGone)
+            harness.store.tmuxServerKeepsRunningWhenEmpty = { keepsRunningWhenEmpty }
+            let (_, tab) = try openTwoTmuxTiles(harness.store)
+
+            #expect(harness.store.handleProcessExit(for: tab.id))
+
+            #expect(await harness.rowWrites(for: tab.id) == [.deselected(tab.id)])
+        }
     }
 
     @Test("A tile the user closed ends its row without asking tmux")

@@ -71,13 +71,14 @@ struct TmuxLiveSocketGuardTests {
         #expect(refusals.count == 1)
     }
 
-    @Test("The holder question from a test never reaches the live socket")
+    @Test("The holder and exit-empty questions from a test never reach the live socket")
     func holderQuestionsAreRefused() async {
         let refusals = Refusals()
         await TmuxLiveSocketGuard.$onRefusal.withValue({ refusals.append($0) }) {
             let holder = TmuxHolderProbe(socketLabel: TmuxSessionProbe.defaultSocketLabel)
             #expect(await holder.holderState(forSessionNamed: "wstest-never-named") == .unanswered)
+            #expect(await TmuxExitEmptyCapability.readFromServer(TmuxSessionProbe.defaultSocketLabel) == nil)
         }
-        #expect(refusals.count == 1)
+        #expect(refusals.count == 2)
     }
 }

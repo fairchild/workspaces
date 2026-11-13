@@ -70,6 +70,10 @@ final class SurfaceStore: ObservableObject {
     /// asks how it had launched. `TileTreeStore` forgets an entry when its session leaves.
     private var launchesBySessionID: [UUID: TerminalLaunch] = [:]
 
+    /// Whether this run's tmux keeps a server running when empty, learned from the first
+    /// launch whose session the socket answered for.
+    let tmuxExitEmptyCapability = TmuxExitEmptyCapability()
+
     /// What one surface's launch did.
     struct TerminalLaunch: Equatable {
         /// Whether the shell exec'd the tmux launch script.
@@ -389,6 +393,7 @@ final class SurfaceStore: ObservableObject {
             let ownership = ledger.record(
                 hostSessionID: session.id, identity: match, launchedAt: launchedAt)
             launchesBySessionID[session.id]?.tmuxServerPID = match.serverPID
+            await tmuxExitEmptyCapability.learn(onSocket: TmuxSessionProbe.socketLabel)
             log.info(
                 "[SurfaceStore] tmux \(match.name, privacy: .public) (\(match.sessionID, privacy: .public)) backs session \(session.id.uuidString, privacy: .public), \(ownership.provenance == .createdByThisLaunch ? "created by this launch" : "adopted from an existing session", privacy: .public)"
             )

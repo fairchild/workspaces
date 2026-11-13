@@ -334,10 +334,10 @@ struct GhosttyTerminalConfig {
     /// only the server on the app's own socket label. The cost is an idle server that
     /// stays up once its sessions are gone.
     ///
-    /// tmux added `exit-empty` in 2.7. An older tmux rejects it with "invalid option";
-    /// it runs last, after the attach and every `set-environment` have run, and the
-    /// rejection leaves the client attached. Exits on such a server cannot tell a killed
-    /// server from a last session ending, and read as a lost holder.
+    /// tmux added `exit-empty` in 2.7. An older tmux rejects it; it runs last, after the
+    /// attach and every `set-environment` have run, and the rejection leaves the client
+    /// attached. Exits on such a server cannot tell a killed server from a last session
+    /// ending, so they leave the row open unmarked (`TmuxExitEmptyCapability`).
     static let keepServerWhenEmpty = "set-option -s exit-empty off"
 
     private static func singleQuoted(_ value: String) -> String {
