@@ -756,6 +756,7 @@ public struct TmuxSessionControl: Sendable {
     /// probe uses, so a wedged tmux server surfaces as no answer instead of a
     /// stalled CLI.
     public static let defaultRunner: CommandRunner = { executable, arguments, environment in
+        guard TmuxLiveSocketGuard.permits(tmuxArguments: arguments) else { return nil }
         do {
             return try await ProcessRunner.run(
                 executable: executable,

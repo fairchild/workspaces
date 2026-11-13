@@ -78,7 +78,18 @@ struct TmuxLiveSocketGuardTests {
             let holder = TmuxHolderProbe(socketLabel: TmuxSessionProbe.defaultSocketLabel)
             #expect(await holder.holderState(forSessionNamed: "wstest-never-named") == .unanswered)
             #expect(await TmuxExitEmptyCapability.readFromServer(TmuxSessionProbe.defaultSocketLabel) == nil)
+            #expect(await holder.serverPID(attachingClient: 1, toSessionNamed: "wstest-never-named") == nil)
         }
-        #expect(refusals.count == 2)
+        #expect(refusals.count == 3)
+    }
+
+    @Test("A session control question from a test never reaches the live socket")
+    func sessionControlIsRefused() async {
+        let refusals = Refusals()
+        await TmuxLiveSocketGuard.$onRefusal.withValue({ refusals.append($0) }) {
+            let control = TmuxSessionControl(socketLabel: TmuxSessionControl.defaultSocketLabel)
+            #expect(await control.isLive(handle: "wstest-never-named") == false)
+        }
+        #expect(refusals.count == 1)
     }
 }

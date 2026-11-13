@@ -70,8 +70,7 @@ final class SurfaceStore: ObservableObject {
     /// asks how it had launched. `TileTreeStore` forgets an entry when its session leaves.
     private var launchesBySessionID: [UUID: TerminalLaunch] = [:]
 
-    /// Whether this run's tmux keeps a server running when empty, learned from the first
-    /// launch whose session the socket answered for.
+    /// Whether each tmux server a launch landed on keeps running when empty, by server pid.
     let tmuxExitEmptyCapability = TmuxExitEmptyCapability()
 
     /// What one surface's launch did.
@@ -285,7 +284,18 @@ final class SurfaceStore: ObservableObject {
         let launchedAt = Date()
         let tmuxLaunchScript = terminal.surfaceView.tmuxLaunchScript
         guard tmuxLaunchScript != nil || session.initialCommand != nil else { return }
-        guard !launchWorkDeliveredSessionIDs.contains(session.id) else { return }
+        guard !launchWorkDeliveredSessionIDs.contains(session.id) else {
+            // A surface re-created for a session whose launch work already ran still launched
+            // anew, so its server is learned again.
+            if tmuxLaunchScript != nil {
+                Task { @MainActor [weak self, weak terminal] in
+                    try? await Task.sleep(for: .milliseconds(1500))
+                    guard let terminal else { return }
+                    await self?.recordLaunchServer(of: terminal, session: session)
+                }
+            }
+            return
+        }
         launchWorkDeliveredSessionIDs.insert(session.id)
 
         Task { @MainActor [weak self, weak terminal] in
@@ -323,6 +333,7 @@ final class SurfaceStore: ObservableObject {
                     await self?.recordTmuxOwnership(
                         session: session, launchedAt: launchedAt, attempts: 6)
                 }
+                await self?.recordLaunchServer(of: terminal, session: session)
             }
 
             let spent = self?.initialCommandSpentSessionIDs.contains(session.id) ?? false
@@ -392,8 +403,6 @@ final class SurfaceStore: ObservableObject {
             guard let match = live.first(where: { $0.name == sessionName }) else { continue }
             let ownership = ledger.record(
                 hostSessionID: session.id, identity: match, launchedAt: launchedAt)
-            launchesBySessionID[session.id]?.tmuxServerPID = match.serverPID
-            await tmuxExitEmptyCapability.learn(onSocket: TmuxSessionProbe.socketLabel)
             log.info(
                 "[SurfaceStore] tmux \(match.name, privacy: .public) (\(match.sessionID, privacy: .public)) backs session \(session.id.uuidString, privacy: .public), \(ownership.provenance == .createdByThisLaunch ? "created by this launch" : "adopted from an existing session", privacy: .public)"
             )
@@ -403,6 +412,39 @@ final class SurfaceStore: ObservableObject {
             "[SurfaceStore] no tmux ownership recorded yet for session \(session.id.uuidString, privacy: .public): nothing on the socket answers to \(sessionName, privacy: .public)"
         )
         return false
+    }
+
+    /// Records which tmux server this surface's launch landed on, once that server lists the
+    /// surface's own command as a client of the session, and learns whether that server keeps
+    /// running when empty.
+    ///
+    /// The session's name alone cannot prove it: a server started after the launch's own
+    /// died can hold the same name, and certifying it would let that server's later answer
+    /// read the tile's exit as its shell ending. Without the proof the launch's server stays
+    /// unknown, and an exit that needs it is undetermined (`TerminalSessionExit`). A surface
+    /// replaced meanwhile records nothing, since its launch is no longer this one.
+    private func recordLaunchServer(of terminal: TerminalSurface, session: HostTerminalSession) async {
+        let sessionName = session.effectiveTmuxSessionName
+        let probe = TmuxHolderProbe()
+        for attempt in 0..<3 {
+            if attempt > 0 {
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            guard surfaces[terminal.tileID] === terminal else { return }
+            guard let clientPID = terminal.surfaceView.foregroundProcessID,
+                let serverPID = await probe.serverPID(attachingClient: clientPID, toSessionNamed: sessionName)
+            else { continue }
+            guard surfaces[terminal.tileID] === terminal else { return }
+            launchesBySessionID[session.id]?.tmuxServerPID = serverPID
+            log.info(
+                "[SurfaceStore] tmux server \(serverPID, privacy: .public) holds \(sessionName, privacy: .public) with client \(clientPID, privacy: .public) for session \(session.id.uuidString, privacy: .public)"
+            )
+            await tmuxExitEmptyCapability.learn(onSocket: probe.socketLabel, serverPID: serverPID)
+            return
+        }
+        log.notice(
+            "[SurfaceStore] no tmux server shows session \(session.id.uuidString, privacy: .public)'s command attached to \(sessionName, privacy: .public); its launch server stays unknown"
+        )
     }
 
     /// Attach a tmux-backed surface to its session when the launch command never ran.

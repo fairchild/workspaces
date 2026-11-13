@@ -109,9 +109,10 @@ struct TerminalSessionExitTests {
 
     /// What a launch learns about the label while its server is up.
     private func learnExitEmpty(_ server: IsolatedTmuxServer) async -> Bool? {
+        guard let serverPID = server.serverPID else { return nil }
         let capability = TmuxExitEmptyCapability()
-        await capability.learn(onSocket: server.label)
-        return await capability.isSupported(onSocket: server.label)
+        await capability.learn(onSocket: server.label, serverPID: serverPID)
+        return await capability.keepsRunningWhenEmpty(onSocket: server.label, serverPID: serverPID)
     }
 
     @Test(
@@ -294,33 +295,220 @@ struct TerminalSessionExitTests {
     }
 
     @Test(
-        "A launch learns that this tmux keeps an empty server, and nothing while no server answers",
+        "A launch learns that a server keeps running when empty from exit-empty off, and nothing while no server answers",
         .enabled(if: tmuxIsInstalled, "tmux is not installed")
     )
     func exitEmptyIsLearnedFromARunningServer() async throws {
         let capability = TmuxExitEmptyCapability()
         let label = IsolatedTmuxServer.freshLabel()
-        await capability.learn(onSocket: label)
-        #expect(await capability.isSupported(onSocket: label) == nil)
+        await capability.learn(onSocket: label, serverPID: 4242)
+        #expect(await capability.keepsRunningWhenEmpty(onSocket: label, serverPID: 4242) == nil)
 
         let server = try IsolatedTmuxServer.start(session: "tile", label: label)
         defer { server.killServer() }
-        await capability.learn(onSocket: label)
-        #expect(await capability.isSupported(onSocket: label) == true)
+        let serverPID = try #require(server.serverPID)
+        await capability.learn(onSocket: label, serverPID: serverPID)
+        #expect(await capability.keepsRunningWhenEmpty(onSocket: label, serverPID: serverPID) == true)
+        #expect(await capability.keepsRunningWhenEmpty(onSocket: label, serverPID: serverPID + 1) == nil)
+        #expect(await capability.keepsRunningWhenEmpty(onSocket: label, serverPID: nil) == nil)
     }
 
-    @Test("A tmux that rejects the option is learned as unable to keep an empty server")
-    func rejectedExitEmptyReadsAsUnsupported() {
-        #expect(TmuxExitEmptyCapability.isSupported(exitCode: 0, stdout: "exit-empty off\n", stderr: "") == true)
+    @Test(
+        "A server whose exit-empty is on is not learned as keeping running when empty",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed")
+    )
+    func exitEmptyOnIsNotKeepingRunning() async throws {
+        let server = try IsolatedTmuxServer.start(session: "tile")
+        defer { server.killServer() }
+        try server.tmux(["set-option", "-s", "exit-empty", "on"])
+        #expect(await learnExitEmpty(server) == false)
+    }
+
+    @Test("Only exit-empty off keeps a server running when empty; a rejected option keeps nothing")
+    func exitEmptyReadings() {
+        typealias Reading = TmuxExitEmptyCapability.Reading
         #expect(
-            TmuxExitEmptyCapability.isSupported(exitCode: 1, stdout: "", stderr: "unknown option: exit-empty")
-                == false)
+            TmuxExitEmptyCapability.reading(exitCode: 0, stdout: "4242\nexit-empty off\n", stderr: "")
+                == Reading(serverPID: 4242, keepsRunningWhenEmpty: true))
         #expect(
-            TmuxExitEmptyCapability.isSupported(exitCode: 1, stdout: "", stderr: "invalid option: exit-empty")
-                == false)
+            TmuxExitEmptyCapability.reading(exitCode: 0, stdout: "4242\nexit-empty on\n", stderr: "")
+                == Reading(serverPID: 4242, keepsRunningWhenEmpty: false))
         #expect(
-            TmuxExitEmptyCapability.isSupported(
+            TmuxExitEmptyCapability.reading(exitCode: 1, stdout: "4242\n", stderr: "unknown option: exit-empty")
+                == Reading(serverPID: 4242, keepsRunningWhenEmpty: false))
+        #expect(
+            TmuxExitEmptyCapability.reading(exitCode: 1, stdout: "4242\n", stderr: "invalid option: exit-empty")
+                == Reading(serverPID: 4242, keepsRunningWhenEmpty: false))
+        #expect(
+            TmuxExitEmptyCapability.reading(
                 exitCode: 1, stdout: "", stderr: "no server running on /private/tmp/tmux-501/x") == nil)
+    }
+
+    /// Counts reads, holding each while the gate is shut; an open gate answers at once.
+    private actor GatedReads {
+        private(set) var count = 0
+        private var answer: Int?
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+
+        func read() async -> TmuxExitEmptyCapability.Reading? {
+            count += 1
+            if answer == nil {
+                await withCheckedContinuation { waiting.append($0) }
+            }
+            return answer.map { TmuxExitEmptyCapability.Reading(serverPID: $0, keepsRunningWhenEmpty: true) }
+        }
+
+        func open(answering serverPID: Int) {
+            answer = serverPID
+            waiting.forEach { $0.resume() }
+            waiting = []
+        }
+
+        func shut() {
+            answer = nil
+        }
+
+        var pending: Int { waiting.count }
+    }
+
+    @Test("Concurrent learns share one read, and a new server pid is learned again")
+    func learnsAreCoalescedAndKeyedByServer() async {
+        let reads = GatedReads()
+        let capability = TmuxExitEmptyCapability(read: { _ in await reads.read() })
+
+        async let first: Void = capability.learn(onSocket: "x", serverPID: 4242)
+        async let second: Void = capability.learn(onSocket: "x", serverPID: 4242)
+        #expect(await waitUntil(timeout: 10) { await reads.pending >= 1 })
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        await reads.open(answering: 4242)
+        _ = await (first, second)
+        #expect(await reads.count == 1)
+        #expect(await capability.keepsRunningWhenEmpty(onSocket: "x", serverPID: 4242) == true)
+
+        await capability.learn(onSocket: "x", serverPID: 4242)
+        #expect(await reads.count == 1)
+
+        await reads.shut()
+        async let replaced: Void = capability.learn(onSocket: "x", serverPID: 5353)
+        #expect(await waitUntil(timeout: 10) { await reads.pending == 1 })
+        await reads.open(answering: 5353)
+        await replaced
+        #expect(await reads.count == 2)
+        #expect(await capability.keepsRunningWhenEmpty(onSocket: "x", serverPID: 5353) == true)
+        #expect(await capability.keepsRunningWhenEmpty(onSocket: "x", serverPID: 4242) == nil)
+    }
+
+    /// A tmux client attached to `session` under a pseudo-terminal, as a terminal tile's
+    /// command is. Its pid is the client's own, not the `script` that holds the pty.
+    private struct AttachedClient {
+        let script: Process
+        let input: Pipe
+        let clientPID: Int
+
+        static func attach(_ server: IsolatedTmuxServer, session: String) async throws -> AttachedClient {
+            let script = Process()
+            script.executableURL = URL(fileURLWithPath: "/usr/bin/script")
+            script.arguments = [
+                "-q", "/dev/null", "/usr/bin/env", "tmux", "-f", "/dev/null", "-L", server.label, "attach", "-t",
+                "=\(session)",
+            ]
+            var environment = TmuxSessionProbe.defaultEnvironment
+            environment["TERM"] = "xterm-256color"
+            script.environment = environment
+            let input = Pipe()
+            script.standardInput = input
+            script.standardOutput = FileHandle.nullDevice
+            script.standardError = FileHandle.nullDevice
+            try script.run()
+            let scriptPID = Int(script.processIdentifier)
+            let attached = await waitUntil(timeout: 10) {
+                guard let listing = try? server.tmux(["list-clients", "-F", "#{client_pid}"]).output else {
+                    return false
+                }
+                return listing.split(separator: "\n").contains { Self.parent(of: Int($0) ?? 0) == scriptPID }
+            }
+            let listing = try server.tmux(["list-clients", "-F", "#{client_pid}"]).output
+            let clientPID = listing.split(separator: "\n").compactMap { Int($0) }.first {
+                Self.parent(of: $0) == scriptPID
+            }
+            guard attached, let clientPID else {
+                script.terminate()
+                throw AttachFailed()
+            }
+            return AttachedClient(script: script, input: input, clientPID: clientPID)
+        }
+
+        private struct AttachFailed: Error {}
+
+        private static func parent(of pid: Int) -> Int? {
+            var info = proc_bsdinfo()
+            let size = proc_pidinfo(pid_t(pid), PROC_PIDTBSDINFO, 0, &info, Int32(MemoryLayout<proc_bsdinfo>.size))
+            return size == Int32(MemoryLayout<proc_bsdinfo>.size) ? Int(info.pbi_ppid) : nil
+        }
+
+        /// Kills the client only while it is still the `script`'s child, so a reused pid is
+        /// left alone.
+        func detach() {
+            if Self.parent(of: clientPID) == Int(script.processIdentifier) {
+                kill(pid_t(clientPID), SIGKILL)
+            }
+            if script.isRunning {
+                kill(script.processIdentifier, SIGKILL)
+            }
+        }
+    }
+
+    @Test(
+        "A launch's server is the one its own client is attached to",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed")
+    )
+    func launchServerIsTheOneItsClientIsAttachedTo() async throws {
+        let server = try IsolatedTmuxServer.start(session: "tile")
+        defer { server.killServer() }
+        try server.tmux(["new-session", "-d", "-s", "other", "sleep 600"])
+        let client = try await AttachedClient.attach(server, session: "tile")
+        defer { client.detach() }
+        let probe = TmuxHolderProbe(socketLabel: server.label)
+
+        #expect(await probe.serverPID(attachingClient: client.clientPID, toSessionNamed: "tile") == server.serverPID)
+        #expect(await probe.serverPID(attachingClient: client.clientPID, toSessionNamed: "other") == nil)
+        #expect(await probe.serverPID(attachingClient: Int(getpid()), toSessionNamed: "tile") == nil)
+    }
+
+    /// The launch's server died before its identity was read, and a new server on the
+    /// label holds a session with the same name and a client of its own. Reading whatever
+    /// server answers would certify the replacement as the launch's server.
+    @Test(
+        "A replacement server holding the same session is not taken for the launch's server",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed")
+    )
+    func replacementServerIsNotTheLaunchServer() async throws {
+        let original = try IsolatedTmuxServer.start(session: "tile")
+        let launchClient = try await AttachedClient.attach(original, session: "tile")
+        defer { launchClient.detach() }
+        #expect(await original.killServerAndWait())
+
+        let replacement = try IsolatedTmuxServer.start(session: "tile", label: original.label)
+        defer { replacement.killServer() }
+        let foreignClient = try await AttachedClient.attach(replacement, session: "tile")
+        defer { foreignClient.detach() }
+        let probe = TmuxHolderProbe(socketLabel: original.label)
+
+        #expect(
+            await probe.serverPID(attachingClient: launchClient.clientPID, toSessionNamed: "tile") == nil)
+        #expect(
+            await probe.serverPID(attachingClient: foreignClient.clientPID, toSessionNamed: "tile")
+                == replacement.serverPID)
+    }
+
+    @Test("A server's identity needs its listing to show this client on this session")
+    func serverIdentityParsing() {
+        let listing = "4242\n777\ttile\n888\tother\n"
+        #expect(TmuxHolderProbe.serverPID(listing: listing, attachingClient: 777, toSessionNamed: "tile") == 4242)
+        #expect(TmuxHolderProbe.serverPID(listing: listing, attachingClient: 888, toSessionNamed: "tile") == nil)
+        #expect(TmuxHolderProbe.serverPID(listing: listing, attachingClient: 777, toSessionNamed: "til") == nil)
+        #expect(TmuxHolderProbe.serverPID(listing: "4242\n", attachingClient: 777, toSessionNamed: "tile") == nil)
+        #expect(TmuxHolderProbe.serverPID(listing: "", attachingClient: 777, toSessionNamed: "tile") == nil)
     }
 
     @Test("An unanswered probe keeps the row open, as its own reason")

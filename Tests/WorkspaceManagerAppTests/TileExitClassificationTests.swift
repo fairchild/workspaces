@@ -62,7 +62,7 @@ struct TileExitClassificationTests {
             await probeCalls.append(name)
             return answer
         }
-        store.tmuxServerKeepsRunningWhenEmpty = { true }
+        store.tmuxServerKeepsRunningWhenEmpty = { _ in true }
         let reclaims = ProbeCalls()
         store.terminateOwnedTmuxSession = { hostSessionID in
             await reclaims.append(hostSessionID.uuidString)
@@ -123,7 +123,7 @@ struct TileExitClassificationTests {
     func goneServerWithoutExitEmptyLeavesTheRowOpen() async throws {
         for keepsRunningWhenEmpty: Bool? in [false, nil] {
             let harness = makeHarness(answer: .serverGone)
-            harness.store.tmuxServerKeepsRunningWhenEmpty = { keepsRunningWhenEmpty }
+            harness.store.tmuxServerKeepsRunningWhenEmpty = { _ in keepsRunningWhenEmpty }
             let (_, tab) = try openTwoTmuxTiles(harness.store)
 
             #expect(harness.store.handleProcessExit(for: tab.id))

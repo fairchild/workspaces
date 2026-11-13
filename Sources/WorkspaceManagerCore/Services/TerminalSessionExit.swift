@@ -32,9 +32,10 @@ public enum TerminalSessionExit: Sendable, Equatable {
     /// detach. The work the row describes is alive, so the row stays open and the next
     /// launch reattaches it.
     case detached
-    /// tmux gave no answer about what is left, so nothing is known about the tile's
-    /// work. Ending the row cannot be undone and keeping it costs one restore offer, so
-    /// the row stays open.
+    /// The evidence cannot tell the other reasons apart: tmux gave no answer, or its answer
+    /// is ambiguous without the launch's server identity or a server known to outlive its
+    /// last session. Ending the row cannot be undone and keeping it costs one restore
+    /// offer, so the row stays open.
     case undetermined
 
     /// What a tile ending this way leaves on its continuity row.
@@ -188,6 +189,50 @@ public struct TmuxHolderProbe: Sendable {
         }
     }
 
+    /// The pid of the server holding `sessionName` with `clientPID` attached to it, or `nil`
+    /// when no server answers with that client on that session.
+    ///
+    /// This is how a launch proves which server it landed on. A session name alone cannot:
+    /// a server started after the launch's own died can hold the same name, with or without
+    /// clients of its own. The launch script execs tmux, so the surface's own command is the
+    /// client, and a server listing it on the session is the one the surface attached to.
+    public func serverPID(attachingClient clientPID: Int, toSessionNamed sessionName: String) async -> Int? {
+        let arguments = [
+            "tmux", "-L", socketLabel,
+            "display-message", "-p", "#{pid}", ";",
+            "list-clients", "-F", "#{client_pid}\t#{session_name}",
+        ]
+        guard TmuxLiveSocketGuard.permits(tmuxArguments: arguments) else { return nil }
+        do {
+            let result = try await ProcessRunner.run(
+                executable: "/usr/bin/env",
+                arguments: arguments,
+                environment: environment,
+                timeout: 5
+            )
+            guard result.exitCode == 0 else { return nil }
+            return Self.serverPID(listing: result.stdout, attachingClient: clientPID, toSessionNamed: sessionName)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Reads `display-message -p '#{pid}' ; list-clients -F '#{client_pid}<tab>#{session_name}'`:
+    /// the server's pid, then one line per client.
+    static func serverPID(
+        listing stdout: String, attachingClient clientPID: Int, toSessionNamed sessionName: String
+    ) -> Int? {
+        var lines = stdout.split(separator: "\n").map(String.init)
+        guard !lines.isEmpty, let serverPID = Int(lines.removeFirst().trimmingCharacters(in: .whitespaces)) else {
+            return nil
+        }
+        let attached = lines.contains { line in
+            let fields = line.split(separator: "\t", maxSplits: 1).map(String.init)
+            return fields.count == 2 && Int(fields[0]) == clientPID && fields[1] == sessionName
+        }
+        return attached ? serverPID : nil
+    }
+
     /// What tmux prints when no server holds the socket. "no server running on <path>"
     /// and "error connecting to <path>" come from a socket with no server or no socket
     /// file. A probe that reaches a server as it dies reads "server exited unexpectedly"
@@ -219,37 +264,69 @@ public struct TmuxHolderProbe: Sendable {
     }
 }
 
-/// Whether a tmux socket's server can be kept running once its last session ends.
+/// Whether a tmux server keeps running once its last session ends.
 ///
-/// tmux added `exit-empty` in 2.7. Without it an empty server exits, so a server that is
-/// gone cannot be told killed from emptied (`TerminalSessionExit.classifyProcessExit`).
-/// The answer belongs to the tmux binary, so it is learned once per socket label, while
-/// a server is up to ask, and kept.
+/// The launch script sets `exit-empty off` on its socket's server; tmux before 2.7 rejects
+/// the option, and a server someone set back to `on` exits when empty. Either way a server
+/// that is gone cannot be told killed from emptied (`TerminalSessionExit.classifyProcessExit`).
+/// The answer belongs to one server, so it is kept by that server's pid and asked again
+/// when a launch lands on another.
 public actor TmuxExitEmptyCapability {
+    /// One server's answer: its pid, and whether its `exit-empty` is off.
+    public struct Reading: Sendable, Equatable {
+        public let serverPID: Int
+        public let keepsRunningWhenEmpty: Bool
+
+        public init(serverPID: Int, keepsRunningWhenEmpty: Bool) {
+            self.serverPID = serverPID
+            self.keepsRunningWhenEmpty = keepsRunningWhenEmpty
+        }
+    }
+
     /// Asks a label's server, answering `nil` when no server answered.
-    public typealias Reader = @Sendable (_ socketLabel: String) async -> Bool?
+    public typealias Reader = @Sendable (_ socketLabel: String) async -> Reading?
 
     private let read: Reader
-    private var known: [String: Bool] = [:]
+    private var known: [String: Reading] = [:]
+    private var inFlight: [String: Task<Reading?, Never>] = [:]
 
     public init(read: @escaping Reader = TmuxExitEmptyCapability.readFromServer) {
         self.read = read
     }
 
-    /// Asks the label's server, unless it has already answered.
-    public func learn(onSocket socketLabel: String) async {
-        guard known[socketLabel] == nil, let supported = await read(socketLabel) else { return }
-        known[socketLabel] = supported
+    /// Asks the label's server unless `serverPID` has already answered. Concurrent asks for
+    /// one label share a single read.
+    public func learn(onSocket socketLabel: String, serverPID: Int) async {
+        guard known[socketLabel]?.serverPID != serverPID else { return }
+        if let pending = inFlight[socketLabel] {
+            _ = await pending.value
+            return
+        }
+        let read = read
+        let pending = Task { await read(socketLabel) }
+        inFlight[socketLabel] = pending
+        let reading = await pending.value
+        inFlight[socketLabel] = nil
+        if let reading {
+            known[socketLabel] = reading
+        }
     }
 
-    /// What the label's server answered, or `nil` before one has.
-    public func isSupported(onSocket socketLabel: String) -> Bool? {
-        known[socketLabel]
+    /// Whether the server with `serverPID` keeps running when empty, or `nil` when that
+    /// server has not answered.
+    public func keepsRunningWhenEmpty(onSocket socketLabel: String, serverPID: Int?) -> Bool? {
+        guard let serverPID, let reading = known[socketLabel], reading.serverPID == serverPID else { return nil }
+        return reading.keepsRunningWhenEmpty
     }
 
-    /// `show-options -s exit-empty` on the label's server. It starts no server.
+    /// `display-message -p '#{pid}' ; show-options -s exit-empty` on the label's server. It
+    /// starts no server, and the pid prints even when the option is rejected.
     public static let readFromServer: Reader = { socketLabel in
-        let arguments = ["tmux", "-L", socketLabel, "show-options", "-s", "exit-empty"]
+        let arguments = [
+            "tmux", "-L", socketLabel,
+            "display-message", "-p", "#{pid}", ";",
+            "show-options", "-s", "exit-empty",
+        ]
         guard TmuxLiveSocketGuard.permits(tmuxArguments: arguments) else { return nil }
         do {
             let result = try await ProcessRunner.run(
@@ -258,20 +335,22 @@ public actor TmuxExitEmptyCapability {
                 environment: TmuxSessionProbe.defaultEnvironment,
                 timeout: 5
             )
-            return isSupported(exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr)
+            return reading(exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr)
         } catch {
             return nil
         }
     }
 
-    /// A server that prints the option has it. tmux before 2.7 rejects the name ("unknown
-    /// option" there, "invalid option" in later releases for any name they lack); any other
-    /// failure, such as no server running, answers nothing.
-    static func isSupported(exitCode: Int32, stdout: String, stderr: String) -> Bool? {
+    /// Only `exit-empty off` keeps a server running when empty. tmux before 2.7 rejects the
+    /// name ("unknown option" there, "invalid option" in later releases for any name they
+    /// lack). Any other failure, such as no server running, answers nothing.
+    static func reading(exitCode: Int32, stdout: String, stderr: String) -> Reading? {
+        let lines = stdout.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let serverPID = lines.first.flatMap({ Int($0) }) else { return nil }
         if exitCode == 0 {
-            return stdout.contains("exit-empty")
+            return Reading(serverPID: serverPID, keepsRunningWhenEmpty: lines.contains("exit-empty off"))
         }
         let rejected = ["unknown option", "invalid option"].contains { stderr.contains($0) }
-        return rejected ? false : nil
+        return rejected ? Reading(serverPID: serverPID, keepsRunningWhenEmpty: false) : nil
     }
 }

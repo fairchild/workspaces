@@ -620,12 +620,12 @@ final class TileTreeStore: ObservableObject {
         await TmuxHolderProbe().holderState(forSessionNamed: sessionName)
     }
 
-    /// Whether this run's tmux keeps a server running once its last session ends, as the
-    /// launch script asks it to (`exit-empty`). `nil` until a launch has learned it. Tests
-    /// answer directly.
-    lazy var tmuxServerKeepsRunningWhenEmpty: @Sendable () async -> Bool? = {
-        [capability = surfaceStore.tmuxExitEmptyCapability] in
-        await capability.isSupported(onSocket: TmuxSessionProbe.socketLabel)
+    /// Whether the tmux server with the given pid keeps running once its last session ends,
+    /// as the launch script asks it to (`exit-empty off`). `nil` for an unknown server or one
+    /// no launch has asked. Tests answer directly.
+    lazy var tmuxServerKeepsRunningWhenEmpty: @Sendable (Int?) async -> Bool? = {
+        [capability = surfaceStore.tmuxExitEmptyCapability] serverPID in
+        await capability.keepsRunningWhenEmpty(onSocket: TmuxSessionProbe.socketLabel, serverPID: serverPID)
     }
 
     /// A tile that left the tree on an exit, holding every row it took until that row has a
@@ -722,7 +722,7 @@ final class TileTreeStore: ObservableObject {
         let keepsServerWhenEmpty = tmuxServerKeepsRunningWhenEmpty
         tileExits[sessionID]?.classification = Task { @MainActor [weak self] in
             let state = await holderState(tmuxSessionName)
-            let serverKeepsRunningWhenEmpty = await keepsServerWhenEmpty()
+            let serverKeepsRunningWhenEmpty = await keepsServerWhenEmpty(launchServerPID)
             guard let self, self.tileExits[sessionID] != nil else { return }
             let exit = TerminalSessionExit.classifyProcessExit(
                 tmuxHolder: state,
@@ -745,7 +745,6 @@ final class TileTreeStore: ObservableObject {
         if sessionID == exitID {
             tileExit.classification?.cancel()
             settled = tileExit.unsettled.map { ($0, $0.id == exitID ? exit : exit.collateralExit) }
-            tileExit.unsettled = []
         } else {
             settled = tileExit.unsettled.filter { $0.id == sessionID }.map { ($0, exit) }
             tileExit.unsettled.removeAll { $0.id == sessionID }
