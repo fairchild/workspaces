@@ -463,6 +463,33 @@ struct ConversationIndexTests {
         #expect(record.observedAt == Date(timeIntervalSince1970: 1_800_000_090))
     }
 
+    /// Codex's linked-socket case: the socket directory is a link into a directory whose
+    /// parent cannot be searched. The link is there, so it is not absent; once its target can
+    /// be reached, its records are read through it.
+    @Test("A linked socket directory that cannot be reached stops the migration without completing it")
+    func unreachableLinkedSocketStoresNothing() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let launched = UUID().uuidString.lowercased()
+        let socket = try saveLaunch(launched, in: fixture.launchRecords).deletingLastPathComponent()
+        let parent = fixture.root.appendingPathComponent("elsewhere")
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        let target = parent.appendingPathComponent("workspaces")
+        try FileManager.default.moveItem(at: socket, to: target)
+        try FileManager.default.createSymbolicLink(at: socket, withDestinationURL: target)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: parent.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: parent.path) }
+        let state = try fixture.localState()
+        let indexer = fixture.indexer(state)
+
+        await #expect(throws: (any Error).self) { try await indexer.migrateOnce() }
+        #expect(try await state.metadataValue(forKey: indexer.migrationMetadataKey) == nil)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: parent.path)
+        #expect(try await indexer.migrateOnce() == .init(written: 1))
+        #expect(fixture.records.load(conversationID: launched) != nil)
+    }
+
     private func saveLaunch(_ conversationID: String, in launchRecords: AgentLaunchRecordStore) throws -> URL {
         try launchRecords.save(
             AgentLaunchRecord(

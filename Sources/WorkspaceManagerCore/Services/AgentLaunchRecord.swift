@@ -208,24 +208,35 @@ public struct AgentLaunchRecordStore: Sendable {
 
     /// Every record on every socket, for a reader that must not take a failed read for a
     /// missing record. A root, socket directory or file that is not there is absent; any
-    /// other failure to list, read or decode one throws.
+    /// other failure to classify, list, read or decode one throws.
     public func everyRecordOrThrow() throws -> [AgentLaunchRecord] {
-        let sockets = try Self.ifPresent { try Self.listing(directory) } ?? []
-        return try sockets.filter(Self.isDirectory).flatMap { socket in
-            try (Self.ifPresent { try Self.listing(socket) } ?? [])
+        guard let root = try Self.directoryIfPresent(directory) else { return [] }
+        return try Self.listing(root).compactMap(Self.directoryIfPresent).flatMap { socket in
+            try Self.listing(socket)
                 .filter { $0.pathExtension == "json" }
                 .compactMap { file in try Self.ifPresent { try Data(contentsOf: file) }.map(Self.decode) }
         }
     }
 
     private static func listing(_ directory: URL) throws -> [URL] {
-        try FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        try ifPresent {
+            try FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        } ?? []
     }
 
-    private static func isDirectory(_ url: URL) -> Bool {
-        var isDirectory: ObjCBool = false
-        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+    /// `url` with its links resolved, when it leads to a directory; nil when nothing is there
+    /// or it is not a directory. Any other failure to stat it, such as a link whose target
+    /// cannot be reached, throws: only absence is absent. The listing goes through the
+    /// resolved path because enumerating a link to a directory fails with `ENOTDIR`.
+    private static func directoryIfPresent(_ url: URL) throws -> URL? {
+        var status = stat()
+        guard stat(url.path, &status) == 0 else {
+            let failure = errno
+            if failure == ENOENT || failure == ENOTDIR { return nil }
+            throw POSIXError(POSIXErrorCode(rawValue: failure) ?? .EIO)
+        }
+        return status.st_mode & S_IFMT == S_IFDIR ? url.resolvingSymlinksInPath() : nil
     }
 
     private static func ifPresent<T>(_ read: () throws -> T) throws -> T? {
