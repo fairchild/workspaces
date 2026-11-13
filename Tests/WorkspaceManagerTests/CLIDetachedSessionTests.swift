@@ -799,16 +799,7 @@ struct CLIDetachedSessionTests {
         let environment = try installStubClaude(in: fixture)
         let key = ConversationRecordStore.directoryEnvironmentKey
         let directory = fixture.root.appendingPathComponent("conversations")
-        let template = try String(
-            contentsOf: URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-                .appendingPathComponent("Sources/WorkspaceManager/Resources/HookForwarders/conversation-observer.sh"),
-            encoding: .utf8
-        )
-        let script = fixture.root.appendingPathComponent("conversation-observer.sh")
-        try template.replacingOccurrences(of: "@WORKSPACES_CLI@", with: fixture.binary.path)
-            .write(to: script, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let script = try installHookScript(in: fixture)
         let trigger = fixture.root.appendingPathComponent("go")
         let conversationID = UUID().uuidString.lowercased()
         let payload = #"{"session_id":"\#(conversationID)","cwd":"\#(fixture.root.path)"}"#
@@ -844,6 +835,142 @@ struct CLIDetachedSessionTests {
         let written = try #require(record, "the hook in the surviving shell wrote no record")
         #expect(written.observedBy == .hook)
         #expect(written.lastSeenIn?.tmux?.sessionID.hasPrefix("$") == true)
+    }
+
+    /// The hook script as the app extracts it, naming this fixture's CLI.
+    private func installHookScript(in fixture: Fixture) throws -> URL {
+        let template = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/WorkspaceManager/Resources/HookForwarders/conversation-observer.sh"),
+            encoding: .utf8
+        )
+        let script = fixture.root.appendingPathComponent("conversation-observer.sh")
+        try template.replacingOccurrences(of: "@WORKSPACES_CLI@", with: fixture.binary.path)
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+
+    /// A session made without the records directory, which the session's environment then
+    /// names, as a surviving session has it after a resume or a tile attaches. Returns the
+    /// `$TMUX` its panes see: socket path, server pid, session number.
+    private func sessionNamingTheRecordsDirectory(
+        _ handle: String,
+        fixture: Fixture,
+        environment: [String: String]
+    ) async throws -> (socket: String, serverPID: Int32, session: String) {
+        let key = ConversationRecordStore.directoryEnvironmentKey
+        try startSession(handle, running: "env -u \(key) sleep 120", fixture: fixture, environment: environment)
+        let tmuxEnvironment = ProcessInfo.processInfo.environment.merging(fixture.environment) { _, new in new }
+            .filter { $0.key != key }
+        try await TmuxSessionControl(
+            socketLabel: fixture.socketLabel,
+            environment: tmuxEnvironment,
+            sessionEnvironment: [key: fixture.root.appendingPathComponent("conversations").path]
+        ).adoptSessionEnvironment(handle: handle)
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [
+            "tmux", "-L", fixture.socketLabel, "display-message", "-p", "-t", "=\(handle):",
+            "#{socket_path}\t#{pid}\t#{session_id}",
+        ]
+        process.environment = tmuxEnvironment
+        process.standardOutput = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let fields = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .newlines)
+            .split(separator: "\t").map(String.init)
+        try #require(fields.count == 3)
+        return (fields[0], try #require(Int32(fields[1])), String(fields[2].dropFirst()))
+    }
+
+    /// Runs the hook outside any tile key with `tmux` as `$TMUX`, and how long it took. A
+    /// hook that outlives `limit` is killed, so a hang fails the test rather than the suite.
+    private func runHook(
+        _ script: URL,
+        tmux: String,
+        conversationID: String,
+        fixture: Fixture,
+        limit: TimeInterval = 15
+    ) throws -> TimeInterval {
+        let process = Process()
+        let input = Pipe()
+        process.executableURL = script
+        process.environment = [
+            "PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin", "HOME": fixture.root.path, "TMUX": tmux,
+            "XDG_CONFIG_HOME": fixture.root.appendingPathComponent("config").path,
+        ]
+        process.standardInput = input
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let started = Date()
+        try process.run()
+        input.fileHandleForWriting.write(
+            Data(#"{"session_id":"\#(conversationID)","cwd":"\#(fixture.root.path)"}"#.utf8))
+        try input.fileHandleForWriting.close()
+        while process.isRunning, Date().timeIntervalSince(started) < limit {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+        }
+        process.waitUntilExit()
+        return Date().timeIntervalSince(started)
+    }
+
+    @Test(
+        "A hook declines the records directory of a server other than the one its $TMUX names",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func hookDeclinesAnotherServersDirectory() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let script = try installHookScript(in: fixture)
+        let records = ConversationRecordStore(directory: fixture.root.appendingPathComponent("conversations"))
+        let tmux = try await sessionNamingTheRecordsDirectory(
+            "wm-replaced-00000000", fixture: fixture, environment: environment)
+
+        let elsewhere = UUID().uuidString.lowercased()
+        _ = try runHook(
+            script, tmux: "\(tmux.socket),\(tmux.serverPID + 1),\(tmux.session)",
+            conversationID: elsewhere, fixture: fixture)
+        #expect(records.load(conversationID: elsewhere) == nil)
+
+        let here = UUID().uuidString.lowercased()
+        _ = try runHook(
+            script, tmux: "\(tmux.socket),\(tmux.serverPID),\(tmux.session)",
+            conversationID: here, fixture: fixture)
+        #expect(records.load(conversationID: here) != nil)
+    }
+
+    @Test(
+        "A hook whose tmux server does not answer gives up within its bound and writes nothing",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func hookGivesUpOnAStoppedServer() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let script = try installHookScript(in: fixture)
+        let records = ConversationRecordStore(directory: fixture.root.appendingPathComponent("conversations"))
+        let tmux = try await sessionNamingTheRecordsDirectory(
+            "wm-stopped-00000000", fixture: fixture, environment: environment)
+
+        let conversationID = UUID().uuidString.lowercased()
+        kill(tmux.serverPID, SIGSTOP)
+        let elapsed: TimeInterval
+        do {
+            defer { kill(tmux.serverPID, SIGCONT) }
+            elapsed = try runHook(
+                script, tmux: "\(tmux.socket),\(tmux.serverPID),\(tmux.session)",
+                conversationID: conversationID, fixture: fixture)
+        }
+        #expect(elapsed < 5, "the hook took \(elapsed) s against a stopped server")
+        #expect(records.load(conversationID: conversationID) == nil)
     }
 
     @Test(
