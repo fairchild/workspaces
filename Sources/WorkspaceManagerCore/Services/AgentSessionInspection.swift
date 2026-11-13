@@ -136,21 +136,6 @@ public enum AgentSessionInspection {
         }
     }
 
-    /// How long each process holding `conversationID` has been running, in seconds, from
-    /// `ps -A -ww -o etime=,command=` output. The id has to follow the flag that names a
-    /// conversation, and `claude` has to be the program, directly or through an interpreter:
-    /// the shell that started it, a tmux client and a hook all carry the same text and hold
-    /// nothing.
-    public static func conversationHolders(_ conversationID: String, processListing: String) -> [Int] {
-        processListing.split(separator: "\n").compactMap { line in
-            guard line.contains(conversationID) else { return nil }
-            let words = line.split(separator: " ").map(String.init)
-            guard let elapsed = words.first.flatMap(elapsedSeconds) else { return nil }
-            let command = Array(words.dropFirst())
-            return isClaude(command) && names(conversationID, command) ? elapsed : nil
-        }
-    }
-
     /// Whether `command`'s options name `conversationID` with a flag that picks a conversation.
     static func names(_ conversationID: String, _ command: [String]) -> Bool {
         let flags = AgentLaunchCommand.conversationFlags
@@ -166,17 +151,6 @@ public enum AgentSessionInspection {
         command.prefix(2).contains { word in
             URL(fileURLWithPath: word).lastPathComponent == "claude" || word.hasSuffix("/claude-code/cli.js")
         }
-    }
-
-    /// Parses `ps` elapsed time, `[[dd-]hh:]mm:ss`.
-    static func elapsedSeconds(_ text: String) -> Int? {
-        let dayParts = text.split(separator: "-")
-        guard (1...2).contains(dayParts.count), let clock = dayParts.last else { return nil }
-        let days = dayParts.count == 2 ? Int(dayParts[0]) : 0
-        let fields = clock.split(separator: ":").map { Int($0) }
-        guard let days, (2...3).contains(fields.count), !fields.contains(nil) else { return nil }
-        let clockSeconds = fields.compactMap { $0 }.reduce(0) { $0 * 60 + $1 }
-        return days * 86_400 + clockSeconds
     }
 
     public static func verdict(
@@ -238,16 +212,5 @@ public enum AgentSessionInspection {
     static func isOwnTurn(_ turn: ClaudeTranscriptTurn, agentStartedAt: Date?) -> Bool {
         guard let timestamp = turn.timestamp, let agentStartedAt else { return false }
         return timestamp >= agentStartedAt
-    }
-
-    /// `ps` listing every process's elapsed time and full argument list, or `nil` when it
-    /// did not answer.
-    public static func processListing() async -> String? {
-        let result = try? await ProcessRunner.run(
-            executable: "/bin/ps",
-            arguments: ["-A", "-ww", "-o", "etime=", "-o", "command="],
-            timeout: 5
-        )
-        return result?.success == true ? result?.stdout : nil
     }
 }

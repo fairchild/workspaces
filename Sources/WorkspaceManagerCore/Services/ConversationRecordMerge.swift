@@ -146,13 +146,13 @@ struct Sighting {
         if let tmux = seen.tmux {
             self.tmux = .session(serverPID: tmux.serverPID, sessionID: tmux.sessionID)
             var session: [String: Any] = ["serverPID": tmux.serverPID, "sessionID": tmux.sessionID]
-            if let createdAt = tmux.createdAt {
-                session["createdAt"] = ConversationRecordJSON.string(createdAt)
-                session["createdAtObservedAt"] = object["observedAt"]
-            }
-            if let name = tmux.name {
-                session["name"] = name
-                session["nameObservedAt"] = object["observedAt"]
+            let attributes: [(String, Any?)] = [
+                ("createdAt", tmux.createdAt.map(ConversationRecordJSON.string)), ("name", tmux.name),
+                ("socketPath", tmux.socketPath), ("serverStartedAt", tmux.serverStartedAtMicroseconds),
+            ]
+            for case (let attribute, let value?) in attributes {
+                session[attribute] = value
+                session["\(attribute)ObservedAt"] = object["observedAt"]
             }
             object["tmux"] = session
         } else if seen.outsideTmux {
@@ -161,10 +161,20 @@ struct Sighting {
         } else {
             self.tmux = .unknown
         }
+        if let harness = seen.harness {
+            object[Self.harnessAttribute] = harness.recorded
+            object["\(Self.harnessAttribute)ObservedAt"] = object["observedAt"]
+        }
         guard holder != nil || self.tmux != .unknown else { return nil }
         self.at = at
         self.object = object
     }
+
+    /// Attributes of the tmux session, each with the time it was observed.
+    static let tmuxAttributes = ["createdAt", "name", "socketPath", "serverStartedAt"]
+    /// The harness process, kept beside the place rather than inside its tmux session: a
+    /// conversation outside tmux has one too.
+    static let harnessAttribute = "harness"
 
     init?(object: [String: Any]) {
         guard let at = ConversationRecordJSON.date(object["observedAt"]) else { return nil }
@@ -192,9 +202,10 @@ struct Sighting {
             at = other.at
             object["observedAt"] = other.object["observedAt"]
         }
+        Self.takeNewer(Self.harnessAttribute, from: other.object, into: &object)
         guard var session = object["tmux"] as? [String: Any], let theirs = other.object["tmux"] as? [String: Any]
         else { return }
-        for attribute in ["createdAt", "name"] {
+        for attribute in Self.tmuxAttributes {
             Self.takeNewer(attribute, from: theirs, into: &session)
         }
         object["tmux"] = session
@@ -204,15 +215,25 @@ struct Sighting {
     /// one keeps that one's time, but its attributes keep their own; once the cut passes
     /// them they are history like any other observation that old, whatever order it came in.
     mutating func forget(atOrBefore cut: (Date, String)) {
+        Self.forget([Self.harnessAttribute], in: &object, atOrBefore: cut, key: key)
         guard var session = object["tmux"] as? [String: Any] else { return }
-        for attribute in ["createdAt", "name"] {
+        Self.forget(Self.tmuxAttributes, in: &session, atOrBefore: cut, key: key)
+        object["tmux"] = session
+    }
+
+    private static func forget(
+        _ attributes: [String],
+        in target: inout [String: Any],
+        atOrBefore cut: (Date, String),
+        key: String
+    ) {
+        for attribute in attributes {
             let stamp = "\(attribute)ObservedAt"
-            if let observed = ConversationRecordJSON.date(session[stamp]), (observed, key) <= cut {
-                session[attribute] = nil
-                session[stamp] = nil
+            if let observed = ConversationRecordJSON.date(target[stamp]), (observed, key) <= cut {
+                target[attribute] = nil
+                target[stamp] = nil
             }
         }
-        object["tmux"] = session
     }
 
     /// The attribute from whichever side observed it later; a tie goes to the larger value.
@@ -294,11 +315,17 @@ struct LocationHistory {
     private func place() -> [String: Any] {
         var place: [String: Any] = [:]
         if let holder = sightings.lazy.compactMap(\.holder).first { place["hostSessionID"] = holder }
+        var harness: [String: Any] = [:]
+        for sighting in sightings {
+            Sighting.takeNewer(Sighting.harnessAttribute, from: sighting.object, into: &harness)
+        }
+        place[Sighting.harnessAttribute] = harness[Sighting.harnessAttribute]
+        place["\(Sighting.harnessAttribute)ObservedAt"] = harness["\(Sighting.harnessAttribute)ObservedAt"]
         if let session = sightings.first(where: { if case .session = $0.tmux { true } else { false } }) {
             var merged: [String: Any] = [:]
             for sighting in sightings where sighting.tmux == session.tmux {
                 guard let theirs = sighting.object["tmux"] as? [String: Any] else { continue }
-                for attribute in ["createdAt", "name"] {
+                for attribute in Sighting.tmuxAttributes {
                     Sighting.takeNewer(attribute, from: theirs, into: &merged)
                 }
             }
@@ -307,8 +334,9 @@ struct LocationHistory {
                 tmux["serverPID"] = pid
                 tmux["sessionID"] = id
             }
-            tmux["createdAt"] = merged["createdAt"]
-            tmux["name"] = merged["name"]
+            for attribute in Sighting.tmuxAttributes {
+                tmux[attribute] = merged[attribute]
+            }
             place["tmux"] = tmux
         } else if sightings.contains(where: { $0.tmux == .outside }) {
             place["outsideTmux"] = true

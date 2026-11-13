@@ -456,14 +456,16 @@ private final class CLIApp {
         defer { lock?.release() }
         if let continuing {
             lock = try await claimConversation(continuing)
-            guard let listing = await AgentSessionInspection.processListing() else {
-                throw CLIError("Could not read the process table, so a second agent cannot be ruled out.")
-            }
-            guard AgentSessionInspection.conversationHolders(continuing, processListing: listing).isEmpty else {
+            switch await holderProbe(control: control).probe(conversationID: continuing) {
+            case .free:
+                break
+            case .held:
                 throw CLIError(
                     "Conversation \(continuing) is already running, and a second agent would be "
                         + "a second writer on its transcript."
                 )
+            case .unknown(let detail):
+                throw CLIError("\(detail), so a second agent cannot be ruled out.")
             }
         }
         let earlierConversation = launchRecords.load(socketLabel: control.socketLabel, handle: handle)?
@@ -474,7 +476,7 @@ private final class CLIApp {
             throw CLIError(error.localizedDescription)
         }
         if let continuing {
-            await waitForHolder(of: continuing)
+            await waitForHolder(of: continuing, control: control)
         }
 
         do {
@@ -630,9 +632,13 @@ private final class CLIApp {
         let pane = sessionLive ? try? await control.read(handle: handle, lines: 1) : nil
         let blocker = pane.flatMap(AgentSessionInspection.blocker(inPane:))
 
-        var holders: [Int]?
-        if let identity, let listing = await AgentSessionInspection.processListing() {
-            holders = AgentSessionInspection.conversationHolders(identity.conversationID, processListing: listing)
+        var holders: [ConversationHolder]?
+        if let identity {
+            switch await holderProbe(control: control).probe(conversationID: identity.conversationID) {
+            case .free: holders = []
+            case .held(let found, _): holders = found
+            case .unknown: holders = nil
+            }
         }
         let lastTurn = record.flatMap { record in
             record.identity.flatMap {
@@ -647,7 +653,7 @@ private final class CLIApp {
             blocker: blocker,
             inputReady: pane.map(AgentSessionInspection.inputReady(inPane:)) ?? false,
             lastTurn: lastTurn,
-            agentStartedAt: holders?.max().map { Date().addingTimeInterval(-TimeInterval($0)) }
+            agentStartedAt: holders?.compactMap(\.startedAt).min()
         )
         return WorkspaceCheckResult(
             handle: handle,
@@ -711,7 +717,8 @@ private final class CLIApp {
 
         // The conversation's record when it has one, for what the hook saw; this launch's own
         // request fills in what the record lacks.
-        let launched = ConversationRecord(launch: record, host: ConversationHost.current)
+        let launched = ConversationRecord(
+            launch: record, host: ConversationHost.current, harness: ConversationRecord.claudeHarness)
         guard !launched.conversationID.isEmpty else {
             throw CLIError("The recorded conversation id is malformed: \(identity.conversationID)")
         }
@@ -848,12 +855,16 @@ private final class CLIApp {
         )
     }
 
+    private func holderProbe(control: TmuxSessionControl) -> ConversationHolderProbe {
+        ConversationHolderProbe(records: conversationRecords, fallbackSocketLabel: control.socketLabel)
+    }
+
     /// Claims a conversation for the span of a launch or resume, so two of them cannot both
-    /// find it free.
+    /// find it free. The claim is the one `conversation resume` takes.
     private func claimConversation(_ conversationID: String) async throws -> AgentConversationLock {
         do {
-            return try await launchRecords.lockConversation(conversationID)
-        } catch AgentLaunchRecordStore.LockError.held {
+            return try await conversationRecords.claim(conversationID)
+        } catch ConversationRecordStore.ClaimError.held {
             throw CLIError("Another launch or resume of conversation \(conversationID) is still running.")
         } catch {
             throw CLIError("Could not claim conversation \(conversationID): \(error.localizedDescription)")
@@ -864,13 +875,10 @@ private final class CLIApp {
     /// the claim: anyone waiting on it then finds a holder rather than a conversation that
     /// still looks free. `false` if none appeared, which is a start that failed.
     @discardableResult
-    private func waitForHolder(of conversationID: String) async -> Bool {
+    private func waitForHolder(of conversationID: String, control: TmuxSessionControl) async -> Bool {
+        let probe = holderProbe(control: control)
         for _ in 0..<100 {
-            if let listing = await AgentSessionInspection.processListing(),
-                !AgentSessionInspection.conversationHolders(conversationID, processListing: listing).isEmpty
-            {
-                return true
-            }
+            if case .held = await probe.probe(conversationID: conversationID) { return true }
             try? await Task.sleep(for: .milliseconds(100))
         }
         return false

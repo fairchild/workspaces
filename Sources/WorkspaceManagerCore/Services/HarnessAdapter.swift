@@ -4,7 +4,7 @@
 //
 //  What the guarded resume verb needs from one agent harness: how its conversations get an
 //  id, the command that continues one, where its transcript lives, and which processes hold
-//  one now. The vocabulary is Agent Client Protocol's (open, saved, unknown); the transport
+//  one now, as far as its records and the process table can show. The vocabulary is Agent Client Protocol's (open, saved, unknown); the transport
 //  is the harness's own CLI in a terminal. Claude is the only conformer until Codex and Pi.
 //
 
@@ -17,51 +17,6 @@ public enum HarnessIdentitySource: String, Codable, Sendable {
     case hook
     case sessionFileWatch = "session-file-watch"
     case launchOnly = "launch-only"
-}
-
-/// A process holding a conversation, and where it sits when that is known: the tmux session
-/// and the tile the conversation was last seen in, when the process runs inside it.
-///
-/// `namesConversation` is false for a harness found only because it runs in the session the
-/// conversation was last seen in. It may have switched to another conversation since, and is
-/// counted as holding this one anyway: a refusal that turns out wrong costs a wait, and a
-/// second writer costs the transcript.
-public struct ConversationHolder: Codable, Equatable, Sendable {
-    public let pid: Int32
-    public let namesConversation: Bool
-    public let tmuxSessionID: String?
-    public let tmuxSessionName: String?
-    public let hostSessionID: String?
-
-    public init(
-        pid: Int32,
-        namesConversation: Bool = true,
-        tmuxSessionID: String? = nil,
-        tmuxSessionName: String? = nil,
-        hostSessionID: String? = nil
-    ) {
-        self.pid = pid
-        self.namesConversation = namesConversation
-        self.tmuxSessionID = tmuxSessionID
-        self.tmuxSessionName = tmuxSessionName
-        self.hostSessionID = hostSessionID
-    }
-
-    public var placeDescription: String {
-        var parts = ["pid \(pid)"]
-        if let tmuxSessionName {
-            parts.append("in tmux session '\(tmuxSessionName)'" + (tmuxSessionID.map { " (\($0))" } ?? ""))
-        } else if let tmuxSessionID {
-            parts.append("in tmux session \(tmuxSessionID)")
-        }
-        if let hostSessionID {
-            parts.append("in tile \(hostSessionID)")
-        }
-        let place = parts.joined(separator: " ")
-        guard !namesConversation else { return place }
-        return "\(place) runs claude without naming this conversation. It may have switched to "
-            + "another one; this one resumes once that process exits."
-    }
 }
 
 /// Why a conversation's state could not be read as open or saved. Each asks something
@@ -95,14 +50,6 @@ public enum ConversationStatus: Equatable, Sendable {
     case unknown(ConversationUnknownReason)
 }
 
-/// The tmux session a record says its conversation was last seen in, as the server answers
-/// for it now. `gone` covers a dead server, a restarted one, and a session that ended.
-public enum RecordedTmuxSession: Equatable, Sendable {
-    case notRecorded
-    case gone
-    case live(sessionID: String, name: String?, panePIDs: Set<Int32>)
-}
-
 public protocol HarnessAdapter: Sendable {
     /// The `harness` value of this harness's Conversation records.
     var harness: String { get }
@@ -130,13 +77,12 @@ public protocol HarnessAdapter: Sendable {
     )
         -> HarnessTranscript?
 
-    /// Every process holding the conversation: one whose arguments name it, and, when the
-    /// session it was last seen in is live, this harness running anywhere in that session.
-    func holders(
-        of record: ConversationRecord,
-        processTable: ProcessTable,
-        recordedSession: RecordedTmuxSession
-    ) -> [ConversationHolder]
+    /// Every process holding the conversation, or `unknown` when the probe could not look.
+    func holders(of record: ConversationRecord, in context: HolderProbeContext) async -> HolderProbe
+
+    /// What to tell someone whose record is from another machine: how to carry the
+    /// conversation here instead of resuming it there.
+    func forkAdvice(conversationID: String) -> String
 }
 
 extension HarnessAdapter {
@@ -218,92 +164,83 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
         return nil
     }
 
-    public func holders(
-        of record: ConversationRecord,
-        processTable: ProcessTable,
-        recordedSession: RecordedTmuxSession
-    ) -> [ConversationHolder] {
-        var inSession: Set<Int32> = []
-        var sessionID: String?
-        var sessionName: String?
-        if case .live(let id, let name, let panePIDs) = recordedSession {
-            inSession = Set(processTable.descendants(of: panePIDs).map(\.pid))
-            sessionID = id
-            sessionName = name
+    /// Claude's holders, by three rules. A process whose arguments name the conversation
+    /// holds it, unless a newer sighting moved that process to another one, as `/clear` does.
+    /// When the record names the process its hook ran under, that process holds it while it
+    /// lives as the same claude and has not moved on. A record from before hooks named their
+    /// process falls back to the tmux session it was last seen in: any claude in that session
+    /// is counted, since it may be this conversation under an id its arguments do not carry.
+    public func holders(of record: ConversationRecord, in context: HolderProbeContext) async -> HolderProbe {
+        let id = record.conversationID
+        let table = context.processTable
+        let seen = record.lastSeenIn
+        func movedOn(_ pid: Int32) -> (ProcessIdentity?, Bool) {
+            let identity = context.inspector.identity(pid)
+            let current = identity.flatMap(context.currentConversation)
+            return (identity, current.map { $0 != id } ?? false)
         }
-        return processTable.rows.compactMap { row in
-            guard AgentSessionInspection.isClaude(row.arguments) else { return nil }
-            let sitsInSession = inSession.contains(row.pid)
-            let names = AgentSessionInspection.names(record.conversationID, row.arguments)
-            guard sitsInSession || names else { return nil }
-            guard sitsInSession else { return ConversationHolder(pid: row.pid) }
-            return ConversationHolder(
-                pid: row.pid,
-                namesConversation: names,
-                tmuxSessionID: sessionID,
-                tmuxSessionName: sessionName,
-                hostSessionID: record.lastSeenIn?.hostSessionID
-            )
+        func recordedPlace(_ pid: Int32, _ evidence: HolderEvidence, _ identity: ProcessIdentity?) -> ConversationHolder
+        {
+            ConversationHolder(
+                pid: pid, foundBy: evidence, startedAt: identity?.startedAt,
+                tmuxSessionID: seen?.tmux?.sessionID, tmuxSessionName: seen?.tmux?.name,
+                hostSessionID: seen?.hostSessionID)
         }
-    }
-}
 
-/// Every process on the machine with its parent and arguments, read once so the argument
-/// rule and the pane-tree rule judge the same instant.
-public struct ProcessTable: Sendable, Equatable {
-    public struct Row: Sendable, Equatable {
-        public let pid: Int32
-        public let parentPID: Int32
-        public let arguments: [String]
-
-        public init(pid: Int32, parentPID: Int32, arguments: [String]) {
-            self.pid = pid
-            self.parentPID = parentPID
-            self.arguments = arguments
+        var holders: [ConversationHolder] = []
+        for row in table.rows
+        where AgentSessionInspection.isClaude(row.arguments) && AgentSessionInspection.names(id, row.arguments) {
+            let (identity, moved) = movedOn(row.pid)
+            guard !moved else { continue }
+            let isRecorded = identity != nil && identity == seen?.harness
+            holders.append(
+                isRecorded
+                    ? recordedPlace(row.pid, .arguments, identity)
+                    : ConversationHolder(pid: row.pid, foundBy: .arguments, startedAt: identity?.startedAt))
         }
-    }
+        let counted = Set(holders.map(\.pid))
 
-    public let rows: [Row]
-
-    public init(rows: [Row]) {
-        self.rows = rows
-    }
-
-    /// Parses `ps -A -ww -o pid=,ppid=,command=` output. A line that does not parse is left
-    /// out; a listing with no line that parses is no listing.
-    public init?(listing: String) {
-        let rows = listing.split(separator: "\n").compactMap { line -> Row? in
-            let words = line.split(separator: " ").map(String.init)
-            guard words.count >= 3, let pid = Int32(words[0]), let parent = Int32(words[1]) else { return nil }
-            return Row(pid: pid, parentPID: parent, arguments: Array(words.dropFirst(2)))
-        }
-        guard !rows.isEmpty else { return nil }
-        self.rows = rows
-    }
-
-    /// `roots` and every process under them.
-    public func descendants(of roots: Set<Int32>) -> [Row] {
-        let children = Dictionary(grouping: rows, by: \.parentPID)
-        var found: [Row] = rows.filter { roots.contains($0.pid) }
-        var frontier = Array(roots)
-        var seen = roots
-        while let pid = frontier.popLast() {
-            for child in children[pid] ?? [] where seen.insert(child.pid).inserted {
-                found.append(child)
-                frontier.append(child.pid)
+        if let harness = seen?.harness {
+            if !counted.contains(harness.pid), context.inspector.isRunning(harness),
+                let row = table.row(harness.pid), AgentSessionInspection.isClaude(row.arguments),
+                !movedOn(harness.pid).1
+            {
+                holders.append(recordedPlace(harness.pid, .recordedHarness, harness))
             }
+            return holders.isEmpty ? .free : .held(holders, recordedSessionGone: context.recordedServerGone(record))
         }
-        return found
+
+        guard seen?.tmux != nil else {
+            return holders.isEmpty ? .free : .held(holders, recordedSessionGone: false)
+        }
+        guard let session = await context.recordedSession(record) else {
+            return .unknown("The tmux server holding its last session did not answer")
+        }
+        guard case .live(let sessionID, let name, let panePIDs) = session else {
+            return holders.isEmpty ? .free : .held(holders, recordedSessionGone: session == .gone)
+        }
+        let inSession = Set(table.descendants(of: panePIDs).map(\.pid))
+        holders = holders.map { holder in
+            guard inSession.contains(holder.pid) else { return holder }
+            return ConversationHolder(
+                pid: holder.pid, foundBy: holder.foundBy, startedAt: holder.startedAt,
+                tmuxSessionID: sessionID, tmuxSessionName: name, hostSessionID: seen?.hostSessionID)
+        }
+        for row in table.rows
+        where inSession.contains(row.pid) && !counted.contains(row.pid)
+            && AgentSessionInspection.isClaude(row.arguments)
+        {
+            let (identity, moved) = movedOn(row.pid)
+            guard !moved else { continue }
+            holders.append(
+                ConversationHolder(
+                    pid: row.pid, foundBy: .sessionPaneTree, startedAt: identity?.startedAt,
+                    tmuxSessionID: sessionID, tmuxSessionName: name, hostSessionID: seen?.hostSessionID))
+        }
+        return holders.isEmpty ? .free : .held(holders, recordedSessionGone: false)
     }
 
-    /// The table now, or nil when `ps` did not answer.
-    public static func read() async -> ProcessTable? {
-        let result = try? await ProcessRunner.run(
-            executable: "/bin/ps",
-            arguments: ["-A", "-ww", "-o", "pid=", "-o", "ppid=", "-o", "command="],
-            timeout: 5
-        )
-        guard let result, result.success else { return nil }
-        return ProcessTable(listing: result.stdout)
+    public func forkAdvice(conversationID: String) -> String {
+        "copy its transcript here and fork it: claude --resume \(conversationID) --fork-session"
     }
 }

@@ -46,6 +46,35 @@ struct ConversationRecordStoreTests {
         try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
     }
 
+    @Test("One claim on a conversation at a time, whatever case the id is spelled in, free again once released")
+    func claimExcludes() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("conversation-claims-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ConversationRecordStore(directory: directory)
+        let id = Self.conversationID
+
+        let first = try await store.claim(id)
+        await #expect(throws: ConversationRecordStore.ClaimError.held) {
+            try await store.claim(id.uppercased(), timeout: .milliseconds(200))
+        }
+        // Another conversation is another claim.
+        try await store.claim("fa08c461-2979-41db-85fb-b5c90c0d2d8c").release()
+        first.release()
+        try await store.claim(id, timeout: .seconds(5)).release()
+    }
+
+    @Test("A claim is only ever taken on something shaped like a conversation id")
+    func claimRefusesAnotherName() async {
+        let store = ConversationRecordStore(
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("conversation-claims-\(UUID().uuidString)")
+        )
+        await #expect(throws: ConversationRecordStore.ClaimError.invalidConversationID) {
+            try await store.claim("../../escape")
+        }
+    }
+
     @Test("A record with unknown fields keeps them through a rewrite, in kept sightings too")
     func unknownFieldsSurviveARewrite() throws {
         try withStore { store in

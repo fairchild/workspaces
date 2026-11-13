@@ -24,7 +24,8 @@ public enum ConversationHookObserver {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         input: FileHandle = .standardInput,
         now: Date = Date(),
-        tmuxSession: (TmuxEnvironment) -> ConversationRecord.TmuxSession? = TmuxEnvironment.describe
+        tmuxSession: (TmuxEnvironment) -> ConversationRecord.TmuxSession? = TmuxEnvironment.describe,
+        harness: () -> ProcessIdentity? = { harnessRunningThisHook() }
     ) -> Int32 {
         guard isInsideWorkSpaces(environment) else { return 0 }
         guard let payload = try? input.readToEnd(),
@@ -32,7 +33,8 @@ public enum ConversationHookObserver {
                 payload: payload,
                 environment: environment,
                 now: now,
-                tmuxSession: tmuxSession
+                tmuxSession: tmuxSession,
+                harness: harness
             )
         else { return 0 }
         let store = ConversationRecordStore(
@@ -45,7 +47,8 @@ public enum ConversationHookObserver {
         payload: Data,
         environment: [String: String],
         now: Date,
-        tmuxSession: (TmuxEnvironment) -> ConversationRecord.TmuxSession? = { _ in nil }
+        tmuxSession: (TmuxEnvironment) -> ConversationRecord.TmuxSession? = { _ in nil },
+        harness: () -> ProcessIdentity? = { nil }
     ) -> ConversationObservation? {
         guard let object = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
             let sessionID = object["session_id"] as? String,
@@ -56,7 +59,8 @@ public enum ConversationHookObserver {
         let place = ConversationRecord.LastSeenIn(
             hostSessionID: hostSessionID,
             tmux: tmux.flatMap(tmuxSession),
-            outsideTmux: tmux == nil
+            outsideTmux: tmux == nil,
+            harness: harness()
         )
         return ConversationObservation(
             conversationID: conversationID,
@@ -73,6 +77,15 @@ public enum ConversationHookObserver {
 
 /// The tmux session a process runs in, as `$TMUX` gives it: `<socket path>,<server pid>,<session
 /// id number>`. The socket's file name is the `-L` label it was started under.
+extension ConversationHookObserver {
+    /// The Claude process this hook runs for: the nearest ancestor that is claude. Claude
+    /// runs a hook through a shell, and the observer script runs the CLI, so it is a few
+    /// generations up.
+    public static func harnessRunningThisHook(inspector: ProcessInspector = .live) -> ProcessIdentity? {
+        inspector.ancestor(of: getppid()) { AgentSessionInspection.isClaude($0) }
+    }
+}
+
 public struct TmuxEnvironment: Equatable, Sendable {
     public let socketPath: String
     public let serverPID: Int
@@ -96,14 +109,21 @@ public struct TmuxEnvironment: Equatable, Sendable {
     /// make an identity a restarted server cannot repeat. Best effort: a server that does not
     /// answer within half a second leaves them out.
     public static func describe(_ tmux: TmuxEnvironment) -> ConversationRecord.TmuxSession? {
-        var described = ConversationRecord.TmuxSession(serverPID: tmux.serverPID, sessionID: tmux.sessionID)
+        var described = ConversationRecord.TmuxSession(
+            serverPID: tmux.serverPID,
+            sessionID: tmux.sessionID,
+            socketPath: tmux.socketPath,
+            serverStartedAtMicroseconds: ProcessInspector.live.identity(Int32(tmux.serverPID))?.startedAtMicroseconds
+        )
+        let arguments = [
+            "tmux", "-u", "-S", tmux.socketPath, "display-message", "-p", "-t", tmux.sessionID,
+            "#{session_created}\t#{session_name}",
+        ]
+        guard TmuxLiveSocketGuard.permits(tmuxArguments: arguments) else { return described }
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [
-            "tmux", "-S", tmux.socketPath, "display-message", "-p", "-t", tmux.sessionID,
-            "#{session_created}\t#{session_name}",
-        ]
+        process.arguments = arguments
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = TmuxSessionProbe.pathPrependingToolPaths(environment["PATH"])
         process.environment = environment

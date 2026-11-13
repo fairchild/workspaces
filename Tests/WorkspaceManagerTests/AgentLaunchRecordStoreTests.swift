@@ -20,6 +20,13 @@ struct AgentLaunchRecordStoreTests {
         try body(AgentLaunchRecordStore(directory: directory))
     }
 
+    private func withStore(_ body: (AgentLaunchRecordStore) async throws -> Void) async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("launch-records-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await body(AgentLaunchRecordStore(directory: directory))
+    }
+
     private func record(handle: String = "wm-a-1", socketLabel: String = "workspaces") -> AgentLaunchRecord {
         AgentLaunchRecord(
             handle: handle,
@@ -80,13 +87,15 @@ struct AgentLaunchRecordStoreTests {
 
     private func resumeCommand(
         store: AgentLaunchRecordStore,
-        processListing: String? = "",
+        processListing: String? = "1 0 /sbin/launchd",
         transcriptExists: Bool = true
-    ) -> String? {
-        store.resumeCommand(
+    ) async -> String? {
+        let table = processListing.flatMap(ProcessTable.init(listing:))
+        return await store.resumeCommand(
             socketLabel: "workspaces",
             tmuxSessionName: "wm-a-1",
-            processListing: processListing,
+            holders: ConversationHolderProbe(
+                records: nil, readProcessTable: { table }, inspector: .none, recordedSession: { _ in .notRecorded }),
             resumability: ClaudeTranscriptResumability(
                 environment: [:],
                 homeDirectory: URL(fileURLWithPath: "/tmp/no-such-home"),
@@ -96,30 +105,30 @@ struct AgentLaunchRecordStoreTests {
     }
 
     @Test("A recorded conversation with a transcript and no holder can be continued")
-    func resumeCommandForARecordedConversation() throws {
-        try withStore { store in
+    func resumeCommandForARecordedConversation() async throws {
+        try await withStore { store in
             try store.save(record())
             #expect(
-                resumeCommand(store: store)
+                await resumeCommand(store: store)
                     == "claude --resume fa08c461-2979-41db-85fb-b5c90c0d2d8b --effort xhigh"
             )
         }
     }
 
     @Test("Nothing is offered for a conversation something still holds")
-    func resumeCommandSkipsAHeldConversation() throws {
-        try withStore { store in
+    func resumeCommandSkipsAHeldConversation() async throws {
+        try await withStore { store in
             try store.save(record())
-            let listing = "00:10 claude --resume fa08c461-2979-41db-85fb-b5c90c0d2d8b"
-            #expect(resumeCommand(store: store, processListing: listing) == nil)
+            let listing = "10 1 claude --resume fa08c461-2979-41db-85fb-b5c90c0d2d8b"
+            #expect(await resumeCommand(store: store, processListing: listing) == nil)
             // No process table means a second writer cannot be ruled out.
-            #expect(resumeCommand(store: store, processListing: nil) == nil)
+            #expect(await resumeCommand(store: store, processListing: nil) == nil)
         }
     }
 
     @Test("Nothing is offered for a conversation from an earlier workspace at the same path")
-    func resumeCommandSkipsAnEarlierWorkspace() throws {
-        try withStore { store in
+    func resumeCommandSkipsAnEarlierWorkspace() async throws {
+        try await withStore { store in
             let earlier = record()
             try store.save(
                 AgentLaunchRecord(
@@ -130,17 +139,17 @@ struct AgentLaunchRecordStoreTests {
                     identity: earlier.identity
                 )
             )
-            #expect(resumeCommand(store: store) == nil)
+            #expect(await resumeCommand(store: store) == nil)
         }
     }
 
     @Test("Nothing is offered without a transcript, a record, or a named conversation")
-    func resumeCommandNeedsAConversation() throws {
-        try withStore { store in
-            #expect(resumeCommand(store: store) == nil)
+    func resumeCommandNeedsAConversation() async throws {
+        try await withStore { store in
+            #expect(await resumeCommand(store: store) == nil)
 
             try store.save(record())
-            #expect(resumeCommand(store: store, transcriptExists: false) == nil)
+            #expect(await resumeCommand(store: store, transcriptExists: false) == nil)
 
             try store.save(
                 AgentLaunchRecord(
@@ -151,7 +160,7 @@ struct AgentLaunchRecordStoreTests {
                     identity: nil
                 )
             )
-            #expect(resumeCommand(store: store) == nil)
+            #expect(await resumeCommand(store: store) == nil)
         }
     }
 
@@ -179,35 +188,6 @@ struct AgentLaunchRecordStoreTests {
         #expect(launched(at: created.addingTimeInterval(-0.5)).isForWorkspaceOnDisk)
         #expect(!launched(at: created.addingTimeInterval(-60)).isForWorkspaceOnDisk)
         #expect(!launched(at: created, path: directory.path + "-gone").isForWorkspaceOnDisk)
-    }
-
-    @Test("One claim on a conversation at a time, free again once released")
-    func conversationLockExcludes() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("launch-locks-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = AgentLaunchRecordStore(directory: directory)
-        let id = "fa08c461-2979-41db-85fb-b5c90c0d2d8b"
-
-        let first = try await store.lockConversation(id)
-        await #expect(throws: AgentLaunchRecordStore.LockError.self) {
-            try await store.lockConversation(id, timeout: .milliseconds(200))
-        }
-        // Another conversation is another lock.
-        try await store.lockConversation("fa08c461-2979-41db-85fb-b5c90c0d2d8c").release()
-        first.release()
-        try await store.lockConversation(id, timeout: .seconds(5)).release()
-    }
-
-    @Test("A lock is only ever taken on something shaped like a conversation id")
-    func conversationLockRefusesAnotherName() async {
-        let store = AgentLaunchRecordStore(
-            directory: FileManager.default.temporaryDirectory
-                .appendingPathComponent("launch-locks-\(UUID().uuidString)")
-        )
-        await #expect(throws: CocoaError.self) {
-            try await store.lockConversation("../../escape")
-        }
     }
 
     @Test("A name that is not a filename is refused rather than written somewhere else")

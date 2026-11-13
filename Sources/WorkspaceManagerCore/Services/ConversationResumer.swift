@@ -65,11 +65,14 @@ public enum HarnessExec {
         }
     }
 
-    /// Becomes the harness. Returns only by throwing, when the process could not be replaced.
-    public static func replaceProcess(with invocation: HarnessInvocation) throws -> Never {
+    /// Becomes the harness. `handOff` runs once the harness binary is found and the directory
+    /// entered, so what it records is only ever followed by the exec itself. Returns only by
+    /// throwing, when the process could not be replaced.
+    public static func replaceProcess(with invocation: HarnessInvocation, handOff: () -> Void) throws -> Never {
         guard let name = invocation.arguments.first, let path = resolve(name, in: invocation.environment["PATH"])
         else { throw Failure.notOnPath(invocation.arguments.first ?? "") }
         guard chdir(invocation.directory) == 0 else { throw Failure.directory(invocation.directory, errno) }
+        handOff()
         fflush(stdout)
         fflush(stderr)
         var argv = invocation.arguments.map { strdup($0) } + [nil]
@@ -104,7 +107,7 @@ public struct ConversationResumer: Sendable {
     public enum Refusal: Error, LocalizedError, Equatable {
         case invalidID(String)
         case noRecord(String)
-        case otherHost(conversationID: String, host: String)
+        case otherHost(conversationID: String, host: String, advice: String)
         case unsupportedHarness(String)
         case directoryGone(String)
         case earlierWorkspace(conversationID: String, path: String)
@@ -117,6 +120,7 @@ public struct ConversationResumer: Sendable {
         case paneAttached(handle: String, command: String)
         case tmux(String)
         case startFailed(handle: String, conversationID: String)
+        case cannotStart(String)
 
         public var errorDescription: String? {
             switch self {
@@ -124,11 +128,10 @@ public struct ConversationResumer: Sendable {
                 return "'\(id)' is not a conversation id."
             case .noRecord(let id):
                 return "No record names conversation \(id) on this machine, so there is nothing to resume."
-            case .otherHost(let id, let host):
+            case .otherHost(let id, let host, let advice):
                 let place = host.isEmpty ? "a machine it does not name" : host
                 return "Conversation \(id) was recorded on \(place), and its transcript lives there. "
-                    + "Resume it on \(place). To continue it on this machine instead, copy its transcript "
-                    + "here and fork it: claude --resume \(id) --fork-session"
+                    + "Resume it on \(place). To continue it on this machine instead, \(advice)"
             case .unsupportedHarness(let harness):
                 return "Conversations run by '\(harness)' cannot be resumed by this build."
             case .directoryGone(let path):
@@ -159,6 +162,8 @@ public struct ConversationResumer: Sendable {
             case .startFailed(let handle, let id):
                 return "The resume command ran under '\(handle)', but nothing took up conversation "
                     + "\(id). To see why: workspaces ws read \(handle)"
+            case .cannotStart(let reason):
+                return reason
             }
         }
     }
@@ -171,7 +176,9 @@ public struct ConversationResumer: Sendable {
     /// The record's tmux session as its server answers now; nil when the server could not be
     /// asked, which leaves the probe unable to rule a holder out.
     public typealias RecordedSessionLookup = @Sendable (ConversationRecord) async -> RecordedTmuxSession?
-    public typealias Exec = @Sendable (HarnessInvocation) throws -> Void
+    /// Replaces the process with the invocation, running `handOff` once nothing but the exec
+    /// itself is left to fail.
+    public typealias Exec = @Sendable (HarnessInvocation, _ handOff: () -> Void) throws -> Void
 
     let records: ConversationRecordStore
     let launches: AgentLaunchRecordStore
@@ -180,8 +187,8 @@ public struct ConversationResumer: Sendable {
     let environment: [String: String]
     let homeDirectory: URL
     let host: String
-    let readProcessTable: @Sendable () async -> ProcessTable?
-    let recordedSession: RecordedSessionLookup
+    let probe: ConversationHolderProbe
+    let inspector: ProcessInspector
     let describeTmux: @Sendable (TmuxEnvironment) -> ConversationRecord.TmuxSession?
     let exec: Exec
     let warn: @Sendable (String) -> Void
@@ -196,10 +203,11 @@ public struct ConversationResumer: Sendable {
         host: String = ConversationHost.current,
         readProcessTable: @escaping @Sendable () async -> ProcessTable? = { await ProcessTable.read() },
         recordedSession: RecordedSessionLookup? = nil,
+        inspector: ProcessInspector = .live,
         describeTmux: @escaping @Sendable (TmuxEnvironment) -> ConversationRecord.TmuxSession? = {
             TmuxEnvironment.describe($0)
         },
-        exec: @escaping Exec = { try HarnessExec.replaceProcess(with: $0) },
+        exec: @escaping Exec = { try HarnessExec.replaceProcess(with: $0, handOff: $1) },
         warn: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.records = records
@@ -211,9 +219,15 @@ public struct ConversationResumer: Sendable {
             homeDirectory ?? environment["HOME"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser
         self.host = host
-        self.readProcessTable = readProcessTable
-        self.recordedSession =
-            recordedSession ?? Self.tmuxRecordedSession(fallbackSocketLabel: control.socketLabel)
+        self.probe = ConversationHolderProbe(
+            adapter: adapter,
+            records: records,
+            readProcessTable: readProcessTable,
+            inspector: inspector,
+            recordedSession: recordedSession,
+            fallbackSocketLabel: control.socketLabel
+        )
+        self.inspector = inspector
         self.describeTmux = describeTmux
         self.exec = exec
         self.warn = warn
@@ -228,7 +242,7 @@ public struct ConversationResumer: Sendable {
         if let record = records.load(conversationID: id) { return record }
         return launches.all(socketLabel: control.socketLabel)
             .first { $0.identity.flatMap { ConversationRecord.normalizedID($0.conversationID) } == id }
-            .map { ConversationRecord(launch: $0, host: host) }
+            .map { ConversationRecord(launch: $0, host: host, harness: adapter.harness) }
     }
 
     /// Advisory: what the conversation looks like now, outside the lock. For display only;
@@ -240,26 +254,26 @@ public struct ConversationResumer: Sendable {
 
     /// The record's host, then holders, then the transcript, in that order: a held
     /// conversation is open whatever its transcript looks like. Holders found while the
-    /// window `exitWindow` gives is open are looked for again until they leave or it closes.
+    /// window `exitWindow` gives is open are looked for again until they leave or it closes;
+    /// it is passed whether the tmux server the conversation was last seen under is gone.
     func status(
         of record: ConversationRecord,
-        exitWindow: (RecordedTmuxSession) -> TimeInterval
+        exitWindow: (_ recordedSessionGone: Bool) -> TimeInterval
     ) async -> ConversationStatus {
         guard record.host == host else { return .unknown(.otherHost(record.host)) }
         var deadline: Date?
-        while true {
-            guard let recorded = await recordedSession(record) else {
-                return .unknown(.probeFailed("The tmux server holding its last session did not answer"))
+        probing: while true {
+            switch await probe.probe(record) {
+            case .unknown(let detail):
+                return .unknown(.probeFailed(detail))
+            case .free:
+                break probing
+            case .held(let holders, let recordedSessionGone):
+                let window = deadline ?? Date().addingTimeInterval(exitWindow(recordedSessionGone))
+                deadline = window
+                if Date() >= window { return .open(holders: holders) }
+                try? await Task.sleep(for: .milliseconds(500))
             }
-            guard let table = await readProcessTable() else {
-                return .unknown(.probeFailed("Could not read the process table"))
-            }
-            let holders = adapter.holders(of: record, processTable: table, recordedSession: recorded)
-            if holders.isEmpty { break }
-            let window = deadline ?? Date().addingTimeInterval(exitWindow(recorded))
-            deadline = window
-            if Date() >= window { return .open(holders: holders) }
-            try? await Task.sleep(for: .milliseconds(500))
         }
         guard
             let transcript = adapter.transcript(for: record, environment: environment, homeDirectory: homeDirectory)
@@ -277,24 +291,25 @@ public struct ConversationResumer: Sendable {
 
     /// Resumes `subject` unless something holds it. Everything up to the start runs under the
     /// conversation's lock, and the record is read again once the lock is held, since the
-    /// resume that held it last may have just moved the conversation.
+    /// resume that held it last may have just moved the conversation; what was checked on
+    /// `subject` is checked again on what was read.
     public func resume(_ subject: ConversationRecord, target: Target) async throws -> Outcome {
         let id = subject.conversationID
-        guard subject.harness == adapter.harness else { throw Refusal.unsupportedHarness(subject.harness) }
-        guard subject.host == host else { throw Refusal.otherHost(conversationID: id, host: subject.host) }
-        try requireDirectories(of: subject)
+        try require(subject)
 
         let lock = try await claim(id)
         defer { lock.release() }
-        let record = records.load(conversationID: id) ?? subject
+        var record = records.load(conversationID: id) ?? subject
+        record.launch = record.launch ?? subject.launch
+        try require(record)
 
         var targetLive: Bool?
         if case .into(let handle) = target {
             targetLive = await control.isLive(handle: handle)
         }
-        let window: (RecordedTmuxSession) -> TimeInterval = { recorded in
+        let window: (Bool) -> TimeInterval = { recordedSessionGone in
             if let targetLive { return targetLive ? 0 : Self.holderExitWindow }
-            return recorded == .gone ? Self.holderExitWindow : 0
+            return recordedSessionGone ? Self.holderExitWindow : 0
         }
 
         let transcript: HarnessTranscript
@@ -302,7 +317,8 @@ public struct ConversationResumer: Sendable {
         case .open(let holders):
             return .held(holders: holders, targetLive: targetLive)
         case .unknown(.otherHost(let recordedHost)):
-            throw Refusal.otherHost(conversationID: id, host: recordedHost)
+            throw Refusal.otherHost(
+                conversationID: id, host: recordedHost, advice: adapter.forkAdvice(conversationID: id))
         case .unknown(.probeFailed(let detail)):
             throw Refusal.probeFailed(detail)
         case .unknown(.transcriptGone):
@@ -318,24 +334,36 @@ public struct ConversationResumer: Sendable {
 
         switch target {
         case .here:
-            recordSighting(of: record)
-            try exec(
-                HarnessInvocation(
-                    arguments: arguments,
-                    environment: adapter.harnessEnvironment(from: environment, transcript: transcript),
-                    directory: record.cwd
-                )
+            let invocation = HarnessInvocation(
+                arguments: arguments,
+                environment: adapter.harnessEnvironment(from: environment, transcript: transcript),
+                directory: record.cwd
             )
+            do {
+                try exec(invocation) { recordSighting(of: record) }
+            } catch let failure as HarnessExec.Failure {
+                throw Refusal.cannotStart(failure.localizedDescription)
+            }
         case .into(let handle):
             try await start(command, conversationID: id, record: record, handle: handle, live: targetLive == true)
         }
         return .resumed(command: command)
     }
 
+    private func require(_ record: ConversationRecord) throws {
+        guard record.harness == adapter.harness else { throw Refusal.unsupportedHarness(record.harness) }
+        guard record.host == host else {
+            throw Refusal.otherHost(
+                conversationID: record.conversationID, host: record.host,
+                advice: adapter.forkAdvice(conversationID: record.conversationID))
+        }
+        try requireDirectories(of: record)
+    }
+
     private func claim(_ conversationID: String) async throws -> AgentConversationLock {
         do {
-            return try await launches.lockConversation(conversationID)
-        } catch AgentLaunchRecordStore.LockError.held {
+            return try await records.claim(conversationID)
+        } catch ConversationRecordStore.ClaimError.held {
             throw Refusal.lockBusy(conversationID)
         } catch {
             throw Refusal.lockFailed(conversationID: conversationID, reason: error.localizedDescription)
@@ -355,8 +383,9 @@ public struct ConversationResumer: Sendable {
         }
     }
 
-    /// Says the conversation is now in this terminal, before the harness takes it over. The
-    /// record is not what guards the conversation, the lock is, so a write that fails warns.
+    /// Says the conversation is now in this terminal and this process, which the exec is about
+    /// to make the harness: a pid keeps its start time across an exec. The record is not what
+    /// guards the conversation, the lock is, so a write that fails warns.
     private func recordSighting(of record: ConversationRecord) {
         let tmux = TmuxEnvironment(environment["TMUX"])
         let observation = ConversationObservation(
@@ -372,7 +401,9 @@ public struct ConversationResumer: Sendable {
             lastSeenIn: .init(
                 hostSessionID: environment["WORKSPACES_HOST_SESSION_ID"].flatMap { UUID(uuidString: $0)?.uuidString },
                 tmux: tmux.flatMap(describeTmux),
-                outsideTmux: tmux == nil
+                outsideTmux: tmux == nil,
+                harness: inspector.identity(getpid()),
+                harnessObservedAt: Date()
             )
         )
         do {
@@ -421,60 +452,14 @@ public struct ConversationResumer: Sendable {
         }
     }
 
-    /// Until the new agent shows in the process table. `false` if none appeared, which is a
+    /// Until the harness's probe finds the new agent. `false` if none appeared, which is a
     /// start that failed.
     private func waitForHolder(of record: ConversationRecord) async -> Bool {
         for _ in 0..<100 {
-            if let table = await readProcessTable(),
-                !adapter.holders(of: record, processTable: table, recordedSession: .notRecorded).isEmpty
-            {
-                return true
-            }
+            if case .held = await probe.probe(record) { return true }
             try? await Task.sleep(for: .milliseconds(100))
         }
         return false
-    }
-
-    // MARK: - The recorded tmux session
-
-    /// Asks the server the record names for the session's panes. A server that is gone, a
-    /// server that restarted and reused the session id, and a session that ended all answer
-    /// `gone`; a server that is alive and does not answer leaves the probe blind.
-    public static func tmuxRecordedSession(
-        fallbackSocketLabel: String,
-        run: @escaping TmuxSessionControl.CommandRunner = TmuxSessionControl.defaultRunner,
-        environment: [String: String] = TmuxSessionProbe.defaultEnvironment
-    ) -> RecordedSessionLookup {
-        { record in
-            guard let tmux = record.lastSeenIn?.tmux else { return .notRecorded }
-            if kill(pid_t(tmux.serverPID), 0) != 0, errno == ESRCH { return .gone }
-            let label = record.socketLabel ?? fallbackSocketLabel
-            guard TmuxSessionProbe.isSafeSocketLabel(label) else { return nil }
-            let arguments = [
-                "tmux", "-L", label, "list-panes", "-s", "-t", tmux.sessionID,
-                "-F", "#{pid}\t#{session_created}\t#{pane_pid}\t#{session_name}",
-            ]
-            guard let result = await run("/usr/bin/env", arguments, environment) else { return nil }
-            guard result.success else { return .gone }
-            return recordedSession(tmux, listing: result.stdout)
-        }
-    }
-
-    static func recordedSession(_ tmux: ConversationRecord.TmuxSession, listing: String) -> RecordedTmuxSession {
-        var panes: Set<Int32> = []
-        var name: String?
-        for line in listing.split(separator: "\n") {
-            let fields = line.split(separator: "\t", maxSplits: 3).map(String.init)
-            guard fields.count == 4, Int(fields[0]) == tmux.serverPID, let pane = Int32(fields[2]) else {
-                return .gone
-            }
-            if let createdAt = tmux.createdAt, Int(fields[1]) != Int(createdAt.timeIntervalSince1970.rounded()) {
-                return .gone
-            }
-            panes.insert(pane)
-            name = fields[3]
-        }
-        return panes.isEmpty ? .gone : .live(sessionID: tmux.sessionID, name: name, panePIDs: panes)
     }
 }
 
@@ -482,10 +467,10 @@ extension ConversationRecord {
     /// A record for a launch from before Conversation records, built from what its Launch
     /// Record says. The workspace's creation is bounded by the launch time, the same rule
     /// `AgentLaunchRecord.isForWorkspaceOnDisk` applies.
-    public init(launch: AgentLaunchRecord, host: String) {
+    public init(launch: AgentLaunchRecord, host: String, harness: String) {
         self.init(
             schema: Self.schemaVersion,
-            harness: Self.claudeHarness,
+            harness: harness,
             conversationID: launch.identity.flatMap { Self.normalizedID($0.conversationID) } ?? "",
             host: host,
             cwd: launch.workspacePath,

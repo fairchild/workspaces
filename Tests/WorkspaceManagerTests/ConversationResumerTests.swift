@@ -69,8 +69,12 @@ struct ConversationResumerTests {
                 homeDirectory: root.appendingPathComponent("home"),
                 readProcessTable: { processTable },
                 recordedSession: { _ in recordedSession },
+                inspector: .none,
                 describeTmux: { _ in nil },
-                exec: { execs.append($0) }
+                exec: { invocation, handOff in
+                    handOff()
+                    execs.append(invocation)
+                }
             )
         }
 
@@ -99,7 +103,8 @@ struct ConversationResumerTests {
     func silentServerRefuses() async throws {
         let world = try World()
         defer { world.teardown() }
-        try world.recordConversation()
+        try world.recordConversation(
+            lastSeenIn: .init(hostSessionID: nil, tmux: .init(serverPID: 4242, sessionID: "$7")))
 
         let resumer = world.resumer(processTable: Self.quietTable, recordedSession: nil)
         await #expect(throws: ConversationResumer.Refusal.self) {
@@ -130,7 +135,7 @@ struct ConversationResumerTests {
         let world = try World()
         defer { world.teardown() }
         try world.recordConversation()
-        let lockPath = world.root.appendingPathComponent("launches/.locks/\(world.conversationID).lock").path
+        let lockPath = world.root.appendingPathComponent("conversations/.locks/\(world.conversationID).claim").path
         let claimable = Claimable()
 
         let resumer = ConversationResumer(
@@ -141,8 +146,10 @@ struct ConversationResumerTests {
             homeDirectory: world.root.appendingPathComponent("home"),
             readProcessTable: { Self.quietTable },
             recordedSession: { _ in .notRecorded },
+            inspector: .none,
             describeTmux: { _ in nil },
-            exec: { _ in
+            exec: { _, handOff in
+                handOff()
                 let descriptor = open(lockPath, O_RDWR | O_CLOEXEC)
                 defer { close(descriptor) }
                 claimable.set(descriptor >= 0 && flock(descriptor, LOCK_EX | LOCK_NB) == 0)
@@ -182,51 +189,76 @@ struct ConversationResumerTests {
             status
                 == .open(holders: [
                     ConversationHolder(
-                        pid: 101, namesConversation: false, tmuxSessionID: "$7", tmuxSessionName: "tile-session",
+                        pid: 101, foundBy: .sessionPaneTree, tmuxSessionID: "$7", tmuxSessionName: "tile-session",
                         hostSessionID: tile)
                 ])
         )
     }
 
-    @Test("A claude elsewhere that names no conversation holds nothing")
-    func unrelatedHarnessHoldsNothing() {
-        let record = ConversationRecord(
-            schema: 1, harness: "claude", conversationID: UUID().uuidString.lowercased(), host: "h", cwd: "/",
-            configHome: nil, transcriptPath: nil, workspacePath: nil, workspaceCreatedAt: nil, socketLabel: nil,
-            createdAt: Date(), observedAt: Date(), observedBy: .hook, launch: nil, lastSeenIn: nil, endedByUserAt: nil)
-        let table = ProcessTable(rows: [
-            .init(pid: 100, parentPID: 1, arguments: ["/usr/local/bin/claude"]),
-            .init(pid: 101, parentPID: 1, arguments: ["/usr/local/bin/claude", "--resume", record.conversationID]),
-        ])
-        let holders = ClaudeHarnessAdapter().holders(of: record, processTable: table, recordedSession: .gone)
-        #expect(holders.map(\.pid) == [101])
+    @Test("The record read under the lock keeps the launch the caller filled in")
+    func reloadKeepsTheCallersLaunch() async throws {
+        let world = try World()
+        defer { world.teardown() }
+        try world.recordConversation()
+        var subject = try #require(world.records.load(conversationID: world.conversationID))
+        subject.launch = .init(handle: "wm-launched", model: nil, effort: "high")
+
+        _ = try await world.resumer(processTable: Self.quietTable).resume(subject, target: .here)
+
+        let invocation = try #require(world.execs.invocations.first)
+        #expect(invocation.arguments == ["claude", "--resume", world.conversationID, "--effort", "high"])
     }
 
-    @Test("A recorded session answered by a different server, or recreated under the same id, is gone")
-    func recordedSessionMatchesTheWholeIdentity() {
-        let created = Date(timeIntervalSince1970: 1_700_000_000)
-        let tmux = ConversationRecord.TmuxSession(serverPID: 4242, sessionID: "$3", createdAt: created)
-        #expect(
-            ConversationResumer.recordedSession(tmux, listing: "4242\t1700000000\t555\twm-a\n")
-                == .live(sessionID: "$3", name: "wm-a", panePIDs: [555]))
-        #expect(ConversationResumer.recordedSession(tmux, listing: "9999\t1700000000\t555\twm-a\n") == .gone)
-        #expect(ConversationResumer.recordedSession(tmux, listing: "4242\t1700000999\t555\twm-a\n") == .gone)
-    }
-
-    @Test("The process table reads ps output and walks a pane's descendants")
-    func processTableWalksDescendants() throws {
-        let table = try #require(
-            ProcessTable(
-                listing: """
-                      1     0 /sbin/launchd
-                    100     1 -zsh
-                    101   100 /bin/sh /opt/bin/claude --resume x
-                    102   101 sleep 1
-                    200     1 other
-                    """
+    @Test("A record that changed before the lock was taken is checked again, and refuses on what it now says")
+    func reloadedRecordIsCheckedAgain() async throws {
+        let world = try World()
+        defer { world.teardown() }
+        try world.recordConversation()
+        let subject = try #require(world.records.load(conversationID: world.conversationID))
+        let created = try #require(
+            try FileManager.default.attributesOfItem(atPath: world.cwd)[.creationDate] as? Date)
+        try world.records.record(
+            ConversationObservation(
+                conversationID: world.conversationID,
+                workspacePath: world.cwd,
+                workspaceCreatedAt: created.addingTimeInterval(-60),
+                observedBy: .wsLaunch
             )
         )
-        #expect(table.rows.count == 5)
-        #expect(Set(table.descendants(of: [100]).map(\.pid)) == [100, 101, 102])
+
+        await #expect(
+            throws: ConversationResumer.Refusal.earlierWorkspace(conversationID: world.conversationID, path: world.cwd)
+        ) {
+            try await world.resumer(processTable: Self.quietTable).resume(subject, target: .here)
+        }
+        #expect(world.execs.invocations.isEmpty)
     }
+
+    @Test("A harness that cannot be started refuses, and the record does not say it was resumed")
+    func unstartableHarnessRefuses() async throws {
+        let world = try World()
+        defer { world.teardown() }
+        try world.recordConversation()
+        let resumer = ConversationResumer(
+            records: world.records,
+            launches: world.launches,
+            control: TmuxSessionControl(socketLabel: "resumer-tests-unused", run: { _, _, _ in nil }),
+            environment: ["PATH": world.root.appendingPathComponent("empty").path],
+            homeDirectory: world.root.appendingPathComponent("home"),
+            readProcessTable: { Self.quietTable },
+            recordedSession: { _ in .notRecorded },
+            inspector: .none,
+            describeTmux: { _ in nil }
+        )
+
+        await #expect(throws: ConversationResumer.Refusal.cannotStart("'claude' is not on PATH.")) {
+            try await resumer.resume(conversationID: world.conversationID, target: .here)
+        }
+        #expect(world.records.load(conversationID: world.conversationID)?.observedBy == .hook)
+    }
+}
+
+extension ProcessInspector {
+    /// Sees no process at all.
+    static let none = ProcessInspector(identity: { _ in nil }, parent: { _ in nil }, arguments: { _ in nil })
 }

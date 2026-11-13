@@ -40,17 +40,31 @@ public struct ConversationRecord: Equatable, Sendable {
 
     /// A tmux session as the server that holds it names it. The id alone repeats once a
     /// server restarts, so the server's pid and the session's creation time travel with it.
+    /// The socket path is where that server listens, which its label alone does not say: a
+    /// label resolves under each client's own `TMUX_TMPDIR`. The server's start time tells
+    /// it from a later process that reused its pid.
     public struct TmuxSession: Equatable, Sendable {
         public var serverPID: Int
         public var sessionID: String
         public var createdAt: Date?
         public var name: String?
+        public var socketPath: String?
+        public var serverStartedAtMicroseconds: Int64?
 
-        public init(serverPID: Int, sessionID: String, createdAt: Date? = nil, name: String? = nil) {
+        public init(
+            serverPID: Int,
+            sessionID: String,
+            createdAt: Date? = nil,
+            name: String? = nil,
+            socketPath: String? = nil,
+            serverStartedAtMicroseconds: Int64? = nil
+        ) {
             self.serverPID = serverPID
             self.sessionID = sessionID
             self.createdAt = createdAt
             self.name = name
+            self.socketPath = socketPath
+            self.serverStartedAtMicroseconds = serverStartedAtMicroseconds
         }
     }
 
@@ -58,15 +72,29 @@ public struct ConversationRecord: Equatable, Sendable {
     /// only some of it: the app knows the tile but not its tmux session, `ws launch` knows the
     /// tmux session but no tile. `outsideTmux` is an observed fact, a hook that ran with no
     /// `$TMUX`, which a missing `tmux` alone does not say.
+    ///
+    /// `harness` is the process that ran the conversation when it was seen there, and
+    /// `harnessObservedAt` when that was; a process that later started another conversation
+    /// has a newer sighting in that conversation's record.
     public struct LastSeenIn: Equatable, Sendable {
         public var hostSessionID: String?
         public var tmux: TmuxSession?
         public var outsideTmux: Bool
+        public var harness: ProcessIdentity?
+        public var harnessObservedAt: Date?
 
-        public init(hostSessionID: String?, tmux: TmuxSession? = nil, outsideTmux: Bool = false) {
+        public init(
+            hostSessionID: String?,
+            tmux: TmuxSession? = nil,
+            outsideTmux: Bool = false,
+            harness: ProcessIdentity? = nil,
+            harnessObservedAt: Date? = nil
+        ) {
             self.hostSessionID = hostSessionID
             self.tmux = tmux
             self.outsideTmux = tmux == nil && outsideTmux
+            self.harness = harness
+            self.harnessObservedAt = harnessObservedAt
         }
     }
 
@@ -209,12 +237,17 @@ enum ConversationRecordJSON {
         let tmux = (object["tmux"] as? [String: Any]).flatMap { tmux -> ConversationRecord.TmuxSession? in
             guard let pid = tmux["serverPID"] as? Int, let id = tmux["sessionID"] as? String else { return nil }
             return .init(
-                serverPID: pid, sessionID: id, createdAt: date(tmux["createdAt"]), name: tmux["name"] as? String)
+                serverPID: pid, sessionID: id, createdAt: date(tmux["createdAt"]), name: tmux["name"] as? String,
+                socketPath: tmux["socketPath"] as? String,
+                serverStartedAtMicroseconds: (tmux["serverStartedAt"] as? NSNumber)?.int64Value
+            )
         }
         return .init(
             hostSessionID: object["hostSessionID"] as? String,
             tmux: tmux,
-            outsideTmux: object["outsideTmux"] as? Bool == true
+            outsideTmux: object["outsideTmux"] as? Bool == true,
+            harness: (object["harness"] as? String).flatMap(ProcessIdentity.init(recorded:)),
+            harnessObservedAt: date(object["harnessObservedAt"])
         )
     }
 }
@@ -325,6 +358,45 @@ public struct ConversationRecordStore: Sendable {
             throw CocoaError(.fileWriteUnknown)
         }
         return .written
+    }
+
+    public enum ClaimError: Error, Equatable {
+        case invalidConversationID
+        case held
+    }
+
+    /// Waits for the conversation to be free, then claims it. The lock sits beside the record,
+    /// so every launch and resume that names the conversation contends on one file wherever
+    /// its own config directory points: a tile's `XDG_CONFIG_HOME` can differ from the
+    /// caller's, and the records directory is the one they are made to agree on (#1417).
+    public func claim(
+        _ conversationID: String,
+        timeout: Duration = .seconds(30)
+    ) async throws -> AgentConversationLock {
+        guard let id = ConversationRecord.normalizedID(conversationID) else { throw ClaimError.invalidConversationID }
+        let locks = directory.appendingPathComponent(".locks", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: locks, withIntermediateDirectories: true, attributes: [.posixPermissions: Self.directoryPermissions])
+        // Close-on-exec: a lock stays held for as long as anything that inherited the
+        // descriptor runs, and a resume can start a tmux server. `resume --here` relies on
+        // it the other way: the exec that starts the harness is what lets the lock go.
+        let descriptor = open(locks.appendingPathComponent("\(id).claim").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
+
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            guard errno == EWOULDBLOCK, ContinuousClock.now < deadline else {
+                close(descriptor)
+                throw ClaimError.held
+            }
+            do {
+                try await Task.sleep(for: .milliseconds(100))
+            } catch {
+                close(descriptor)
+                throw error
+            }
+        }
+        return AgentConversationLock(descriptor: descriptor)
     }
 
     /// Records name workspaces, transcripts and config homes, so the file is 0600 from the

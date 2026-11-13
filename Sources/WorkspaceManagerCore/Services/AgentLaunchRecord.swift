@@ -52,11 +52,11 @@ public struct AgentLaunchRecord: Codable, Sendable, Equatable {
 
 /// An exclusive claim on one conversation, for the span between seeing that nothing holds it
 /// and a new holder being visible. The kernel drops it when the process ends, so a crashed
-/// resume leaves nothing behind.
+/// resume leaves nothing behind. `ConversationRecordStore.claim` takes it.
 public final class AgentConversationLock: Sendable {
     private let descriptor: Int32
 
-    fileprivate init(descriptor: Int32) {
+    init(descriptor: Int32) {
         self.descriptor = descriptor
     }
 
@@ -68,19 +68,18 @@ public final class AgentConversationLock: Sendable {
 extension AgentLaunchRecordStore {
     /// The command that would continue the conversation recorded under this tmux name, or
     /// `nil` when there is nothing to continue: no record, a command that named no
-    /// conversation, a later workspace at the same path, a conversation still held by a
-    /// process, or one that never took a turn.
+    /// conversation, a later workspace at the same path, a conversation the probe finds held
+    /// or cannot rule out, or one that never took a turn.
     public func resumeCommand(
         socketLabel: String,
         tmuxSessionName: String,
-        processListing: String?,
+        holders: ConversationHolderProbe,
         resumability: ClaudeTranscriptResumability
-    ) -> String? {
+    ) async -> String? {
         guard let record = load(socketLabel: socketLabel, handle: tmuxSessionName),
             let identity = record.identity,
             record.isForWorkspaceOnDisk,
-            let processListing,
-            AgentSessionInspection.conversationHolders(identity.conversationID, processListing: processListing).isEmpty,
+            await holders.probe(conversationID: identity.conversationID) == .free,
             let transcript = resumability.existingTranscriptURL(
                 agentSessionID: identity.conversationID,
                 launchDirectory: record.workspacePath
@@ -149,42 +148,6 @@ public struct AgentLaunchRecordStore: Sendable {
                 options: [.skipsHiddenFiles]
             )) ?? []
         return urls.filter { $0.pathExtension == "json" }.compactMap(Self.decode(contentsOf:))
-    }
-
-    public enum LockError: Error {
-        case held
-    }
-
-    /// Waits for the conversation to be free, then claims it. Keyed by conversation rather
-    /// than handle, because two handles can name one conversation. The lock files sit
-    /// beside the socket directories, where writing them wakes nothing that watches records.
-    public func lockConversation(
-        _ conversationID: String,
-        timeout: Duration = .seconds(30)
-    ) async throws -> AgentConversationLock {
-        guard UUID(uuidString: conversationID) != nil else { throw CocoaError(.fileWriteInvalidFileName) }
-        let locks = directory.appendingPathComponent(".locks", isDirectory: true)
-        try FileManager.default.createDirectory(at: locks, withIntermediateDirectories: true)
-        let path = locks.appendingPathComponent("\(conversationID).lock").path
-        // Close-on-exec: a lock stays held for as long as anything that inherited the
-        // descriptor runs, and a resume can start a tmux server.
-        let descriptor = open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
-        guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
-
-        let deadline = ContinuousClock.now.advanced(by: timeout)
-        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
-            guard errno == EWOULDBLOCK, ContinuousClock.now < deadline else {
-                close(descriptor)
-                throw LockError.held
-            }
-            do {
-                try await Task.sleep(for: .milliseconds(100))
-            } catch {
-                close(descriptor)
-                throw error
-            }
-        }
-        return AgentConversationLock(descriptor: descriptor)
     }
 
     /// A handle becomes a filename, so it has to be one.
