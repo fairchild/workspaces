@@ -56,9 +56,9 @@ final class TileTreeStore: ObservableObject {
     /// render binding and the #684 `automationTileIDBySessionID` map — one identity per session, shared
     /// by the renderer, `SurfaceStore.sync`, and the automation handle registry.
     private var tileIDBySessionID: [UUID: TileID] = [:]
-    /// How many times a restore has brought each session id back in a tile of its own. A
-    /// tmux record made under an id after its count moved belongs to the returned tile.
-    private var returnCountBySessionID: [UUID: Int] = [:]
+    /// How many tiles each session id has been bound to. A tmux record made under an id after
+    /// its generation moved belongs to a tile other than the one that held it before.
+    private var tileGenerationBySessionID: [UUID: Int] = [:]
     private var primaryIDBySplitSessionID: [UUID: UUID] = [:]
     private var automationHandleRegistry: AutomationHandleRegistry?
     private var automationSocketPath: String?
@@ -141,7 +141,7 @@ final class TileTreeStore: ObservableObject {
             return tileID
         }
         let tileID = TileID()
-        tileIDBySessionID[sessionID] = tileID
+        bind(sessionID, to: tileID)
         if let session = coordinator.sessions.first(where: { $0.id == sessionID }) {
             sessionByTileID[tileID] = session
         }
@@ -150,6 +150,15 @@ final class TileTreeStore: ObservableObject {
 
     /// The render `TileID` for the leaf filling `sessionID`, single-pane or split. The renderer uses
     /// this to vend the tile's surface from `SurfaceStore`.
+    /// Binds `sessionID` to `tileID`, the one way a session gets a tile. A tile other than the
+    /// one it holds starts a new generation of the session, whichever path brought it there.
+    private func bind(_ sessionID: UUID, to tileID: TileID) {
+        if tileIDBySessionID[sessionID] != tileID {
+            tileGenerationBySessionID[sessionID, default: 0] += 1
+        }
+        tileIDBySessionID[sessionID] = tileID
+    }
+
     func renderTileID(forSession session: HostTerminalSession) -> TileID {
         renderTileID(for: session.id)
     }
@@ -593,34 +602,35 @@ final class TileTreeStore: ObservableObject {
     }
 
     /// A tile a retiring pass set out to close, as it stood before the pass's first await: the
-    /// tile holding the session, the tmux session the ledger held for it, and how many times
-    /// a restore had brought the session back. While the pass awaits, the tile can exit and a
-    /// restore can bring the session back under the same id, in a new tile on a new tmux
-    /// session; neither is the pass's to close or kill.
+    /// tile holding the session, the tmux session the ledger held for it, and the session's
+    /// tile generation. While the pass awaits, the tile can exit and a restore can bring the
+    /// session back under the same id, in a new tile on a new tmux session; neither is the
+    /// pass's to close or kill.
     struct RetirementTarget {
         let session: HostTerminalSession
         /// The tile holding the session when the pass began; `nil` for one no tile held.
         let tileID: TileID?
         let ownership: TmuxSessionOwnership?
-        let returnCount: Int
+        let tileGeneration: Int
     }
 
     func retirementTarget(for session: HostTerminalSession) -> RetirementTarget {
         let held = allLiveSessions.contains { $0.id == session.id }
+        let tileID = held ? renderTileID(for: session.id) : nil
         return RetirementTarget(
             session: session,
-            tileID: held ? renderTileID(for: session.id) : nil,
+            tileID: tileID,
             ownership: tmuxOwnershipLedger.ownership(forHostSessionID: session.id),
-            returnCount: returnCountBySessionID[session.id, default: 0]
+            tileGeneration: tileGenerationBySessionID[session.id, default: 0]
         )
     }
 
     /// The tmux session a retiring pass ends for `target`: the one the ledger held when the
     /// pass began, or, when it held none yet, the one the captured tile has recorded since.
-    /// Once a restore has brought the session back, a later record is the returned tile's.
+    /// Once the session has been bound to another tile, a later record is that tile's.
     func ownershipToEnd(_ target: RetirementTarget) -> TmuxSessionOwnership? {
         if let ownership = target.ownership { return ownership }
-        guard returnCountBySessionID[target.session.id, default: 0] == target.returnCount else { return nil }
+        guard tileGenerationBySessionID[target.session.id, default: 0] == target.tileGeneration else { return nil }
         return tmuxOwnershipLedger.ownership(forHostSessionID: target.session.id)
     }
 
@@ -856,7 +866,6 @@ final class TileTreeStore: ObservableObject {
     /// now: an earlier exit still waiting to settle it lets it go, and a confirmation raised
     /// over its earlier tile no longer covers it.
     private func sessionReturned(_ sessionID: UUID) {
-        returnCountBySessionID[sessionID, default: 0] += 1
         for confirmation in closeConfirmations.values where confirmation.covers(sessionID) {
             confirmation.returned.insert(sessionID)
         }
@@ -1278,10 +1287,10 @@ final class TileTreeStore: ObservableObject {
 
         if existingTree == nil {
             sessionByTileID[primaryTile] = primarySession
-            tileIDBySessionID[primarySessionID] = primaryTile
+            bind(primarySessionID, to: primaryTile)
         }
         sessionByTileID[newTile] = splitSession
-        tileIDBySessionID[splitSession.id] = newTile
+        bind(splitSession.id, to: newTile)
         primaryIDBySplitSessionID[splitSession.id] = primarySessionID
         treesByPrimaryID[primarySessionID] = grownTree
 

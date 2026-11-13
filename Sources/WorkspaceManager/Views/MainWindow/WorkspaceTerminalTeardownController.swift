@@ -32,7 +32,7 @@ struct WorkspaceTerminalTeardownController {
     /// back under the same id while teardown awaits, and that tile and its tmux session are
     /// not teardown's.
     var captureTarget: @MainActor (HostTerminalSession) -> Target = {
-        Target(session: $0, tileID: nil, ownership: nil, returnCount: 0)
+        Target(session: $0, tileID: nil, ownership: nil, tileGeneration: 0)
     }
     /// End the tmux session the target captured, or the one its captured tile has recorded
     /// since when the ledger held none at capture, when the app's ownership ledger authorized
