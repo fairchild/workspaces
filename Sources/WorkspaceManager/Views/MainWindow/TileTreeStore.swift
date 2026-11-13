@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import WorkspaceManagerCore
 import os.log
@@ -107,8 +108,18 @@ final class TileTreeStore: ObservableObject {
     /// The socket production's pane reclamation reads and kills on. Tests answer it from a stub.
     var tmuxSessionProbe = TmuxSessionProbe()
 
+    /// Sessions whose tile a process exit has just closed, for the window showing this store to
+    /// move focus (`onTerminalProcessExit(of:perform:)`). The tile and its row are already
+    /// handled by then, window or no window; a window that has gone has no subscription, so an
+    /// exit after it closes moves nothing.
+    let processExits = PassthroughSubject<UUID, Never>()
+
     init() {
         surfaceStore.tmuxOwnershipLedger = tmuxOwnershipLedger
+        surfaceStore.onTerminalProcessExit = { [weak self] sessionID in
+            guard let self, self.handleProcessExit(for: sessionID) else { return }
+            self.processExits.send(sessionID)
+        }
         surfaceStore.onTerminalTitleChanged = { [weak self] _ in
             self?.objectWillChange.send()
         }
@@ -1105,15 +1116,12 @@ final class TileTreeStore: ObservableObject {
         return focusTargetAfterRemoval(defaultHomeDirectory: defaultHomeDirectory)
     }
 
-    private func focusTargetAfterRemoval(defaultHomeDirectory: URL) -> UUID? {
+    /// Where focus goes once a tile has left the tree: the active session, or a fresh Home
+    /// session when the last one left.
+    func focusTargetAfterRemoval(defaultHomeDirectory: URL) -> UUID? {
         if sessions.isEmpty {
-            let replacement = activateSession(
-                key: .defaultHome,
-                directory: defaultHomeDirectory
-            )
-            return replacement.session.id
+            return activateSession(key: .defaultHome, directory: defaultHomeDirectory).session.id
         }
-
         return activeSessionID
     }
 
@@ -1792,5 +1800,14 @@ final class TileTreeStore: ObservableObject {
         default:
             return nil
         }
+    }
+}
+
+extension View {
+    /// Runs `action` for each session whose tile a process exit closed in `store`, while this
+    /// view is showing. The subscription ends with the view, so the store never holds the
+    /// window that watches it.
+    func onTerminalProcessExit(of store: TileTreeStore, perform action: @escaping (UUID) -> Void) -> some View {
+        onReceive(store.processExits, perform: action)
     }
 }

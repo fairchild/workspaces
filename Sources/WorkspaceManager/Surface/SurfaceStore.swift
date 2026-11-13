@@ -57,7 +57,8 @@ final class SurfaceStore: ObservableObject {
     /// Where a terminal's process exit goes, by session id, once the store has evicted the surface.
     /// Every surface carries the exit hook from creation, so a surface realized before SwiftUI
     /// renders it — a prewarm or a reattach of an unvisited scope — reports its exit the same way.
-    /// Only the surface current for its tile reaches it (`processExitHandler(for:)`).
+    /// Only the surface current for its tile reaches it (`processExitHandler(for:)`). The owning
+    /// `TileTreeStore` sets it once, at init, holding itself weakly.
     var onTerminalProcessExit: (@MainActor (UUID) -> Void)?
 
     /// Where this store records which tmux session ended up backing each surface it

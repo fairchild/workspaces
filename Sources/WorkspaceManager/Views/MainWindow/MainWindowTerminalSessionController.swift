@@ -248,19 +248,17 @@ struct MainWindowTerminalSessionController {
         tileTreeStore.cancelCloseConfirmation(shown.context)
     }
 
-    func handleProcessExit(
+    /// The window's half of a process exit, after the store has closed the tile and recorded
+    /// its row: where focus goes next.
+    func focusAfterProcessExit(
         sessionID: UUID,
         tileTreeStore: TileTreeStore,
         defaultHomeDirectory: URL,
         repos: [Repo],
         normalizePath: (String) -> String
     ) -> SessionFocusResult? {
-        log.info("[HostSession] Process exit detected for session \(sessionID.uuidString, privacy: .public)")
-        guard
-            let focusSessionID = tileTreeStore.handleProcessExitAndResolveFocusTarget(
-                for: sessionID,
-                defaultHomeDirectory: defaultHomeDirectory
-            )
+        log.info("[HostSession] Process exit closed session \(sessionID.uuidString, privacy: .public)")
+        guard let focusSessionID = tileTreeStore.focusTargetAfterRemoval(defaultHomeDirectory: defaultHomeDirectory)
         else {
             return nil
         }

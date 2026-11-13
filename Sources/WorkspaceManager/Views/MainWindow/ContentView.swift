@@ -1002,7 +1002,6 @@ struct ContentView: View {
     private var splitViewWithLifecycleHandlers: some View {
         splitViewWithToolbar
             .onAppear {
-                tileTreeStore.surfaceStore.onTerminalProcessExit = handleTerminalProcessExit(sessionID:)
                 launchWorkLifetime.noteWindowAppeared()
                 automationWindowLifetime.noteWindowAppeared()
                 adoptionWorkLifetime.noteWindowAppeared()
@@ -1022,6 +1021,7 @@ struct ContentView: View {
                     _ = await seedLandingWorkspaceEnvironmentStateIfNeeded()
                 }
             }
+            .onTerminalProcessExit(of: tileTreeStore, perform: handleTerminalProcessExit(sessionID:))
             .onReceive(agentSessionRegistry.statusesDidChange) { _ in
                 scheduleWorkspaceStatusAggregatorRefresh()
             }
@@ -1741,7 +1741,7 @@ struct ContentView: View {
 
     private func handleTerminalProcessExit(sessionID: UUID) {
         guard
-            let result = terminalSessionController.handleProcessExit(
+            let result = terminalSessionController.focusAfterProcessExit(
                 sessionID: sessionID,
                 tileTreeStore: tileTreeStore,
                 defaultHomeDirectory: resolvedDefaultHostDirectory,
