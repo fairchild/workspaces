@@ -66,10 +66,15 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
             )
         }
 
-        let conversationObserverPath = ClaudeIntegrationLifecycle.extractConversationObserverScript()
-        if conversationObserverPath == nil {
+        // Named even when nothing is there, so the installer removes a handler that would run
+        // a missing script.
+        let conversationObserverPath =
+            ClaudeIntegrationLifecycle.extractConversationObserverScript()
+            ?? ClaudeIntegrationLifecycle.hookForwarderInstallDirectory()
+            .appendingPathComponent("conversation-observer.sh").path
+        if !FileManager.default.isExecutableFile(atPath: conversationObserverPath) {
             log.error(
-                "[ClaudeIntegration] conversation-observer.sh extraction failed; SessionStart conversation observer will be skipped this session"
+                "[ClaudeIntegration] no conversation-observer.sh at \(conversationObserverPath, privacy: .public); SessionStart conversation observer will be skipped this session"
             )
         }
 

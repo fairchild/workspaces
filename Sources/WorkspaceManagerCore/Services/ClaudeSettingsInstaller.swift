@@ -74,6 +74,10 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
 
     private let homeDirectory: URL
     private let eventForwarderScriptPath: String?
+    /// Where WorkSpaces extracts the conversation observer. Its handler is installed while an
+    /// executable is there and removed while none is. Only a handler with exactly the command
+    /// this installer writes for that path counts as WorkSpaces's: a person's own script with
+    /// the same name, or a command that wraps one, is theirs.
     private let conversationObserverScriptPath: String?
     private let statusLineForwarderPath: String?
     private let statusLineRefreshInterval: Int
@@ -233,7 +237,6 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         var dict = current
         var lines: [String] = []
         var hooks = (current["hooks"]?.value as? [String: Any]) ?? [:]
-        var removedMissingObserver = false
 
         if let eventForwarderScriptPath {
             let eventForwarder = CommandContribution(
@@ -364,29 +367,28 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         if let conversationObserverScriptPath {
             let observer = CommandContribution(rawPath: homeRelativeCommand(conversationObserverScriptPath))
             let event = Self.conversationObserverEventName
+            let scriptIsThere = FileManager.default.isExecutableFile(atPath: conversationObserverScriptPath)
             var groups = normalizedClaudeHookGroups(from: hooks[event])
             let stale = scrubHandlers(in: groups) { handler in
-                isStaleConversationObserverHook(handler, contribution: observer)
+                isCanonicalWorkspacesCommandHook(handler, contribution: observer)
+                    && !(scriptIsThere && handler["async"] as? Bool == true)
             }
             groups = stale.groups
             if stale.removedCount > 0 {
-                lines.append("replace an earlier conversation observer command in \(event)")
+                lines.append(
+                    scriptIsThere
+                        ? "make the conversation observer in \(event) async"
+                        : "remove the conversation observer from \(event): \(observer.command) is missing")
             }
             let present = groups.contains { group in
                 claudeGroupContainsHandler(group) { isCanonicalConversationObserverHook($0, contribution: observer) }
             }
-            if !present {
+            if scriptIsThere && !present {
                 groups.append(["hooks": [["type": "command", "command": observer.command, "async": true]]])
                 lines.append("add conversation observer to \(event) using \(observer.command)")
             }
-            hooks[event] = groups
-        } else if let groups = hooks[Self.conversationObserverEventName] {
-            let missing = scrubHandlers(
-                in: normalizedClaudeHookGroups(from: groups), where: isMissingConversationObserverHook)
-            if missing.removedCount > 0 {
-                hooks[Self.conversationObserverEventName] = missing.groups
-                removedMissingObserver = true
-                lines.append("remove a conversation observer whose script is missing")
+            if hooks[event] != nil || !groups.isEmpty {
+                hooks[event] = groups
             }
         }
 
@@ -408,7 +410,7 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
             }
         }
 
-        if eventForwarderScriptPath != nil || conversationObserverScriptPath != nil || removedMissingObserver {
+        if eventForwarderScriptPath != nil || conversationObserverScriptPath != nil {
             dict["hooks"] = AnyCodable(hooks)
         }
 
@@ -607,34 +609,6 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         contribution: CommandContribution
     ) -> Bool {
         isCanonicalWorkspacesCommandHook(handler, contribution: contribution) && handler["async"] as? Bool == true
-    }
-
-    /// Any WorkSpaces conversation observer other than the canonical one — an unescaped
-    /// spelling of its command, a copy extracted somewhere else, or the right command without
-    /// `async` — so one SessionStart runs exactly one observer, and that one asynchronously.
-    private func isStaleConversationObserverHook(
-        _ handler: [String: Any],
-        contribution: CommandContribution
-    ) -> Bool {
-        guard (handler["type"] as? String) == "command",
-            let command = handler["command"] as? String,
-            !isCanonicalConversationObserverHook(handler, contribution: contribution)
-        else { return false }
-        return unquoteSingleQuotedCommand(command).hasSuffix("/conversation-observer.sh")
-    }
-
-    /// A WorkSpaces conversation observer whose script is not there to run, which a build
-    /// that does not own the observer leaves behind when the copy it names has gone. Claude
-    /// would run the missing command on every SessionStart.
-    private func isMissingConversationObserverHook(_ handler: [String: Any]) -> Bool {
-        guard (handler["type"] as? String) == "command", let command = handler["command"] as? String else {
-            return false
-        }
-        let path = unquoteSingleQuotedCommand(command)
-        guard path.hasSuffix("/conversation-observer.sh") else { return false }
-        let expanded =
-            path.hasPrefix("~/") ? homeDirectory.appendingPathComponent(String(path.dropFirst(2))).path : path
-        return !FileManager.default.isExecutableFile(atPath: expanded)
     }
 
     /// Strip a single layer of POSIX single quotes (and `'\''` escapes) so a
