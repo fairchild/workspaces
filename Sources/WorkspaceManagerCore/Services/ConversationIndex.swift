@@ -120,10 +120,10 @@ public struct ConversationIndexer: Sendable {
         "\(Self.migrationMetadataKeyPrefix):\(destination)"
     }
 
-    /// The runs the first attempt for this destination selected. A retry reads the same runs,
-    /// so a launch that fails and the launches after it agree on what was eligible.
-    public var migrationRunsMetadataKey: String {
-        "conversation_records_migration_runs:\(destination)"
+    /// The observations the migration still owes this destination, as its first attempt
+    /// gathered them. Present from the first attempt until the marker is set.
+    public var migrationPendingMetadataKey: String {
+        "conversation_records_migration_pending:\(destination)"
     }
 
     private var destination: String {
@@ -132,11 +132,12 @@ public struct ConversationIndexer: Sendable {
 
     /// Writes a record for every conversation the app already knew before records existed:
     /// each Launch Record that names one, and each id reported by the tiles of the current
-    /// and previous runs as of the first attempt. It is marked done for this database and
-    /// destination only once every observation was written or rejected, so a failed pass
-    /// runs again at the next launch over the runs it first chose, rather than over a window
-    /// that has since moved on. After that it never runs again: a rerun would bring back a
-    /// record a later cleanup removed on purpose.
+    /// and previous runs. The first attempt for a destination gathers those observations and
+    /// stores them before writing any; every attempt writes what is stored and keeps only
+    /// what failed. The rows they came from can change between launches (a tile recorded
+    /// again moves to the new run), and the stored observations do not. The migration is
+    /// marked done for this database and destination once nothing is left, and never runs
+    /// again: a rerun would bring back a record a later cleanup removed on purpose.
     ///
     /// Each sighting carries the time it was made, so against a record a hook has written
     /// since, it only fills what that record lacks.
@@ -144,9 +145,47 @@ public struct ConversationIndexer: Sendable {
     public func migrateOnce(now: Date = Date()) async throws -> MigrationOutcome {
         let key = migrationMetadataKey
         guard try await localState.metadataValue(forKey: key) == nil else { return .init(alreadyDone: true) }
-        let runIDs = try await selectedRuns()
-        var observations = launchRecordObservations()
-        observations += try await localState.fetchConversationSightings(runIDs: runIDs).map { sighting in
+        let pendingKey = migrationPendingMetadataKey
+        let pending = try await pendingObservations()
+        var outcome = MigrationOutcome()
+        var remaining: [String: [PendingMigrationObservation]] = [:]
+        for conversationID in pending.keys.sorted() {
+            for item in pending[conversationID] ?? [] {
+                do {
+                    switch try records.record(item.observation, lockBudget: .seconds(1)) {
+                    case .written:
+                        outcome.written += 1
+                        continue
+                    case .lockBusy:
+                        outcome.failed += 1
+                    }
+                } catch ConversationRecordStore.WriteError.invalidConversationID {
+                    outcome.rejected += 1
+                    continue
+                } catch {
+                    outcome.failed += 1
+                }
+                remaining[conversationID, default: []].append(item)
+            }
+        }
+        if remaining.isEmpty {
+            try await localState.setMetadataValue(ConversationRecordJSON.string(now), forKey: key, removing: pendingKey)
+        } else {
+            try await localState.setMetadataValue(try Self.encode(remaining), forKey: pendingKey)
+        }
+        return outcome
+    }
+
+    /// What is stored for this destination, or, on the first attempt, what the launch records
+    /// and recent runs say now, stored before anything is written.
+    private func pendingObservations() async throws -> [String: [PendingMigrationObservation]] {
+        let pendingKey = migrationPendingMetadataKey
+        if let stored = try await localState.metadataValue(forKey: pendingKey) {
+            return try JSONDecoder().decode([String: [PendingMigrationObservation]].self, from: Data(stored.utf8))
+        }
+        var gathered = launchRecordObservations()
+        gathered += try await localState.fetchConversationSightings(runIDs: localState.recentRunIDs()).map {
+            sighting in
             ConversationObservation(
                 conversationID: sighting.conversationID,
                 cwd: sighting.cwd,
@@ -155,36 +194,15 @@ public struct ConversationIndexer: Sendable {
                 lastSeenIn: .init(hostSessionID: sighting.hostSessionID.uuidString)
             )
         }
-        var outcome = MigrationOutcome()
-        for observation in observations {
-            do {
-                switch try records.record(observation, lockBudget: .seconds(1)) {
-                case .written: outcome.written += 1
-                case .lockBusy: outcome.failed += 1
-                }
-            } catch ConversationRecordStore.WriteError.invalidConversationID {
-                outcome.rejected += 1
-            } catch {
-                outcome.failed += 1
-            }
-        }
-        if outcome.failed == 0 {
-            try await localState.setMetadataValue(ConversationRecordJSON.string(now), forKey: key)
-        }
-        return outcome
+        let pending = Dictionary(grouping: gathered.map(PendingMigrationObservation.init), by: \.conversationID)
+        try await localState.setMetadataValue(try Self.encode(pending), forKey: pendingKey)
+        return pending
     }
 
-    private func selectedRuns() async throws -> [String] {
-        let key = migrationRunsMetadataKey
-        if let stored = try await localState.metadataValue(forKey: key),
-            let runIDs = try? JSONDecoder().decode([String].self, from: Data(stored.utf8))
-        {
-            return runIDs
-        }
-        let runIDs = try await localState.recentRunIDs()
-        let encoded = String(decoding: try JSONEncoder().encode(runIDs), as: UTF8.self)
-        try await localState.setMetadataValue(encoded, forKey: key)
-        return runIDs
+    private static func encode(_ pending: [String: [PendingMigrationObservation]]) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return String(decoding: try encoder.encode(pending), as: UTF8.self)
     }
 
     private func launchRecordObservations() -> [ConversationObservation] {
@@ -206,5 +224,49 @@ public struct ConversationIndexer: Sendable {
                 launch: .init(handle: launch.handle, model: identity.requestedModel, effort: identity.requestedEffort)
             )
         }
+    }
+}
+
+/// One observation the migration owes a destination, in the fields migration observations
+/// carry, so it can be stored between launches and written as it was first gathered.
+struct PendingMigrationObservation: Codable, Equatable, Sendable {
+    var conversationID: String
+    var host: String
+    var cwd: String?
+    var workspacePath: String?
+    var socketLabel: String?
+    var observedAt: Date
+    var hostSessionID: String?
+    var launch: Launch?
+
+    struct Launch: Codable, Equatable, Sendable {
+        var handle: String
+        var model: String?
+        var effort: String?
+    }
+
+    init(_ observation: ConversationObservation) {
+        conversationID = observation.conversationID
+        host = observation.host
+        cwd = observation.cwd
+        workspacePath = observation.workspacePath
+        socketLabel = observation.socketLabel
+        observedAt = observation.observedAt
+        hostSessionID = observation.lastSeenIn?.hostSessionID
+        launch = observation.launch.map { Launch(handle: $0.handle, model: $0.model, effort: $0.effort) }
+    }
+
+    var observation: ConversationObservation {
+        ConversationObservation(
+            conversationID: conversationID,
+            host: host,
+            cwd: cwd,
+            workspacePath: workspacePath,
+            socketLabel: socketLabel,
+            observedAt: observedAt,
+            observedBy: .migration,
+            launch: launch.map { .init(handle: $0.handle, model: $0.model, effort: $0.effort) },
+            lastSeenIn: hostSessionID.map { .init(hostSessionID: $0) }
+        )
     }
 }

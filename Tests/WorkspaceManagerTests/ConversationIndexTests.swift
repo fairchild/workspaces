@@ -257,7 +257,7 @@ struct ConversationIndexTests {
 
     /// The failed launch records an unrelated tile, so by the next launch the run that held
     /// the failed conversation is no longer the previous one.
-    @Test("A failed migration retries over the runs it first chose, across launches")
+    @Test("A failed migration retries what its first attempt gathered, across launches")
     func failedMigrationKeepsItsRunsAcrossLaunches() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -284,6 +284,53 @@ struct ConversationIndexTests {
         let nextLaunch = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_002_000))
         #expect(try await fixture.indexer(nextLaunch).migrateOnce() == .init(written: 1))
         #expect(fixture.records.load(conversationID: typed) != nil)
+    }
+
+    /// The tile that reported the conversation is restored in a later failed launch, which
+    /// moves its row to that launch's run, and a launch after that records another tile, so
+    /// neither the first attempt's runs nor the latest two still hold it.
+    @Test("A conversation whose tile moved to a later run is still carried once the destination works")
+    func restoredTileKeepsItsPendingConversation() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let typed = UUID().uuidString.lowercased()
+        let tile = UUID()
+        try await recordPreviousRunSighting(
+            typed, tile: tile,
+            in: try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_000_000)))
+        try Data().write(to: fixture.records.directory)
+
+        let first = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_001_000))
+        #expect(try await fixture.indexer(first).migrateOnce() == .init(failed: 1))
+
+        let second = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_002_000))
+        #expect(try await fixture.indexer(second).migrateOnce() == .init(failed: 1))
+        try await recordTile(tile, in: second)
+
+        let third = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_003_000))
+        #expect(try await fixture.indexer(third).migrateOnce() == .init(failed: 1))
+        try await recordTile(UUID(), in: third)
+
+        try FileManager.default.removeItem(at: fixture.records.directory)
+        let repaired = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_004_000))
+        let indexer = fixture.indexer(repaired)
+        #expect(try await indexer.migrateOnce() == .init(written: 1))
+        #expect(fixture.records.load(conversationID: typed) != nil)
+        #expect(try await repaired.metadataValue(forKey: indexer.migrationPendingMetadataKey) == nil)
+        #expect(try await indexer.migrateOnce() == .init(alreadyDone: true))
+    }
+
+    private func recordTile(_ tile: UUID, in localState: LocalStateStore) async throws {
+        try await localState.recordTerminalSession(
+            HostTerminalSession(
+                id: tile,
+                key: .repoPath("/tmp/repo"),
+                directory: URL(fileURLWithPath: "/tmp/repo"),
+                terminalMode: .tmuxPerSession
+            ),
+            isActive: true,
+            hooksSocketPath: nil
+        )
     }
 
     @Test("An id no record can hold is rejected without holding the migration open")

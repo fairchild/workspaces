@@ -1273,6 +1273,14 @@ public actor LocalStateStore {
         }
     }
 
+    /// Sets `key` and removes `removing` in one transaction.
+    public func setMetadataValue(_ value: String, forKey key: String, removing: String) async throws {
+        try await dbPool.write { db in
+            try Self.writeMetadataValue(db, key: key, value: value)
+            try db.execute(sql: "DELETE FROM local_state_metadata WHERE key = ?", arguments: [removing])
+        }
+    }
+
     private static func upsertConversationIndexEntry(_ entry: ConversationIndexEntry, in db: Database) throws {
         try db.cachedStatement(
             sql: """
