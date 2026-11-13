@@ -12,10 +12,12 @@
 # The answer goes through a file, not a pipe: a tmux client hands its output
 # descriptor to the server, so a stopped server would hold a pipe open. One
 # owner cleans up the lookup's file, client and deadline, on return or on any
-# signal. The deadline kills only a process that is still this shell's child,
-# and it is stopped before this shell starts any other child. The app writes
-# the bundled CLI's path in place of the placeholder when it extracts this
-# file. Always exits 0: a failure here is never Claude's to report.
+# signal; a signal while they are being started waits until all three are
+# recorded, and cleanup ignores further signals once it begins. The deadline
+# kills only a process that is still this shell's child, and it is stopped
+# before this shell starts any other child. The app writes the bundled CLI's
+# path in place of the placeholder when it extracts this file. Exits 0 unless
+# signalled while the CLI runs: a failure here is never Claude's to report.
 
 set -u
 
@@ -23,6 +25,7 @@ readonly KEY=WORKSPACES_CONVERSATIONS_DIR
 lookup_out=""
 lookup_client=""
 lookup_guard=""
+lookup_interrupted=""
 
 main() {
     if [[ -z "${WORKSPACES_CONVERSATIONS_DIR:-}" ]]; then
@@ -42,7 +45,6 @@ adopt_session_directory() {
     local socket="${server%,*}"
     local session="\$${TMUX##*,}"
     trap end_lookup EXIT
-    trap 'exit 0' TERM INT HUP
     local answer=""
     if ask_session "$socket" "$session"; then
         answer="$(<"$lookup_out")"
@@ -56,6 +58,20 @@ adopt_session_directory() {
 }
 
 ask_session() {
+    trap 'lookup_interrupted=1' TERM INT HUP
+    start_lookup "$@"
+    local started=$?
+    trap end_on_signal TERM INT HUP
+    [[ -z "$lookup_interrupted" ]] || end_on_signal
+    ((started == 0)) || return 1
+    wait "$lookup_client"
+    local status=$?
+    lookup_client=""
+    stop_guard
+    return "$status"
+}
+
+start_lookup() {
     local socket=$1 session=$2
     lookup_out="$(mktemp "${TMPDIR:-/tmp}/workspaces-observer.XXXXXX")" || return 1
     PATH="$PATH:/opt/homebrew/bin:/usr/local/bin" tmux -S "$socket" \
@@ -64,14 +80,15 @@ ask_session() {
     lookup_client=$!
     end_at_deadline "$lookup_client" </dev/null >/dev/null 2>&1 &
     lookup_guard=$!
-    wait "$lookup_client"
-    local status=$?
-    lookup_client=""
-    stop_guard
-    return "$status"
+}
+
+end_on_signal() {
+    trap '' TERM INT HUP
+    exit 0
 }
 
 end_lookup() {
+    trap '' TERM INT HUP
     stop_guard
     if [[ -n "$lookup_client" ]]; then
         kill_child "$lookup_client"

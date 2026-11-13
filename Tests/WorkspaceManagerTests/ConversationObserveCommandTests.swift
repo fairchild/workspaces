@@ -262,6 +262,104 @@ struct ConversationObserveCommandTests {
         #expect(text.contains("own=137"))
     }
 
+    /// Where Codex's probes put a TERM: a second one while cleanup asks `ps` about the client,
+    /// or one while the shell is stopped after starting the client and before recording it.
+    enum LookupInterruption: String, CaseIterable, Sendable {
+        case duringCleanup = "during-cleanup"
+        case beforeTheClientIsRecorded = "before-the-client-is-recorded"
+    }
+
+    /// The stand-in `tmux` writes its pid and waits, as a client of a stopped server does,
+    /// and the stand-in `ps` marks that it was asked and pauses before answering truly, so a
+    /// signal can land inside cleanup.
+    @Test(
+        "A signal at any point of the hook's lookup leaves no client and no lookup file",
+        arguments: LookupInterruption.allCases)
+    func interruptedLookupCleansUp(_ interruption: LookupInterruption) throws {
+        let source = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/WorkspaceManager/Resources/HookForwarders/conversation-observer.sh")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "hook-interrupt-\(UUID().uuidString)")
+        let bin = root.appendingPathComponent("bin")
+        let temporary = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func install(_ name: String, _ body: String, in directory: URL) throws -> URL {
+            let url = directory.appendingPathComponent(name)
+            try ("#!/bin/bash\n" + body + "\n").write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+            return url
+        }
+        func marker(_ name: String) -> URL { root.appendingPathComponent(name) }
+        func waitFor(_ name: String) throws {
+            let deadline = Date().addingTimeInterval(5)
+            while !FileManager.default.fileExists(atPath: marker(name).path) {
+                try #require(Date() < deadline, "\(name) never appeared")
+                Thread.sleep(forTimeInterval: 0.005)
+            }
+        }
+        _ = try install("tmux", #"echo $$ > "$EDGE_ROOT/client"; exec /bin/sleep 30"#, in: bin)
+        _ = try install("ps", #"echo ready > "$EDGE_ROOT/in-ps"; /bin/sleep 0.3; exec /bin/ps "$@""#, in: bin)
+        let wrapper = try install(
+            "wrapper.sh",
+            #"""
+            source "$1"
+            if [[ "$2" == before-the-client-is-recorded ]]; then
+                set -T
+                trap 'if [[ "$BASH_COMMAND" == "lookup_client="* && "$BASH_SUBSHELL" == 0 && ! -e "$EDGE_ROOT/spawned" ]]; then echo ready > "$EDGE_ROOT/spawned"; builtin kill -STOP "$$"; fi' DEBUG
+            fi
+            main
+            """#,
+            in: root)
+
+        let hook = Process()
+        hook.executableURL = URL(fileURLWithPath: "/bin/bash")
+        hook.arguments = [wrapper.path, source.path, interruption.rawValue]
+        hook.environment = [
+            "PATH": "\(bin.path):/usr/bin:/bin", "TMPDIR": temporary.path, "EDGE_ROOT": root.path,
+            "TMUX": "\(root.path)/absent.sock,123,0", "HOME": root.path,
+        ]
+        hook.standardInput = FileHandle.nullDevice
+        hook.standardOutput = FileHandle.nullDevice
+        hook.standardError = FileHandle.nullDevice
+        try hook.run()
+        var client: pid_t = 0
+        defer {
+            if hook.isRunning {
+                kill(hook.processIdentifier, SIGCONT)
+                kill(hook.processIdentifier, SIGKILL)
+            }
+            if client > 0 { kill(client, SIGKILL) }
+        }
+
+        switch interruption {
+        case .duringCleanup:
+            try waitFor("client")
+            kill(hook.processIdentifier, SIGTERM)
+            try waitFor("in-ps")
+            kill(hook.processIdentifier, SIGTERM)
+        case .beforeTheClientIsRecorded:
+            try waitFor("spawned")
+            kill(hook.processIdentifier, SIGTERM)
+            kill(hook.processIdentifier, SIGCONT)
+            try waitFor("client")
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while hook.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+        try #require(!hook.isRunning, "the hook outlived its cleanup")
+        client = try #require(
+            pid_t(
+                String(decoding: try Data(contentsOf: marker("client")), as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)))
+        Thread.sleep(forTimeInterval: 0.05)
+
+        #expect(hook.terminationReason == .exit && hook.terminationStatus == 0)
+        #expect(kill(client, 0) != 0, "the lookup's tmux client outlived the hook")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: temporary.path) == [])
+    }
+
     @Test("The installed hook script starts the CLI only inside WorkSpaces, and exits 0 either way")
     func hookScriptGatesOnTheTileEnvironment() async throws {
         let fixture = try Fixture()
