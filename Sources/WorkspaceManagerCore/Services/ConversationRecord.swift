@@ -18,6 +18,8 @@ public struct ConversationObserver: RawRepresentable, Hashable, Sendable {
     public static let hook = ConversationObserver(rawValue: "hook")
     public static let app = ConversationObserver(rawValue: "app")
     public static let migration = ConversationObserver(rawValue: "migration")
+    /// `conversation resume --here`, just before it hands the terminal to the harness.
+    public static let resume = ConversationObserver(rawValue: "resume")
 }
 
 public struct ConversationRecord: Equatable, Sendable {
