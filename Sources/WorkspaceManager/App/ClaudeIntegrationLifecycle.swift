@@ -322,13 +322,19 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
     }
 
     /// Copy the SessionStart conversation observer beside the forwarders, with this build's
-    /// bundled CLI written into it. The settings entry names the stable copy, so a dev build
-    /// and the installed app share one entry, and whichever launched last supplies the CLI.
-    /// Nil when this build has no CLI beside it or the copy failed.
+    /// bundled CLI written into it. The settings entry names the stable copy, which every
+    /// Claude on the machine runs, so only the installed app writes it (see
+    /// `ownsMachineWideObserver`). Any other build returns the copy already there, so its
+    /// settings install still names the same entry. Nil when there is no copy to name.
     nonisolated static func extractConversationObserverScript(
+        bundleURL: URL = Bundle.main.bundleURL,
         cliURL: URL? = CommandLineToolService.defaultSourceCommandURL(fileManager: .default),
         installDirectory: URL = hookForwarderInstallDirectory()
     ) -> String? {
+        guard ownsMachineWideObserver(bundleURL: bundleURL) else {
+            let existing = installDirectory.appendingPathComponent("conversation-observer.sh")
+            return FileManager.default.isExecutableFile(atPath: existing.path) ? existing.path : nil
+        }
         guard let cliURL,
             let template = bundledHookForwarderURL(named: "conversation-observer")
                 .flatMap({ try? String(contentsOf: $0, encoding: .utf8) })
@@ -338,6 +344,16 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
             cliPath: cliURL.path,
             installDirectory: installDirectory
         )
+    }
+
+    /// The installed app is an `.app` in an Applications folder, where `install-local.sh` and
+    /// the release put it. Debug binaries under `.build`, packaged evidence and test bundles,
+    /// and a checkout's `build/` copy all live elsewhere, and a CLI path written from one of
+    /// them stops working when that tree is cleaned, silencing the observer for every Claude
+    /// on the machine.
+    nonisolated static func ownsMachineWideObserver(bundleURL: URL) -> Bool {
+        bundleURL.pathExtension == "app"
+            && bundleURL.deletingLastPathComponent().lastPathComponent == "Applications"
     }
 
     nonisolated static func writeConversationObserverScript(
