@@ -1,0 +1,298 @@
+//
+//  ConversationRecordMerge.swift
+//  WorkspaceManagerCore
+//
+//  The one merge every Conversation record writer goes through. Writers run in different
+//  processes and their observations land in any order, so the merge is built so that a set
+//  of observations makes the same record whatever order it arrives in.
+//
+
+import Foundation
+
+extension ConversationRecordJSON {
+    /// When each field's value was observed, keyed by field (`launch.handle` for nested ones).
+    static let fieldObservedAtKey = "fieldObservedAt"
+    /// The location sightings still consistent with the newest one, newest first.
+    static let sightingsKey = "sightings"
+    /// The newest sighting that contradicted them. Anything not newer than it is history.
+    static let sightingsAfterKey = "sightingsAfter"
+
+    /// Applies `observation` to the file's object.
+    ///
+    /// The property: merging a set of observations gives the same object whatever order they
+    /// arrive in, and merging one twice changes nothing. Every fact keeps the time of the
+    /// observation that set it, rather than the record keeping one time for all of them:
+    /// - A field (`cwd`, `transcriptPath`, `launch.model`, …) takes the value of the newest
+    ///   observation that carried one; a tie on time goes to the larger value. An observation
+    ///   that does not carry a field leaves it alone, so unknown never erases known.
+    /// - `observedAt` is the newest observation's time and `createdAt` the earliest.
+    /// - Location is a holder (`hostSessionID`) and a tmux fact (a session's `serverPID` and
+    ///   `sessionID`, or `outsideTmux`). A part an observation does not state is unknown, never
+    ///   "none": no writer can see that no tile holds a conversation. Sightings are kept
+    ///   newest first for as long as their known parts agree. The first that contradicts them
+    ///   ends the run, and it and everything older become history. So a sighting that
+    ///   matches the current place fills it in or refreshes it whatever its age, and one that
+    ///   contradicts it moves the conversation only if it is newer than every sighting of the
+    ///   current place. `lastSeenIn` is that run read as one place, with each tmux attribute
+    ///   from the newest sighting that had it.
+    ///
+    /// Keys this build does not know survive at the top level, under `launch`, and in each
+    /// kept sighting. `lastSeenIn` is rewritten from the sightings on every merge, so a build
+    /// that records a new location fact adds it to the sightings.
+    static func merge(_ observation: ConversationObservation, into existing: [String: Any]?) -> [String: Any] {
+        var object = existing ?? [:]
+        let at = date(string(observation.observedAt)) ?? observation.observedAt
+        var observed = object[fieldObservedAtKey] as? [String: Any] ?? legacyFieldTimes(object)
+
+        func register(_ key: String, _ value: Any?, in target: inout [String: Any], as field: String? = nil) {
+            guard let value else { return }
+            let field = field ?? key
+            if let current = target[key], let currentAt = date(observed[field]),
+                (at, "\(value)") <= (currentAt, "\(current)")
+            {
+                return
+            }
+            target[key] = value
+            observed[field] = string(at)
+        }
+
+        let recordedAt = date(object["observedAt"])
+        object["schema"] = max(object["schema"] as? Int ?? 0, ConversationRecord.schemaVersion)
+        object["conversationID"] = observation.conversationID
+        register("harness", observation.harness, in: &object)
+        register("host", observation.host, in: &object)
+        register("cwd", observation.cwd, in: &object)
+        register("configHome", observation.configHome, in: &object)
+        register("transcriptPath", observation.transcriptPath, in: &object)
+        register("workspacePath", observation.workspacePath, in: &object)
+        register("workspaceCreatedAt", observation.workspaceCreatedAt.map(string), in: &object)
+        register("socketLabel", observation.socketLabel, in: &object)
+        register("observedBy", observation.observedBy.rawValue, in: &object)
+        if let launch = observation.launch {
+            var target = object["launch"] as? [String: Any] ?? [:]
+            register("handle", launch.handle, in: &target, as: "launch.handle")
+            register("model", launch.model, in: &target, as: "launch.model")
+            register("effort", launch.effort, in: &target, as: "launch.effort")
+            object["launch"] = target
+        }
+        object[fieldObservedAtKey] = observed
+        object["createdAt"] = string([date(object["createdAt"]) ?? at, at].min() ?? at)
+        object["observedAt"] = string(max(recordedAt ?? at, at))
+
+        var location = LocationHistory(object: object)
+        if let seen = observation.lastSeenIn, let sighting = Sighting(seen, at: at) {
+            location.insert(sighting)
+        }
+        location.write(into: &object)
+        return object
+    }
+
+    /// A record written before fields carried their own times: each present field counts as
+    /// seen when the record was.
+    private static func legacyFieldTimes(_ object: [String: Any]) -> [String: Any] {
+        guard let recordedAt = object["observedAt"] as? String else { return [:] }
+        var observed: [String: Any] = [:]
+        for key in [
+            "harness", "host", "cwd", "configHome", "transcriptPath", "workspacePath", "workspaceCreatedAt",
+            "socketLabel", "observedBy",
+        ] where object[key] != nil {
+            observed[key] = recordedAt
+        }
+        for key in ["handle", "model", "effort"] where (object["launch"] as? [String: Any])?[key] != nil {
+            observed["launch.\(key)"] = recordedAt
+        }
+        return observed
+    }
+}
+
+// MARK: - Location
+
+/// What one sighting says about tmux.
+enum TmuxFact: Equatable {
+    case unknown
+    case outside
+    case session(serverPID: Int, sessionID: String)
+
+    var key: String {
+        switch self {
+        case .unknown: ""
+        case .outside: "outside"
+        case .session(let pid, let id): "\(pid):\(id)"
+        }
+    }
+
+    func contradicts(_ other: TmuxFact) -> Bool {
+        self != .unknown && other != .unknown && self != other
+    }
+}
+
+/// One place a conversation was seen, with the newest time it was seen there. Sightings
+/// with the same known parts share one entry; its tmux attributes keep their own times.
+struct Sighting {
+    var holder: String?
+    var tmux: TmuxFact
+    var at: Date
+    var object: [String: Any]
+
+    var key: String { "\(holder ?? "")|\(tmux.key)" }
+    var order: (Date, String) { (at, key) }
+
+    init?(_ seen: ConversationRecord.LastSeenIn, at: Date) {
+        holder = seen.hostSessionID
+        var object: [String: Any] = ["observedAt": ConversationRecordJSON.string(at)]
+        if let holder { object["hostSessionID"] = holder }
+        if let tmux = seen.tmux {
+            self.tmux = .session(serverPID: tmux.serverPID, sessionID: tmux.sessionID)
+            var session: [String: Any] = ["serverPID": tmux.serverPID, "sessionID": tmux.sessionID]
+            if let createdAt = tmux.createdAt {
+                session["createdAt"] = ConversationRecordJSON.string(createdAt)
+                session["createdAtObservedAt"] = object["observedAt"]
+            }
+            if let name = tmux.name {
+                session["name"] = name
+                session["nameObservedAt"] = object["observedAt"]
+            }
+            object["tmux"] = session
+        } else if seen.outsideTmux {
+            self.tmux = .outside
+            object["outsideTmux"] = true
+        } else {
+            self.tmux = .unknown
+        }
+        guard holder != nil || self.tmux != .unknown else { return nil }
+        self.at = at
+        self.object = object
+    }
+
+    init?(object: [String: Any]) {
+        guard let at = ConversationRecordJSON.date(object["observedAt"]) else { return nil }
+        holder = object["hostSessionID"] as? String
+        if let session = object["tmux"] as? [String: Any],
+            let pid = session["serverPID"] as? Int,
+            let id = session["sessionID"] as? String
+        {
+            tmux = .session(serverPID: pid, sessionID: id)
+        } else {
+            tmux = object["outsideTmux"] as? Bool == true ? .outside : .unknown
+        }
+        guard holder != nil || tmux != .unknown else { return nil }
+        self.at = at
+        self.object = object
+    }
+
+    func agrees(holder otherHolder: String?, tmux otherTmux: TmuxFact) -> Bool {
+        !(holder != nil && otherHolder != nil && holder != otherHolder) && !tmux.contradicts(otherTmux)
+    }
+
+    /// Folds another sighting with the same known parts into this one.
+    mutating func absorb(_ other: Sighting) {
+        if other.at > at {
+            at = other.at
+            object["observedAt"] = other.object["observedAt"]
+        }
+        guard var session = object["tmux"] as? [String: Any], let theirs = other.object["tmux"] as? [String: Any]
+        else { return }
+        for attribute in ["createdAt", "name"] {
+            Self.takeNewer(attribute, from: theirs, into: &session)
+        }
+        object["tmux"] = session
+    }
+
+    /// The attribute from whichever side observed it later; a tie goes to the larger value.
+    static func takeNewer(_ attribute: String, from source: [String: Any], into target: inout [String: Any]) {
+        let stamp = "\(attribute)ObservedAt"
+        guard let value = source[attribute], let at = ConversationRecordJSON.date(source[stamp]) else { return }
+        if let current = target[attribute], let currentAt = ConversationRecordJSON.date(target[stamp]),
+            (at, "\(value)") <= (currentAt, "\(current)")
+        {
+            return
+        }
+        target[attribute] = value
+        target[stamp] = source[stamp]
+    }
+}
+
+/// The run of sightings that agree with the newest one, and where that run begins.
+struct LocationHistory {
+    private var sightings: [Sighting]
+    private var after: (Date, String)?
+
+    init(object: [String: Any]) {
+        let stored = (object[ConversationRecordJSON.sightingsKey] as? [[String: Any]])?
+            .compactMap(Sighting.init(object:))
+        if let stored {
+            sightings = stored
+        } else if let at = ConversationRecordJSON.date(object["observedAt"]),
+            let legacy = ConversationRecordJSON.record(from: object)?.lastSeenIn,
+            let sighting = Sighting(legacy, at: at)
+        {
+            // A record from before sightings: its one place, seen when the record was.
+            sightings = [sighting]
+        } else {
+            sightings = []
+        }
+        if let boundary = object[ConversationRecordJSON.sightingsAfterKey] as? [String: Any],
+            let at = ConversationRecordJSON.date(boundary["observedAt"])
+        {
+            after = (at, boundary["key"] as? String ?? "")
+        }
+    }
+
+    mutating func insert(_ sighting: Sighting) {
+        if let after, sighting.order <= after { return }
+        if let index = sightings.firstIndex(where: { $0.key == sighting.key }) {
+            sightings[index].absorb(sighting)
+        } else {
+            sightings.append(sighting)
+        }
+        sightings.sort { $0.order > $1.order }
+        var holder: String?
+        var tmux = TmuxFact.unknown
+        for (index, candidate) in sightings.enumerated() {
+            guard candidate.agrees(holder: holder, tmux: tmux) else {
+                after = candidate.order
+                sightings.removeSubrange(index...)
+                return
+            }
+            holder = holder ?? candidate.holder
+            if tmux == .unknown { tmux = candidate.tmux }
+        }
+    }
+
+    func write(into object: inout [String: Any]) {
+        guard !sightings.isEmpty else { return }
+        object[ConversationRecordJSON.sightingsKey] = sightings.map(\.object)
+        if let after {
+            object[ConversationRecordJSON.sightingsAfterKey] = [
+                "observedAt": ConversationRecordJSON.string(after.0), "key": after.1,
+            ]
+        }
+        object["lastSeenIn"] = place()
+    }
+
+    /// The run read as one place.
+    private func place() -> [String: Any] {
+        var place: [String: Any] = [:]
+        if let holder = sightings.lazy.compactMap(\.holder).first { place["hostSessionID"] = holder }
+        if let session = sightings.first(where: { if case .session = $0.tmux { true } else { false } }) {
+            var merged: [String: Any] = [:]
+            for sighting in sightings where sighting.tmux == session.tmux {
+                guard let theirs = sighting.object["tmux"] as? [String: Any] else { continue }
+                for attribute in ["createdAt", "name"] {
+                    Sighting.takeNewer(attribute, from: theirs, into: &merged)
+                }
+            }
+            var tmux: [String: Any] = [:]
+            if case .session(let pid, let id) = session.tmux {
+                tmux["serverPID"] = pid
+                tmux["sessionID"] = id
+            }
+            tmux["createdAt"] = merged["createdAt"]
+            tmux["name"] = merged["name"]
+            place["tmux"] = tmux
+        } else if sightings.contains(where: { $0.tmux == .outside }) {
+            place["outsideTmux"] = true
+        }
+        return place
+    }
+}

@@ -52,13 +52,19 @@ public struct ConversationRecord: Equatable, Sendable {
         }
     }
 
+    /// Where the conversation was last seen. Each part is optional because each writer knows
+    /// only some of it: the app knows the tile but not its tmux session, `ws launch` knows the
+    /// tmux session but no tile. `outsideTmux` is an observed fact, a hook that ran with no
+    /// `$TMUX`, which a missing `tmux` alone does not say.
     public struct LastSeenIn: Equatable, Sendable {
         public var hostSessionID: String?
         public var tmux: TmuxSession?
+        public var outsideTmux: Bool
 
-        public init(hostSessionID: String?, tmux: TmuxSession? = nil) {
+        public init(hostSessionID: String?, tmux: TmuxSession? = nil, outsideTmux: Bool = false) {
             self.hostSessionID = hostSessionID
             self.tmux = tmux
+            self.outsideTmux = tmux == nil && outsideTmux
         }
     }
 
@@ -197,117 +203,17 @@ enum ConversationRecordJSON {
         return .init(handle: handle, model: object["model"] as? String, effort: object["effort"] as? String)
     }
 
-    private static func lastSeenIn(from object: [String: Any]) -> ConversationRecord.LastSeenIn {
+    static func lastSeenIn(from object: [String: Any]) -> ConversationRecord.LastSeenIn {
         let tmux = (object["tmux"] as? [String: Any]).flatMap { tmux -> ConversationRecord.TmuxSession? in
             guard let pid = tmux["serverPID"] as? Int, let id = tmux["sessionID"] as? String else { return nil }
             return .init(
                 serverPID: pid, sessionID: id, createdAt: date(tmux["createdAt"]), name: tmux["name"] as? String)
         }
-        return .init(hostSessionID: object["hostSessionID"] as? String, tmux: tmux)
-    }
-
-    /// Applies `observation` to the file's object. An observation at least as new as the
-    /// record's sets every field it carries; an older one, such as the migration's, only
-    /// fills fields the record lacks. `observedAt` therefore only moves forward, and the
-    /// record describes its newest sighting.
-    ///
-    /// Keys this version does not know survive at the top level and under `launch`, which
-    /// describe the conversation wherever it runs. `lastSeenIn` and its `tmux` describe one
-    /// place, so their keys are location-specific:
-    /// - `lastSeenIn` belongs to one holder, its `hostSessionID` (none, for a session no tile
-    ///   holds). The same holder's observations, older or newer, merge into it field by
-    ///   field. A newer observation from another holder replaces it whole, dropping every key
-    ///   under it, `tmux` included; an older one from another holder is ignored.
-    /// - `tmux` belongs to one session, its `serverPID` and `sessionID`. Observations of that
-    ///   session merge into it field by field. A newer observation of another session
-    ///   replaces it whole; an older one is ignored.
-    static func merge(_ observation: ConversationObservation, into existing: [String: Any]?) -> [String: Any] {
-        var object = existing ?? [:]
-        let recordedAt = date(object["observedAt"])
-        let isNewer = recordedAt.map { observation.observedAt >= $0 } ?? true
-
-        func apply(_ key: String, _ value: Any?, into target: inout [String: Any]) {
-            guard let value else { return }
-            if isNewer || target[key] == nil { target[key] = value }
-        }
-
-        object["schema"] = max(object["schema"] as? Int ?? 0, ConversationRecord.schemaVersion)
-        object["conversationID"] = observation.conversationID
-        apply("harness", observation.harness, into: &object)
-        apply("host", observation.host, into: &object)
-        apply("cwd", observation.cwd, into: &object)
-        apply("configHome", observation.configHome, into: &object)
-        apply("transcriptPath", observation.transcriptPath, into: &object)
-        apply("workspacePath", observation.workspacePath, into: &object)
-        apply("workspaceCreatedAt", observation.workspaceCreatedAt.map(string), into: &object)
-        apply("socketLabel", observation.socketLabel, into: &object)
-        apply("observedBy", observation.observedBy.rawValue, into: &object)
-
-        let earliest = [date(object["createdAt"]), recordedAt, observation.observedAt].compactMap { $0 }.min()
-        object["createdAt"] = earliest.map(string)
-        object["observedAt"] = string(max(recordedAt ?? observation.observedAt, observation.observedAt))
-
-        if let launch = observation.launch {
-            var target = object["launch"] as? [String: Any] ?? [:]
-            apply("handle", launch.handle, into: &target)
-            apply("model", launch.model, into: &target)
-            apply("effort", launch.effort, into: &target)
-            object["launch"] = target
-        }
-
-        if let seen = observation.lastSeenIn {
-            object["lastSeenIn"] = mergeLastSeenIn(
-                seen, into: object["lastSeenIn"] as? [String: Any], isNewer: isNewer)
-        }
-        return object
-    }
-}
-
-extension ConversationRecordJSON {
-    fileprivate static func mergeLastSeenIn(
-        _ seen: ConversationRecord.LastSeenIn,
-        into current: [String: Any]?,
-        isNewer: Bool
-    ) -> [String: Any]? {
-        guard let current, current["hostSessionID"] as? String == seen.hostSessionID else {
-            return isNewer || current == nil ? fresh(seen) : current
-        }
-        var target = current
-        if let tmux = seen.tmux {
-            target["tmux"] = mergeTmux(tmux, into: current["tmux"] as? [String: Any], isNewer: isNewer)
-        }
-        return target
-    }
-
-    fileprivate static func mergeTmux(
-        _ tmux: ConversationRecord.TmuxSession,
-        into current: [String: Any]?,
-        isNewer: Bool
-    ) -> [String: Any] {
-        guard let current,
-            current["serverPID"] as? Int == tmux.serverPID,
-            current["sessionID"] as? String == tmux.sessionID
-        else { return isNewer || current == nil ? fresh(tmux) : current ?? [:] }
-        var target = current
-        if let createdAt = tmux.createdAt, isNewer || target["createdAt"] == nil {
-            target["createdAt"] = string(createdAt)
-        }
-        if let name = tmux.name, isNewer || target["name"] == nil { target["name"] = name }
-        return target
-    }
-
-    private static func fresh(_ seen: ConversationRecord.LastSeenIn) -> [String: Any] {
-        var object: [String: Any] = [:]
-        if let hostSessionID = seen.hostSessionID { object["hostSessionID"] = hostSessionID }
-        if let tmux = seen.tmux { object["tmux"] = fresh(tmux) }
-        return object
-    }
-
-    private static func fresh(_ tmux: ConversationRecord.TmuxSession) -> [String: Any] {
-        var object: [String: Any] = ["serverPID": tmux.serverPID, "sessionID": tmux.sessionID]
-        if let createdAt = tmux.createdAt { object["createdAt"] = string(createdAt) }
-        if let name = tmux.name { object["name"] = name }
-        return object
+        return .init(
+            hostSessionID: object["hostSessionID"] as? String,
+            tmux: tmux,
+            outsideTmux: object["outsideTmux"] as? Bool == true
+        )
     }
 }
 

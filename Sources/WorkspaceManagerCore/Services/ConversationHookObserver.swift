@@ -53,10 +53,11 @@ public enum ConversationHookObserver {
         else { return nil }
         let tmux = TmuxEnvironment(environment["TMUX"])
         let hostSessionID = (environment["WORKSPACES_HOST_SESSION_ID"]).flatMap { UUID(uuidString: $0)?.uuidString }
-        let place =
-            hostSessionID != nil || tmux != nil
-            ? ConversationRecord.LastSeenIn(hostSessionID: hostSessionID, tmux: tmux.flatMap(tmuxSession))
-            : nil
+        let place = ConversationRecord.LastSeenIn(
+            hostSessionID: hostSessionID,
+            tmux: tmux.flatMap(tmuxSession),
+            outsideTmux: tmux == nil
+        )
         return ConversationObservation(
             conversationID: conversationID,
             cwd: (object["cwd"] as? String) ?? FileManager.default.currentDirectoryPath,

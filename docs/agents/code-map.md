@@ -60,8 +60,9 @@ Pointers from a task or symbol to the file that answers it — moved out of `AGE
 | Launch command planning and resume command | Sources/WorkspaceManagerCore/Services/AgentLaunchCommand.swift |
 | App side of launch records (row adoption, tile rejoin) | Sources/WorkspaceManager/Services/AgentLaunchRecordWatcher.swift, ContentView.swift |
 | Conversation record model, store, per-record lock | Sources/WorkspaceManagerCore/Services/ConversationRecord.swift |
+| Conversation record merge (order-independent; per-fact times, location sightings) | Sources/WorkspaceManagerCore/Services/ConversationRecordMerge.swift |
 | `workspaces conversation observe` (SessionStart hook writer) | Sources/WorkspaceManagerCore/Services/ConversationHookObserver.swift, Resources/HookForwarders/conversation-observer.sh |
-| App writer of Conversation records (id change per tile) | Sources/WorkspaceManagerCore/Services/ConversationIdentityRecorder.swift |
+| App writer of Conversation records (every hook payload) | Sources/WorkspaceManagerCore/Services/ConversationIdentityRecorder.swift |
 | `conversation_index` rebuild/sync and one-time migration | Sources/WorkspaceManagerCore/Services/ConversationIndex.swift, Sources/WorkspaceManager/App/ConversationRecordsLifecycle.swift |
 | Main layout | Sources/WorkspaceManager/Views/MainWindow/ContentView.swift |
 | Terminal wrapper | Sources/WorkspaceManager/Views/Components/TerminalView.swift |

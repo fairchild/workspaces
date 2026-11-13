@@ -46,16 +46,16 @@ struct ConversationRecordStoreTests {
         try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
     }
 
-    @Test("A record with unknown fields keeps them through a rewrite")
+    @Test("A record with unknown fields keeps them through a rewrite, in kept sightings too")
     func unknownFieldsSurviveARewrite() throws {
         try withStore { store in
             try store.record(observation(at: 1_800_000_000, lastSeenIn: .init(hostSessionID: Self.tile.uuidString)))
             let url = try #require(store.fileURL(conversationID: Self.conversationID))
             var written = try object(at: url)
             written["fromANewerBuild"] = ["kept": true]
-            var place = try #require(written["lastSeenIn"] as? [String: Any])
-            place["paneIndex"] = 2
-            written["lastSeenIn"] = place
+            var sightings = try #require(written["sightings"] as? [[String: Any]])
+            sightings[0]["paneIndex"] = 2
+            written["sightings"] = sightings
             try JSONSerialization.data(withJSONObject: written).write(to: url)
 
             try store.record(
@@ -68,7 +68,7 @@ struct ConversationRecordStoreTests {
 
             let rewritten = try object(at: url)
             #expect((rewritten["fromANewerBuild"] as? [String: Any])?["kept"] as? Bool == true)
-            #expect((rewritten["lastSeenIn"] as? [String: Any])?["paneIndex"] as? Int == 2)
+            #expect((rewritten["sightings"] as? [[String: Any]])?.first?["paneIndex"] as? Int == 2)
             #expect(store.load(conversationID: Self.conversationID)?.transcriptPath == "/tmp/t.jsonl")
         }
     }
@@ -204,27 +204,19 @@ struct ConversationRecordStoreTests {
                 observation(at: 1_800_000_000, lastSeenIn: .init(hostSessionID: Self.tile.uuidString, tmux: tmux)))
             let url = try #require(store.fileURL(conversationID: Self.conversationID))
             var written = try object(at: url)
-            var place = try #require(written["lastSeenIn"] as? [String: Any])
-            var session = try #require(place["tmux"] as? [String: Any])
-            session["windowIndex"] = 1
-            place["tmux"] = session
-            place["paneIndex"] = 2
-            written["lastSeenIn"] = place
+            var sightings = try #require(written["sightings"] as? [[String: Any]])
+            sightings[0]["paneIndex"] = 2
+            written["sightings"] = sightings
             try JSONSerialization.data(withJSONObject: written).write(to: url)
-
-            let moved = ConversationRecord.TmuxSession(serverPID: 4242, sessionID: "$9")
-            try store.record(
-                observation(at: 1_800_000_010, lastSeenIn: .init(hostSessionID: Self.tile.uuidString, tmux: moved)))
-            let sameTile = try #require(try object(at: url)["lastSeenIn"] as? [String: Any])
-            #expect(sameTile["paneIndex"] as? Int == 2)
-            #expect((sameTile["tmux"] as? [String: Any])?["windowIndex"] == nil)
-            #expect((sameTile["tmux"] as? [String: Any])?["name"] == nil)
 
             let elsewhere = UUID().uuidString
             try store.record(observation(at: 1_800_000_020, by: .app, lastSeenIn: .init(hostSessionID: elsewhere)))
-            let otherTile = try #require(try object(at: url)["lastSeenIn"] as? [String: Any])
-            #expect(otherTile.keys.sorted() == ["hostSessionID"])
-            #expect(otherTile["hostSessionID"] as? String == elsewhere)
+            let rewritten = try object(at: url)
+            let place = try #require(rewritten["lastSeenIn"] as? [String: Any])
+            #expect(place.keys.sorted() == ["hostSessionID"])
+            #expect(place["hostSessionID"] as? String == elsewhere)
+            #expect((rewritten["sightings"] as? [[String: Any]])?.count == 1)
+            #expect((rewritten["sightings"] as? [[String: Any]])?.first?["paneIndex"] == nil)
         }
     }
 
