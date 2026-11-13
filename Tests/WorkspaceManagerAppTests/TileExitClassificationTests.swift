@@ -1436,21 +1436,26 @@ extension TileExitClassificationTests {
     }
 
     /// A tab whose tile exits while teardown is busy with the scope's first tile, and that a
-    /// restore brings back under its id on tmux session `$90`, recorded in the ledger.
+    /// restore brings back under its id on tmux session `$90`, recorded in the ledger. The
+    /// tab's own launch landed on `$2`, which the socket lists only when `originalLive`.
     private struct TeardownRace {
         let first: HostTerminalSession
         let raced: HostTerminalSession
         let kills: IssuedKills
+        let original: TmuxLiveSession
         let replacement: TmuxLiveSession
     }
 
-    private func teardownRace(_ store: TileTreeStore) throws -> TeardownRace {
+    private func teardownRace(_ store: TileTreeStore, originalLive: Bool = false) throws -> TeardownRace {
         let (first, raced) = try openTwoTmuxTiles(store)
+        let original = try #require(store.tmuxOwnershipLedger.ownership(forHostSessionID: raced.id)).identity
         let replacement = TmuxLiveSession(
             sessionID: "$90", name: raced.effectiveTmuxSessionName,
             createdAt: Date(timeIntervalSince1970: 900), serverPID: 4242)
         let kills = IssuedKills()
-        let listing = "$90\t\(replacement.name)\t900\t4242\n"
+        let listing = [originalLive ? original : nil, replacement].compactMap { $0 }
+            .map { "\($0.sessionID)\t\($0.name)\t\(Int($0.createdAt.timeIntervalSince1970))\t4242\n" }
+            .joined()
         store.terminateOwnedTmuxSession = nil
         store.tmuxSessionProbe = TmuxSessionProbe(
             run: { _, arguments, _ in
@@ -1458,7 +1463,7 @@ extension TileExitClassificationTests {
                 return 0
             },
             runForOutput: { _, _, _ in listing }, environment: [:])
-        return TeardownRace(first: first, raced: raced, kills: kills, replacement: replacement)
+        return TeardownRace(first: first, raced: raced, kills: kills, original: original, replacement: replacement)
     }
 
     /// Brings `raced` back under its id, as a restore does, on the replacement tmux session.
@@ -1552,5 +1557,53 @@ extension TileExitClassificationTests {
         #expect(closed == [race.first.id])
         #expect(retired == [race.first.id])
         #expect(store.allLiveSessions.contains { $0.id == race.raced.id })
+    }
+
+    @Test("A teardown ends the tmux session a tile it found recorded only after it began")
+    func teardownEndsALateRecordedSession() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let store = harness.store
+        let race = try teardownRace(store, originalLive: true)
+        store.tmuxOwnershipLedger.forget(hostSessionID: race.raced.id)
+        store.closeSurfaceForRetirement = { _ in }
+        var controller = WorkspaceTerminalTeardownController(tileTreeStore: store)
+        let kill = controller.killTmuxSession
+        controller.killTmuxSession = { target in
+            if target.session.id == race.first.id {
+                store.tmuxOwnershipLedger.record(
+                    hostSessionID: race.raced.id, identity: race.original, launchedAt: race.original.createdAt)
+                #expect(store.handleProcessExit(for: race.raced.id))
+            }
+            return await kill(target)
+        }
+
+        let outcome = await controller.teardown(scopeKey: race.first.key)
+
+        guard case .completed = outcome else {
+            Issue.record("expected completion, got \(outcome)")
+            return
+        }
+        #expect(await race.kills.arguments.map { Array($0.suffix(3)) } == [["kill-session", "-t", "$2"]])
+        #expect(!store.allLiveSessions.contains { $0.id == race.raced.id })
+        #expect(await harness.rowWrites(for: race.raced.id) == [.ended(race.raced.id)])
+    }
+
+    @Test("A teardown that found a tile with no tmux record leaves the one a restore brought back")
+    func teardownLeavesARestoredTilesFirstRecord() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let store = harness.store
+        let race = try teardownRace(store)
+        store.tmuxOwnershipLedger.forget(hostSessionID: race.raced.id)
+        store.closeSurfaceForRetirement = { _ in }
+
+        let outcome = await racedTeardown(race, in: store).teardown(scopeKey: race.first.key)
+
+        guard case .completed = outcome else {
+            Issue.record("expected completion, got \(outcome)")
+            return
+        }
+        #expect(await race.kills.arguments.isEmpty)
+        #expect(store.allLiveSessions.contains { $0.id == race.raced.id })
+        #expect(store.tmuxOwnershipLedger.ownership(forHostSessionID: race.raced.id)?.identity == race.replacement)
     }
 }

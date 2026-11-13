@@ -32,9 +32,10 @@ struct WorkspaceTerminalTeardownController {
     /// back under the same id while teardown awaits, and that tile and its tmux session are
     /// not teardown's.
     var captureTarget: @MainActor (HostTerminalSession) -> Target = {
-        Target(session: $0, tileID: nil, ownership: nil)
+        Target(session: $0, tileID: nil, ownership: nil, returnCount: 0)
     }
-    /// End the tmux session the target captured, when the app's ownership ledger authorized
+    /// End the tmux session the target captured, or the one its captured tile has recorded
+    /// since when the ledger held none at capture, when the app's ownership ledger authorized
     /// it. `false` when nothing died: the kill failed, the session was already gone, or the
     /// app could not attribute the session to a surface it launched and left it running
     /// (#1267). Taking the captured ownership rather than a name is what makes that question
@@ -144,7 +145,9 @@ extension WorkspaceTerminalTeardownController {
             },
             captureTarget: { tileTreeStore.retirementTarget(for: $0) },
             killTmuxSession: { target in
-                await tileTreeStore.terminateTmuxSession(of: target.session.id, ownership: target.ownership).didKill
+                await tileTreeStore.terminateTmuxSession(
+                    of: target.session.id, ownership: tileTreeStore.ownershipToEnd(target)
+                ).didKill
             },
             closeForRetirement: { try await tileTreeStore.closeForRetirement($0) },
             beginRetirement: { tileTreeStore.beginRetirement(of: $0) },
