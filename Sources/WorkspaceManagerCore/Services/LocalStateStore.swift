@@ -1273,11 +1273,27 @@ public actor LocalStateStore {
         }
     }
 
-    /// Sets `key` and removes `removing` in one transaction.
-    public func setMetadataValue(_ value: String, forKey key: String, removing: String) async throws {
-        try await dbPool.write { db in
-            try Self.writeMetadataValue(db, key: key, value: value)
-            try db.execute(sql: "DELETE FROM local_state_metadata WHERE key = ?", arguments: [removing])
+    /// Replaces `key`'s value with `transform(current)` inside one `BEGIN IMMEDIATE`
+    /// transaction, which takes the database's write lock before the read, so no other
+    /// connection, from this store or another on the same file, writes between them. A nil
+    /// result leaves the value as it is. Returns the value the transaction leaves.
+    public func updateMetadataValue(
+        forKey key: String,
+        _ transform: @escaping @Sendable (String?) throws -> String?
+    ) async throws -> String? {
+        try await dbPool.writeWithoutTransaction { db in
+            var result: String?
+            try db.inTransaction(.immediate) {
+                let current = try String.fetchOne(
+                    db, sql: "SELECT value FROM local_state_metadata WHERE key = ?", arguments: [key])
+                result = current
+                if let next = try transform(current) {
+                    try Self.writeMetadataValue(db, key: key, value: next)
+                    result = next
+                }
+                return .commit
+            }
+            return result
         }
     }
 

@@ -60,11 +60,13 @@ public struct ConversationSighting: Equatable, Sendable {
 }
 
 public struct ConversationIndexer: Sendable {
-    public static let migrationMetadataKeyPrefix = "conversation_records_migrated_at"
+    public static let migrationMetadataKeyPrefix = "conversation_records_migration"
 
     public let records: ConversationRecordStore
     public let localState: LocalStateStore
     public let launchRecords: AgentLaunchRecordStore
+    /// Runs between staging and writing. Tests use it to put another attempt there.
+    var afterStaging: (@Sendable () async throws -> Void)?
 
     public init(
         records: ConversationRecordStore,
@@ -114,75 +116,95 @@ public struct ConversationIndexer: Sendable {
         }
     }
 
-    /// The marker is per destination: the same database pointed at a new records directory
-    /// has carried nothing there yet.
+    /// What the migration still owes this destination, keyed by conversation id: absent
+    /// before any attempt, and empty once every observation has been written or rejected.
+    /// Empty is the only completed state. The same database pointed at a new records
+    /// directory has carried nothing there yet, so the key is per destination.
     public var migrationMetadataKey: String {
         "\(Self.migrationMetadataKeyPrefix):\(destination)"
     }
 
-    /// The observations the migration still owes this destination, as its first attempt
-    /// gathered them. Present from the first attempt until the marker is set.
-    public var migrationPendingMetadataKey: String {
-        "conversation_records_migration_pending:\(destination)"
-    }
-
+    /// The directory as configured, with `.` and `..` folded by text alone. Anything that
+    /// consults the file system (resolving links, Foundation's standardizing, which drops a
+    /// leading `/private` only when the result exists) answers differently once the first
+    /// writer creates the directory, and would move the key away from what earlier attempts
+    /// staged. Two spellings of one directory (a link and its target, `/tmp` and
+    /// `/private/tmp`) are two destinations; carrying the same observations into one
+    /// directory twice is safe, because the merge is idempotent.
     private var destination: String {
-        records.directory.resolvingSymlinksInPath().path
+        var components: [String] = []
+        for component in records.directory.pathComponents.dropFirst() {
+            switch component {
+            case ".", "": continue
+            case "..": _ = components.popLast()
+            default: components.append(component)
+            }
+        }
+        return "/" + components.joined(separator: "/")
     }
 
     /// Writes a record for every conversation the app already knew before records existed:
     /// each Launch Record that names one, and each id reported by the tiles of the current
-    /// and previous runs. The first attempt for a destination gathers those observations and
-    /// stores them before writing any; every attempt writes what is stored and keeps only
-    /// what failed. The rows they came from can change between launches (a tile recorded
-    /// again moves to the new run), and the stored observations do not. The migration is
-    /// marked done for this database and destination once nothing is left, and never runs
-    /// again: a rerun would bring back a record a later cleanup removed on purpose.
+    /// and previous runs. Every attempt adds what it gathers to the pending set, unless the
+    /// set is already empty, and writes the whole set; then it removes what it wrote or had
+    /// rejected, and nothing else. Both steps are single transactions, so attempts from any
+    /// number of stores on one database interleave safely: an observation leaves the set only
+    /// once some attempt has written it, and the set empties only when all have been. An
+    /// empty set is never refilled: a rerun would bring back a record a later cleanup removed
+    /// on purpose.
     ///
     /// Each sighting carries the time it was made, so against a record a hook has written
     /// since, it only fills what that record lacks.
     @discardableResult
-    public func migrateOnce(now: Date = Date()) async throws -> MigrationOutcome {
+    public func migrateOnce() async throws -> MigrationOutcome {
         let key = migrationMetadataKey
-        guard try await localState.metadataValue(forKey: key) == nil else { return .init(alreadyDone: true) }
-        let pendingKey = migrationPendingMetadataKey
-        let pending = try await pendingObservations()
+        if let stored = try await localState.metadataValue(forKey: key), try Self.decode(stored).isEmpty {
+            return .init(alreadyDone: true)
+        }
+        let gathered = try await gatheredObservations()
+        let staged = try await localState.updateMetadataValue(forKey: key) { current in
+            var pending = try current.map(Self.decode) ?? [:]
+            if current != nil, pending.isEmpty { return nil }
+            for observation in gathered where !(pending[observation.conversationID] ?? []).contains(observation) {
+                pending[observation.conversationID, default: []].append(observation)
+            }
+            return try Self.encode(pending)
+        }
+        let pending = try staged.map(Self.decode) ?? [:]
+        guard !pending.isEmpty else { return .init() }
+        try await afterStaging?()
+
         var outcome = MigrationOutcome()
-        var remaining: [String: [PendingMigrationObservation]] = [:]
-        for conversationID in pending.keys.sorted() {
-            for item in pending[conversationID] ?? [] {
-                do {
-                    switch try records.record(item.observation, lockBudget: .seconds(1)) {
-                    case .written:
-                        outcome.written += 1
-                        continue
-                    case .lockBusy:
-                        outcome.failed += 1
-                    }
-                } catch ConversationRecordStore.WriteError.invalidConversationID {
-                    outcome.rejected += 1
-                    continue
-                } catch {
+        var settled: [PendingMigrationObservation] = []
+        for item in pending.keys.sorted().flatMap({ pending[$0] ?? [] }) {
+            do {
+                switch try records.record(item.observation, lockBudget: .seconds(1)) {
+                case .written:
+                    outcome.written += 1
+                    settled.append(item)
+                case .lockBusy:
                     outcome.failed += 1
                 }
-                remaining[conversationID, default: []].append(item)
+            } catch ConversationRecordStore.WriteError.invalidConversationID {
+                outcome.rejected += 1
+                settled.append(item)
+            } catch {
+                outcome.failed += 1
             }
         }
-        if remaining.isEmpty {
-            try await localState.setMetadataValue(ConversationRecordJSON.string(now), forKey: key, removing: pendingKey)
-        } else {
-            try await localState.setMetadataValue(try Self.encode(remaining), forKey: pendingKey)
+        _ = try await localState.updateMetadataValue(forKey: key) { [settled] current in
+            var remaining = try current.map(Self.decode) ?? [:]
+            for item in settled {
+                remaining[item.conversationID]?.removeAll { $0 == item }
+                if remaining[item.conversationID]?.isEmpty == true { remaining[item.conversationID] = nil }
+            }
+            return try Self.encode(remaining)
         }
         return outcome
     }
 
-    /// What is stored for this destination, or, on the first attempt, what the launch records
-    /// and recent runs say now, stored before anything is written.
-    private func pendingObservations() async throws -> [String: [PendingMigrationObservation]] {
-        let pendingKey = migrationPendingMetadataKey
-        if let stored = try await localState.metadataValue(forKey: pendingKey) {
-            return try JSONDecoder().decode([String: [PendingMigrationObservation]].self, from: Data(stored.utf8))
-        }
+    /// The launch records' and recent runs' observations as they are now.
+    private func gatheredObservations() async throws -> [PendingMigrationObservation] {
         var gathered = launchRecordObservations()
         gathered += try await localState.fetchConversationSightings(runIDs: localState.recentRunIDs()).map {
             sighting in
@@ -194,9 +216,11 @@ public struct ConversationIndexer: Sendable {
                 lastSeenIn: .init(hostSessionID: sighting.hostSessionID.uuidString)
             )
         }
-        let pending = Dictionary(grouping: gathered.map(PendingMigrationObservation.init), by: \.conversationID)
-        try await localState.setMetadataValue(try Self.encode(pending), forKey: pendingKey)
-        return pending
+        return gathered.map(PendingMigrationObservation.init)
+    }
+
+    private static func decode(_ stored: String) throws -> [String: [PendingMigrationObservation]] {
+        try JSONDecoder().decode([String: [PendingMigrationObservation]].self, from: Data(stored.utf8))
     }
 
     private static func encode(_ pending: [String: [PendingMigrationObservation]]) throws -> String {
@@ -228,7 +252,7 @@ public struct ConversationIndexer: Sendable {
 }
 
 /// One observation the migration owes a destination, in the fields migration observations
-/// carry, so it can be stored between launches and written as it was first gathered.
+/// carry, so it can be stored between launches and written as it was gathered.
 struct PendingMigrationObservation: Codable, Equatable, Sendable {
     var conversationID: String
     var host: String
