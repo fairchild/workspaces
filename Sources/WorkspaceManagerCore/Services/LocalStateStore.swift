@@ -1264,7 +1264,7 @@ public actor LocalStateStore {
     }
 
     private static func upsertConversationIndexEntry(_ entry: ConversationIndexEntry, in db: Database) throws {
-        try db.execute(
+        try db.cachedStatement(
             sql: """
                 INSERT INTO conversation_index (
                     conversation_id, harness, host_session_id, tmux_server_pid, tmux_session_id,
@@ -1278,12 +1278,12 @@ public actor LocalStateStore {
                     cwd = excluded.cwd,
                     observed_at = excluded.observed_at,
                     file_mtime = excluded.file_mtime
-                """,
-            arguments: [
-                entry.conversationID, entry.harness, entry.hostSessionID?.uuidString, entry.tmuxServerPID,
-                entry.tmuxSessionID, entry.cwd, isoString(entry.observedAt), isoString(entry.fileModifiedAt),
-            ]
-        )
+                """
+        ).execute(arguments: [
+            entry.conversationID, entry.harness, entry.hostSessionID?.uuidString, entry.tmuxServerPID,
+            entry.tmuxSessionID, entry.cwd, ConversationRecordJSON.string(entry.observedAt),
+            ConversationRecordJSON.string(entry.fileModifiedAt),
+        ])
     }
 
     /// Standalone `PRAGMA quick_check` probe. Returns `true` when SQLite reports a
