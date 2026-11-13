@@ -21,15 +21,27 @@ public enum HarnessIdentitySource: String, Codable, Sendable {
 
 /// A process holding a conversation, and where it sits when that is known: the tmux session
 /// and the tile the conversation was last seen in, when the process runs inside it.
+///
+/// `namesConversation` is false for a harness found only because it runs in the session the
+/// conversation was last seen in. It may have switched to another conversation since, and is
+/// counted as holding this one anyway: a refusal that turns out wrong costs a wait, and a
+/// second writer costs the transcript.
 public struct ConversationHolder: Codable, Equatable, Sendable {
     public let pid: Int32
+    public let namesConversation: Bool
     public let tmuxSessionID: String?
     public let tmuxSessionName: String?
     public let hostSessionID: String?
 
-    public init(pid: Int32, tmuxSessionID: String? = nil, tmuxSessionName: String? = nil, hostSessionID: String? = nil)
-    {
+    public init(
+        pid: Int32,
+        namesConversation: Bool = true,
+        tmuxSessionID: String? = nil,
+        tmuxSessionName: String? = nil,
+        hostSessionID: String? = nil
+    ) {
         self.pid = pid
+        self.namesConversation = namesConversation
         self.tmuxSessionID = tmuxSessionID
         self.tmuxSessionName = tmuxSessionName
         self.hostSessionID = hostSessionID
@@ -45,7 +57,10 @@ public struct ConversationHolder: Codable, Equatable, Sendable {
         if let hostSessionID {
             parts.append("in tile \(hostSessionID)")
         }
-        return parts.joined(separator: " ")
+        let place = parts.joined(separator: " ")
+        guard !namesConversation else { return place }
+        return "\(place) runs claude without naming this conversation. It may have switched to "
+            + "another one; this one resumes once that process exits."
     }
 }
 
@@ -219,12 +234,12 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
         return processTable.rows.compactMap { row in
             guard AgentSessionInspection.isClaude(row.arguments) else { return nil }
             let sitsInSession = inSession.contains(row.pid)
-            guard sitsInSession || AgentSessionInspection.names(record.conversationID, row.arguments) else {
-                return nil
-            }
+            let names = AgentSessionInspection.names(record.conversationID, row.arguments)
+            guard sitsInSession || names else { return nil }
             guard sitsInSession else { return ConversationHolder(pid: row.pid) }
             return ConversationHolder(
                 pid: row.pid,
+                namesConversation: names,
                 tmuxSessionID: sessionID,
                 tmuxSessionName: sessionName,
                 hostSessionID: record.lastSeenIn?.hostSessionID

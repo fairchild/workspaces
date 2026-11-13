@@ -202,6 +202,7 @@ struct CLIConversationResumeTests {
         let refusal = try String(contentsOf: outputs[refused], encoding: .utf8)
         #expect(refusal.contains("already held"))
         #expect(refusal.contains("pid \(agent.processIdentifier)"))
+        #expect(!refusal.contains("may have switched"))
         let started = try String(contentsOf: outputs[1 - refused], encoding: .utf8)
         #expect(started.contains("stub argv=--resume \(conversationID)"))
         #expect(started.contains("stub config=unset"))
@@ -247,6 +248,8 @@ struct CLIConversationResumeTests {
         #expect(resume.status == 3)
         #expect(resume.stdout.contains("tmux session 'held-tile' (\(identity[1]))"))
         #expect(resume.stdout.contains("tile \(tile)"))
+        #expect(resume.stdout.contains("runs claude without naming this conversation"))
+        #expect(resume.stdout.contains("resumes once that process exits"))
         #expect(!resume.stdout.contains("stub argv"))
 
         let json = try fixture.run(["conversation", "resume", conversationID, "--here", "--json"])
@@ -254,6 +257,7 @@ struct CLIConversationResumeTests {
         let result = try JSONDecoder().decode(ConversationResumeResult.self, from: Data(json.stdout.utf8))
         #expect(!result.resumed)
         #expect(result.holders.first?.hostSessionID == tile)
+        #expect(result.holders.first?.namesConversation == false)
     }
 
     @Test("A record from another host refuses with fork advice, and nothing starts")
@@ -310,6 +314,59 @@ struct CLIConversationResumeTests {
         let record = try #require(fixture.records.load(conversationID: conversationID))
         #expect(record.observedBy == .resume)
         #expect(record.lastSeenIn?.outsideTmux == true)
+    }
+
+    @Test("A config home recorded as the default is not exported, so claude finds its own settings")
+    func explicitDefaultConfigHomeIsNotExported() throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = UUID().uuidString.lowercased()
+        let defaultHome = fixture.home.appendingPathComponent(".claude")
+        let transcript = defaultHome.appendingPathComponent("projects/p/\(conversationID).jsonl")
+        try FileManager.default.createDirectory(
+            at: transcript.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: transcript.path, contents: Data())
+        try fixture.records.record(
+            ConversationObservation(
+                conversationID: conversationID,
+                cwd: fixture.work.path,
+                configHome: defaultHome.path,
+                transcriptPath: transcript.path,
+                observedBy: .hook
+            )
+        )
+
+        let resume = try fixture.run(
+            ["conversation", "resume", conversationID, "--here"],
+            extraEnvironment: ["CLAUDE_CONFIG_DIR": "/nonexistent-caller-profile"]
+        )
+        #expect(resume.status == 0)
+        #expect(resume.stdout.contains("stub config=unset"))
+    }
+
+    /// `ws launch` records the workspace directory's creation time. A directory at that path
+    /// made later is a workspace archived and recreated under the same name, and the
+    /// conversation is no part of the new one: resuming would run it against other files.
+    @Test("A workspace directory made after the conversation was recorded refuses, and nothing starts")
+    func recreatedWorkspaceRefuses() throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = try recordConversation(in: fixture)
+        let created = try #require(
+            try FileManager.default.attributesOfItem(atPath: fixture.work.path)[.creationDate] as? Date)
+        try fixture.records.record(
+            ConversationObservation(
+                conversationID: conversationID,
+                workspacePath: fixture.work.path,
+                workspaceCreatedAt: created.addingTimeInterval(-60),
+                observedBy: .wsLaunch
+            )
+        )
+
+        let resume = try fixture.run(["conversation", "resume", conversationID, "--here"])
+        #expect(resume.status == 1)
+        #expect(resume.stderr.contains("may belong to an earlier workspace at that path"))
+        #expect(!resume.stdout.contains("stub argv"))
     }
 
     @Test("A conversation nothing recorded refuses")

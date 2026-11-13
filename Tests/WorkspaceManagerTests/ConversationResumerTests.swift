@@ -182,7 +182,8 @@ struct ConversationResumerTests {
             status
                 == .open(holders: [
                     ConversationHolder(
-                        pid: 101, tmuxSessionID: "$7", tmuxSessionName: "tile-session", hostSessionID: tile)
+                        pid: 101, namesConversation: false, tmuxSessionID: "$7", tmuxSessionName: "tile-session",
+                        hostSessionID: tile)
                 ])
         )
     }
