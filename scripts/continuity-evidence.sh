@@ -520,6 +520,7 @@ build_isolation_env() {
         "SHELL=/bin/zsh"
         "PATH=$ISOLATED_HOME/.drill/bin:$PATH"
         "XDG_CONFIG_HOME=$PASS_DIR/xdg"
+        "WORKSPACES_CONVERSATIONS_DIR=$PASS_DIR/conversations"
         "CLAUDE_CONFIG_DIR=$ISOLATED_HOME/.claude"
         "WORKSPACES_TMUX_SOCKET_LABEL=$label"
         "WORKSPACES_SYNTHETIC_ROOT=$PASS_DIR/synthetic"

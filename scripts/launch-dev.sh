@@ -397,6 +397,19 @@ expand_home_prefix() {
     printf "%s\n" "$path"
 }
 
+# Whether a --env entry already sets KEY, so a default never overrides the caller's.
+env_var_requested() {
+    local entry
+    [[ ${#ENV_VARS[@]} -gt 0 ]] || return 1
+    for entry in "${ENV_VARS[@]}"; do
+        [[ "$entry" == "$1="* ]] && return 0
+    done
+    return 1
+}
+
+# An isolated data root also gets its own Conversation records directory. A WorkSpaces
+# terminal exports the installed app's, and the app reads an inherited value as explicit,
+# so without this a dev run would migrate and record into the installed app's records.
 configure_data_root() {
     if [[ "$USE_APP_SUPPORT" == true ]]; then
         return
@@ -422,6 +435,8 @@ configure_data_root() {
     fi
     ENV_VARS+=("WORKSPACES_DATA_DIR=$DATA_DIR")
     ENV_VARS+=("WORKSPACES_APP_VARIANT=dev")
+    env_var_requested WORKSPACES_CONVERSATIONS_DIR \
+        || ENV_VARS+=("WORKSPACES_CONVERSATIONS_DIR=$DATA_DIR/conversations")
 
     if [[ "$CLEAN_DATA" == true ]]; then
         log "Cleaning isolated data dir: $DATA_DIR"

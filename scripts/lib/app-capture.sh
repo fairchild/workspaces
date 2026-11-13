@@ -156,8 +156,10 @@ app_capture_window() {
 
     # A WorkSpaces terminal exports these for the installed app that owns it, and the
     # CLI's socket verbs prefer them over the root, so a capture driven from a tile
-    # would otherwise ask that app whether it is ready.
+    # would otherwise ask that app whether it is ready. The conversations directory is
+    # the installed app's too, so the lane names one inside its own data dir.
     unset WORKSPACES_AUTOMATION_SOCKET WORKSPACES_AUTOMATION_HANDLE
+    export WORKSPACES_CONVERSATIONS_DIR="$data_dir/conversations"
 
     # --coexist: an evidence capture must never kill the operator's installed
     # WorkSpaces.app (or the terminal session driving the capture); only a stale
