@@ -433,6 +433,139 @@ struct ConversationIndexTests {
         #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("records").path))
     }
 
+    /// The gather takes each tile's newest sighting of a conversation, its time and its
+    /// directory both, whatever order the events were recorded in.
+    @Test("A tile's newest sighting of a conversation is the one migrated")
+    func newestSightingIsMigrated() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let typed = UUID().uuidString.lowercased()
+        let tile = UUID()
+        let state = try fixture.localState()
+        try await recordTile(tile, in: state)
+        let events = [(1_800_000_090.0, "/newest"), (1_800_000_010.0, "/oldest"), (1_800_000_050.0, "/middle")]
+        for (seconds, cwd) in events {
+            let at = Date(timeIntervalSince1970: seconds)
+            try await state.recordAgentEvents(
+                [.sessionStart(agentSessionID: typed, cwd: cwd, kind: .claudeCode)],
+                hostSessionID: tile,
+                origin: .hook,
+                status: AgentSessionStatus(
+                    hostSessionID: tile, agentSessionID: typed, kind: .claudeCode, cwd: cwd, run: .idle,
+                    lastEventAt: at, hookActive: true, createdAt: at),
+                occurredAt: at
+            )
+        }
+
+        #expect(try await fixture.indexer(state).migrateOnce() == .init(written: 1))
+        let record = try #require(fixture.records.load(conversationID: typed))
+        #expect(record.cwd == "/newest")
+        #expect(record.observedAt == Date(timeIntervalSince1970: 1_800_000_090))
+    }
+
+    private func saveLaunch(_ conversationID: String, in launchRecords: AgentLaunchRecordStore) throws -> URL {
+        try launchRecords.save(
+            AgentLaunchRecord(
+                handle: "wm-repo-1",
+                workspacePath: "/tmp/repo",
+                socketLabel: "workspaces",
+                launchedAt: Date(timeIntervalSince1970: 1_800_000_000),
+                identity: AgentLaunchIdentity(conversationID: conversationID, requestedModel: nil, requestedEffort: nil)
+            )
+        )
+        return launchRecords.directory(socketLabel: "workspaces").appendingPathComponent("wm-repo-1.json")
+    }
+
+    /// Codex's READ cases: a launch record the gather cannot list, open or decode is not an
+    /// absent one. The attempt fails, stores nothing, and a later one carries the record.
+    @Test(
+        "A launch record that cannot be read stops the migration without completing it",
+        arguments: ["file", "socket", "root", "truncated"])
+    func unreadableLaunchRecordStoresNothing(_ failure: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let launched = UUID().uuidString.lowercased()
+        let file = try saveLaunch(launched, in: fixture.launchRecords)
+        let blocked: URL? =
+            switch failure {
+            case "file": file
+            case "socket": file.deletingLastPathComponent()
+            case "root": fixture.launchRecords.directory
+            default: nil
+            }
+        let whole = try Data(contentsOf: file)
+        if let blocked {
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: blocked.path)
+        } else {
+            try whole.prefix(whole.count / 2).write(to: file)
+        }
+        defer {
+            if let blocked {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: blocked.path)
+            }
+        }
+        let state = try fixture.localState()
+        let indexer = fixture.indexer(state)
+
+        await #expect(throws: (any Error).self) { try await indexer.migrateOnce() }
+        #expect(try await state.metadataValue(forKey: indexer.migrationMetadataKey) == nil)
+
+        if let blocked {
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: blocked.path)
+        } else {
+            try whole.write(to: file)
+        }
+        #expect(try await indexer.migrateOnce() == .init(written: 1))
+        #expect(fixture.records.load(conversationID: launched) != nil)
+    }
+
+    /// Codex's CONFIG case: two runs share the database and the records directory but read
+    /// launch records from different roots. The one whose root is empty finishes first, and
+    /// the other's root is still carried.
+    @Test("Each launch-record root is migrated, whichever finishes first")
+    func eachLaunchRootIsMigrated() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let launched = UUID().uuidString.lowercased()
+        let other = AgentLaunchRecordStore(directory: fixture.root.appendingPathComponent("other-launches"))
+        _ = try saveLaunch(launched, in: other)
+        let state = try fixture.localState()
+        let empty = fixture.indexer(state)
+        let holding = ConversationIndexer(records: fixture.records, localState: state, launchRecords: other)
+
+        #expect(try await empty.migrateOnce() == .init())
+        #expect(try await holding.migrateOnce() == .init(written: 1))
+        #expect(fixture.records.load(conversationID: launched) != nil)
+    }
+
+    /// Codex's cost finding: a gather can take seconds on a large database, so it reads
+    /// through a snapshot. Another connection holds the write lock for the whole gather and
+    /// releases it only once the gather is done.
+    @Test("Gathering holds no write lock")
+    func gatherHoldsNoWriteLock() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let typed = UUID().uuidString.lowercased()
+        try await recordPreviousRunSighting(
+            typed, tile: UUID(),
+            in: try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_000_000)))
+        var indexer = fixture.indexer(
+            try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_001_000)))
+
+        var configuration = Configuration()
+        configuration.allowsUnsafeTransactions = true
+        let gate = try DatabaseQueue(
+            path: fixture.root.appendingPathComponent("state.sqlite").path, configuration: configuration)
+        try await gate.writeWithoutTransaction { try $0.execute(sql: "BEGIN IMMEDIATE") }
+        indexer.afterGathering = { try await gate.writeWithoutTransaction { try $0.execute(sql: "COMMIT") } }
+        let started = Date()
+        let outcome = try await indexer.migrateOnce()
+        try gate.close()
+
+        #expect(outcome == .init(written: 1))
+        #expect(Date().timeIntervalSince(started) < 4, "the gather waited on the write lock")
+    }
+
     private func recordTile(_ tile: UUID, in localState: LocalStateStore) async throws {
         try await localState.recordTerminalSession(
             HostTerminalSession(

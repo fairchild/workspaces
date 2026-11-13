@@ -197,8 +197,42 @@ public struct AgentLaunchRecordStore: Sendable {
 
     private static func decode(contentsOf url: URL) -> AgentLaunchRecord? {
         guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? decode(data)
+    }
+
+    private static func decode(_ data: Data) throws -> AgentLaunchRecord {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(AgentLaunchRecord.self, from: data)
+        return try decoder.decode(AgentLaunchRecord.self, from: data)
+    }
+
+    /// Every record on every socket, for a reader that must not take a failed read for a
+    /// missing record. A root, socket directory or file that is not there is absent; any
+    /// other failure to list, read or decode one throws.
+    public func everyRecordOrThrow() throws -> [AgentLaunchRecord] {
+        let sockets = try Self.ifPresent { try Self.listing(directory) } ?? []
+        return try sockets.filter(Self.isDirectory).flatMap { socket in
+            try (Self.ifPresent { try Self.listing(socket) } ?? [])
+                .filter { $0.pathExtension == "json" }
+                .compactMap { file in try Self.ifPresent { try Data(contentsOf: file) }.map(Self.decode) }
+        }
+    }
+
+    private static func listing(_ directory: URL) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+    }
+
+    private static func isDirectory(_ url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+
+    private static func ifPresent<T>(_ read: () throws -> T) throws -> T? {
+        do {
+            return try read()
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            return nil
+        }
     }
 }

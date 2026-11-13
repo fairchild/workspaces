@@ -55,7 +55,7 @@ final class ConversationRecordsLifecycle {
                 do {
                     try await indexer.launch()
                 } catch {
-                    log.error("conversation index rebuild failed: \(String(describing: error), privacy: .public)")
+                    log.error("conversation launch pass failed: \(String(describing: error), privacy: .public)")
                 }
             },
             then: {

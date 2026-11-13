@@ -1204,38 +1204,45 @@ public actor LocalStateStore {
     }
 
     /// Each Claude conversation a recorded tile reported, newest sighting per tile, from every
-    /// run the database holds. It reads nothing but `db`, so any store on the database gathers
-    /// the same set from the same state.
-    static func conversationSightings(in db: Database) throws -> [ConversationSighting] {
-        try Row.fetchAll(
-            db,
-            sql: """
-                SELECT ae.host_session_id, ae.agent_session_id, ae.cwd, ae.event_at
-                FROM (
-                    SELECT
-                        host_session_id, agent_session_id, cwd, event_at,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY host_session_id, agent_session_id
-                            ORDER BY event_at DESC, id DESC
-                        ) AS sighting_rank
-                    FROM agent_status_events
-                    WHERE agent_session_id IS NOT NULL AND agent_kind = ?
-                ) ae
-                JOIN terminal_sessions ts ON ts.host_session_id = ae.host_session_id
-                WHERE ae.sighting_rank = 1
-                ORDER BY ae.event_at, ae.host_session_id, ae.agent_session_id
-                """,
-            arguments: [AgentKind.claudeCode.rawValue]
-        ).compactMap { row in
-            guard let hostSessionID = UUID(uuidString: row["host_session_id"]),
-                let observedAt = Self.date(fromISOString: row["event_at"])
-            else { return nil }
-            return ConversationSighting(
-                hostSessionID: hostSessionID,
-                conversationID: row["agent_session_id"],
-                cwd: row["cwd"],
-                observedAt: observedAt
-            )
+    /// run the database holds, read through one snapshot that holds no write lock. It reads
+    /// nothing but the database, so any store on it gathers the same set from the same state.
+    /// The newest time per pair comes from one grouped pass; only then is each pair's newest
+    /// row looked up for its directory.
+    public func conversationSightings() async throws -> [ConversationSighting] {
+        try await dbPool.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT pair.host_session_id, pair.agent_session_id, pair.event_at,
+                        (
+                            SELECT cwd FROM agent_status_events newest
+                            WHERE newest.host_session_id = pair.host_session_id
+                                AND newest.agent_session_id = pair.agent_session_id
+                                AND newest.agent_kind = ?
+                            ORDER BY newest.event_at DESC, newest.id DESC
+                            LIMIT 1
+                        ) AS cwd
+                    FROM (
+                        SELECT host_session_id, agent_session_id, MAX(event_at) AS event_at
+                        FROM agent_status_events
+                        WHERE agent_session_id IS NOT NULL AND agent_kind = ?
+                            AND host_session_id IN (SELECT host_session_id FROM terminal_sessions)
+                        GROUP BY host_session_id, agent_session_id
+                    ) pair
+                    ORDER BY pair.event_at, pair.host_session_id, pair.agent_session_id
+                    """,
+                arguments: [AgentKind.claudeCode.rawValue, AgentKind.claudeCode.rawValue]
+            ).compactMap { row in
+                guard let hostSessionID = UUID(uuidString: row["host_session_id"]),
+                    let observedAt = Self.date(fromISOString: row["event_at"])
+                else { return nil }
+                return ConversationSighting(
+                    hostSessionID: hostSessionID,
+                    conversationID: row["agent_session_id"],
+                    cwd: row["cwd"],
+                    observedAt: observedAt
+                )
+            }
         }
     }
 
@@ -1245,20 +1252,13 @@ public actor LocalStateStore {
         }
     }
 
-    public func setMetadataValue(_ value: String, forKey key: String) async throws {
-        try await dbPool.write { db in
-            try Self.writeMetadataValue(db, key: key, value: value)
-        }
-    }
-
-    /// Replaces `key`'s value with `transform(db, current)` inside one `BEGIN IMMEDIATE`
+    /// Replaces `key`'s value with `transform(current)` inside one `BEGIN IMMEDIATE`
     /// transaction, which takes the database's write lock before the read, so no other
-    /// connection, from this store or another on the same file, writes between them, and
-    /// whatever `transform` reads from `db` is the state its result is stored against. A nil
+    /// connection, from this store or another on the same file, writes between them. A nil
     /// result leaves the value as it is. Returns the value found and the value left.
     func updateMetadataValue(
         forKey key: String,
-        _ transform: @escaping @Sendable (Database, String?) throws -> String?
+        _ transform: @escaping @Sendable (String?) throws -> String?
     ) async throws -> (found: String?, left: String?) {
         try await dbPool.writeWithoutTransaction { db in
             var values: (found: String?, left: String?) = (nil, nil)
@@ -1266,7 +1266,7 @@ public actor LocalStateStore {
                 let current = try String.fetchOne(
                     db, sql: "SELECT value FROM local_state_metadata WHERE key = ?", arguments: [key])
                 values = (current, current)
-                if let next = try transform(db, current) {
+                if let next = try transform(current) {
                     try Self.writeMetadataValue(db, key: key, value: next)
                     values.left = next
                 }

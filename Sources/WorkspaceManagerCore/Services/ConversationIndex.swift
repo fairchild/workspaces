@@ -65,6 +65,8 @@ public struct ConversationIndexer: Sendable {
     public let records: ConversationRecordStore
     public let localState: LocalStateStore
     public let launchRecords: AgentLaunchRecordStore
+    /// Runs between gathering and staging. Tests use it to show no write lock is held there.
+    var afterGathering: (@Sendable () async throws -> Void)?
     /// Runs between staging and writing. Tests use it to put another attempt there.
     var afterStaging: (@Sendable () async throws -> Void)?
 
@@ -79,9 +81,15 @@ public struct ConversationIndexer: Sendable {
     }
 
     /// What the app runs at launch: the one-time migration, then a rebuild, so a record a
-    /// hook wrote while the app was down is in the index before anything reads it.
+    /// hook wrote while the app was down is in the index before anything reads it. A
+    /// migration that could not read its sources still leaves the index rebuilt.
     public func launch() async throws {
-        try await migrateOnce()
+        do {
+            try await migrateOnce()
+        } catch {
+            try await rebuild()
+            throw error
+        }
         try await rebuild()
     }
 
@@ -116,46 +124,58 @@ public struct ConversationIndexer: Sendable {
         }
     }
 
-    /// What the migration still owes this destination, keyed by conversation id: absent
-    /// before any attempt, and empty once every observation has been written or rejected.
-    /// Empty is the only completed state. The same database pointed at a new records
-    /// directory has carried nothing there yet, so the key is per destination.
+    /// What the migration still owes, keyed by conversation id: absent before any attempt,
+    /// and empty once every observation has been written or rejected. Empty is the only
+    /// completed state. The key names both the records directory and the launch-record root:
+    /// the same database pointed at a new records directory has carried nothing there yet,
+    /// and a run with another launch-record root has sources no other run has read. Two
+    /// roots carried into one directory is safe, because the merge is idempotent.
     public var migrationMetadataKey: String {
-        "\(Self.migrationMetadataKeyPrefix):\(destination)"
+        let pair = String(decoding: (try? JSONEncoder().encode([destination, source])) ?? Data(), as: UTF8.self)
+        return "\(Self.migrationMetadataKeyPrefix):\(pair)"
     }
 
-    /// The directory as configured, with `.` and empty components dropped by text alone.
+    private var destination: String { Self.lexicalPath(records.directory) }
+    private var source: String { Self.lexicalPath(launchRecords.directory) }
+
+    /// The path as configured, with `.` and empty components dropped by text alone.
     /// Anything that consults the file system (resolving links, Foundation's standardizing,
     /// which drops a leading `/private` only when the result exists) answers differently once
     /// the first writer creates the directory, and would move the key away from what earlier
     /// attempts stored. `..` stays: after a link it leads somewhere text cannot tell, so
     /// folding it could give two directories one key. Two spellings of one directory (a link
-    /// and its target, `/tmp` and `/private/tmp`) are two destinations; carrying the same
-    /// observations into one directory twice is safe, because the merge is idempotent.
-    private var destination: String {
-        "/" + records.directory.pathComponents.dropFirst().filter { $0 != "." && !$0.isEmpty }.joined(separator: "/")
+    /// and its target, `/tmp` and `/private/tmp`) are two keys; carrying the same
+    /// observations twice is safe, because the merge is idempotent.
+    private static func lexicalPath(_ url: URL) -> String {
+        "/" + url.pathComponents.dropFirst().filter { $0 != "." && !$0.isEmpty }.joined(separator: "/")
     }
 
     /// Writes a record for every conversation the app knew before records existed: each
     /// Launch Record that names one, and each one a tile in the database reported.
     ///
-    /// The attempt that finds no value for this destination gathers those sources inside the
-    /// transaction that stores them, so they are read once, against the state they are stored
-    /// with, and the same whichever store or process gets there first. No other attempt
-    /// gathers. Every attempt writes what is still owed and then, in a second transaction,
-    /// removes what it wrote or had rejected, and nothing else, so the set empties only once
-    /// everything gathered has been written. Conversations that start after the gather are
-    /// the live writers' to record. An empty set is never refilled: a rerun would bring back
-    /// a record a later cleanup removed on purpose.
+    /// An attempt that finds no value gathers those sources without holding the write lock:
+    /// the database through one read snapshot, the launch records outside any transaction,
+    /// failing on anything it cannot read rather than counting it absent, so a failed gather
+    /// stores nothing and the next launch tries again. It then stores what it gathered only
+    /// if the value is still absent; if another attempt stored first, it works that one. A
+    /// conversation that starts after a gather is recorded by its own writer. Every attempt
+    /// writes what is still owed and then, in a second transaction, removes what it wrote or
+    /// had rejected, and nothing else, so the set empties only once everything gathered has
+    /// been written. An empty set is never refilled: a rerun would bring back a record a
+    /// later cleanup removed on purpose.
     ///
     /// Each sighting carries the time it was made, so against a record a hook has written
     /// since, it only fills what that record lacks.
     @discardableResult
     public func migrateOnce() async throws -> MigrationOutcome {
         let key = migrationMetadataKey
-        let stored = try await localState.updateMetadataValue(forKey: key) { [self] db, current in
-            guard current == nil else { return nil }
-            return try Self.encode(Self.pendingSet(try gatheredObservations(in: db)))
+        var gathered: String?
+        if try await localState.metadataValue(forKey: key) == nil {
+            gathered = try Self.encode(Self.pendingSet(try await gatheredObservations()))
+            try await afterGathering?()
+        }
+        let stored = try await localState.updateMetadataValue(forKey: key) { [gathered] current in
+            current == nil ? gathered : nil
         }
         let pending = try stored.left.map(Self.decode) ?? [:]
         guard !pending.isEmpty else { return .init(alreadyDone: stored.found != nil) }
@@ -179,7 +199,7 @@ public struct ConversationIndexer: Sendable {
                 outcome.failed += 1
             }
         }
-        _ = try await localState.updateMetadataValue(forKey: key) { [settled] _, current in
+        _ = try await localState.updateMetadataValue(forKey: key) { [settled] current in
             var remaining = try current.map(Self.decode) ?? [:]
             for item in settled {
                 remaining[item.conversationID]?.removeAll { $0 == item }
@@ -190,10 +210,9 @@ public struct ConversationIndexer: Sendable {
         return outcome
     }
 
-    /// The launch records' and the database's observations as they are inside `db`'s transaction.
-    private func gatheredObservations(in db: Database) throws -> [PendingMigrationObservation] {
-        var gathered = launchRecordObservations()
-        gathered += try LocalStateStore.conversationSightings(in: db).map { sighting in
+    private func gatheredObservations() async throws -> [PendingMigrationObservation] {
+        var gathered = try launchRecordObservations()
+        gathered += try await localState.conversationSightings().map { sighting in
             ConversationObservation(
                 conversationID: sighting.conversationID,
                 cwd: sighting.cwd,
@@ -225,14 +244,8 @@ public struct ConversationIndexer: Sendable {
         return String(decoding: try encoder.encode(pending), as: UTF8.self)
     }
 
-    private func launchRecordObservations() -> [ConversationObservation] {
-        let sockets =
-            (try? FileManager.default.contentsOfDirectory(
-                at: launchRecords.directory,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            )) ?? []
-        return sockets.flatMap { launchRecords.all(socketLabel: $0.lastPathComponent) }.compactMap { launch in
+    private func launchRecordObservations() throws -> [ConversationObservation] {
+        try launchRecords.everyRecordOrThrow().compactMap { launch in
             guard let identity = launch.identity else { return nil }
             return ConversationObservation(
                 conversationID: identity.conversationID,
