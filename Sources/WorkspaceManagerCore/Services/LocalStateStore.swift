@@ -1375,7 +1375,7 @@ public actor LocalStateStore {
             arguments: [key, value, Self.isoString(Date())])
     }
 
-    private static var migrator: DatabaseMigrator {
+    static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1") { db in
             try db.execute(

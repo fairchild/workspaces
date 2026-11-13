@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import GRDB
 import Testing
 
 @testable import WorkspaceManagerCore
@@ -284,6 +285,65 @@ struct ConversationIndexTests {
             records: moved, localState: thisRun, launchRecords: fixture.launchRecords)
         #expect(try await movedIndexer.migrateOnce() == .init(written: 1))
         #expect(moved.load(conversationID: typed) != nil)
+    }
+
+    /// A database from before the restore columns and the conversation index: `v3` and
+    /// `conversation_index` both run on it, its rows survive untouched, and the ids its
+    /// tiles reported are carried into records and indexed.
+    @Test("A v2 database migrates through the restore columns and the conversation index")
+    func oldDatabaseMigratesThroughBoth() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let url = fixture.root.appendingPathComponent("old.sqlite")
+        let tile = UUID()
+        let typed = UUID().uuidString.lowercased()
+        let then = ConversationRecordJSON.string(Date(timeIntervalSince1970: 1_800_000_000))
+        let old = try DatabaseQueue(path: url.path)
+        try LocalStateStore.migrator.migrate(old, upTo: "v2")
+        try await old.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO terminal_sessions (
+                        host_session_id, session_key, target_kind, target_path, directory_path,
+                        terminal_mode, is_active, created_at, last_seen_at, run_id, run_started_at
+                    ) VALUES (?, 'repo:/tmp/repo', 'repo', '/tmp/repo', '/tmp/repo',
+                        'tmux_per_session', 1, ?, ?, 'old-run', ?)
+                    """,
+                arguments: [tile.uuidString, then, then, then]
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO agent_status_events (
+                        id, host_session_id, agent_session_id, agent_kind, origin, event_name,
+                        run_state, cwd, event_at
+                    ) VALUES (?, ?, ?, ?, 'hook', 'session_start', 'idle', '/tmp/repo', ?)
+                    """,
+                arguments: [UUID().uuidString, tile.uuidString, typed, AgentKind.claudeCode.rawValue, then]
+            )
+        }
+        try old.close()
+
+        let store = try LocalStateStore(databaseURL: url, runStartedAt: Date(timeIntervalSince1970: 1_800_001_000))
+        let migrated = try DatabaseQueue(path: url.path)
+        let (applied, row, tables) = try await migrated.read { db in
+            (
+                try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY identifier"),
+                try Row.fetchOne(db, sql: "SELECT * FROM terminal_sessions"),
+                try String.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE name = 'conversation_index'")
+            )
+        }
+        try migrated.close()
+        #expect(applied == ["conversation_index", "v1", "v2", "v3"])
+        #expect(tables == ["conversation_index"])
+        #expect(row?["host_session_id"] == tile.uuidString)
+        #expect(row?["is_active"] == 1)
+        #expect(row?["stale_since"] == nil as String?)
+        #expect(row?["holder_lost_at"] == nil as String?)
+
+        let indexer = fixture.indexer(store)
+        try await indexer.launch()
+        #expect(fixture.records.load(conversationID: typed)?.lastSeenIn?.hostSessionID == tile.uuidString)
+        #expect(try await store.fetchCurrentConversation(hostSessionID: tile)?.conversationID == typed)
     }
 
     @Test("/resume inside a tile makes the tile's current conversation the new id, through the app's writer")
