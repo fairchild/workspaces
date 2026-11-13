@@ -13,10 +13,14 @@
 # descriptor to the server, so a stopped server would hold a pipe open. The
 # file sits in a private directory this shell names before `mkdir -m 700`
 # makes it: mkdir refuses any existing path, links included, and the shell
-# knows the name even if mkdir dies. The client writes the file under umask
-# 077. One owner cleans up the lookup's directory, client and deadline, on
-# return or on any signal; a signal while they are being started waits until
-# all three are recorded, and cleanup ignores further signals once it begins.
+# knows the name even if mkdir dies. Only a directory mkdir reported making
+# is emptied. A name it did not report may still be a directory a killed
+# mkdir made, so it is removed only while it is an empty directory of ours
+# and not a link: what someone else put there stays. The client writes the
+# file under umask 077. One owner cleans up the lookup's directory, client
+# and deadline, on return or on any signal; a signal while they are being
+# started waits until all three are recorded, and cleanup ignores further
+# signals once it begins.
 # The deadline kills only a process that is still this shell's child, and it
 # is stopped before this shell starts any other child. The app writes the
 # bundled CLI's path in place of the placeholder when it extracts this file.
@@ -27,6 +31,7 @@ set -u
 
 readonly KEY=WORKSPACES_CONVERSATIONS_DIR
 lookup_dir=""
+lookup_dir_acquired=""
 lookup_out=""
 lookup_client=""
 lookup_guard=""
@@ -97,6 +102,7 @@ create_lookup_dir() {
         lookup_dir="${TMPDIR:-/tmp}"
         lookup_dir="${lookup_dir%/}/workspaces-observer.$$.$RANDOM"
         if mkdir -m 700 "$lookup_dir" 2>/dev/null; then
+            lookup_dir_acquired=1
             lookup_out="$lookup_dir/out"
             return 0
         fi
@@ -119,12 +125,15 @@ end_lookup() {
         wait "$lookup_client" 2>/dev/null
         lookup_client=""
     fi
-    if [[ -n "$lookup_dir" ]]; then
+    if [[ -n "$lookup_dir_acquired" ]]; then
         rm -f "$lookup_dir/out"
         rmdir "$lookup_dir" 2>/dev/null
-        lookup_dir=""
-        lookup_out=""
+    elif [[ -n "$lookup_dir" && -d "$lookup_dir" && ! -L "$lookup_dir" && -O "$lookup_dir" ]]; then
+        rmdir "$lookup_dir" 2>/dev/null
     fi
+    lookup_dir=""
+    lookup_dir_acquired=""
+    lookup_out=""
 }
 
 stop_guard() {
