@@ -1157,7 +1157,8 @@ struct ContentView: View {
             }
             .alert(
                 "Close Terminal?",
-                isPresented: MainWindowPresentation.isPresented($viewState.terminalCloseConfirmation)
+                isPresented: terminalSessionController.closeConfirmationPresented(
+                    $viewState.terminalCloseConfirmation, tileTreeStore: tileTreeStore)
             ) {
                 Button("Close", role: .destructive) {
                     guard
@@ -1167,9 +1168,7 @@ struct ContentView: View {
                     forceCloseTerminalTab(sessionID: confirmation.sessionID)
                 }
                 Button("Cancel", role: .cancel) {
-                    if let confirmation = MainWindowPresentation.consume($viewState.terminalCloseConfirmation) {
-                        tileTreeStore.closeConfirmationCancelled(for: confirmation.sessionID)
-                    }
+                    dismissTerminalCloseConfirmation()
                 }
             } message: {
                 Text(
@@ -1252,6 +1251,7 @@ struct ContentView: View {
                 syncAppCommands()
             }
             .onDisappear {
+                dismissTerminalCloseConfirmation()
                 clearAppCommands()
                 accessRecorder.flushPendingSave(modelContext: modelContext)
                 // Window close: the app outlives its last window, so tear the web-detail domain
@@ -1927,14 +1927,17 @@ struct ContentView: View {
     @MainActor
     private func requestCloseConfirmationForTerminalTab(sessionID: UUID) {
         // The sheet holds one confirmation; a newer one replaces the one it was showing.
-        if let shown = viewState.terminalCloseConfirmation, shown.sessionID != sessionID {
-            tileTreeStore.closeConfirmationCancelled(for: shown.sessionID)
-        }
-        tileTreeStore.closeConfirmationRaised(for: sessionID)
-        viewState.terminalCloseConfirmation = terminalSessionController.closeConfirmation(
+        dismissTerminalCloseConfirmation()
+        viewState.terminalCloseConfirmation = terminalSessionController.raiseCloseConfirmation(
             sessionID: sessionID,
             tileTreeStore: tileTreeStore
         )
+    }
+
+    @MainActor
+    private func dismissTerminalCloseConfirmation() {
+        terminalSessionController.dismissCloseConfirmation(
+            $viewState.terminalCloseConfirmation, tileTreeStore: tileTreeStore)
     }
 
     @MainActor

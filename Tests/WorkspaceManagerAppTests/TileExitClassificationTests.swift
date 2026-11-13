@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import WorkspaceManager
@@ -392,16 +393,56 @@ struct TileExitClassificationTests {
         #expect(await harness.reclaimed(awaiting: 1) == [tab.id.uuidString])
     }
 
+    /// The close sheet as the main window drives it: one shown confirmation, raised,
+    /// dismissed and answered through the terminal session controller.
+    @MainActor
+    private final class CloseSheet {
+        let store: TileTreeStore
+        let controller = MainWindowTerminalSessionController()
+        var shown: TerminalCloseConfirmation?
+
+        init(_ store: TileTreeStore) {
+            self.store = store
+        }
+
+        var binding: Binding<TerminalCloseConfirmation?> {
+            Binding(get: { self.shown }, set: { self.shown = $0 })
+        }
+
+        /// The tile's close asks for confirmation; a sheet already up for another tile goes.
+        func raise(_ sessionID: UUID) {
+            controller.dismissCloseConfirmation(binding, tileTreeStore: store)
+            shown = controller.raiseCloseConfirmation(sessionID: sessionID, tileTreeStore: store)
+        }
+
+        func cancel() {
+            controller.dismissCloseConfirmation(binding, tileTreeStore: store)
+        }
+
+        /// The framework takes the sheet down, as it does for Escape or a lost window.
+        func dismissByFramework() {
+            controller.closeConfirmationPresented(binding, tileTreeStore: store).wrappedValue = false
+        }
+
+        func close() {
+            guard let confirmation = MainWindowPresentation.consume(binding) else { return }
+            _ = controller.forceCloseTab(
+                sessionID: confirmation.sessionID, tileTreeStore: store,
+                defaultHomeDirectory: URL(fileURLWithPath: "/private/tmp"), repos: [], normalizePath: { $0 })
+        }
+    }
+
     /// A close that raised the confirmation sheet belongs to the sheet: a cancelled sheet
     /// leaves the tile, whose later exit is whatever tmux says it was.
     @Test("A cancelled close confirmation leaves the tile's later exit to tmux")
     func cancelledConfirmationLeavesTheExitToTmux() async throws {
         let harness = makeHarness(answer: .serverGone)
         let (_, tab) = try openTwoTmuxTiles(harness.store)
+        let sheet = CloseSheet(harness.store)
         harness.store.noteCloseRequested(tab.id)
-        harness.store.closeConfirmationRaised(for: tab.id)
+        sheet.raise(tab.id)
 
-        harness.store.closeConfirmationCancelled(for: tab.id)
+        sheet.cancel()
         #expect(harness.store.handleProcessExit(for: tab.id))
 
         #expect(await harness.rowWrites(for: tab.id) == [.holderLost(tab.id)])
@@ -415,13 +456,13 @@ struct TileExitClassificationTests {
         let harness = makeHarness(answer: .sessionPresent(serverPID: 4242))
         let (first, second) = try openTwoTmuxTiles(harness.store)
         let store = harness.store
+        let sheet = CloseSheet(store)
         store.noteCloseRequested(first.id)
-        store.closeConfirmationRaised(for: first.id)
+        sheet.raise(first.id)
         store.noteCloseRequested(second.id)
-        store.closeConfirmationCancelled(for: first.id)
-        store.closeConfirmationRaised(for: second.id)
+        sheet.raise(second.id)
 
-        #expect(store.handleProcessExit(for: second.id, cause: .userClosed))
+        sheet.close()
         #expect(store.handleProcessExit(for: first.id))
 
         #expect(await harness.rowWrites(for: second.id) == [.ended(second.id)])
@@ -435,12 +476,13 @@ struct TileExitClassificationTests {
     func confirmedCloseAfterSettlementEndsTheRow() async throws {
         let harness = makeHarness(answer: .serverGone)
         let (primary, split, _) = try openSplitTab(harness.store)
+        let sheet = CloseSheet(harness.store)
         harness.store.noteCloseRequested(split.id)
-        harness.store.closeConfirmationRaised(for: split.id)
+        sheet.raise(split.id)
 
         #expect(harness.store.handleProcessExit(for: primary.id))
         #expect(await harness.rowWrites(for: split.id) == [.holderLost(split.id)])
-        #expect(!harness.store.handleProcessExit(for: split.id, cause: .userClosed))
+        sheet.close()
 
         #expect(await harness.rowWrites(for: split.id) == [.holderLost(split.id), .ended(split.id)])
         #expect(await harness.reclaimed(awaiting: 1) == [split.id.uuidString])
@@ -450,16 +492,98 @@ struct TileExitClassificationTests {
     func cancelledCloseAfterSettlementLeavesTheRow() async throws {
         let harness = makeHarness(answer: .serverGone)
         let (primary, split, otherTab) = try openSplitTab(harness.store)
+        let sheet = CloseSheet(harness.store)
         harness.store.noteCloseRequested(split.id)
-        harness.store.closeConfirmationRaised(for: split.id)
+        sheet.raise(split.id)
 
         #expect(harness.store.handleProcessExit(for: primary.id))
         #expect(await harness.rowWrites(for: split.id) == [.holderLost(split.id)])
-        harness.store.closeConfirmationCancelled(for: split.id)
+        sheet.cancel()
         #expect(!harness.store.handleProcessExit(for: split.id, cause: .userClosed))
         #expect(harness.store.handleProcessExit(for: otherTab.id, cause: .userClosed))
 
         #expect(await harness.rowWrites(for: split.id) == [.holderLost(split.id)])
+        #expect(await harness.reclaimed(awaiting: 1) == [otherTab.id.uuidString])
+    }
+
+    /// Where a tab's exit stands when the person confirms closing the whole tab.
+    enum ConfirmedTabClose: CaseIterable {
+        case beforeTheExit, whileTheExitIsRead, afterTheExitSettled
+    }
+
+    /// Closing a tab closes its split panes. The sheet was raised for the whole tab, so its
+    /// Close ends every pane's row and reclaims every pane's tmux session, wherever the tab's
+    /// own exit had got to.
+    @Test(
+        "Confirming a whole tab's close ends and reclaims its split panes wherever its exit stands",
+        arguments: ConfirmedTabClose.allCases)
+    func confirmedTabCloseEndsItsSplits(_ moment: ConfirmedTabClose) async throws {
+        let harness = makeHarness(answer: .sessionPresent(serverPID: 4242))
+        let answer = gateProbe(harness.store)
+        let (primary, split, _) = try openSplitTab(harness.store)
+        let store = harness.store
+        let sheet = CloseSheet(store)
+        store.noteCloseRequested(primary.id)
+        sheet.raise(primary.id)
+
+        switch moment {
+        case .beforeTheExit:
+            sheet.close()
+        case .whileTheExitIsRead:
+            #expect(store.handleProcessExit(for: primary.id))
+            sheet.close()
+        case .afterTheExitSettled:
+            #expect(store.handleProcessExit(for: primary.id))
+            answer.yield(.sessionPresent(serverPID: 4242))
+            #expect(await harness.rowWrites(for: split.id) == [.deselected(split.id)])
+            sheet.close()
+        }
+        answer.yield(.sessionPresent(serverPID: 4242))
+        answer.finish()
+
+        #expect(await harness.rowWrites(for: primary.id).last == .ended(primary.id))
+        #expect(await harness.rowWrites(for: split.id).last == .ended(split.id))
+        #expect(await harness.reclaimed(awaiting: 1) == [split.id.uuidString])
+    }
+
+    /// Cancelling names the confirmation it cancels: a sheet raised again for the same tile
+    /// owns the close, and an older sheet going away leaves it.
+    @Test("Cancelling an older confirmation leaves a newer one for the same tile in charge")
+    func staleCancelLeavesTheNewerConfirmation() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let (_, tab) = try openTwoTmuxTiles(harness.store)
+        let store = harness.store
+        let older = store.raiseCloseConfirmation(for: tab.id)
+        _ = store.raiseCloseConfirmation(for: tab.id)
+
+        store.cancelCloseConfirmation(older)
+        #expect(store.handleProcessExit(for: tab.id))
+        #expect(await harness.rowWrites(for: tab.id) == [.holderLost(tab.id)])
+        #expect(!store.handleProcessExit(for: tab.id, cause: .userClosed))
+
+        #expect(await harness.rowWrites(for: tab.id) == [.holderLost(tab.id), .ended(tab.id)])
+    }
+
+    /// A sheet the framework takes down, by Escape or with its window, was not answered with
+    /// Close, so it gives up the close it owned.
+    @Test("A close sheet dismissed by the framework gives up its close")
+    func frameworkDismissalCancelsTheClose() async throws {
+        let harness = makeHarness(answer: .sessionPresent(serverPID: 4242))
+        let (primary, split, otherTab) = try openSplitTab(harness.store)
+        let store = harness.store
+        let sheet = CloseSheet(store)
+        store.noteCloseRequested(primary.id)
+        sheet.raise(primary.id)
+
+        sheet.dismissByFramework()
+        #expect(sheet.shown == nil)
+        #expect(store.handleProcessExit(for: primary.id))
+        #expect(await harness.rowWrites(for: split.id) == [.deselected(split.id)])
+        #expect(!store.handleProcessExit(for: primary.id, cause: .userClosed))
+        #expect(store.handleProcessExit(for: otherTab.id, cause: .userClosed))
+
+        #expect(await harness.rowWrites(for: primary.id) == [.deselected(primary.id)])
+        #expect(await harness.rowWrites(for: split.id) == [.deselected(split.id)])
         #expect(await harness.reclaimed(awaiting: 1) == [otherTab.id.uuidString])
     }
 
@@ -522,10 +646,12 @@ struct TileExitClassificationTests {
     @Test("Cancelling a close confirmation leaves a retirement's request in place")
     func cancellingTheSheetKeepsARetirement() async throws {
         let harness = makeHarness(answer: .serverGone)
-        let (_, tab) = try openTwoTmuxTiles(harness.store)
+        let (primary, tab) = try openTwoTmuxTiles(harness.store)
+        let sheet = CloseSheet(harness.store)
         harness.store.noteCloseRequested(tab.id, as: .retired)
 
-        harness.store.closeConfirmationCancelled(for: tab.id)
+        sheet.raise(primary.id)
+        sheet.cancel()
         #expect(harness.store.handleProcessExit(for: tab.id))
 
         #expect(await harness.rowWrites(for: tab.id) == [.ended(tab.id)])

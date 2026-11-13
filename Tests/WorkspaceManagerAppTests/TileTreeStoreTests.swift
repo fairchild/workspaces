@@ -254,9 +254,9 @@ struct TileTreeStoreTests {
             launchedAt: Date(timeIntervalSince1970: 100)
         )
 
-        let detaching = controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store)
-        let ending = controller.closeConfirmation(sessionID: tab.id, tileTreeStore: store)
-        let unattributable = controller.closeConfirmation(sessionID: unrecordedTab.id, tileTreeStore: store)
+        let detaching = controller.raiseCloseConfirmation(sessionID: primary.id, tileTreeStore: store)
+        let ending = controller.raiseCloseConfirmation(sessionID: tab.id, tileTreeStore: store)
+        let unattributable = controller.raiseCloseConfirmation(sessionID: unrecordedTab.id, tileTreeStore: store)
         #expect(detaching.message.contains("keeps running"))
         #expect(ending.message.contains("will end it"))
         #expect(unattributable.message.contains("keeps running"))
@@ -265,11 +265,13 @@ struct TileTreeStoreTests {
         // only a tab born after the change closes for good.
         store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
         #expect(
-            controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains("keeps running"))
+            controller.raiseCloseConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains(
+                "keeps running"))
         let other = URL(fileURLWithPath: "/Users/test/code/other")
         let bornAfter = store.activateSession(key: .repoPath(other.path), directory: other).session
         #expect(
-            controller.closeConfirmation(sessionID: bornAfter.id, tileTreeStore: store).message.contains("will end it"))
+            controller.raiseCloseConfirmation(sessionID: bornAfter.id, tileTreeStore: store).message.contains(
+                "will end it"))
     }
 
     /// #1826: the prompt follows what the tile's launch did. A tmux-mode tile on a machine
@@ -288,10 +290,10 @@ struct TileTreeStoreTests {
 
         #expect(launchedPlain.terminalMode == .tmuxPerSession)
         #expect(
-            controller.closeConfirmation(sessionID: launchedInTmux.id, tileTreeStore: store).message
+            controller.raiseCloseConfirmation(sessionID: launchedInTmux.id, tileTreeStore: store).message
                 .contains("keeps running"))
         #expect(
-            controller.closeConfirmation(sessionID: launchedPlain.id, tileTreeStore: store).message
+            controller.raiseCloseConfirmation(sessionID: launchedPlain.id, tileTreeStore: store).message
                 .contains("will end it"))
     }
 
@@ -304,7 +306,8 @@ struct TileTreeStoreTests {
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
         let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
         #expect(
-            controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains("keeps running"))
+            controller.raiseCloseConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains(
+                "keeps running"))
 
         store.tmuxOwnershipLedger.record(
             hostSessionID: split.id,
@@ -314,7 +317,8 @@ struct TileTreeStoreTests {
             launchedAt: Date(timeIntervalSince1970: 100)
         )
         #expect(
-            controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains("will end it"))
+            controller.raiseCloseConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains(
+                "will end it"))
     }
 
     /// A split pane's own close reads the pane, not its tab: a pane-scoped session the
@@ -328,7 +332,8 @@ struct TileTreeStoreTests {
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
         let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
         #expect(
-            controller.closeConfirmation(sessionID: split.id, tileTreeStore: store).message.contains("keeps running"))
+            controller.raiseCloseConfirmation(sessionID: split.id, tileTreeStore: store).message.contains(
+                "keeps running"))
 
         store.tmuxOwnershipLedger.record(
             hostSessionID: split.id,
@@ -338,7 +343,8 @@ struct TileTreeStoreTests {
             launchedAt: Date(timeIntervalSince1970: 100)
         )
         #expect(
-            controller.closeConfirmation(sessionID: split.id, tileTreeStore: store).message.contains("will end it"))
+            controller.raiseCloseConfirmation(sessionID: split.id, tileTreeStore: store).message.contains("will end it")
+        )
     }
 
     /// Tabs recorded before they had names of their own share their primary's. Relaunching

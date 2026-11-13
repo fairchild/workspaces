@@ -423,6 +423,9 @@ final class SurfaceStore: ObservableObject {
     /// read the tile's exit as its shell ending. Without the proof the launch's server stays
     /// unknown, and an exit that needs it is undetermined (`TerminalSessionExit`). A surface
     /// replaced meanwhile records nothing, since its launch is no longer this one.
+    ///
+    /// It asks up to three times, 500 ms apart, and each ask can take up to the probe's 5 s
+    /// timeout, so a slow socket stretches the whole read to about 16 s.
     private func recordLaunchServer(of terminal: TerminalSurface, session: HostTerminalSession) async {
         let sessionName = session.effectiveTmuxSessionName
         let probe = TmuxHolderProbe()

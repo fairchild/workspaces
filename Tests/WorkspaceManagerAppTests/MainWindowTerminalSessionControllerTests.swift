@@ -392,7 +392,7 @@ struct MainWindowTerminalSessionControllerTests {
         ).session
         #expect(store.setTabTitle("Build", for: session.id))
 
-        let confirmation = controller.closeConfirmation(
+        let confirmation = controller.raiseCloseConfirmation(
             sessionID: session.id,
             tileTreeStore: store
         )

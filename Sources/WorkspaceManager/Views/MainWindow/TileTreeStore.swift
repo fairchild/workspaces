@@ -585,7 +585,7 @@ final class TileTreeStore: ObservableObject {
         }
     }
 
-    /// Withdraws a retirement close held across attempts once its caller gives up.
+    /// Withdraws a retirement close held across attempts, once its caller is done with it.
     func abandonRetirement(_ sessionID: UUID) {
         guard closeRequests[sessionID]?.exit == .retired else { return }
         closeRequests.removeValue(forKey: sessionID)
@@ -621,26 +621,63 @@ final class TileTreeStore: ObservableObject {
         closeRequests.removeValue(forKey: sessionID)
     }
 
-    /// Closes waiting on the person's answer in the confirmation sheet, with the session each
-    /// would close.
+    /// A close the confirmation sheet is asking the person about, and the only owner of that
+    /// close until it is answered.
     ///
-    /// A raised confirmation owns its tile's close until it is answered. It takes over the
-    /// request that raised it, so no other exit of that tile reads as the person's close: the
-    /// sheet may be replaced by another tile's, or never answered. Close ends the row and
-    /// reclaims its tmux session whatever the tile's exit did meanwhile (`handleProcessExit`);
-    /// Cancel leaves the row as that exit left it.
-    private var closeConfirmations: [UUID: HostTerminalSession] = [:]
+    /// It holds every row the close covers, as the tile stood when the sheet was raised: the
+    /// tile's own and, for a tab, its split panes'. Close ends each of those rows and reclaims
+    /// its tmux session whatever the tile's exit did meanwhile (`handleProcessExit`); Cancel,
+    /// or any other dismissal, leaves the rows as that exit left them.
+    final class CloseConfirmation: Equatable {
+        let sessionID: UUID
+        let rows: [HostTerminalSession]
 
-    /// The confirmation sheet now asks about `sessionID`'s close.
-    func closeConfirmationRaised(for sessionID: UUID) {
-        closeRequests.removeValue(forKey: sessionID)
-        guard let session = allLiveSessions.first(where: { $0.id == sessionID }) else { return }
-        closeConfirmations[sessionID] = session
+        fileprivate init(sessionID: UUID, rows: [HostTerminalSession]) {
+            self.sessionID = sessionID
+            self.rows = rows
+        }
+
+        static func == (lhs: CloseConfirmation, rhs: CloseConfirmation) -> Bool { lhs === rhs }
     }
 
-    /// The person cancelled `sessionID`'s close, or the sheet moved on to another tile.
-    func closeConfirmationCancelled(for sessionID: UUID) {
-        closeConfirmations.removeValue(forKey: sessionID)
+    private var closeConfirmations: [UUID: CloseConfirmation] = [:]
+
+    /// Raises the confirmation for `sessionID`'s close. It takes over the request that raised
+    /// it, so no other exit of that tile reads as the person's close: the sheet may be
+    /// replaced by another tile's, or dismissed unanswered.
+    func raiseCloseConfirmation(for sessionID: UUID) -> CloseConfirmation {
+        closeRequests.removeValue(forKey: sessionID)
+        let rows = allLiveSessions.first(where: { $0.id == sessionID }).map {
+            [$0] + splitSessions(forPrimarySessionID: sessionID)
+        }
+        let confirmation = CloseConfirmation(sessionID: sessionID, rows: rows ?? [])
+        closeConfirmations[sessionID] = confirmation
+        return confirmation
+    }
+
+    /// The sheet went away without Close: cancelled, dismissed, replaced by another tile's,
+    /// or gone with its window. A confirmation already answered or replaced is left alone.
+    func cancelCloseConfirmation(_ confirmation: CloseConfirmation) {
+        guard closeConfirmations[confirmation.sessionID] === confirmation else { return }
+        closeConfirmations.removeValue(forKey: confirmation.sessionID)
+    }
+
+    /// Ends the rows a confirmed close covers that the tile's own exit path will not reach:
+    /// rows an earlier exit already settled, and rows waiting in another tile's exit. Rows
+    /// still in the tree, and rows waiting in this tile's own exit, are settled by that path.
+    private func settleConfirmedRows(_ confirmation: CloseConfirmation, as exit: TerminalSessionExit) {
+        let now = Date()
+        for row in confirmation.rows {
+            if let exitID = tileExitIDBySessionID[row.id] {
+                guard exitID != confirmation.sessionID, row.id != confirmation.sessionID else { continue }
+                settle(row.id, inExit: exitID, as: exit)
+            } else if !allLiveSessions.contains(where: { $0.id == row.id }) {
+                log.info(
+                    "[TileTreeStore] session \(row.id.uuidString, privacy: .public) closed from its confirmation after its exit settled: reason \(String(describing: exit), privacy: .public)"
+                )
+                record(row, exit, at: now)
+            }
+        }
     }
 
     /// Asks the tile's tmux socket what remains once its client is gone. Production reads
@@ -690,8 +727,8 @@ final class TileTreeStore: ObservableObject {
     /// exited. `noteCloseRequested` marks the request so that exit still counts as the
     /// user's. A close that reaches a tile already gone with an exit still waiting on its
     /// reason settles that tile's row (`TileExit`). A close the person confirmed in the sheet
-    /// ends its row even when the tile's exit has already settled it, since the confirmation
-    /// owned that close (`closeConfirmations`).
+    /// ends every row the confirmation covers, before, during or after the tile's own exit
+    /// settles them (`CloseConfirmation`).
     ///
     /// A process exit of a tile that launched through tmux asks the tmux socket, off the
     /// main actor, which reason it was (see `TerminalSessionExit.classifyProcessExit`). A
@@ -700,7 +737,9 @@ final class TileTreeStore: ObservableObject {
     @discardableResult
     func handleProcessExit(for sessionID: UUID, cause: TerminalSessionExit? = nil) -> Bool {
         let knownExit = closeRequests.removeValue(forKey: sessionID)?.exit ?? cause
-        let confirmed = knownExit == nil ? nil : closeConfirmations.removeValue(forKey: sessionID)
+        if let knownExit, let confirmation = closeConfirmations.removeValue(forKey: sessionID) {
+            settleConfirmedRows(confirmation, as: knownExit)
+        }
         if let exitID = tileExitIDBySessionID[sessionID] {
             if let knownExit {
                 log.info(
@@ -710,15 +749,7 @@ final class TileTreeStore: ObservableObject {
             }
             return false
         }
-        guard let exitingSession = allLiveSessions.first(where: { $0.id == sessionID }) else {
-            if let confirmed, let knownExit {
-                log.info(
-                    "[TileTreeStore] session \(sessionID.uuidString, privacy: .public) closed from its confirmation after its exit settled: reason \(String(describing: knownExit), privacy: .public)"
-                )
-                record(confirmed, knownExit, at: Date())
-            }
-            return false
-        }
+        guard let exitingSession = allLiveSessions.first(where: { $0.id == sessionID }) else { return false }
         let launch = surfaceStore.launch(sessionID: sessionID)
 
         let rows = [exitingSession] + splitSessions(forPrimarySessionID: sessionID)
