@@ -542,6 +542,42 @@ public struct TmuxSessionControl: Sendable {
         }
     }
 
+    /// `set-environment` of one pair on a session that already exists.
+    public static func setSessionEnvironmentArguments(
+        socketLabel: String,
+        handle: String,
+        key: String,
+        value: String
+    ) -> [String] {
+        ["tmux", "-L", socketLabel, "set-environment", "-t", "=\(handle)", key, value]
+    }
+
+    /// Puts `sessionEnvironment` on a session that was made without it, such as one that
+    /// outlived the build that created it. Panes spawned later inherit it, and a hook in an
+    /// older pane reads it from the session (`conversation-observer.sh`).
+    public func adoptSessionEnvironment(handle: String) async throws {
+        for key in sessionEnvironment.keys.sorted() {
+            let arguments = Self.setSessionEnvironmentArguments(
+                socketLabel: socketLabel, handle: handle, key: key, value: sessionEnvironment[key] ?? "")
+            guard let result = await run("/usr/bin/env", arguments, environment) else {
+                throw ControlError.tmuxUnavailable
+            }
+            guard result.success else {
+                throw ControlError.commandFailed(verb: "set-environment", handle: handle, stderr: result.stderr)
+            }
+        }
+    }
+
+    /// `command` with `sessionEnvironment` as leading assignments, for typing into a shell
+    /// that is already running: it keeps the environment it started with, whatever the
+    /// session says now.
+    public func prefixingSessionEnvironment(_ command: String) -> String {
+        let assignments = sessionEnvironment.keys.sorted().map {
+            "\($0)=\(RaceGroupPlanner.shellQuoted(sessionEnvironment[$0] ?? ""))"
+        }
+        return (assignments + [command]).joined(separator: " ")
+    }
+
     /// Whether a pane is at a shell prompt, which is the one state text can safely be typed
     /// into: anything else in the foreground would receive it as its own input.
     public static func isIdleShell(paneCommand: String) -> Bool {

@@ -763,8 +763,10 @@ private final class CLIApp {
                             + "command, or run: \(command)"
                     )
                 }
+                try await control.adoptSessionEnvironment(handle: handle)
                 try await control.clearInputLine(handle: handle)
-                let report = try await control.send(handle: handle, text: command, submit: true)
+                let report = try await control.send(
+                    handle: handle, text: control.prefixingSessionEnvironment(command), submit: true)
                 if report.verification == .paneMissingText {
                     writeStderr("warning: the pane did not show the resume command; 'ws check' will say if it ran.")
                 }

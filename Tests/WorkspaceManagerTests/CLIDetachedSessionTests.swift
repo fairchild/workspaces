@@ -67,6 +67,21 @@ struct CLIDetachedSessionTests {
             )
         }
 
+        /// One session's own environment on this fixture's socket, as `KEY=value` lines.
+        func sessionEnvironment(_ handle: String) throws -> String {
+            let process = Process()
+            let output = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["tmux", "-L", socketLabel, "show-environment", "-t", "=\(handle)"]
+            process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return String(decoding: data, as: UTF8.self)
+        }
+
         /// The tmux server's global environment on this fixture's socket, as `KEY=value` lines.
         func serverGlobalEnvironment() throws -> String {
             let process = Process()
@@ -471,6 +486,7 @@ struct CLIDetachedSessionTests {
           printf '{"type":"assistant","isSidechain":false,"timestamp":"%s","effort":"%s","message":{"model":"%s"}}\n' \
             "$now" "${ran_effort:-$effort}" "$model" >> "$dir/$id.jsonl"
         fi
+        printf 'stub-records=%s\n' "${WORKSPACES_CONVERSATIONS_DIR:-none}"
         printf 'stub-started id=%s effort=%s\n' "$id" "$effort"
         printf '────\n❯ \n────\n'
         [ "$mode" = "quit" ] && exit 0
@@ -739,6 +755,95 @@ struct CLIDetachedSessionTests {
             $0.contains("stub-started id=\(conversationID)")
         }
         #expect(text.contains("stub-started id=\(conversationID)"))
+    }
+
+    @Test(
+        "Resume into a shell older than the records directory hands the agent the directory",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func resumeIntoAPreRecordsShell() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let directory = fixture.root.appendingPathComponent("conversations").path
+
+        let launch = try launchResult(
+            fixture.run(
+                ["ws", "launch", fixture.workspaceSelector, "--cmd", "claude --stub-quit", "--json"],
+                extraEnvironment: environment
+            )
+        )
+        try await waitUntilGone(launch.handle, fixture: fixture, environment: environment)
+        try startSession(
+            launch.handle, running: "env -u \(ConversationRecordStore.directoryEnvironmentKey) /bin/sh",
+            fixture: fixture, environment: environment
+        )
+
+        let resume = try resumeResult(
+            fixture.run(["ws", "resume", launch.handle, "--json"], extraEnvironment: environment)
+        )
+        #expect(resume.resumed)
+        let text = try await readUntil(fixture, selector: launch.handle) { $0.contains("stub-started") }
+        #expect(text.contains("stub-records=\(directory)"))
+        let assignment = "\(ConversationRecordStore.directoryEnvironmentKey)=\(directory)"
+        #expect(try fixture.sessionEnvironment(launch.handle).contains(assignment))
+    }
+
+    @Test(
+        "A hook in a shell older than its session's records directory reads it from the session",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func hookInAPreRecordsShellReadsTheSession() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let key = ConversationRecordStore.directoryEnvironmentKey
+        let directory = fixture.root.appendingPathComponent("conversations")
+        let template = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/WorkspaceManager/Resources/HookForwarders/conversation-observer.sh"),
+            encoding: .utf8
+        )
+        let script = fixture.root.appendingPathComponent("conversation-observer.sh")
+        try template.replacingOccurrences(of: "@WORKSPACES_CLI@", with: fixture.binary.path)
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let trigger = fixture.root.appendingPathComponent("go")
+        let conversationID = UUID().uuidString.lowercased()
+        let payload = #"{"session_id":"\#(conversationID)","cwd":"\#(fixture.root.path)"}"#
+        let handle = "wm-pre-records-00000000"
+
+        // A shell started without the key, waiting until the session has it, then a
+        // SessionStart hook in that same shell.
+        try startSession(
+            handle,
+            running: "env -u \(key) -u WORKSPACES_HOST_SESSION_ID /bin/sh -c "
+                + RaceGroupPlanner.shellQuoted(
+                    "while [ ! -e '\(trigger.path)' ]; do sleep 0.1; done; "
+                        + "printf '%s' '\(payload)' | '\(script.path)'; sleep 60"
+                ),
+            fixture: fixture, environment: environment
+        )
+        let control = TmuxSessionControl(
+            socketLabel: fixture.socketLabel,
+            environment: ProcessInfo.processInfo.environment.merging(fixture.environment) { _, new in new }
+                .filter { $0.key != key },
+            sessionEnvironment: [key: directory.path]
+        )
+        try await control.adoptSessionEnvironment(handle: handle)
+        FileManager.default.createFile(atPath: trigger.path, contents: nil)
+
+        let records = ConversationRecordStore(directory: directory)
+        let deadline = Date().addingTimeInterval(await LaunchBudget.deadline(launches: 2, floor: 10, ceiling: 60))
+        var record = try records.load(conversationID: conversationID)
+        while record == nil, Date() < deadline {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            record = try records.load(conversationID: conversationID)
+        }
+        let written = try #require(record, "the hook in the surviving shell wrote no record")
+        #expect(written.observedBy == .hook)
+        #expect(written.lastSeenIn?.tmux?.sessionID.hasPrefix("$") == true)
     }
 
     @Test(
