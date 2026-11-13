@@ -7,6 +7,7 @@
 //  tests of the listener alone cannot cover.
 //
 
+import Darwin
 import Foundation
 import Testing
 
@@ -16,6 +17,40 @@ import Testing
 struct HookForwarderScriptTests {
     private static func makeTempSocketURL() -> URL {
         URL(fileURLWithPath: "/tmp/wm-fwd-\(UUID().uuidString.prefix(8)).sock")
+    }
+
+    /// Starts `listener` and returns once its socket accepts a connection. `start()` hands the
+    /// bind to Network.framework and returns before the socket exists, and a forwarder that
+    /// finds no socket drops its payload by design, so a script launched in that gap posts
+    /// nothing. How long the bind takes is scheduling, not a property of the scripts.
+    private static func startAccepting(_ listener: AgentHookListener) async throws {
+        try await listener.start()
+        let path = listener.socketPath
+        let accepting = await waitUntilLaunchScaled(launches: 1, floor: 5, ceiling: 60) {
+            acceptsConnections(at: path)
+        }
+        try #require(accepting, "the hook listener never accepted a connection at \(path)")
+    }
+
+    private static func acceptsConnections(at path: String) -> Bool {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let bytes = Array(path.utf8)
+        guard bytes.count < MemoryLayout.size(ofValue: address.sun_path) else { return false }
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: bytes) }
+        let length = socklen_t(MemoryLayout<sockaddr_un>.size)
+        return withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, length) == 0 }
+        }
+    }
+
+    /// Waits for a posted payload to cross the listener's coalescing window to the main actor.
+    /// The deadline scales from this machine's launch cost and bounds a failure only.
+    private static func delivered(_ condition: @escaping @Sendable () async -> Bool) async -> Bool {
+        await waitUntilLaunchScaled(launches: 2, floor: 10, ceiling: 60, condition)
     }
 
     private static func hookForwarder(named name: String) -> URL {
@@ -188,8 +223,8 @@ struct HookForwarderScriptTests {
             registry: registry,
             socketURLOverride: socket
         )
-        try await listener.start()
         defer { Task { await listener.stop() } }
+        try await Self.startAccepting(listener)
 
         let payload: [String: Any] = [
             "hook_event_name": "SessionStart",
@@ -205,7 +240,7 @@ struct HookForwarderScriptTests {
 
         #expect(result.status == 0)
         #expect(result.stderr.isEmpty)
-        let reached = await waitUntil {
+        let reached = await Self.delivered {
             await MainActor.run {
                 registry.statuses[hostSessionID]?.agentSessionID == "script-session"
             }
@@ -225,8 +260,8 @@ struct HookForwarderScriptTests {
             registry: registry,
             socketURLOverride: socket
         )
-        try await listener.start()
         defer { Task { await listener.stop() } }
+        try await Self.startAccepting(listener)
 
         let payload: [String: Any] = [
             "model": ["display_name": "Claude Sonnet 4.5"],
@@ -243,7 +278,7 @@ struct HookForwarderScriptTests {
         #expect(result.status == 0)
         #expect(result.stdout == " ")
         #expect(result.stderr.isEmpty)
-        let reached = await waitUntil {
+        let reached = await Self.delivered {
             await MainActor.run {
                 registry.statuses[hostSessionID]?.modelDisplayName == "Claude Sonnet 4.5"
             }
@@ -306,8 +341,8 @@ struct HookForwarderScriptTests {
             commandStatusRegistry: commandStatusRegistry,
             socketURLOverride: socket
         )
-        try await listener.start()
         defer { Task { await listener.stop() } }
+        try await Self.startAccepting(listener)
 
         let result = try Self.runZshCommandStatusHook(
             socket: socket,
@@ -317,7 +352,7 @@ struct HookForwarderScriptTests {
         #expect(result.status == 0)
         #expect(result.stdout.isEmpty)
         #expect(result.stderr.isEmpty)
-        let reached = await waitUntil {
+        let reached = await Self.delivered {
             await MainActor.run {
                 commandStatusRegistry.statusByTerminalSession[hostSessionID]?.exitCode == 1
             }
@@ -340,8 +375,8 @@ struct HookForwarderScriptTests {
             commandStatusRegistry: commandStatusRegistry,
             socketURLOverride: socket
         )
-        try await listener.start()
         defer { Task { await listener.stop() } }
+        try await Self.startAccepting(listener)
 
         let result = try Self.runZshCommandStatusRegisteredHooks(
             socket: socket,
@@ -352,7 +387,7 @@ struct HookForwarderScriptTests {
         #expect(result.status == 0)
         #expect(result.stdout.isEmpty)
         #expect(result.stderr.isEmpty)
-        let reached = await waitUntil {
+        let reached = await Self.delivered {
             await MainActor.run {
                 commandStatusRegistry.statusByTerminalSession[hostSessionID]?.exitCode == 1
             }
