@@ -41,6 +41,9 @@ extension ConversationRecordJSON {
     /// that records a new location fact adds it to the sightings.
     static func merge(_ observation: ConversationObservation, into existing: [String: Any]?) -> [String: Any] {
         var object = existing ?? [:]
+        // Read before any field or time below moves: a record from before sightings is seeded
+        // from its own `observedAt`, not this observation's.
+        var location = LocationHistory(object: object)
         let at = date(string(observation.observedAt)) ?? observation.observedAt
         var observed = object[fieldObservedAtKey] as? [String: Any] ?? legacyFieldTimes(object)
 
@@ -79,7 +82,6 @@ extension ConversationRecordJSON {
         object["createdAt"] = string([date(object["createdAt"]) ?? at, at].min() ?? at)
         object["observedAt"] = string(max(recordedAt ?? at, at))
 
-        var location = LocationHistory(object: object)
         if let seen = observation.lastSeenIn, let sighting = Sighting(seen, at: at) {
             location.insert(sighting)
         }
@@ -198,6 +200,21 @@ struct Sighting {
         object["tmux"] = session
     }
 
+    /// Drops tmux attributes observed at or before `cut`. A sighting that absorbed a newer
+    /// one keeps that one's time, but its attributes keep their own; once the cut passes
+    /// them they are history like any other observation that old, whatever order it came in.
+    mutating func forget(atOrBefore cut: (Date, String)) {
+        guard var session = object["tmux"] as? [String: Any] else { return }
+        for attribute in ["createdAt", "name"] {
+            let stamp = "\(attribute)ObservedAt"
+            if let observed = ConversationRecordJSON.date(session[stamp]), (observed, key) <= cut {
+                session[attribute] = nil
+                session[stamp] = nil
+            }
+        }
+        object["tmux"] = session
+    }
+
     /// The attribute from whichever side observed it later; a tie goes to the larger value.
     static func takeNewer(_ attribute: String, from source: [String: Any], into target: inout [String: Any]) {
         let stamp = "\(attribute)ObservedAt"
@@ -223,7 +240,7 @@ struct LocationHistory {
         if let stored {
             sightings = stored
         } else if let at = ConversationRecordJSON.date(object["observedAt"]),
-            let legacy = ConversationRecordJSON.record(from: object)?.lastSeenIn,
+            let legacy = (object["lastSeenIn"] as? [String: Any]).map(ConversationRecordJSON.lastSeenIn(from:)),
             let sighting = Sighting(legacy, at: at)
         {
             // A record from before sightings: its one place, seen when the record was.
@@ -252,6 +269,9 @@ struct LocationHistory {
             guard candidate.agrees(holder: holder, tmux: tmux) else {
                 after = candidate.order
                 sightings.removeSubrange(index...)
+                for kept in sightings.indices {
+                    sightings[kept].forget(atOrBefore: candidate.order)
+                }
                 return
             }
             holder = holder ?? candidate.holder
