@@ -214,6 +214,9 @@ struct TileExitClassificationTests {
     @Test("An evicted or replaced surface's command exiting leaves the tile and its row alone")
     func retiredSurfaceExitIsIgnored() async throws {
         let harness = makeHarness(answer: .serverGone)
+        // The surfaces below are realized, so they launch as Ghostty-split tiles: a tmux-mode
+        // surface would start tmux for real. The exit path reads the launch the test notes.
+        harness.store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
         let (_, tab) = try openTwoTmuxTiles(harness.store)
         let store = harness.store
         let tile = store.renderTileID(forSession: tab)
