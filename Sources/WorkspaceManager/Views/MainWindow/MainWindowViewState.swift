@@ -36,7 +36,8 @@ struct MainWindowPendingRemoteWorkspaceSelection: Equatable {
 }
 
 struct TerminalCloseConfirmation: Identifiable, Equatable {
-    let sessionID: UUID
+    /// The close this sheet asks about, owned by the tile tree until answered.
+    let context: TileTreeStore.CloseConfirmation
     let title: String
     /// Closing only detaches: the tab's tmux session outlives it.
     var keepsRunningInTmux = false
@@ -47,6 +48,7 @@ struct TerminalCloseConfirmation: Identifiable, Equatable {
             : "The terminal still has a running process. Closing '\(title)' will end it."
     }
 
+    var sessionID: UUID { context.sessionID }
     var id: UUID { sessionID }
 }
 

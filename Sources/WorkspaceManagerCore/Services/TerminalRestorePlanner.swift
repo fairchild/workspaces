@@ -44,8 +44,18 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
     /// recorded mode. `nil` when the row names no mode this build knows; the session then
     /// takes the resolver's mode like a new primary.
     public let terminalMode: TerminalMultiplexingMode?
+    /// Whether this row was the selected tab in its scope. Restore creates every open
+    /// tile, and this decides which one each scope comes back on.
+    public let isSelectedInScope: Bool
 
     public var id: UUID { hostSessionID }
+
+    /// A surface that only rejoins a tmux session still running. It needs no decision
+    /// from anyone, so launch brings it back without asking.
+    public var isReattach: Bool {
+        if case .reattachTmux = action { return true }
+        return false
+    }
 
     /// This surface with its mode settled: a surface whose row named no mode takes the mode a
     /// new session in its scope would get, so everything downstream reads one concrete mode.
@@ -59,7 +69,8 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
             action: action,
             launchDirectoryFellBack: launchDirectoryFellBack,
             launchTmuxSessionName: launchTmuxSessionName,
-            terminalMode: terminalMode ?? terminalModeForNewSession(key.normalized())
+            terminalMode: terminalMode ?? terminalModeForNewSession(key.normalized()),
+            isSelectedInScope: isSelectedInScope
         )
     }
 
@@ -70,7 +81,8 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
         action: RestoreSurfaceAction,
         launchDirectoryFellBack: Bool = false,
         launchTmuxSessionName: String? = nil,
-        terminalMode: TerminalMultiplexingMode? = nil
+        terminalMode: TerminalMultiplexingMode? = nil,
+        isSelectedInScope: Bool = false
     ) {
         self.hostSessionID = hostSessionID
         self.key = key
@@ -79,6 +91,7 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
         self.launchDirectoryFellBack = launchDirectoryFellBack
         self.launchTmuxSessionName = launchTmuxSessionName
         self.terminalMode = terminalMode
+        self.isSelectedInScope = isSelectedInScope
     }
 }
 
@@ -113,6 +126,17 @@ public struct RestorePlan: Sendable, Equatable {
         )
     }
 
+    /// This plan narrowed to the surfaces `isIncluded` keeps, with the same run identity
+    /// and focus target. Launch splits a plan into what it rejoins silently and what it
+    /// offers, and both halves describe the same prior run.
+    public func filteringSurfaces(_ isIncluded: (RestoreSurfacePlan) -> Bool) -> RestorePlan {
+        RestorePlan(
+            surfaces: surfaces.filter(isIncluded),
+            selectedHostSessionID: selectedHostSessionID,
+            previousRunID: previousRunID
+        )
+    }
+
     /// Whether this plan's prior run was already handled (restored or dismissed).
     /// A plan without a run identity is never considered handled — when in doubt,
     /// offer the banner rather than silently drop a restorable session set.
@@ -123,21 +147,28 @@ public struct RestorePlan: Sendable, Equatable {
 
     /// Whether the plan restores anything beyond what a fresh launch already
     /// provides. Startup seeds a plain shell on `seedKey` at `seedDirectory`
-    /// before restore runs, so a plan consisting only of fresh shells matching
-    /// both duplicates the seed and is not worth a banner. A fresh shell on the
-    /// seed key at a different directory is still a real restore (the default
-    /// host directory can change between runs) and keeps the banner.
+    /// before restore runs, so a plan consisting of exactly one fresh shell matching
+    /// both duplicates the seed and is not worth a banner.
+    ///
+    /// The seed stands in for one tile, and only while it is still there:
+    /// `seedIsPresent` is false once an earlier restore pass retired it, and then
+    /// every surface is a real restore. Two fresh shells on the seed key are two
+    /// tiles, one more than the seed covers. A fresh shell on the seed key at a
+    /// different directory is still a real restore (the default host directory can
+    /// change between runs).
     public func offersMoreThanLaunchSeed(
         seedKey: HostTerminalSessionKey,
-        seedDirectory: URL
+        seedDirectory: URL,
+        seedIsPresent: Bool
     ) -> Bool {
+        guard seedIsPresent else { return !surfaces.isEmpty }
         let normalizedSeedPath = seedDirectory.standardizedFileURL.resolvingSymlinksInPath().path
-        return surfaces.contains { surface in
-            surface.action != .freshShell
-                || surface.key != seedKey
-                || surface.directory.standardizedFileURL.resolvingSymlinksInPath().path
-                    != normalizedSeedPath
+        let duplicatesSeed = surfaces.filter { surface in
+            surface.action == .freshShell
+                && surface.key == seedKey
+                && surface.directory.standardizedFileURL.resolvingSymlinksInPath().path == normalizedSeedPath
         }
+        return !(surfaces.count == 1 && duplicatesSeed.count == 1)
     }
 }
 
@@ -209,7 +240,7 @@ public struct TerminalRestorePlanner: Sendable {
         // directory from resuming the same conversation into two panes.
         var usedAgentSessionIDs: Set<String> = []
         let restorable = rows.compactMap { row -> (TerminalSessionContinuityRow, ResolvedRestoreTarget)? in
-            guard row.endedAt == nil, row.isActive, let resolved = resolveTarget(row) else { return nil }
+            guard row.endedAt == nil, let resolved = resolveTarget(row) else { return nil }
             return (row, resolved)
         }
         let displaced = displacedFromSharedTmuxSessions(restorable.map { $0.0 })
@@ -236,7 +267,8 @@ public struct TerminalRestorePlanner: Sendable {
                     launchDirectoryFellBack: decision.fellBack,
                     launchTmuxSessionName: ownLaunchName(
                         row: row, action: decision.action, directory: decision.directory),
-                    terminalMode: terminalMode(row: row, action: decision.action)
+                    terminalMode: terminalMode(row: row, action: decision.action),
+                    isSelectedInScope: row.isActive
                 )
             )
         }
@@ -264,7 +296,9 @@ public struct TerminalRestorePlanner: Sendable {
                 }
             }
             .compactMap { _, row -> TmuxSessionNameSharing.Claim? in
-                guard let name = row.tmuxSessionName, isTmuxSessionAlive(name) else { return nil }
+                guard row.holderLostAt == nil, let name = row.tmuxSessionName, isTmuxSessionAlive(name) else {
+                    return nil
+                }
                 return TmuxSessionNameSharing.Claim(hostSessionID: row.hostSessionID, tmuxSessionName: name)
             }
         return TmuxSessionNameSharing.displacedClaims(claims)
@@ -283,13 +317,18 @@ public struct TerminalRestorePlanner: Sendable {
 
     /// A fresh name for a row that recorded a tmux name of its own but cannot reattach it, so
     /// its new shell stays apart from the directory-derived session its primary holds.
+    ///
+    /// A row whose holder was lost gets one even when it recorded the directory-derived name.
+    /// Whatever answers to that name now was started after its server died, by another tile
+    /// or another launch, and two such rows would otherwise both launch onto the one name.
     private func ownLaunchName(
         row: TerminalSessionContinuityRow, action: RestoreSurfaceAction, directory: URL
     )
         -> String?
     {
         if case .reattachTmux = action { return nil }
-        guard let recorded = row.tmuxSessionName, recorded != TmuxSessionNaming.defaultName(for: directory) else {
+        guard let recorded = row.tmuxSessionName else { return nil }
+        guard row.holderLostAt != nil || recorded != TmuxSessionNaming.defaultName(for: directory) else {
             return nil
         }
         return TmuxSessionNameSharing.replacementName(for: directory)
@@ -311,18 +350,22 @@ public struct TerminalRestorePlanner: Sendable {
             action: .freshShell,
             launchDirectoryFellBack: fellBack,
             launchTmuxSessionName: TmuxSessionNameSharing.replacementName(for: directory),
-            terminalMode: .tmuxPerSession
+            terminalMode: .tmuxPerSession,
+            isSelectedInScope: row.isActive
         )
     }
 
     /// The restore ladder: live tmux → resumable Claude transcript → fresh shell.
+    ///
+    /// A row whose holder was lost never takes the first rung: the session it ran in died
+    /// with its server, so a live session under its recorded name is someone else's.
     private func decideAction(
         row: TerminalSessionContinuityRow,
         resolved: ResolvedRestoreTarget,
         usedAgentSessionIDs: Set<String>,
         recordedAgentSessionIDs: Set<String>
     ) -> (action: RestoreSurfaceAction, directory: URL, fellBack: Bool) {
-        if let tmuxSessionName = row.tmuxSessionName, isTmuxSessionAlive(tmuxSessionName) {
+        if row.holderLostAt == nil, let tmuxSessionName = row.tmuxSessionName, isTmuxSessionAlive(tmuxSessionName) {
             let (directory, fellBack) = nearestValidDirectory(row: row, resolved: resolved)
             return (.reattachTmux(sessionName: tmuxSessionName), directory, fellBack)
         }

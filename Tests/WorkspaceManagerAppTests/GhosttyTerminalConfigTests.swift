@@ -73,7 +73,7 @@ struct GhosttyTerminalConfigTests {
         // The `-e` form is pinned by the override: whether this tmux understands the
         // flag is a property of the host, and CI's tmux is older than the laptop's.
         let script = try #require(config.tmuxLaunchScript)
-        #expect(script.hasPrefix("exec tmux -L workspaces new-session -A -s "))
+        #expect(script.hasPrefix("exec tmux -L \(TmuxSessionProbe.socketLabel) new-session -A -s "))
         #expect(!script.contains("/bin/zsh"))
         #expect(script.contains("WORKSPACES_HOST_SESSION_ID=host-session-1"))
 
@@ -112,8 +112,9 @@ struct GhosttyTerminalConfigTests {
         // Typed into a shell that is already a tmux client — a repair racing a launch
         // that just attached — a bare `exec tmux` would nest, be refused, and take the
         // exec'd shell and its pane down. The guard makes that case a no-op.
-        let repair = GhosttyTerminalConfig.tmuxRepairScript("exec tmux -L workspaces new-session -A -s 'x'")
-        #expect(repair == "[ -z \"$TMUX\" ] && exec tmux -L workspaces new-session -A -s 'x'")
+        let repair = GhosttyTerminalConfig.tmuxRepairScript(
+            "exec tmux -L \(TmuxSessionProbe.socketLabel) new-session -A -s 'x'")
+        #expect(repair == "[ -z \"$TMUX\" ] && exec tmux -L \(TmuxSessionProbe.socketLabel) new-session -A -s 'x'")
     }
 
     @Test("tmux mode without tmux available exposes no launch script")
@@ -147,7 +148,7 @@ struct GhosttyTerminalConfigTests {
 
         let command = try #require(config.command)
         #expect(command.contains("/bin/zsh --login -c "))
-        #expect(command.contains("tmux -L workspaces new-session -A -s"))
+        #expect(command.contains("tmux -L \(TmuxSessionProbe.socketLabel) new-session -A -s"))
         #expect(command.contains("/tmp/repo-a"))
         #expect(command.contains("'wm-repo-a-"))
     }
@@ -397,7 +398,7 @@ struct GhosttyTerminalConfigTests {
 
         let command = try #require(config.command)
         #expect(command.contains("/bin/zsh -f -c "))
-        #expect(command.contains("tmux -L workspaces new-session -A -s"))
+        #expect(command.contains("tmux -L \(TmuxSessionProbe.socketLabel) new-session -A -s"))
         #expect(config.shellProfileModeLabel == "clean")
     }
 
@@ -525,7 +526,9 @@ struct GhosttyTerminalConfigTests {
             sessionEnvironment: Self.tileEnvironment(handle: "handle-b")
         )
 
-        #expect(script.contains("exec tmux -L workspaces new-session -A -s 'wm-repo-b-00000000' -c '/tmp/repo-b'"))
+        #expect(
+            script.contains(
+                "exec tmux -L \(TmuxSessionProbe.socketLabel) new-session -A -s 'wm-repo-b-00000000' -c '/tmp/repo-b'"))
         #expect(script.contains("-e '\(AutomationAPI.handleEnvironmentKey)=handle-b'"))
         #expect(script.contains("-e '\(AutomationAPI.socketEnvironmentKey)=/tmp/workspaces-automation.sock'"))
     }
@@ -633,7 +636,10 @@ struct GhosttyTerminalConfigTests {
             seedsEnvironmentOnCreate: false
         )
 
-        #expect(script.hasPrefix("exec tmux -L workspaces new-session -A -s 'wm-repo-b-00000000' -c '/tmp/repo-b' \\;"))
+        #expect(
+            script.hasPrefix(
+                "exec tmux -L \(TmuxSessionProbe.socketLabel) new-session -A -s 'wm-repo-b-00000000' -c '/tmp/repo-b' \\;"
+            ))
         #expect(!script.contains(" -e "))
         for pair in Self.tileEnvironment(handle: "handle-b") {
             let reseed = "\\; set-environment -t '=wm-repo-b-00000000' '\(pair.key)' '\(pair.value)'"
@@ -696,7 +702,7 @@ struct GhosttyTerminalConfigTests {
         #expect(unseeded.contains("'handle-b'"))
     }
 
-    @Test("A tmux launch with no tile-scoped environment stays a bare attach-or-create")
+    @Test("A tmux launch with no tile-scoped environment attaches or creates and keeps its server")
     func tmuxLaunchWithoutTileEnvironmentStaysBare() throws {
         let script = GhosttyTerminalConfig.tmuxLaunchScript(
             sessionName: "wm-repo-a",
@@ -710,9 +716,27 @@ struct GhosttyTerminalConfigTests {
             isTmuxAvailableOverride: true
         )
 
-        #expect(script == "exec tmux -L workspaces new-session -A -s 'wm-repo-a' -c '/tmp/repo-a'")
+        #expect(
+            script
+                == "exec tmux -L \(TmuxSessionProbe.socketLabel) new-session -A -s 'wm-repo-a' -c '/tmp/repo-a'"
+                + " \\; set-option -s exit-empty off")
         let command = try #require(config.command)
         #expect(!command.contains("set-environment"))
+    }
+
+    /// A server that outlives its last session is what lets an exit tell a shell ending from a
+    /// server dying. The option goes last, so a tmux too old to know it rejects it after the
+    /// attach and every `set-environment` have already run.
+    @Test("The launch keeps its tmux server running when empty, as the chain's last command")
+    func launchKeepsServerWhenEmptyLast() {
+        let script = GhosttyTerminalConfig.tmuxLaunchScript(
+            sessionName: "wm-repo-b-00000000",
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-b"),
+            sessionEnvironment: Self.tileEnvironment(handle: "handle-b")
+        )
+
+        #expect(script.hasSuffix(" \\; set-option -s exit-empty off"))
+        #expect(script.components(separatedBy: "exit-empty").count == 2)
     }
 
     /// The script is interpolated into a shell command that is itself wrapped as a

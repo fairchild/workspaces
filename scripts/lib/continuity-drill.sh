@@ -89,6 +89,7 @@ describe_pass() {
     esac
     case "$1" in
         *-server) PASS_KILL_ORDER="server-first" ;;
+        *-restart) PASS_KILL_ORDER="restart" ;;
         *) PASS_KILL_ORDER="app-first" ;;
     esac
 }
@@ -461,13 +462,18 @@ def text: sub("^(shell|pane) [^:]*: "; "");
    holders_before_kill: $holders.before, surviving_holders: $survivors, new_resume_processes: $resumed,
    successor_host_sessions: $assignment.successors, os_log_restored_sessions: $restored_ids,
    claimed_shells: $rendered, claimed_shells_without_resume: $fresh,
-   rung_basis: "successor = an unended after-relaunch terminal_sessions row the os_log says restore created, matched one-to-one to a before-row: first by an unchanged host_session_id, then (for newly minted rows only) by session_key and tmux_session_name, then by is_active when several share them; a tie or a before-row claimed twice is ambiguous. Claimed sessions = successors plus the tile's own reused host sessions. Holders come from the stub-agent ledger: a start event's pid counts only while its process start time falls within 120s before the event. reattach = a pre-kill holder pid is alive with the same start time; resume = a claimed shell or pane shows `--resume <id>`, or the ledger shows a new resume-source start for the conversation; ambiguous = the successor match tied, the resume landed only outside the tile's claimed sessions, or a claimed shell holds another conversation's resume; fresh = a claimed shell holds no resume; restored_unrendered = a successor exists but no shell started; none = neither",
+   rung_basis: "successor = an unended after-relaunch terminal_sessions row the os_log says restore created, matched one-to-one to a before-row: first by an unchanged host_session_id, then by the recorded row the os_log names for it, then (for newly minted rows a build logs no row for) by session_key and tmux_session_name, then by is_active when several share them; a tie or a before-row claimed twice is ambiguous. Claimed sessions = successors plus the tile's own reused host sessions. Holders come from the stub-agent ledger: a start event's pid counts only while its process start time falls within 120s before the event. reattach = a pre-kill holder pid is alive with the same start time; resume = a claimed shell or pane shows `--resume <id>`, or the ledger shows a new resume-source start for the conversation; ambiguous = the successor match tied, the resume landed only outside the tile's claimed sessions, or a claimed shell holds another conversation's resume; fresh = a claimed shell holds no resume; restored_unrendered = a successor exists but no shell started; none = neither",
    db_before: rows($db_before), db_after: rows($db_after)}
 JQ
 }
 
 restored_session_ids() {
     sed -nE 's/.*Created restored session ([0-9A-F-]{36}).*/\1/p' "$PASS_DIR/restore-log.txt" 2>/dev/null || true
+}
+
+restored_row_pairs() {
+    sed -nE 's/.*Created restored session ([0-9A-F-]{36}) from row ([0-9A-F-]{36}).*/\1 \2/p' \
+        "$PASS_DIR/restore-log.txt" 2>/dev/null || true
 }
 
 not_started_reason() {
@@ -494,8 +500,11 @@ classify_conversation_processes() {
 
 successor_assignment() {
     jq -cn --arg host "$1" --arg cwd "$2" --arg restored "$(restored_session_ids)" \
+        --arg logged_pairs "$(restored_row_pairs)" \
         --slurpfile before "$PASS_DIR/db-before.json" --slurpfile after "$PASS_DIR/db-after.json" \
         '($restored | split("\n") | map(select(. != ""))) as $restored_ids
+         | ($logged_pairs | split("\n") | map(select(. != "") | split(" ") | {key: .[0], value: .[1]})
+            | from_entries) as $logged_row
          | $before[0] as $rows
          | ($rows | map(select(if $host == "" then .directory_path == $cwd else .host_session_id == $host end))
                   | map(.host_session_id)) as $mine
@@ -506,6 +515,9 @@ successor_assignment() {
             | . as $row
             | if ($row.host_session_id | IN($kept[])) then
                 {after: $row.host_session_id, candidates: [$row.host_session_id], before: $row.host_session_id}
+              elif $logged_row[$row.host_session_id] != null then
+                {after: $row.host_session_id, candidates: [$logged_row[$row.host_session_id]],
+                 before: $logged_row[$row.host_session_id]}
               else
                 ($rows | map(select((.host_session_id | IN($kept[]) | not)
                                     and .session_key == $row.session_key

@@ -109,9 +109,9 @@ struct TileTreeStoreTests {
             launchedAt: Date(timeIntervalSince1970: 100)
         )
         let teardown = OutcomeLog()
-        store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] hostSessionID in
+        store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] _, ownership in
             let outcome = await TmuxOwnedSessionTerminator(ledger: ledger, probe: stub.probe)
-                .terminate(hostSessionID: hostSessionID, requiringCreation: false)
+                .terminate(ownership, requiringCreation: false)
             await teardown.append(outcome)
             return outcome
         }
@@ -161,9 +161,9 @@ struct TileTreeStoreTests {
             launchedAt: Date(timeIntervalSince1970: 100)
         )
         let teardown = OutcomeLog()
-        store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] hostSessionID in
+        store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] _, ownership in
             let outcome = await TmuxOwnedSessionTerminator(ledger: ledger, probe: stub.probe)
-                .terminate(hostSessionID: hostSessionID, requiringCreation: false)
+                .terminate(ownership, requiringCreation: false)
             await teardown.append(outcome)
             return outcome
         }
@@ -192,7 +192,7 @@ struct TileTreeStoreTests {
         let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
         let closedByUser = try #require(store.createTab(from: primary.id))
         let requests = OutcomeLog()
-        store.terminateOwnedTmuxSession = { hostSessionID in
+        store.terminateOwnedTmuxSession = { hostSessionID, _ in
             await requests.append(.killed(sessionID: hostSessionID.uuidString, name: ""))
             return .notLive
         }
@@ -218,14 +218,13 @@ struct TileTreeStoreTests {
         let cancelled = try #require(store.createTab(from: primary.id))
         let closedByUser = try #require(store.createTab(from: primary.id))
         let requests = OutcomeLog()
-        store.terminateOwnedTmuxSession = { hostSessionID in
+        store.terminateOwnedTmuxSession = { hostSessionID, _ in
             await requests.append(.killed(sessionID: hostSessionID.uuidString, name: ""))
             return .notLive
         }
 
-        store.noteCloseRequested(requested.id)
-        store.noteCloseRequested(cancelled.id)
-        store.forgetCloseRequest(cancelled.id)
+        store.beginClose(of: requested.id)
+        store.withdraw(try #require(store.beginClose(of: cancelled.id)))
         #expect(store.handleProcessExit(for: requested.id))
         #expect(store.handleProcessExit(for: cancelled.id))
         #expect(store.handleProcessExit(for: closedByUser.id, cause: .userClosed))
@@ -254,9 +253,9 @@ struct TileTreeStoreTests {
             launchedAt: Date(timeIntervalSince1970: 100)
         )
 
-        let detaching = controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store)
-        let ending = controller.closeConfirmation(sessionID: tab.id, tileTreeStore: store)
-        let unattributable = controller.closeConfirmation(sessionID: unrecordedTab.id, tileTreeStore: store)
+        let detaching = controller.raiseCloseConfirmation(sessionID: primary.id, tileTreeStore: store)
+        let ending = controller.raiseCloseConfirmation(sessionID: tab.id, tileTreeStore: store)
+        let unattributable = controller.raiseCloseConfirmation(sessionID: unrecordedTab.id, tileTreeStore: store)
         #expect(detaching.message.contains("keeps running"))
         #expect(ending.message.contains("will end it"))
         #expect(unattributable.message.contains("keeps running"))
@@ -265,11 +264,36 @@ struct TileTreeStoreTests {
         // only a tab born after the change closes for good.
         store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
         #expect(
-            controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains("keeps running"))
+            controller.raiseCloseConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains(
+                "keeps running"))
         let other = URL(fileURLWithPath: "/Users/test/code/other")
         let bornAfter = store.activateSession(key: .repoPath(other.path), directory: other).session
         #expect(
-            controller.closeConfirmation(sessionID: bornAfter.id, tileTreeStore: store).message.contains("will end it"))
+            controller.raiseCloseConfirmation(sessionID: bornAfter.id, tileTreeStore: store).message.contains(
+                "will end it"))
+    }
+
+    /// #1826: the prompt follows what the tile's launch did. A tmux-mode tile on a machine
+    /// without tmux runs a plain shell that ends with the tile, whatever its mode says.
+    @Test("The close prompt's wording follows whether the tile actually launched through tmux")
+    func closePromptFollowsTheRealizedLaunch() throws {
+        let store = TileTreeStore()
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
+        let controller = MainWindowTerminalSessionController()
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let launchedInTmux = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        let other = URL(fileURLWithPath: "/Users/test/code/other")
+        let launchedPlain = store.activateSession(key: .repoPath(other.path), directory: other).session
+        store.surfaceStore.noteLaunch(sessionID: launchedInTmux.id, throughTmux: true)
+        store.surfaceStore.noteLaunch(sessionID: launchedPlain.id, throughTmux: false)
+
+        #expect(launchedPlain.terminalMode == .tmuxPerSession)
+        #expect(
+            controller.raiseCloseConfirmation(sessionID: launchedInTmux.id, tileTreeStore: store).message
+                .contains("keeps running"))
+        #expect(
+            controller.raiseCloseConfirmation(sessionID: launchedPlain.id, tileTreeStore: store).message
+                .contains("will end it"))
     }
 
     @Test("The close prompt warns when closing a tab ends one of its splits")
@@ -281,7 +305,8 @@ struct TileTreeStoreTests {
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
         let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
         #expect(
-            controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains("keeps running"))
+            controller.raiseCloseConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains(
+                "keeps running"))
 
         store.tmuxOwnershipLedger.record(
             hostSessionID: split.id,
@@ -291,7 +316,34 @@ struct TileTreeStoreTests {
             launchedAt: Date(timeIntervalSince1970: 100)
         )
         #expect(
-            controller.closeConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains("will end it"))
+            controller.raiseCloseConfirmation(sessionID: primary.id, tileTreeStore: store).message.contains(
+                "will end it"))
+    }
+
+    /// A split pane's own close reads the pane, not its tab: a pane-scoped session the
+    /// ledger has not attributed is left running by teardown, and one it has is ended.
+    @Test("A split pane's close prompt reads the pane's own tmux session")
+    func closePromptReadsTheSplitPane() throws {
+        let store = TileTreeStore()
+        store.terminalModeForNewSession = { _ in .tmuxPerSession }
+        let controller = MainWindowTerminalSessionController()
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
+        #expect(
+            controller.raiseCloseConfirmation(sessionID: split.id, tileTreeStore: store).message.contains(
+                "keeps running"))
+
+        store.tmuxOwnershipLedger.record(
+            hostSessionID: split.id,
+            identity: TmuxLiveSession(
+                sessionID: "$9", name: try #require(split.tmuxSessionNameOverride),
+                createdAt: Date(timeIntervalSince1970: 100), serverPID: 4242),
+            launchedAt: Date(timeIntervalSince1970: 100)
+        )
+        #expect(
+            controller.raiseCloseConfirmation(sessionID: split.id, tileTreeStore: store).message.contains("will end it")
+        )
     }
 
     /// Tabs recorded before they had names of their own share their primary's. Relaunching
@@ -303,7 +355,7 @@ struct TileTreeStoreTests {
         let store = TileTreeStore()
         store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
         var killRequests: [UUID] = []
-        store.terminateOwnedTmuxSession = { hostSessionID in
+        store.terminateOwnedTmuxSession = { hostSessionID, _ in
             killRequests.append(hostSessionID)
             return .notAttributable
         }
@@ -363,9 +415,9 @@ struct TileTreeStoreTests {
         // Deliberately no ledger entry: this is a session holding the pane's name that
         // the app has no record of launching.
         let outcomes = OutcomeLog()
-        store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] hostSessionID in
+        store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] _, ownership in
             let outcome = await TmuxOwnedSessionTerminator(ledger: ledger, probe: stub.probe)
-                .terminate(hostSessionID: hostSessionID, requiringCreation: false)
+                .terminate(ownership, requiringCreation: false)
             await outcomes.append(outcome)
             return outcome
         }

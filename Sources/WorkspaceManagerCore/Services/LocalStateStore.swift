@@ -241,7 +241,7 @@ public struct LocalStateRetentionOutcome: Sendable, Equatable {
 }
 
 public actor LocalStateStore {
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
     public let databaseURL: URL
 
     /// Identity of this app run. One store instance == one process == one run, so
@@ -281,31 +281,34 @@ public actor LocalStateStore {
         )
     }
 
-    /// Startup hygiene (#1347 D4): rows still flagged active from runs *older
-    /// than the most-recent prior run* (or from before run tracking existed)
-    /// can never be offered again — cold-start restore reads only that single
-    /// prior run, and continuity rehydration upserts move live ids to the
-    /// current run — yet they polluted every `is_active = 1` listing and
-    /// blocked agent-event retention (135 "active" rows vs 13 live tiles
-    /// measured on 2026-08-23).
+    /// Startup hygiene (#1347 D4): rows still open from runs *older than the
+    /// most-recent prior run* (or from before run tracking existed) can never be
+    /// offered again — cold-start restore reads only that single prior run, and
+    /// continuity rehydration upserts move live ids to the current run — yet they
+    /// polluted every open-row listing and blocked agent-event retention (135
+    /// open rows vs 13 live tiles measured on 2026-08-23).
     ///
     /// Two stages, because ending a row is terminal for its id (#1239's
     /// ended-wins upsert guard) while the continuity manifest can still hold a
     /// stranded id whose upsert never landed in the intervening run:
     ///
-    /// 1. This launch only *deactivates* stale rows (`is_active = 0`, no
-    ///    `ended_at`) — a manifest rehydration that lands later this launch
-    ///    still revives the row into the current run.
-    /// 2. A row a *previous* launch deactivated and nothing revived since is
-    ///    ended terminally, which is what makes it eligible for retention
-    ///    deletion. (A session would have to hit the crash-before-upsert edge
-    ///    in two consecutive runs to be ended while its tile is still open;
-    ///    even then the tile keeps working and heals on close-and-reopen.)
+    /// 1. This launch only *stages* stale rows (`stale_since`, no `ended_at`) —
+    ///    a manifest rehydration that lands later this launch clears the stamp
+    ///    and moves the row into the current run.
+    /// 2. A row a *previous* launch staged and nothing revived since is ended
+    ///    terminally, which is what makes it eligible for retention deletion.
+    ///    (A session would have to hit the crash-before-upsert edge in two
+    ///    consecutive runs to be ended while its tile is still open; even then
+    ///    the tile keeps working and heals on close-and-reopen.)
+    ///
+    /// Staging has its own column so `is_active` keeps one meaning, the selected
+    /// tab in its scope: a background tab is open and unselected, and must take
+    /// both stages like any other open row.
     ///
     /// The current run's rows and the single restorable prior run's rows are
     /// never touched, and a store stamped with an older run start (the fixture
-    /// continuity seeder opens one deliberately) cannot deactivate rows of
-    /// runs newer than itself.
+    /// continuity seeder opens one deliberately) cannot stage rows of runs newer
+    /// than itself.
     private static func endStaleSessionsFromOlderRuns(
         in dbPool: DatabasePool,
         currentRunID: String,
@@ -329,13 +332,13 @@ public actor LocalStateStore {
             )
             """
         try dbPool.write { db in
-            // Stage 2 first: rows a previous launch deactivated. Running it
-            // before stage 1 keeps this launch's own deactivations revivable.
+            // Stage 2 first: rows a previous launch staged. Running it before
+            // stage 1 keeps this launch's own staging revivable.
             try db.execute(
                 sql: """
                     UPDATE terminal_sessions
-                    SET ended_at = ?
-                    WHERE is_active = 0
+                    SET ended_at = ?, is_active = 0
+                    WHERE stale_since IS NOT NULL
                       AND ended_at IS NULL
                       AND \(stalePredicate)
                     """,
@@ -344,12 +347,12 @@ public actor LocalStateStore {
             try db.execute(
                 sql: """
                     UPDATE terminal_sessions
-                    SET is_active = 0
-                    WHERE is_active = 1
+                    SET stale_since = ?
+                    WHERE stale_since IS NULL
                       AND ended_at IS NULL
                       AND \(stalePredicate)
                     """,
-                arguments: [currentRunID, currentRunStartedAt, currentRunStartedAt]
+                arguments: [now, currentRunID, currentRunStartedAt, currentRunStartedAt]
             )
         }
     }
@@ -423,7 +426,9 @@ public actor LocalStateStore {
                         is_active = excluded.is_active,
                         last_seen_at = excluded.last_seen_at,
                         run_id = excluded.run_id,
-                        run_started_at = excluded.run_started_at
+                        run_started_at = excluded.run_started_at,
+                        stale_since = NULL,
+                        holder_lost_at = NULL
                     WHERE terminal_sessions.ended_at IS NULL
                     """,
                 arguments: [
@@ -462,6 +467,39 @@ public actor LocalStateStore {
                     WHERE host_session_id = ? AND ended_at IS NULL
                     """,
                 arguments: [now, now, hostSessionID.uuidString])
+        }
+    }
+
+    /// Records that the tmux server holding a session's processes died under it.
+    ///
+    /// The row stays open: losing a holder is not the person ending the tile, so the
+    /// next run's restore set still carries it and offers what can come back. Its tile is
+    /// gone from the window, so the row stops being its scope's selected tab. An ended row
+    /// is left alone, and the first loss time wins, as with `ended_at`.
+    public func markTerminalSessionHolderLost(hostSessionID: UUID, lostAt: Date = Date()) async throws {
+        let now = Self.isoString(lostAt)
+        try await dbPool.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE terminal_sessions
+                    SET holder_lost_at = ?, is_active = 0, last_seen_at = ?
+                    WHERE host_session_id = ? AND ended_at IS NULL AND holder_lost_at IS NULL
+                    """,
+                arguments: [now, now, hostSessionID.uuidString])
+        }
+    }
+
+    /// Records that an open row's tile left the window while its work stayed, so the row is
+    /// no longer its scope's selected tab. The row stays open and nothing else changes.
+    public func markTerminalSessionDeselected(hostSessionID: UUID) async throws {
+        try await dbPool.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE terminal_sessions
+                    SET is_active = 0
+                    WHERE host_session_id = ? AND ended_at IS NULL
+                    """,
+                arguments: [hostSessionID.uuidString])
         }
     }
 
@@ -595,6 +633,24 @@ public actor LocalStateStore {
         }
     }
 
+    /// The `terminal_mode` a placeholder row carries until a surface records it.
+    ///
+    /// An agent event can land before the surface's own upsert, and the event's
+    /// foreign key needs a row to point at, so `ensureTerminalSessionRow` writes one
+    /// with this mode. Every surface upsert overwrites the mode with a real one, so the
+    /// value holds exactly while no tile has recorded the row — which is the fact the
+    /// restore reader needs to skip it. Rows written by older builds already carry it,
+    /// so no migration has to rewrite them to be told apart.
+    static let placeholderTerminalMode = "unknown"
+
+    /// The SQL condition for an open tile: a row some surface recorded that has not
+    /// ended. Every reader that asks which tiles are open uses this one condition, and
+    /// adds run selection and the stale-staging filter itself where it needs them.
+    /// `alias` is the `terminal_sessions` table's name in the caller's query.
+    static func openTile(_ alias: String) -> String {
+        "(\(alias).ended_at IS NULL AND \(alias).terminal_mode != '\(placeholderTerminalMode)')"
+    }
+
     private static func ensureTerminalSessionRow(
         _ db: Database,
         hostSessionID: UUID,
@@ -625,7 +681,7 @@ public actor LocalStateStore {
                     run_started_at,
                     ended_at
                 )
-                VALUES (?, ?, 'host_path', NULL, ?, NULL, NULL, ?, 'unknown', NULL, 0, NULL, 0, ?, ?, ?, ?, NULL)
+                VALUES (?, ?, 'host_path', NULL, ?, NULL, NULL, ?, ?, NULL, 0, NULL, 0, ?, ?, ?, ?, NULL)
                 ON CONFLICT(host_session_id) DO NOTHING
                 """,
             arguments: [
@@ -633,6 +689,7 @@ public actor LocalStateStore {
                 "host_session_id:\(hostSessionID.uuidString)",
                 cwd,
                 cwd,
+                placeholderTerminalMode,
                 now,
                 now,
                 runID,
@@ -670,18 +727,19 @@ public actor LocalStateStore {
     /// Continuity read model (local-state-store plan, slice 3): the most recent
     /// terminal sessions, each joined with the latest agent status event recorded
     /// for that host session (or `nil` agent fields when none exists). Rows are
-    /// ordered newest `last_seen_at` first. Pass `activeOnly: true` to restrict to
-    /// sessions that have not been marked ended — after a crash or reboot the
-    /// previous run's sessions typically remain active, which is what a cold-start
-    /// restore wants to enumerate.
+    /// ordered newest `last_seen_at` first. Pass `openOnly: true` to restrict to
+    /// open tiles (`openTile`), selected tab or not — after a crash or reboot the
+    /// previous run's sessions typically remain open, which is what a cold-start
+    /// restore wants to enumerate. Rows the startup sweep has staged as stale are on
+    /// their way to ending and are left out.
     public func fetchContinuitySessions(
-        activeOnly: Bool = false,
+        openOnly: Bool = false,
         limit: Int = 50,
         offset: Int = 0
     ) async throws -> [TerminalSessionContinuityRow] {
         let cappedLimit = max(0, limit)
         let cappedOffset = max(0, offset)
-        let activeOnlyValue = activeOnly ? 1 : 0
+        let openOnlyValue = openOnly ? 1 : 0
         return try await dbPool.read { db -> [TerminalSessionContinuityRow] in
             let rows = try Row.fetchAll(
                 db,
@@ -702,6 +760,7 @@ public actor LocalStateStore {
                         ts.created_at,
                         ts.last_seen_at,
                         ts.ended_at,
+                        ts.holder_lost_at,
                         ae.agent_session_id,
                         ae.agent_kind,
                         ae.run_state AS agent_run_state,
@@ -724,25 +783,36 @@ public actor LocalStateStore {
                             ) AS event_rank
                         FROM agent_status_events
                     ) ae ON ae.host_session_id = ts.host_session_id AND ae.event_rank = 1
-                    WHERE (? = 0 OR (ts.is_active = 1 AND ts.ended_at IS NULL))
+                    WHERE (? = 0 OR (\(Self.openTile("ts")) AND ts.stale_since IS NULL))
                     ORDER BY ts.last_seen_at DESC
                     LIMIT ? OFFSET ?
                     """,
-                arguments: [activeOnlyValue, cappedLimit, cappedOffset]
+                arguments: [openOnlyValue, cappedLimit, cappedOffset]
             )
             return rows.compactMap(TerminalSessionContinuityRow.init(row:))
         }
     }
 
-    /// Cold-start restore read model (issue #783 #2): the active continuity rows
-    /// belonging to the single most-recent *prior* app run — the run whose
+    /// Cold-start restore read model (issue #783 #2): every tile still open at the
+    /// end of the single most-recent *prior* app run — the run whose
     /// `run_started_at` is the greatest value strictly less than this store
     /// instance's run. Rows from older never-cleanly-closed runs and from the
     /// current run are excluded, so restore offers only the user's previous
-    /// session set instead of an all-time backlog of stale "active" rows. Returns
+    /// session set instead of an all-time backlog of stale open rows. Returns
     /// `[]` on first launch and for pre-v2 rows (NULL `run_id`).
-    public func fetchPreviousRunSessions(limit: Int = 100) async throws -> [TerminalSessionContinuityRow] {
-        let cappedLimit = max(0, limit)
+    ///
+    /// Open is `openTile`: a background tab and a split pane are open tiles as much
+    /// as the selected tab is, so `is_active` (the selected tab in its scope) plays
+    /// no part here. A row whose holder died stays open and is included. Placeholder
+    /// rows no surface ever recorded are not tiles and are skipped. The startup sweep
+    /// never stages the previous run's rows, so the stale filter keeps nothing out
+    /// today; it is stated so this reader and `fetchContinuitySessions` agree.
+    ///
+    /// Restore reads the whole set: which rows share a tmux name, and which one is a
+    /// scope's selected tab, are facts about every row, so a cut taken before planning
+    /// would decide them from part of the run. `limit` is for callers that page.
+    public func fetchPreviousRunSessions(limit: Int? = nil) async throws -> [TerminalSessionContinuityRow] {
+        let sqlLimit = limit.map { max(0, $0) } ?? -1
         let currentRunStartedAt = runStartedAt
         return try await dbPool.read { db -> [TerminalSessionContinuityRow] in
             let rows = try Row.fetchAll(
@@ -764,6 +834,7 @@ public actor LocalStateStore {
                         ts.created_at,
                         ts.last_seen_at,
                         ts.ended_at,
+                        ts.holder_lost_at,
                         ai.agent_session_id,
                         COALESCE(ai.agent_kind, ae.agent_kind) AS agent_kind,
                         ae.run_state AS agent_run_state,
@@ -813,12 +884,13 @@ public actor LocalStateStore {
                         ORDER BY run_started_at DESC
                         LIMIT 1
                     )
-                    AND ts.is_active = 1
-                    AND ts.ended_at IS NULL
+                    AND \(Self.openTile("ts"))
+                    AND ts.stale_since IS NULL
                     ORDER BY ts.last_seen_at DESC
                     LIMIT ?
                     """,
-                arguments: [currentRunStartedAt, cappedLimit]
+                // SQLite reads a negative LIMIT as no limit.
+                arguments: [currentRunStartedAt, sqlLimit]
             )
             return rows.compactMap(TerminalSessionContinuityRow.init(row:))
         }
@@ -960,11 +1032,11 @@ public actor LocalStateStore {
     /// disturbing anything the cold-start restore path reads. Two invariants hold
     /// regardless of `policy` or `now`:
     ///
-    /// - Only ended *and* aged `terminal_sessions` are removed, so every active
+    /// - Only ended *and* aged `terminal_sessions` are removed, so every open
     ///   row — including the previous run's resumable sessions that
     ///   `fetchPreviousRunSessions` enumerates — is preserved. Removing an ended
     ///   session cascades its `agent_status_events` and split snapshots away.
-    /// - The latest `agent_status_events` row per still-active session is kept
+    /// - The latest `agent_status_events` row per still-open session is kept
     ///   regardless of age (it carries the `agent_session_id` that drives
     ///   `claude --resume`); only older, non-latest events past the cutoff are
     ///   pruned. The preserved set is computed with the same latest-per-session
@@ -986,20 +1058,20 @@ public actor LocalStateStore {
 
         let deletions = try await dbPool.write { db -> (sessions: Int, agentEvents: Int, diagnostics: Int) in
             // Ended + aged sessions first; ON DELETE CASCADE clears their agent
-            // events and split snapshots. Active rows never match this predicate.
+            // events and split snapshots. Open rows never match this predicate.
             // One exception: a *fully-ended* most-recent prior run keeps its rows.
             // `fetchPreviousRunSessions` selects the prior run from all rows, so
             // deleting the last rows of a cleanly-closed prior run would make the
             // reader fall back to an older run's stale never-ended crash rows and
             // offer the wrong restore set — a cleanly-closed prior run must read
             // as "nothing to restore", not as an older run's leftovers. When the
-            // prior run still has active rows, those anchor the reader and its
-            // ended rows prune normally. (The EXISTS probe checks active rows,
+            // prior run still has open tiles, those anchor the reader and its
+            // ended rows prune normally. (The EXISTS probe checks open tiles,
             // which this statement never deletes, so it is stable mid-delete.)
             try db.execute(
                 sql: """
                     DELETE FROM terminal_sessions
-                    WHERE is_active = 0 AND ended_at IS NOT NULL AND ended_at < ?
+                    WHERE ended_at IS NOT NULL AND ended_at < ?
                       AND (
                           run_id IS NOT (
                               SELECT run_id
@@ -1011,14 +1083,14 @@ public actor LocalStateStore {
                           OR EXISTS (
                               SELECT 1 FROM terminal_sessions anchor
                               WHERE anchor.run_id = terminal_sessions.run_id
-                                AND anchor.is_active = 1 AND anchor.ended_at IS NULL
+                                AND \(Self.openTile("anchor"))
                           )
                       )
                     """,
                 arguments: [sessionCutoff, currentRunStartedAt])
             let deletedEndedSessions = db.changesCount
 
-            // Aged agent events, except the latest per still-active session. The
+            // Aged agent events, except the latest per open tile. The
             // ROW_NUMBER projection mirrors fetchContinuitySessions /
             // fetchPreviousRunSessions, so the row each reader joins as "latest"
             // is exactly the row this keeps.
@@ -1037,7 +1109,7 @@ public actor LocalStateStore {
                               FROM agent_status_events ae
                               JOIN terminal_sessions ts
                                   ON ts.host_session_id = ae.host_session_id
-                              WHERE ts.is_active = 1 AND ts.ended_at IS NULL
+                              WHERE \(Self.openTile("ts"))
                           )
                           WHERE event_rank = 1
                       )
@@ -1311,6 +1383,17 @@ public actor LocalStateStore {
                         ON terminal_sessions(run_started_at DESC);
                     """)
         }
+        migrator.registerMigration("v3") { db in
+            // Two facts kept apart from `is_active`, which means only the selected
+            // tab in its scope: when the startup sweep staged a stale row, and when
+            // a row's tmux holder died under a running app. Additive and nullable;
+            // no existing row is rewritten.
+            try db.execute(
+                sql: """
+                    ALTER TABLE terminal_sessions ADD COLUMN stale_since TEXT;
+                    ALTER TABLE terminal_sessions ADD COLUMN holder_lost_at TEXT;
+                    """)
+        }
         return migrator
     }
 
@@ -1568,6 +1651,9 @@ public struct TerminalSessionContinuityRow: Sendable, Equatable, Identifiable {
     public let createdAt: Date
     public let lastSeenAt: Date
     public let endedAt: Date?
+    /// When the tmux server holding this row's processes died under a running app.
+    /// The row stays open, so restore still offers it.
+    public let holderLostAt: Date?
     public let agentSessionID: String?
     public let agentKind: String?
     public let agentRunState: String?
@@ -1593,6 +1679,7 @@ public struct TerminalSessionContinuityRow: Sendable, Equatable, Identifiable {
         createdAt: Date,
         lastSeenAt: Date,
         endedAt: Date?,
+        holderLostAt: Date? = nil,
         agentSessionID: String?,
         agentKind: String?,
         agentRunState: String?,
@@ -1615,6 +1702,7 @@ public struct TerminalSessionContinuityRow: Sendable, Equatable, Identifiable {
         self.createdAt = createdAt
         self.lastSeenAt = lastSeenAt
         self.endedAt = endedAt
+        self.holderLostAt = holderLostAt
         self.agentSessionID = agentSessionID
         self.agentKind = agentKind
         self.agentRunState = agentRunState
@@ -1654,6 +1742,7 @@ public struct TerminalSessionContinuityRow: Sendable, Equatable, Identifiable {
             createdAt: createdAt,
             lastSeenAt: lastSeenAt,
             endedAt: (row["ended_at"] as String?).flatMap(parseLocalStateISODate),
+            holderLostAt: (row["holder_lost_at"] as String?).flatMap(parseLocalStateISODate),
             agentSessionID: row["agent_session_id"] as String?,
             agentKind: row["agent_kind"] as String?,
             agentRunState: row["agent_run_state"] as String?,

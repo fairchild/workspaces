@@ -47,11 +47,11 @@ struct TerminalRestoreCoordinator: Sendable {
         self.normalizePath = normalizePath
     }
 
-    /// Read the previous run's active sessions + latest layout, pre-probe tmux
+    /// Read every open row of the previous run + latest layout, pre-probe tmux
     /// liveness, and produce a fully-decided plan. Store read failures degrade to
     /// an empty plan rather than throwing.
     func makePlan(index: RestoreTargetIndex) async -> RestorePlan {
-        let rows = (try? await localStateStore.fetchPreviousRunSessions(limit: 100)) ?? []
+        let rows = (try? await localStateStore.fetchPreviousRunSessions()) ?? []
         let layout = (try? await localStateStore.fetchLatestLayoutSnapshot()) ?? nil
         let previousRunID = (try? await localStateStore.fetchPreviousRunID()) ?? nil
 
@@ -67,18 +67,27 @@ struct TerminalRestoreCoordinator: Sendable {
         return planner.plan(rows: rows, layout: layout, previousRunID: previousRunID)
     }
 
-    /// Fan out `has-session` probes concurrently and collect the live names, so
-    /// the planner receives a pure synchronous membership test.
+    /// How many `has-session` probes run at once. The previous run's set is read
+    /// whole, so the fan-out is bounded here rather than by the read.
+    static let maxConcurrentProbes = 8
+
+    /// Run `has-session` probes concurrently, a bounded number at a time, and collect
+    /// the live names, so the planner receives a pure synchronous membership test.
     private func probeLiveTmuxSessions(_ names: Set<String>) async -> Set<String> {
         guard !names.isEmpty else { return [] }
         let probe = tmuxProbe
         return await withTaskGroup(of: (String, Bool).self) { group in
-            for name in names {
+            var pending = names.makeIterator()
+            for _ in 0..<Self.maxConcurrentProbes {
+                guard let name = pending.next() else { break }
                 group.addTask { (name, await probe.isSessionAlive(name)) }
             }
             var live: Set<String> = []
-            for await (name, alive) in group where alive {
-                live.insert(name)
+            for await (name, alive) in group {
+                if alive { live.insert(name) }
+                if let next = pending.next() {
+                    group.addTask { (next, await probe.isSessionAlive(next)) }
+                }
             }
             return live
         }

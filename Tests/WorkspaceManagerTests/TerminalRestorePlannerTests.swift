@@ -256,17 +256,102 @@ struct TerminalRestorePlannerTests {
         }
     }
 
-    @Test("Ended or inactive rows are excluded")
-    func endedOrInactiveExcluded() {
+    @Test("Ended rows are excluded")
+    func endedRowsExcluded() {
         let planner = makePlanner()
+        let plan = planner.plan(rows: [makeRow(endedAt: Self.baseDate)], layout: nil)
+        #expect(plan.surfaces.isEmpty)
+    }
+
+    /// `is_active` is the selected tab in its scope. A background tab and a split pane are
+    /// open tiles with it unset, and each comes back as its own tab in its scope; the flag
+    /// only decides which tab the scope lands on.
+    @Test("A background tab and a split pane from the previous run are planned")
+    func backgroundTabAndSplitPanePlanned() throws {
+        let directory = "/repo"
+        let directoryURL = URL(fileURLWithPath: directory)
+        let selectedID = UUID()
+        let backgroundTabID = UUID()
+        let splitPaneID = UUID()
+        let primaryName = TmuxSessionNaming.defaultName(for: directoryURL)
+        let tabName = TmuxSessionNaming.splitPaneName(for: directoryURL, paneSessionID: backgroundTabID)
+        let splitName = TmuxSessionNaming.splitPaneName(for: directoryURL, paneSessionID: splitPaneID)
+        let live: Set<String> = [primaryName, tabName, splitName]
+        let planner = makePlanner(tmuxAlive: { live.contains($0) })
+
         let plan = planner.plan(
             rows: [
-                makeRow(endedAt: Self.baseDate),
-                makeRow(isActive: false),
+                makeRow(
+                    hostSessionID: selectedID, directoryPath: directory, terminalMode: .tmuxPerSession,
+                    tmuxSessionName: primaryName, isActive: true),
+                makeRow(
+                    hostSessionID: backgroundTabID, directoryPath: directory, terminalMode: .tmuxPerSession,
+                    tmuxSessionName: tabName, isActive: false),
+                makeRow(
+                    hostSessionID: splitPaneID, directoryPath: directory, terminalMode: .tmuxPerSession,
+                    tmuxSessionName: splitName, isActive: false),
             ],
             layout: nil
         )
-        #expect(plan.surfaces.isEmpty)
+
+        let byID = Dictionary(uniqueKeysWithValues: plan.surfaces.map { ($0.hostSessionID, $0) })
+        #expect(Set(byID.keys) == [selectedID, backgroundTabID, splitPaneID])
+        for surface in plan.surfaces {
+            #expect(surface.key == .repoPath(directory))
+        }
+        #expect(byID[selectedID]?.action == .reattachTmux(sessionName: primaryName))
+        #expect(byID[backgroundTabID]?.action == .reattachTmux(sessionName: tabName))
+        #expect(byID[splitPaneID]?.action == .reattachTmux(sessionName: splitName))
+        #expect(byID[selectedID]?.isSelectedInScope == true)
+        #expect(byID[backgroundTabID]?.isSelectedInScope == false)
+        #expect(byID[splitPaneID]?.isSelectedInScope == false)
+    }
+
+    private func holderLostRow(
+        tmuxSessionName: String = TmuxSessionNaming.defaultName(for: URL(fileURLWithPath: "/repo")),
+        holderLostAt: Date? = Self.baseDate,
+        agentSessionID: String? = Self.sessionOne
+    ) -> TerminalSessionContinuityRow {
+        TerminalSessionContinuityRow(
+            hostSessionID: UUID(), sessionKey: "repoPath(/repo)", targetKind: "repo", targetID: nil,
+            targetPath: "/repo", backendIdentifier: nil, backendInstanceID: nil, directoryPath: "/repo",
+            terminalMode: .tmuxPerSession, tmuxSessionName: tmuxSessionName, customCommandPresent: false,
+            isActive: false, createdAt: Self.baseDate, lastSeenAt: Self.baseDate, endedAt: nil,
+            holderLostAt: holderLostAt, agentSessionID: agentSessionID,
+            agentKind: AgentKind.claudeCode.rawValue, agentRunState: "idle", agentCwd: "/repo",
+            agentModelDisplayName: nil, agentEventAt: Self.baseDate)
+    }
+
+    /// The session a holder-lost row ran in died with its server. A live session under its
+    /// recorded name was started since, by another tile or launch, and is not this tile's.
+    @Test("A tile whose tmux server died resumes on a name of its own, even when its old name is live again")
+    func holderLostRowPlansResume() throws {
+        let recordedName = TmuxSessionNaming.defaultName(for: URL(fileURLWithPath: "/repo"))
+        let planner = makePlanner(
+            tmuxAlive: { $0 == recordedName },
+            transcriptResumable: { _, _ in true }
+        )
+
+        let lost = try #require(planner.plan(rows: [holderLostRow()], layout: nil).surfaces.first)
+        let unmarked = try #require(planner.plan(rows: [holderLostRow(holderLostAt: nil)], layout: nil).surfaces.first)
+
+        #expect(lost.action == .resumeClaude(agentSessionID: Self.sessionOne))
+        #expect(lost.launchTmuxSessionName != nil)
+        #expect(lost.launchTmuxSessionName != recordedName)
+        #expect(unmarked.action == .reattachTmux(sessionName: recordedName))
+    }
+
+    @Test("Two tiles whose server died on one shared name come back on two names of their own")
+    func holderLostRowsNeverShareAName() {
+        let planner = makePlanner(tmuxAlive: { _ in false }, transcriptResumable: { _, _ in false })
+
+        let plan = planner.plan(
+            rows: [holderLostRow(agentSessionID: nil), holderLostRow(agentSessionID: nil)], layout: nil)
+
+        let names = plan.surfaces.compactMap(\.launchTmuxSessionName)
+        #expect(plan.surfaces.map(\.action) == [.freshShell, .freshShell])
+        #expect(names.count == 2)
+        #expect(Set(names).count == 2)
     }
 
     @Test("Rows whose target no longer resolves are dropped")
@@ -578,12 +663,16 @@ struct TerminalRestorePlannerTests {
         let seedFresh = RestorePlan(
             surfaces: [surface(key: .defaultHome, action: .freshShell)],
             selectedHostSessionID: nil)
-        #expect(!seedFresh.offersMoreThanLaunchSeed(seedKey: .defaultHome, seedDirectory: seedDirectory))
+        #expect(
+            !seedFresh.offersMoreThanLaunchSeed(
+                seedKey: .defaultHome, seedDirectory: seedDirectory, seedIsPresent: true))
 
         let seedResume = RestorePlan(
             surfaces: [surface(key: .defaultHome, action: .resumeClaude(agentSessionID: "s1"))],
             selectedHostSessionID: nil)
-        #expect(seedResume.offersMoreThanLaunchSeed(seedKey: .defaultHome, seedDirectory: seedDirectory))
+        #expect(
+            seedResume.offersMoreThanLaunchSeed(
+                seedKey: .defaultHome, seedDirectory: seedDirectory, seedIsPresent: true))
 
         let withRepo = RestorePlan(
             surfaces: [
@@ -591,7 +680,8 @@ struct TerminalRestorePlannerTests {
                 surface(key: .repoPath("/code/repo"), action: .freshShell),
             ],
             selectedHostSessionID: nil)
-        #expect(withRepo.offersMoreThanLaunchSeed(seedKey: .defaultHome, seedDirectory: seedDirectory))
+        #expect(
+            withRepo.offersMoreThanLaunchSeed(seedKey: .defaultHome, seedDirectory: seedDirectory, seedIsPresent: true))
 
         // A seed-key fresh shell at a DIFFERENT directory is a real restore, not a
         // seed duplicate (the default host directory can change between runs).
@@ -604,6 +694,6 @@ struct TerminalRestorePlannerTests {
             selectedHostSessionID: nil)
         #expect(
             differentDirectory.offersMoreThanLaunchSeed(
-                seedKey: .defaultHome, seedDirectory: seedDirectory))
+                seedKey: .defaultHome, seedDirectory: seedDirectory, seedIsPresent: true))
     }
 }

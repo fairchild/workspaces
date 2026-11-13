@@ -16,6 +16,8 @@ import Testing
 enum ContinuityWriteOperation: Equatable, Hashable {
     case record(UUID, isActive: Bool)
     case ended(UUID)
+    case holderLost(UUID)
+    case deselected(UUID)
 }
 
 /// In-memory `TerminalContinuityWriting` sink recording the exact order writes
@@ -48,6 +50,14 @@ actor ContinuityWriteLog: TerminalContinuityWriting {
 
     func markTerminalSessionEnded(hostSessionID: UUID, endedAt: Date) async throws {
         operations.append(.ended(hostSessionID))
+    }
+
+    func markTerminalSessionDeselected(hostSessionID: UUID) async throws {
+        operations.append(.deselected(hostSessionID))
+    }
+
+    func markTerminalSessionHolderLost(hostSessionID: UUID, lostAt: Date) async throws {
+        operations.append(.holderLost(hostSessionID))
     }
 }
 
@@ -187,7 +197,7 @@ struct TerminalContinuityRecorderTests {
         }
         await recorder.waitUntilDrained()
 
-        #expect(try await store.fetchContinuitySessions(activeOnly: true, limit: 200).isEmpty)
+        #expect(try await store.fetchContinuitySessions(openOnly: true, limit: 200).isEmpty)
         let rows = try await store.fetchContinuitySessions(limit: 200)
         #expect(rows.count == 100)
         #expect(rows.allSatisfy { $0.endedAt != nil && !$0.isActive })

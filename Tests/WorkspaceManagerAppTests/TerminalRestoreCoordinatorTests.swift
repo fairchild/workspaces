@@ -115,6 +115,63 @@ struct TerminalRestoreCoordinatorTests {
         #expect(plan.surfaces.isEmpty)
     }
 
+    /// Which rows share a tmux name and which is a scope's selected tab are facts about
+    /// the whole previous run, so the plan is made from every open row, however many.
+    @Test("Plans every open tile of the previous run, past a hundred, probing a few at a time")
+    func plansEveryOpenTile() async throws {
+        let directory = URL(fileURLWithPath: "/code/app")
+        let db = try makeDatabaseURL()
+        let priorRun = try makeStore(at: db, runStartedAt: Self.priorRun)
+        let recorded = (0..<130).map { index in
+            HostTerminalSession(
+                id: UUID(), key: .repoPath(directory.path), directory: directory, terminalMode: .tmuxPerSession,
+                tmuxSessionNameOverride: "app-tab-\(index)")
+        }
+        for session in recorded {
+            try await priorRun.recordTerminalSession(session, isActive: false, hooksSocketPath: nil)
+        }
+
+        let probes = ProbeConcurrency()
+        let coordinator = TerminalRestoreCoordinator(
+            localStateStore: try makeStore(at: db, runStartedAt: Self.currentRun),
+            tmuxProbe: TmuxSessionProbe(
+                run: { _, _, _ in
+                    await probes.enter()
+                    try? await Task.sleep(for: .milliseconds(2))
+                    await probes.leave()
+                    return 0
+                },
+                environment: [:]),
+            transcriptResumability: ClaudeTranscriptResumability(environment: [:], fileExists: { _ in false }),
+            normalizePath: { $0 }
+        )
+        let index = RestoreTargetIndex(
+            homeDirectoryPath: "/Users/me",
+            repos: [RestoreTargetIndex.Entry(normalizedPath: directory.path, rootPath: directory.path)],
+            workspaces: []
+        )
+
+        let plan = await coordinator.makePlan(index: index)
+
+        #expect(Set(plan.surfaces.map(\.hostSessionID)) == Set(recorded.map(\.id)))
+        #expect(await probes.calls == recorded.count)
+        #expect(await probes.peak <= TerminalRestoreCoordinator.maxConcurrentProbes)
+    }
+
+    private actor ProbeConcurrency {
+        private(set) var calls = 0
+        private(set) var peak = 0
+        private var inFlight = 0
+
+        func enter() {
+            calls += 1
+            inFlight += 1
+            peak = max(peak, inFlight)
+        }
+
+        func leave() { inFlight -= 1 }
+    }
+
     private func makeDatabaseURL() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("TerminalRestoreCoordinatorTests-\(UUID().uuidString)", isDirectory: true)

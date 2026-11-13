@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import WorkspaceManagerCore
 import os.log
 
@@ -179,11 +180,14 @@ struct MainWindowTerminalSessionController {
         }
     }
 
-    func closeConfirmation(
+    /// Raises the close confirmation for `sessionID`: the tile tree takes ownership of the
+    /// close, and the returned sheet content refers to it.
+    func raiseCloseConfirmation(
         sessionID: UUID,
         tileTreeStore: TileTreeStore
     ) -> TerminalCloseConfirmation {
-        let session = tileTreeStore.sessions.first(where: { $0.id == sessionID })
+        let context = tileTreeStore.raiseCloseConfirmation(for: sessionID)
+        let session = tileTreeStore.allLiveSessions.first(where: { $0.id == sessionID })
         let title =
             session.map {
                 tileTreeStore.tabTitleOverride(for: $0.id)
@@ -192,10 +196,56 @@ struct MainWindowTerminalSessionController {
             ?? "Terminal"
 
         return TerminalCloseConfirmation(
-            sessionID: sessionID,
+            context: context,
             title: title,
-            keepsRunningInTmux: session.map(tileTreeStore.closeLeavesTmuxSessionRunning) ?? false
+            keepsRunningInTmux: context.keepsTmuxRunning
         )
+    }
+
+    /// Whether the close sheet is up. Dismissing it by any route but Close, the framework's
+    /// own dismissal included, cancels the close it showed.
+    func closeConfirmationPresented(
+        _ confirmation: Binding<TerminalCloseConfirmation?>,
+        tileTreeStore: TileTreeStore
+    ) -> Binding<Bool> {
+        MainWindowPresentation.isPresented(
+            confirmation.wrappedValue,
+            onDismiss: { dismissCloseConfirmation(confirmation, tileTreeStore: tileTreeStore) }
+        )
+    }
+
+    /// The person answered the sheet with Close: its confirmation completes the close.
+    func completeCloseConfirmation(
+        _ confirmation: TerminalCloseConfirmation,
+        tileTreeStore: TileTreeStore,
+        defaultHomeDirectory: URL,
+        repos: [Repo],
+        normalizePath: (String) -> String
+    ) -> SessionFocusResult? {
+        guard
+            let focusSessionID = tileTreeStore.completeCloseConfirmationAndResolveFocusTarget(
+                confirmation.context,
+                defaultHomeDirectory: defaultHomeDirectory
+            )
+        else {
+            return nil
+        }
+        return focusResult(
+            sessionID: focusSessionID,
+            tileTreeStore: tileTreeStore,
+            repos: repos,
+            normalizePath: normalizePath
+        )
+    }
+
+    /// Takes the sheet's confirmation down and cancels its close. A sheet already answered
+    /// has nothing left to cancel.
+    func dismissCloseConfirmation(
+        _ confirmation: Binding<TerminalCloseConfirmation?>,
+        tileTreeStore: TileTreeStore
+    ) {
+        guard let shown = MainWindowPresentation.consume(confirmation) else { return }
+        tileTreeStore.cancelCloseConfirmation(shown.context)
     }
 
     func handleProcessExit(

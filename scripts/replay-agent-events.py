@@ -302,11 +302,11 @@ def open_store(path: Path) -> sqlite3.Connection:
 
 
 def sessions_from_store(store: Path) -> list[Session]:
-    """Active rows of the most recent run.
+    """Open tiles of the most recent run: recorded by a surface and not ended.
 
-    Run-scoped on purpose: is_active = 1 alone carries stale rows from earlier
-    runs (issue #1347 D4 — 152 rows on this machine, 5 in the current run). The
-    query mirrors LocalStateStore.fetchPreviousRunSessions (LocalStateStore.swift:667).
+    Run-scoped on purpose: open rows from earlier never-cleanly-closed runs are not
+    on screen (issue #1347 D4). is_active marks only the selected tab in a scope, so
+    it plays no part. The open condition mirrors LocalStateStore.openTile.
     """
     conn = open_store(store)
     try:
@@ -319,8 +319,8 @@ def sessions_from_store(store: Path) -> list[Session]:
                 WHERE run_started_at IS NOT NULL
                 ORDER BY run_started_at DESC LIMIT 1
             )
-              AND is_active = 1
               AND ended_at IS NULL
+              AND terminal_mode != 'unknown'
             ORDER BY last_seen_at DESC
             """
         ).fetchall()

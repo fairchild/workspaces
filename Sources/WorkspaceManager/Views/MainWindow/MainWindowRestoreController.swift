@@ -18,6 +18,18 @@ import WorkspaceManagerCore
 struct MainWindowRestoreState: Equatable {
     private(set) var plan: RestorePlan?
     private(set) var bannerDismissed = false
+    /// The whole previous-run plan launch started from, before it was split into what
+    /// rejoins at once and what the banner offers. Selection is restored against it.
+    private(set) var launchPlan: RestorePlan?
+    /// Every session restore created this launch, keyed by the host-session id its row
+    /// recorded, across every restore pass.
+    private(set) var restoredByRecordedID: [UUID: HostTerminalSession] = [:]
+
+    /// Host sessions restore created this launch. A later restore pass keeps them: they are
+    /// the tiles it brought back, not seeds standing in for them.
+    var restoredSessionIDs: Set<UUID> {
+        Set(restoredByRecordedID.values.map(\.id))
+    }
 
     /// The plan the banner should show, or `nil` when there is nothing to offer — no plan, an
     /// empty one, or one the user already acted on this launch.
@@ -32,6 +44,14 @@ struct MainWindowRestoreState: Equatable {
 
     mutating func dismissBanner() {
         bannerDismissed = true
+    }
+
+    mutating func noteLaunchPlan(_ plan: RestorePlan) {
+        launchPlan = plan
+    }
+
+    mutating func noteRestored(_ created: [UUID: HostTerminalSession]) {
+        restoredByRecordedID.merge(created) { _, latest in latest }
     }
 }
 
@@ -53,7 +73,8 @@ struct MainWindowRestoreController {
         for plan: RestorePlan,
         handledRunID: String,
         seedKey: HostTerminalSessionKey,
-        seedDirectory: URL
+        seedDirectory: URL,
+        seedIsPresent: Bool
     ) -> PlanDisposition {
         if plan.surfaces.isEmpty {
             return .noRestorableSurfaces
@@ -62,10 +83,38 @@ struct MainWindowRestoreController {
         if plan.wasHandled(handledRunID: handledRunID.isEmpty ? nil : handledRunID) {
             return .alreadyHandled(previousRunID: plan.previousRunID)
         }
-        if !plan.offersMoreThanLaunchSeed(seedKey: seedKey, seedDirectory: seedDirectory) {
+        if !plan.offersMoreThanLaunchSeed(
+            seedKey: seedKey, seedDirectory: seedDirectory, seedIsPresent: seedIsPresent)
+        {
             return .onlyDuplicatesLaunchSeed
         }
         return .offer
+    }
+
+    /// The two parts launch handles differently: surfaces that only rejoin a tmux session still
+    /// running, which come back without asking, and everything else, which the banner offers.
+    /// Both parts keep the plan's run identity and focus target.
+    func launchSplit(of plan: RestorePlan) -> (reattach: RestorePlan, offered: RestorePlan) {
+        (plan.filteringSurfaces(\.isReattach), plan.filteringSurfaces { !$0.isReattach })
+    }
+
+    /// The sessions to activate, in order, once restore has created `created` (keyed by each
+    /// surface's recorded host-session id): every scope's selected tab, then the surface the
+    /// window had focused, so the last activation is the one the window lands on. Surfaces not
+    /// yet created are left out.
+    ///
+    /// One tab per scope: should two rows of a scope both say selected, the plan's first —
+    /// the newest — wins.
+    func selectionOrder(in plan: RestorePlan, created: [UUID: HostTerminalSession]) -> [UUID] {
+        var selectedScopes: Set<HostTerminalSessionKey> = []
+        var order = plan.surfaces
+            .filter { $0.isSelectedInScope && selectedScopes.insert($0.key).inserted }
+            .filter { $0.hostSessionID != plan.selectedHostSessionID }
+            .compactMap { created[$0.hostSessionID]?.id }
+        if let selected = plan.selectedHostSessionID, let session = created[selected] {
+            order.append(session.id)
+        }
+        return order
     }
 
     /// The prior-run id that acting on this plan should persist, or `nil` when the plan has no
@@ -237,5 +286,25 @@ struct MainWindowRestoreController {
     func adoptedHostSessionID(for surface: RestoreSurfacePlan) -> UUID? {
         guard case .reattachTmux = surface.action else { return nil }
         return surface.hostSessionID
+    }
+
+    /// Creates the tile one plan surface restores. Each continuity row gets a session of its
+    /// own, never a key reuse: sibling rows sharing a key — a primary and its recorded split
+    /// panes — each launch on their own tmux target (#1232). A reattach surface takes back
+    /// its recorded host-session id and tmux name.
+    @MainActor
+    func realize(
+        _ surface: RestoreSurfacePlan,
+        in tileTreeStore: TileTreeStore,
+        initialCommand: String?
+    ) -> HostTerminalSession {
+        tileTreeStore.createRestoredSession(
+            key: surface.key,
+            directory: surface.directory,
+            recordedTerminalMode: surface.terminalMode,
+            initialCommand: initialCommand,
+            tmuxSessionNameOverride: tmuxSessionNameOverride(for: surface),
+            adoptedHostSessionID: adoptedHostSessionID(for: surface)
+        )
     }
 }

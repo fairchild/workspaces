@@ -280,9 +280,9 @@ public struct TmuxSessionProbe: Sendable {
     }
 
     /// Parses `list-sessions -F '#{session_id}\t#{session_name}\t#{session_created}\t#{pid}'`.
-    /// A socket with no server answers non-zero, which the runner maps to `nil`; a
-    /// server with no sessions cannot exist, so empty output also reads as no answer
-    /// only when the runner said so — an empty string parses to an empty list.
+    /// A socket with no server answers non-zero, which the runner maps to `nil`. A
+    /// server with no sessions answers with empty output (the app's launch script keeps
+    /// its server running when empty), which parses to an empty list.
     /// Malformed rows are skipped rather than failing the whole read.
     static func parseLiveSessions(fromListSessions output: String?) -> [TmuxLiveSession]? {
         guard let output else { return nil }
@@ -382,6 +382,7 @@ public struct TmuxSessionProbe: Sendable {
     /// Production runner: `ProcessRunner.run` with a short timeout so a wedged
     /// tmux server cannot stall restore; any throw maps to `nil` (not alive).
     public static let defaultRunner: CommandRunner = { executable, arguments, environment in
+        guard TmuxLiveSocketGuard.permits(tmuxArguments: arguments) else { return nil }
         do {
             let result = try await ProcessRunner.run(
                 executable: executable,
@@ -398,6 +399,7 @@ public struct TmuxSessionProbe: Sendable {
     /// Production output runner: `ProcessRunner.run` with a short timeout; returns
     /// stdout only on success so a wedged/missing tmux server maps to `nil`.
     public static let defaultOutputRunner: OutputCommandRunner = { executable, arguments, environment in
+        guard TmuxLiveSocketGuard.permits(tmuxArguments: arguments) else { return nil }
         do {
             let result = try await ProcessRunner.run(
                 executable: executable,
@@ -413,7 +415,8 @@ public struct TmuxSessionProbe: Sendable {
 
     /// Production synchronous runner: `synchronousOutput` at the standard deadline.
     public static let defaultSynchronousOutputRunner: SynchronousOutputRunner = { executable, arguments, environment in
-        synchronousOutput(executable: executable, arguments: arguments, environment: environment)
+        guard TmuxLiveSocketGuard.permits(tmuxArguments: arguments) else { return nil }
+        return synchronousOutput(executable: executable, arguments: arguments, environment: environment)
     }
 
     /// Scores a run against its deadline: true when the child exited before it.

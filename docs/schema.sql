@@ -3,7 +3,7 @@
 --
 -- This file is both documentation and a runnable SQLite schema for the native
 -- app's local state sidecar database. It mirrors LocalStateStore schema version
--- 2 in Sources/WorkspaceManagerCore/Services/LocalStateStore.swift.
+-- 3 in Sources/WorkspaceManagerCore/Services/LocalStateStore.swift.
 --
 -- Keep this file manually in sync whenever LocalStateStore migrations change.
 -- SwiftData remains the canonical store for Repository, Workspace, and Web
@@ -21,7 +21,7 @@
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 
 BEGIN;
 
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS local_state_metadata (
 ) STRICT;
 
 INSERT INTO local_state_metadata (key, value, updated_at)
-VALUES ('schema_version', '2', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+VALUES ('schema_version', '3', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 ON CONFLICT(key) DO UPDATE SET
     value = excluded.value,
     updated_at = excluded.updated_at;
@@ -60,6 +60,10 @@ ON CONFLICT(key) DO UPDATE SET
 --   run's tabs from the continuity manifest under their recorded ids; those rows
 --   are live, so the guard passes and they move to the current run. A row that
 --   is already ended stays ended under any later upsert.
+-- - terminal_mode = 'unknown' marks a placeholder row: an agent event landed
+--   before any surface recorded the session, and the event's foreign key needs a
+--   row. The first surface upsert overwrites it with a real mode. Restore skips
+--   placeholder rows; they are not tiles.
 -- - last_seen_at advances when a state-changing write lands (the runtime drops
 --   upserts whose row state is unchanged), not on every layout snapshot.
 CREATE TABLE IF NOT EXISTS terminal_sessions (
@@ -77,8 +81,11 @@ CREATE TABLE IF NOT EXISTS terminal_sessions (
     custom_command_present INTEGER NOT NULL DEFAULT 0
         CHECK (custom_command_present IN (0, 1)),
     hooks_socket_path TEXT,
-    -- Active tab for this terminal scope; more than one row can be active
+    -- Selected tab for this terminal scope; more than one row can be selected
     -- globally when they belong to different Home/Repository/Workspace scopes.
+    -- Selection only: a background tab or a split pane is open with is_active = 0,
+    -- and whether a row is open is ended_at IS NULL. Restore reads it to pick
+    -- which tab each scope comes back on.
     is_active INTEGER NOT NULL DEFAULT 0
         CHECK (is_active IN (0, 1)),
     created_at TEXT NOT NULL,
@@ -89,7 +96,16 @@ CREATE TABLE IF NOT EXISTS terminal_sessions (
     -- recent prior run, so crash/reboot rows do not accumulate as "active"
     -- forever. NULL for rows written before schema v2 (added by ALTER TABLE).
     run_id TEXT,
-    run_started_at TEXT
+    run_started_at TEXT,
+    -- When the startup sweep staged this row as belonging to a run older than
+    -- the restorable prior run (schema v3). A later launch that finds it still
+    -- staged ends it; an upsert clears it. NULL for rows the sweep never staged.
+    stale_since TEXT,
+    -- When the tmux server holding this row's processes died while the app ran
+    -- (schema v3). The row stays open (ended_at NULL), so the next run's restore
+    -- set still carries it. A user close or a shell exit sets ended_at instead.
+    -- An upsert clears it.
+    holder_lost_at TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_terminal_sessions_target

@@ -52,7 +52,7 @@ struct LocalStateStoreTests {
         )
 
         let summary = try await store.summary()
-        #expect(summary.schemaVersion == 2)
+        #expect(summary.schemaVersion == 3)
         #expect(summary.tableCounts["terminal_sessions"] == 1)
         #expect(summary.tableCounts["agent_status_events"] == 1)
         #expect(summary.tableCounts["diagnostic_events"] == 1)
@@ -287,7 +287,7 @@ struct LocalStateStoreTests {
         #expect(endedRow.agentSessionID == nil)
         #expect(endedRow.agentRunState == nil)
 
-        let activeRows = try await store.fetchContinuitySessions(activeOnly: true)
+        let activeRows = try await store.fetchContinuitySessions(openOnly: true)
         #expect(activeRows.count == 1)
         let activeRow = try #require(activeRows.first)
         #expect(activeRow.hostSessionID == agentSessionID)
@@ -403,18 +403,18 @@ struct LocalStateStoreTests {
         }
         #expect(tableCount == 7)
 
-        // Schema doc must carry the v2 run-epoch columns (issue #783 #2) so a DB
-        // built from docs/schema.sql matches a migrated store.
-        let runColumns = try await dbQueue.read {
-            try Int.fetchOne(
-                $0,
-                sql: """
-                    SELECT COUNT(*) FROM pragma_table_info('terminal_sessions')
-                    WHERE name IN ('run_id', 'run_started_at')
-                    """
-            )
+        // A DB built from docs/schema.sql carries every terminal_sessions column a
+        // migrated store has, so the doc cannot fall behind a migration.
+        let columnsSQL = "SELECT name FROM pragma_table_info('terminal_sessions') ORDER BY name"
+        let documentedColumns = try await dbQueue.read { try String.fetchAll($0, sql: columnsSQL) }
+        let migratedURL = fixture.url.appendingPathComponent("migrated.sqlite")
+        _ = try LocalStateStore(databaseURL: migratedURL)
+        let migratedColumns = try await DatabaseQueue(path: migratedURL.path).read {
+            try String.fetchAll($0, sql: columnsSQL)
         }
-        #expect(runColumns == 2)
+        #expect(documentedColumns == migratedColumns)
+        #expect(migratedColumns.contains("stale_since"))
+        #expect(migratedColumns.contains("holder_lost_at"))
     }
 
     @Test("fetchPreviousRunSessions returns only the immediately-prior run's active sessions")
@@ -453,10 +453,10 @@ struct LocalStateStoreTests {
         let rows = try await current.fetchPreviousRunSessions(limit: 100)
         #expect(rows.map(\.hostSessionID) == [prevID])
 
-        // Startup hygiene (#1347 D4): opening the current run ends active rows
-        // from runs older than the prior one, so the broad active listing no
+        // Startup hygiene (#1347 D4): opening the current run stages open rows
+        // from runs older than the prior one, so the broad open listing no
         // longer accumulates every never-cleanly-closed run.
-        let broad = try await current.fetchContinuitySessions(activeOnly: true, limit: 100)
+        let broad = try await current.fetchContinuitySessions(openOnly: true, limit: 100)
         #expect(broad.map(\.hostSessionID) == [prevID])
     }
 
@@ -493,11 +493,14 @@ struct LocalStateStoreTests {
         _ = try LocalStateStore(
             databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_200_000))
 
-        // Stage 1: the ancient row is deactivated but left un-ended so a
+        // Stage 1: the ancient row is staged but left un-ended so a
         // late-landing rehydration upsert can still revive it (#1239 guard).
+        // Staging leaves the selection flag alone.
         var state = try sessionSweepState(db: db)
-        #expect(state[ancientID.uuidString]?.isActive == 0)
+        #expect(state[ancientID.uuidString]?.staleSince != nil)
+        #expect(state[ancientID.uuidString]?.isActive == 1)
         #expect(state[ancientID.uuidString]?.endedAt == nil)
+        #expect(state[priorID.uuidString]?.staleSince == nil)
         #expect(state[priorID.uuidString]?.isActive == 1)
         #expect(state[priorID.uuidString]?.endedAt == nil)
 
@@ -507,9 +510,51 @@ struct LocalStateStoreTests {
             databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_300_000))
         state = try sessionSweepState(db: db)
         #expect(state[ancientID.uuidString]?.endedAt != nil)
+        #expect(state[ancientID.uuidString]?.isActive == 0)
     }
 
-    @Test("A deactivated stale row is revived by a rehydration upsert")
+    /// A background tab is open with `is_active = 0`. Staging on its own column is what
+    /// gives it the same two launches as a selected tab instead of ending it at the first.
+    @Test("A stale background tab is staged before it is ended, like a selected one")
+    func staleBackgroundTabTakesBothStages() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let db = fixture.url.appendingPathComponent("state.sqlite")
+
+        let backgroundID = UUID()
+        let run1 = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        try await run1.recordTerminalSession(
+            HostTerminalSession(
+                id: backgroundID,
+                key: .repoPath("/code/ancient"),
+                directory: URL(fileURLWithPath: "/code/ancient"),
+                terminalMode: .tmuxPerSession
+            ),
+            isActive: false, hooksSocketPath: nil)
+        let run2 = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
+        try await run2.recordTerminalSession(
+            HostTerminalSession(
+                key: .repoPath("/code/prior"),
+                directory: URL(fileURLWithPath: "/code/prior"),
+                terminalMode: .tmuxPerSession
+            ),
+            isActive: true, hooksSocketPath: nil)
+
+        _ = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_200_000))
+        var state = try sessionSweepState(db: db)
+        #expect(state[backgroundID.uuidString]?.staleSince != nil)
+        #expect(state[backgroundID.uuidString]?.endedAt == nil)
+
+        _ = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_300_000))
+        state = try sessionSweepState(db: db)
+        #expect(state[backgroundID.uuidString]?.endedAt != nil)
+    }
+
+    @Test("A staged stale row is revived by a rehydration upsert")
     func sweptRowRevivedByRehydration() async throws {
         let fixture = try TemporaryDirectory()
         defer { fixture.cleanup() }
@@ -546,7 +591,8 @@ struct LocalStateStoreTests {
         let state = try sessionSweepState(db: db)
         #expect(state[strandedID.uuidString]?.isActive == 1)
         #expect(state[strandedID.uuidString]?.endedAt == nil)
-        let active = try await current.fetchContinuitySessions(activeOnly: true, limit: 100)
+        #expect(state[strandedID.uuidString]?.staleSince == nil)
+        let active = try await current.fetchContinuitySessions(openOnly: true, limit: 100)
         #expect(active.map(\.hostSessionID) == [strandedID])
     }
 
@@ -587,7 +633,7 @@ struct LocalStateStoreTests {
 
         let adopted = try await reattachRun.summary()
         #expect(adopted.tableCounts["terminal_sessions"] == 1)
-        let adoptedActive = try await reattachRun.fetchContinuitySessions(activeOnly: true, limit: 100)
+        let adoptedActive = try await reattachRun.fetchContinuitySessions(openOnly: true, limit: 100)
         #expect(adoptedActive.map(\.hostSessionID) == [survivorID])
         #expect(adoptedActive.first?.tmuxSessionName == "wm-survivor")
 
@@ -601,7 +647,7 @@ struct LocalStateStoreTests {
 
         let minted = try await mintingRun.summary()
         #expect(minted.tableCounts["terminal_sessions"] == 2)
-        let mintedActive = try await mintingRun.fetchContinuitySessions(activeOnly: true, limit: 100)
+        let mintedActive = try await mintingRun.fetchContinuitySessions(openOnly: true, limit: 100)
         #expect(mintedActive.filter { $0.tmuxSessionName == "wm-survivor" }.count == 2)
     }
 
@@ -629,7 +675,7 @@ struct LocalStateStoreTests {
             databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
 
         let state = try sessionSweepState(db: db)
-        #expect(state[liveID.uuidString]?.isActive == 1)
+        #expect(state[liveID.uuidString]?.staleSince == nil)
         #expect(state[liveID.uuidString]?.endedAt == nil)
     }
 
@@ -663,7 +709,7 @@ struct LocalStateStoreTests {
         _ = try LocalStateStore(
             databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
         var state = try sessionSweepState(db: db)
-        #expect(state[legacyID.uuidString]?.isActive == 0)
+        #expect(state[legacyID.uuidString]?.staleSince != nil)
         #expect(state[legacyID.uuidString]?.endedAt == nil)
 
         _ = try LocalStateStore(
@@ -674,16 +720,16 @@ struct LocalStateStoreTests {
 
     private func sessionSweepState(
         db: URL
-    ) throws -> [String: (isActive: Int, endedAt: String?)] {
+    ) throws -> [String: (isActive: Int, endedAt: String?, staleSince: String?)] {
         let dbQueue = try DatabaseQueue(path: db.path)
         return try dbQueue.read { db in
             let rows = try Row.fetchAll(
-                db, sql: "SELECT host_session_id, is_active, ended_at FROM terminal_sessions")
+                db, sql: "SELECT host_session_id, is_active, ended_at, stale_since FROM terminal_sessions")
             return Dictionary(
                 uniqueKeysWithValues: rows.map {
                     (
                         $0["host_session_id"] as String,
-                        ($0["is_active"] as Int, $0["ended_at"] as String?)
+                        ($0["is_active"] as Int, $0["ended_at"] as String?, $0["stale_since"] as String?)
                     )
                 })
         }
@@ -831,7 +877,7 @@ struct LocalStateStoreTests {
         #expect(!row.isActive)
         #expect(row.directoryPath == recordedDirectory)
         #expect(row.terminalMode == .tmuxPerSession)
-        #expect(try await store.fetchContinuitySessions(activeOnly: true).isEmpty)
+        #expect(try await store.fetchContinuitySessions(openOnly: true).isEmpty)
     }
 
     @Test("Repeated close keeps the first ended_at")

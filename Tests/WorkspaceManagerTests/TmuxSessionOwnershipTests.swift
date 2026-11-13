@@ -219,11 +219,8 @@ struct TmuxSessionOwnershipTests {
         let bystander = live("$0", "probe-bystander", 1_788_320_000)
 
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: unknownSurface,
-                liveSessions: [bystander],
-                requiringCreation: false
-            ) == nil
+            ledger.ownership(forHostSessionID: unknownSurface)?.killTarget(
+                in: [bystander], requiringCreation: false) == nil
         )
     }
 
@@ -246,12 +243,12 @@ struct TmuxSessionOwnershipTests {
         )
 
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface, liveSessions: [foreign], requiringCreation: true) == nil
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [foreign], requiringCreation: true) == nil
         )
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface, liveSessions: [foreign], requiringCreation: false) == "$0"
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [foreign], requiringCreation: false) == "$0"
         )
     }
 
@@ -266,8 +263,8 @@ struct TmuxSessionOwnershipTests {
             launchedAt: Date(timeIntervalSince1970: 1_788_328_040))
 
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface, liveSessions: [seed], requiringCreation: true) == "$4"
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [seed], requiringCreation: true) == "$4"
         )
     }
 
@@ -285,23 +282,17 @@ struct TmuxSessionOwnershipTests {
         )
 
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface, liveSessions: [], requiringCreation: true) == nil
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [], requiringCreation: true) == nil
         )
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface,
-                liveSessions: [live("$4", "renamed-by-someone", 1_788_328_041)],
-                requiringCreation: true
-            ) == nil
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [live("$4", "renamed-by-someone", 1_788_328_041)], requiringCreation: true) == nil
         )
         // A different session that has taken the recorded *name* is not the recorded session.
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface,
-                liveSessions: [live("$9", "wm-repo-abcd1234", 1_788_329_000)],
-                requiringCreation: true
-            ) == nil
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [live("$9", "wm-repo-abcd1234", 1_788_329_000)], requiringCreation: true) == nil
         )
     }
 
@@ -327,13 +318,13 @@ struct TmuxSessionOwnershipTests {
             createdAt: Date(timeIntervalSince1970: 1_788_400_000), serverPID: 90210)
 
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface, liveSessions: [afterRestart], requiringCreation: true)
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [afterRestart], requiringCreation: true)
                 == nil
         )
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface, liveSessions: [afterRestart], requiringCreation: false)
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [afterRestart], requiringCreation: false)
                 == nil
         )
     }
@@ -424,6 +415,44 @@ struct TmuxSessionOwnershipTests {
         #expect(await recorder.calls.isEmpty)
     }
 
+    @MainActor
+    @Test("A kill waiting on the socket ends only the session it was asked for")
+    func terminatorKeepsTheTargetItWasAskedFor() async {
+        let ledger = TmuxSessionOwnershipLedger()
+        let surface = UUID()
+        ledger.record(
+            hostSessionID: surface,
+            identity: live("$7", "wm-repo-abcd1234-p1", 1_788_328_041),
+            launchedAt: Date(timeIntervalSince1970: 1_788_328_040)
+        )
+        let socket = HeldListing()
+        let recorder = ArgumentRecorder()
+        let probe = TmuxSessionProbe(
+            run: { executable, arguments, _ in
+                await recorder.record(executable: executable, arguments: arguments)
+                return 0
+            },
+            runForOutput: { _, _, _ in await socket.read() },
+            environment: [:]
+        )
+
+        let kill = Task {
+            await TmuxOwnedSessionTerminator(ledger: ledger, probe: probe)
+                .terminate(hostSessionID: surface, requiringCreation: false)
+        }
+        await socket.waitUntilRead()
+        ledger.forget(hostSessionID: surface)
+        ledger.record(
+            hostSessionID: surface,
+            identity: live("$8", "wm-repo-abcd1234-p1", 1_788_328_100),
+            launchedAt: Date(timeIntervalSince1970: 1_788_328_099)
+        )
+        await socket.answer("$8\twm-repo-abcd1234-p1\t1788328100\t35533\n")
+
+        #expect(await kill.value == .notLive)
+        #expect(await recorder.calls.isEmpty)
+    }
+
     // MARK: - Helpers
 
     private func live(_ id: String, _ name: String, _ created: TimeInterval) -> TmuxLiveSession {
@@ -452,5 +481,32 @@ private actor ArgumentRecorder {
 
     func record(executable: String, arguments: [String]) {
         calls.append(Call(executable: executable, arguments: arguments))
+    }
+}
+
+/// Holds a socket listing until the test answers it. Waiting for the read is an event, not
+/// a deadline, so a loaded machine slows the test without failing it.
+private actor HeldListing {
+    private var waiting: CheckedContinuation<String?, Never>?
+    private var watchers: [CheckedContinuation<Void, Never>] = []
+
+    func read() async -> String? {
+        await withCheckedContinuation { listing in
+            waiting = listing
+            let woken = watchers
+            watchers = []
+            woken.forEach { $0.resume() }
+        }
+    }
+
+    func waitUntilRead() async {
+        while waiting == nil {
+            await withCheckedContinuation { watchers.append($0) }
+        }
+    }
+
+    func answer(_ listing: String) {
+        waiting?.resume(returning: listing)
+        waiting = nil
     }
 }

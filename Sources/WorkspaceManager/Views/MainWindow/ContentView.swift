@@ -1157,20 +1157,18 @@ struct ContentView: View {
             }
             .alert(
                 "Close Terminal?",
-                isPresented: MainWindowPresentation.isPresented($viewState.terminalCloseConfirmation)
+                isPresented: terminalSessionController.closeConfirmationPresented(
+                    $viewState.terminalCloseConfirmation, tileTreeStore: tileTreeStore)
             ) {
                 Button("Close", role: .destructive) {
                     guard
                         let confirmation = MainWindowPresentation.consume(
                             $viewState.terminalCloseConfirmation)
                     else { return }
-                    forceCloseTerminalTab(sessionID: confirmation.sessionID)
+                    completeTerminalCloseConfirmation(confirmation)
                 }
                 Button("Cancel", role: .cancel) {
-                    if let sessionID = viewState.terminalCloseConfirmation?.sessionID {
-                        tileTreeStore.forgetCloseRequest(sessionID)
-                    }
-                    viewState.terminalCloseConfirmation = nil
+                    dismissTerminalCloseConfirmation()
                 }
             } message: {
                 Text(
@@ -1253,6 +1251,7 @@ struct ContentView: View {
                 syncAppCommands()
             }
             .onDisappear {
+                dismissTerminalCloseConfirmation()
                 clearAppCommands()
                 accessRecorder.flushPendingSave(modelContext: modelContext)
                 // Window close: the app outlives its last window, so tear the web-detail domain
@@ -1767,12 +1766,7 @@ struct ContentView: View {
 
     @MainActor
     private func retireTerminalSessions(inScope scopeKey: HostTerminalSessionKey) async throws {
-        let sessionIDs = tileTreeStore.terminalSessionIDs(inScope: scopeKey)
-        for sessionID in sessionIDs {
-            try await tileTreeStore.surfaceStore.closeForSessionRetirement(sessionID: sessionID)
-        }
-
-        let retiredSessionIDs = tileTreeStore.retireSessions(inScope: scopeKey)
+        let retiredSessionIDs = try await tileTreeStore.closeAndRetireSessions(inScope: scopeKey)
         guard !retiredSessionIDs.isEmpty else { return }
 
         terminalFocusCoordinator.cancelPendingFocusRequest(reason: "workspace_lifecycle_retired_sessions")
@@ -1783,24 +1777,7 @@ struct ContentView: View {
     /// the store's seams, and the graceful retirement close from the surface store.
     @MainActor
     private func makeWorkspaceTerminalTeardownController() -> WorkspaceTerminalTeardownController {
-        WorkspaceTerminalTeardownController(
-            sessionsInScope: { key in
-                tileTreeStore.sessions(inScope: key).flatMap { primary in
-                    tileTreeStore.splitSessions(forPrimarySessionID: primary.id) + [primary]
-                }
-            },
-            killTmuxSession: { session in
-                await TmuxOwnedSessionTerminator(ledger: tileTreeStore.tmuxOwnershipLedger)
-                    .terminate(hostSessionID: session.id, requiringCreation: false)
-                    .didKill
-            },
-            closeForRetirement: { sessionID in
-                _ = try await tileTreeStore.surfaceStore.closeForSessionRetirement(sessionID: sessionID)
-            },
-            retireSessions: { key in
-                tileTreeStore.retireSessions(inScope: key)
-            }
-        )
+        WorkspaceTerminalTeardownController(tileTreeStore: tileTreeStore)
     }
 
     @MainActor
@@ -1924,17 +1901,25 @@ struct ContentView: View {
 
     @MainActor
     private func requestCloseConfirmationForTerminalTab(sessionID: UUID) {
-        viewState.terminalCloseConfirmation = terminalSessionController.closeConfirmation(
+        // The sheet holds one confirmation; a newer one replaces the one it was showing.
+        dismissTerminalCloseConfirmation()
+        viewState.terminalCloseConfirmation = terminalSessionController.raiseCloseConfirmation(
             sessionID: sessionID,
             tileTreeStore: tileTreeStore
         )
     }
 
     @MainActor
-    private func forceCloseTerminalTab(sessionID: UUID) {
+    private func dismissTerminalCloseConfirmation() {
+        terminalSessionController.dismissCloseConfirmation(
+            $viewState.terminalCloseConfirmation, tileTreeStore: tileTreeStore)
+    }
+
+    @MainActor
+    private func completeTerminalCloseConfirmation(_ confirmation: TerminalCloseConfirmation) {
         guard
-            let result = terminalSessionController.forceCloseTab(
-                sessionID: sessionID,
+            let result = terminalSessionController.completeCloseConfirmation(
+                confirmation,
                 tileTreeStore: tileTreeStore,
                 defaultHomeDirectory: resolvedDefaultHostDirectory,
                 repos: repos,
@@ -1946,12 +1931,7 @@ struct ContentView: View {
 
     @MainActor
     private func requestTerminalClose(sessionID: UUID) -> Bool {
-        guard let terminal = tileTreeStore.surfaceStore.terminal(for: sessionID) else {
-            return false
-        }
-        tileTreeStore.noteCloseRequested(sessionID)
-        terminal.requestClose()
-        return true
+        tileTreeStore.requestTerminalClose(sessionID)
     }
 
     @MainActor
@@ -2831,9 +2811,13 @@ struct ContentView: View {
         pathNormalizationCache.normalize(rawPath)
     }
 
-    /// Cold-start restore (experimental, opt-in): compute what could be restored
-    /// from the previous run and, when non-empty, surface the restore banner.
-    /// A no-op unless the `restoreSessionsOnLaunch` flag is enabled.
+    /// Cold-start restore (experimental, opt-in): bring back the previous run's
+    /// open tiles. Tiles whose tmux session is still running rejoin it at once,
+    /// with no banner: reattaching by name is what the default manifest path
+    /// already does, and it asks nothing of anyone. The banner offers only the
+    /// rest — tiles to resume or start fresh — and dismissing it leaves the
+    /// rejoined tiles where they are. A no-op unless the `restoreSessionsOnLaunch`
+    /// flag is enabled.
     @MainActor
     private func computeRestorePlanIfEnabled() async {
         guard restoreSessionsOnLaunchEnabled, let localStateStore else { return }
@@ -2842,18 +2826,31 @@ struct ContentView: View {
             homeDirectoryPath: resolvedDefaultHostDirectory.path,
             normalizePath: RestorePathNormalization.normalize
         ).build(repos: repos)
-        let plan = await TerminalRestoreCoordinator(
+        let previousRunPlan = await TerminalRestoreCoordinator(
             localStateStore: localStateStore,
             normalizePath: RestorePathNormalization.normalize
         ).makePlan(index: index)
+        restoreState.noteLaunchPlan(previousRunPlan)
+        let launchSplit = restoreController.launchSplit(of: previousRunPlan)
+        if !launchSplit.reattach.surfaces.isEmpty {
+            restoreLog.info(
+                "[Restore] reattaching \(launchSplit.reattach.surfaces.count, privacy: .public) surface(s) whose tmux session is still running"
+            )
+            await executeRestore(launchSplit.reattach)
+        }
+        let plan = launchSplit.offered
+        let restoredSessionIDs = restoreState.restoredSessionIDs
         switch restoreController.disposition(
             for: plan,
             handledRunID: restoreHandledRunID,
             seedKey: .defaultHome,
-            seedDirectory: resolvedDefaultHostDirectory
+            seedDirectory: resolvedDefaultHostDirectory,
+            seedIsPresent: tileTreeStore.sessions(inScope: .defaultHome).contains {
+                !restoredSessionIDs.contains($0.id)
+            }
         ) {
         case .noRestorableSurfaces:
-            restoreLog.info("[Restore] no restorable surfaces from previous run")
+            restoreLog.info("[Restore] nothing to offer from previous run")
         case .alreadyHandled(let previousRunID):
             restoreLog.info(
                 "[Restore] suppressed banner: previous run \(previousRunID ?? "?", privacy: .public) already handled"
@@ -2905,6 +2902,9 @@ struct ContentView: View {
     @MainActor
     private func executeRestore(_ recordedPlan: RestorePlan) async {
         let plan = recordedPlan.settlingTerminalModes(tileTreeStore.terminalModeForNewSession)
+        // Sessions an earlier restore pass this launch created are restored tiles, not seeds:
+        // nothing below retires them or counts their tmux names as this launch's to reclaim.
+        let restoredSessionIDs = restoreState.restoredSessionIDs
         // #3: the restore plan owns every key it restores. Retire any session a
         // pre-restore seed (the default-home fallback) left on those keys, so a
         // resume/reattach surface is created fresh and the coordinator's key-reuse
@@ -2919,14 +2919,14 @@ struct ContentView: View {
         // `sessions` is primaries only, and a split seed is no less this launch's to
         // retire than a primary one.
         var ownedHostSessionIDsByTmuxName: [String: [UUID]] = [:]
-        for session in tileTreeStore.allLiveSessions {
+        for session in tileTreeStore.allLiveSessions where !restoredSessionIDs.contains(session.id) {
             guard let tmuxSessionName = session.tmuxSessionName else { continue }
             ownedHostSessionIDsByTmuxName[tmuxSessionName, default: []].append(session.id)
         }
         let ownedTmuxSessionNames = Set(ownedHostSessionIDsByTmuxName.keys)
 
         for key in restoreController.ownedSessionKeys(in: plan) {
-            _ = tileTreeStore.retireSessions(inScope: key)
+            _ = tileTreeStore.retireSessions(inScope: key, keeping: restoredSessionIDs)
         }
 
         // Same ownership, tmux layer: kill this launch's own seed so the resume surface
@@ -3013,33 +3013,28 @@ struct ContentView: View {
                     "[Restore] surface \(surface.hostSessionID.uuidString, privacy: .public) resume target is a live session; attaching without the resume command"
                 )
             }
-            // One session per continuity row (never key-reuse): sibling rows sharing
-            // a key — a primary and its recorded split panes — each launch on their
-            // own recorded tmux target (#1232). A reattach surface also takes back the
-            // row's host-session id, because the processes it is rejoining still post
-            // agent updates under it (#1397).
             let adoptedHostSessionID = restoreController.adoptedHostSessionID(for: surface)
-            let session = tileTreeStore.createRestoredSession(
-                key: surface.key,
-                directory: surface.directory,
-                recordedTerminalMode: surface.terminalMode,
-                initialCommand: initialCommand,
-                tmuxSessionNameOverride: restoreController.tmuxSessionNameOverride(for: surface),
-                adoptedHostSessionID: adoptedHostSessionID
-            )
+            let session = restoreController.realize(
+                surface, in: tileTreeStore, initialCommand: initialCommand)
             if let adoptedHostSessionID, session.id != adoptedHostSessionID {
                 restoreLog.notice(
                     "[Restore] host session \(adoptedHostSessionID.uuidString, privacy: .public) is already live; reattach surface launched under \(session.id.uuidString, privacy: .public) instead"
                 )
             }
             hostSessionLog.info(
-                "[HostSession] Created restored session \(session.id.uuidString, privacy: .public) key=\(surface.key.debugDescription, privacy: .public) path=\(session.directoryPath, privacy: .public) adopted=\(adoptedHostSessionID != nil, privacy: .public) (total sessions=\(tileTreeStore.sessions.count, privacy: .public))"
+                "[HostSession] Created restored session \(session.id.uuidString, privacy: .public) from row \(surface.hostSessionID.uuidString, privacy: .public) key=\(surface.key.debugDescription, privacy: .public) path=\(session.directoryPath, privacy: .public) adopted=\(adoptedHostSessionID != nil, privacy: .public) (total sessions=\(tileTreeStore.sessions.count, privacy: .public))"
             )
             activatedByHostSessionID[surface.hostSessionID] = session
         }
+        restoreState.noteRestored(activatedByHostSessionID)
 
-        if let selected = plan.selectedHostSessionID, let target = activatedByHostSessionID[selected] {
-            _ = tileTreeStore.activateExistingSession(sessionID: target.id)
+        // Each scope comes back on the tab it had selected, then the window on the surface it
+        // had focused. Both read the whole launch plan and every session restored this launch,
+        // so the banner's pass lands where the window was, not on what that pass created.
+        for sessionID in restoreController.selectionOrder(
+            in: restoreState.launchPlan ?? plan, created: restoreState.restoredByRecordedID)
+        {
+            _ = tileTreeStore.activateExistingSession(sessionID: sessionID)
         }
         restoreLog.info("[Restore] executed \(plan.surfaces.count, privacy: .public) surface(s)")
         await reattachPreviouslyOpenSurfaces(trigger: .restore)

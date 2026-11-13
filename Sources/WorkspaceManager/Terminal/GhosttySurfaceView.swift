@@ -327,6 +327,27 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
         return ghostty_surface_process_exited(surface)
     }
 
+    /// Whether a close would ask to confirm, as `requestClose` would decide it now.
+    var closeNeedsConfirmation: Bool {
+        guard let surface else { return false }
+        return ghostty_surface_needs_confirm_quit(surface)
+    }
+
+    /// Whether a render has wired this terminal to its tile. A terminal vended ahead of its
+    /// first render has no hooks, so nothing hears its exit or its request to confirm.
+    var isWiredToTile: Bool {
+        onCloseConfirmationRequired != nil
+    }
+
+    /// The pty's foreground process group (libghostty names it a pid; it reads `tcgetpgrp`).
+    /// `login` leads it and the surface's command runs in it, so for a tmux launch it holds
+    /// the tmux client. `nil` when the surface is gone or libghostty cannot say.
+    var foregroundProcessGroupID: Int? {
+        guard let surface else { return nil }
+        let pid = ghostty_surface_foreground_pid(surface)
+        return pid > 0 ? Int(pid) : nil
+    }
+
     func requestSurfaceClose() {
         guard let surface else { return }
         ghostty_surface_request_close(surface)
@@ -378,6 +399,7 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
             return
         }
 
+        TmuxLiveSocketGuard.check(launchScript: terminalConfig.tmuxLaunchScript)
         let createdSurface = terminalConfig.withCValue(view: self, userdata: callbackUserdata) { config in
             ghostty_surface_new(app, &config)
         }

@@ -23,7 +23,7 @@ PREF_DOMAIN="com.cloudcompute.workspaces"
 LIVE_SOCKET_LABEL="workspaces"
 QUARANTINE_SOCKET_LABEL="workspaces-rejected-label"
 PREFS_SUITE_PREFIX="com.cloudcompute.workspaces.drill"
-ALL_PASSES=(tmux-on-app tmux-off-app tmux-on-server tmux-off-server ghostty-on ghostty-off)
+ALL_PASSES=(tmux-on-app tmux-off-app tmux-on-server tmux-off-server ghostty-on ghostty-off tmux-on-restart)
 DRILL_TILES=("ws_launch|high|done" "hand_typed|medium|done" "split|low|done" "mid_turn|xhigh|held")
 
 TARGET_PATH="$HOME/code/workspaces"
@@ -136,7 +136,8 @@ Options:
   --drill                  Run the holder-death matrix (implies --kill-holder). Each pass gets
                            its own socket <label>-pN, HOME, data dir and preferences suite.
   --pass <id>              Limit --drill to one pass (repeatable): tmux-on-app, tmux-off-app,
-                           tmux-on-server, tmux-off-server, ghostty-on, ghostty-off
+                           tmux-on-server, tmux-off-server, ghostty-on, ghostty-off,
+                           tmux-on-restart (quits the app only; the server keeps running)
   --settle <s>             Seconds to wait for restore after relaunch in --drill (default: 30)
   --help, -h               Show this help
 
@@ -150,7 +151,7 @@ What --drill records (summary.json, one row per tile and pass, plus one global
 mixed-window row):
   tiles from `ws launch`, a hand-typed `claude`, two splits of it with one agent
   mid-turn, and the cmd+t tab (recorded as not_drivable); the rung each tile took after
-  holder death (reattach, resume, fresh, restored_unrendered, ambiguous or none) and the
+  holder death, or after a plain quit in tmux-on-restart (reattach, resume, fresh, restored_unrendered, ambiguous or none) and the
   prefill text. Agents are scripts/lib/stub-agent.sh on PATH as `claude`: deterministic
   and token-free. Needs jq and sqlite3.
 
@@ -646,6 +647,15 @@ kill_holder() {
     server="$LAST_SERVER"
     [[ -z "$server" ]] || server_pid="$(cut -d'|' -f2 <<<"$server")"
     log "Killing the holder ($order): app pid=$APP_PID, tmux -L $label server pid=${server_pid:-none}"
+    if [[ "$order" == restart ]]; then
+        log "Quitting the app only: app pid=$APP_PID; tmux -L $label server pid=${server_pid:-none} keeps running"
+        stop_app "$APP_PID" "$(launch_not_before "$APP_PID")" || fail "app pid did not exit: $APP_PID"
+        jq -n --arg label "$label" --arg app_pid "$APP_PID" --arg server_pid "$server_pid" \
+            --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{order: "restart", socket_label: $label, app_pid: $app_pid, server_pid: $server_pid, at: $at}' \
+            >"$evidence_dir/holder-kill.json"
+        return 0
+    fi
     if [[ "$order" == server-first && -n "$server" ]]; then
         kill_owned_server "$server"
         sleep 5

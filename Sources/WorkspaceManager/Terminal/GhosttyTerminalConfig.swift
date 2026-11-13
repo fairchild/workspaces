@@ -281,6 +281,10 @@ struct GhosttyTerminalConfig {
     /// Panes spawned after this point inherit the session environment. A shell
     /// already running in a surviving pane keeps the environment it was spawned
     /// with; tmux cannot rewrite a live process.
+    ///
+    /// The chain ends with `keepServerWhenEmpty`, so the server on the app's socket
+    /// outlives its last session. That is what lets a tile's exit tell its shell ending
+    /// from its server dying (`TerminalSessionExit.classifyProcessExit`).
     static func tmuxLaunchScript(
         sessionName: String,
         workingDirectory: URL,
@@ -309,6 +313,7 @@ struct GhosttyTerminalConfig {
             // `\;` reaches tmux as a bare `;` argument: its command separator.
             script += " \\; set-environment -t \(exactTarget) \(singleQuoted(pair.key)) \(singleQuoted(pair.value))"
         }
+        script += " \\; \(keepServerWhenEmpty)"
         return script
     }
 
@@ -320,6 +325,20 @@ struct GhosttyTerminalConfig {
     static func tmuxRepairScript(_ launchScript: String) -> String {
         "[ -z \"$TMUX\" ] && \(launchScript)"
     }
+
+    /// Keeps the app socket's tmux server running after its last session ends.
+    ///
+    /// By default tmux exits an empty server, which from outside looks exactly like the
+    /// server being killed. With the option off, a server that is gone was killed or
+    /// crashed. It is a server-wide option, set only through this script, so it reaches
+    /// only the server on the app's own socket label. The cost is an idle server that
+    /// stays up once its sessions are gone.
+    ///
+    /// tmux added `exit-empty` in 2.7. An older tmux rejects it; it runs last, after the
+    /// attach and every `set-environment` have run, and the rejection leaves the client
+    /// attached. Exits on such a server cannot tell a killed server from a last session
+    /// ending, so they leave the row open unmarked (`TmuxExitEmptyCapability`).
+    static let keepServerWhenEmpty = "set-option -s exit-empty off"
 
     private static func singleQuoted(_ value: String) -> String {
         let escaped = value.replacingOccurrences(of: "'", with: "'\"'\"'")

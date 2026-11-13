@@ -26,6 +26,8 @@ protocol TerminalContinuityWriting: Sendable {
         hooksSocketPath: String?
     ) async throws
     func markTerminalSessionEnded(hostSessionID: UUID, endedAt: Date) async throws
+    func markTerminalSessionHolderLost(hostSessionID: UUID, lostAt: Date) async throws
+    func markTerminalSessionDeselected(hostSessionID: UUID) async throws
 }
 
 extension LocalStateStore: TerminalContinuityWriting {}
@@ -102,11 +104,47 @@ final class TerminalContinuityRecorder {
         lastWrittenBySessionID.removeValue(forKey: sessionID)
     }
 
+    /// Writes what a tile ending with `exit` leaves on its row: ended, holder lost, or left
+    /// open. A row left open is no longer any scope's selected tab, since its tile is gone;
+    /// both open outcomes clear that, so the scope's next selection is the only one.
+    /// `exitedAt` is when the tile went away, which a classified exit learns only after
+    /// asking tmux, so the caller captures it at the exit itself.
+    func recordExit(_ sessionID: UUID, _ exit: TerminalSessionExit, at exitedAt: Date) {
+        switch exit.rowOutcome {
+        case .end:
+            recordEnded(sessionID, at: exitedAt)
+        case .markHolderLost:
+            lastWrittenBySessionID.removeValue(forKey: sessionID)
+            let sink = sink
+            operations.yield {
+                do {
+                    try await sink.markTerminalSessionHolderLost(hostSessionID: sessionID, lostAt: exitedAt)
+                } catch {
+                    log.error(
+                        "[TerminalContinuityRecorder] holder-lost write failed for \(sessionID.uuidString, privacy: .public): \(String(describing: error), privacy: .public)"
+                    )
+                }
+            }
+        case .keepOpen:
+            lastWrittenBySessionID.removeValue(forKey: sessionID)
+            let sink = sink
+            operations.yield {
+                do {
+                    try await sink.markTerminalSessionDeselected(hostSessionID: sessionID)
+                } catch {
+                    log.error(
+                        "[TerminalContinuityRecorder] deselect write failed for \(sessionID.uuidString, privacy: .public): \(String(describing: error), privacy: .public)"
+                    )
+                }
+            }
+        }
+    }
+
     /// Ends the session's continuity row. The close moment is captured here, at
-    /// enqueue, so a backed-up queue cannot shift the recorded close time.
-    func recordEnded(_ sessionID: UUID) {
+    /// enqueue, unless the caller already captured it, so a backed-up queue cannot
+    /// shift the recorded close time.
+    func recordEnded(_ sessionID: UUID, at endedAt: Date = Date()) {
         lastWrittenBySessionID.removeValue(forKey: sessionID)
-        let endedAt = Date()
         let sink = sink
         operations.yield {
             do {
