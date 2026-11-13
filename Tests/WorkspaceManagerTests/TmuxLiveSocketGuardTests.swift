@@ -45,6 +45,19 @@ struct TmuxLiveSocketGuardTests {
         #expect(TmuxLiveSocketGuard.refusal(socketLabel: "workspaces", inTestProcess: false) == nil)
         #expect(TmuxLiveSocketGuard.permits(tmuxArguments: ["tmux", "-V"]))
         #expect(TmuxLiveSocketGuard.permits(tmuxArguments: ["tmux", "-L", "wstest-1a2b3c4d", "ls"]))
+        #expect(TmuxLiveSocketGuard.permits(tmuxArguments: ["tmux", "-u", "-S", "/tmp/wscr-1/tmux-501/cr-1", "ls"]))
+    }
+
+    @Test("A socket path to a live label is refused like the label")
+    func refusesALiveSocketPath() {
+        let refusals = Refusals()
+        TmuxLiveSocketGuard.$onRefusal.withValue({ refusals.append($0) }) {
+            #expect(
+                !TmuxLiveSocketGuard.permits(tmuxArguments: [
+                    "tmux", "-u", "-S", "/private/tmp/tmux-501/workspaces", "ls",
+                ]))
+        }
+        #expect(refusals.count == 1)
     }
 
     @Test(
