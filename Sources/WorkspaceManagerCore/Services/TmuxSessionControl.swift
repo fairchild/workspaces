@@ -145,16 +145,24 @@ public struct TmuxSessionControl: Sendable {
     /// The session's lifetime is its command's: no `remain-on-exit`, matching both
     /// the app's own launches and what a person typing tmux by hand would get.
     ///
-    /// `sessionEnvironment` goes on this session alone through `-e`. The client's own
-    /// environment has tile-scoped keys stripped, and the server's global environment is
-    /// shared by every pane on the socket, so `-e` is the one place a value reaches this
-    /// session's panes and no other.
+    /// `sessionEnvironment` goes on this session alone. The client's own environment has
+    /// tile-scoped keys stripped, and the server's global environment is shared by every
+    /// pane on the socket, so the session's own environment is the one place a value
+    /// reaches this session's panes and no other.
+    ///
+    /// With `seedsEnvironmentOnCreate`, `-e` sets it as the session is made. A tmux older
+    /// than `TmuxSessionProbe.sessionEnvironmentFlagVersion` rejects `-e` and would fail
+    /// the launch, so there the command runs under `env` with the same pairs, and a
+    /// `set-environment` chained in the same client invocation gives them to every later
+    /// pane. A first pane without a command is a plain shell that lacks them; a hook in it
+    /// reads them from the session (`conversation-observer.sh`).
     public static func newSessionArguments(
         socketLabel: String,
         handle: String,
         directory: URL,
         command: String?,
-        sessionEnvironment: [String: String] = [:]
+        sessionEnvironment: [String: String] = [:],
+        seedsEnvironmentOnCreate: Bool = true
     ) -> [String] {
         var arguments = [
             "tmux", "-L", socketLabel, "new-session", "-d",
@@ -162,11 +170,24 @@ public struct TmuxSessionControl: Sendable {
             "-c", directory.path,
             "-x", String(detachedPaneWidth), "-y", String(detachedPaneHeight),
         ]
-        for key in sessionEnvironment.keys.sorted() {
-            arguments.append(contentsOf: ["-e", "\(key)=\(sessionEnvironment[key] ?? "")"])
+        let pairs = sessionEnvironment.keys.sorted().map { (key: $0, value: sessionEnvironment[$0] ?? "") }
+        if seedsEnvironmentOnCreate {
+            for pair in pairs {
+                arguments.append(contentsOf: ["-e", "\(pair.key)=\(pair.value)"])
+            }
         }
         if let command, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            arguments.append(contentsOf: ["--", "/bin/zsh", "-lc", command])
+            arguments.append("--")
+            if !seedsEnvironmentOnCreate, !pairs.isEmpty {
+                arguments.append("/usr/bin/env")
+                arguments.append(contentsOf: pairs.map { "\($0.key)=\($0.value)" })
+            }
+            arguments.append(contentsOf: ["/bin/zsh", "-lc", command])
+        }
+        if !seedsEnvironmentOnCreate {
+            for pair in pairs {
+                arguments.append(contentsOf: [";", "set-environment", "-t", "=\(handle)", pair.key, pair.value])
+            }
         }
         return arguments
     }
@@ -431,6 +452,7 @@ public struct TmuxSessionControl: Sendable {
             throw ControlError.handleAlreadyLive(handle: handle)
         }
         await removeCallerIdentityFromServer()
+        let seedsEnvironmentOnCreate = sessionEnvironment.isEmpty ? true : await supportsSessionEnvironmentFlag()
         guard
             let result = await run(
                 "/usr/bin/env",
@@ -439,7 +461,8 @@ public struct TmuxSessionControl: Sendable {
                     handle: handle,
                     directory: directory,
                     command: command,
-                    sessionEnvironment: sessionEnvironment
+                    sessionEnvironment: sessionEnvironment,
+                    seedsEnvironmentOnCreate: seedsEnvironmentOnCreate
                 ),
                 environment
             )
@@ -450,6 +473,15 @@ public struct TmuxSessionControl: Sendable {
             throw ControlError.commandFailed(verb: "new-session", handle: handle, stderr: result.stderr)
         }
         return handle
+    }
+
+    /// Whether this tmux accepts `new-session -e`. An unreadable version reads as too old,
+    /// as the app's launches read it: the fallback costs a plain first pane its seeded
+    /// environment, while `-e` at a tmux that rejects it costs the whole session.
+    public func supportsSessionEnvironmentFlag() async -> Bool {
+        let result = await run("/usr/bin/env", ["tmux", "-V"], environment)
+        let version = result?.success == true ? TmuxSessionProbe.parseVersion(fromVersionOutput: result?.stdout) : nil
+        return TmuxSessionProbe.supportsSessionEnvironmentFlag(version: version)
     }
 
     /// Clears agent identity a running server already holds, so a pane spawned after this

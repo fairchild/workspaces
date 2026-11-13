@@ -14,6 +14,7 @@
 //
 
 import Foundation
+import os
 import Testing
 
 @testable import WorkspaceManagerCore
@@ -1319,6 +1320,54 @@ struct CLIDetachedSessionTests {
         #expect(written.lastSeenIn?.hostSessionID == nil)
         #expect(written.lastSeenIn?.tmux?.sessionID.hasPrefix("$") == true)
         #expect(!(try fixture.serverGlobalEnvironment()).contains(ConversationRecordStore.directoryEnvironmentKey))
+    }
+
+    /// The launch a tmux older than 3.2 gets, run on the real tmux here with only its version
+    /// answer replaced: no `-e`, the command under `env`, and a chained `set-environment`.
+    /// The observer in the first pane still writes where the launch named, and the session
+    /// names the directory for any later pane.
+    @Test(
+        "Without new-session -e, an observer in the detached pane still writes to the launch's directory",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func detachedSessionWithoutTheEnvironmentFlag() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let key = ConversationRecordStore.directoryEnvironmentKey
+        let directory = fixture.root.appendingPathComponent("conversations")
+        let conversationID = UUID().uuidString.lowercased()
+        let payload = #"{"session_id":"\#(conversationID)","cwd":"\#(fixture.root.path)"}"#
+        let handle = "wm-old-tmux-00000000"
+        let calls = OSAllocatedUnfairLock<[[String]]>(initialState: [])
+        let control = TmuxSessionControl(
+            socketLabel: fixture.socketLabel,
+            run: { executable, arguments, environment in
+                calls.withLock { $0.append(arguments) }
+                if arguments == ["tmux", "-V"] { return ProcessResult(exitCode: 0, stdout: "tmux 3.1c\n", stderr: "") }
+                return await TmuxSessionControl.defaultRunner(executable, arguments, environment)
+            },
+            environment: ProcessInfo.processInfo.environment.merging(fixture.environment) { _, new in new }
+                .filter { $0.key != key },
+            sessionEnvironment: [key: directory.path]
+        )
+
+        try await control.launch(
+            handle: handle, directory: fixture.root,
+            command: "printf '%s' '\(payload)' | '\(fixture.binary.path)' conversation observe; sleep 30")
+
+        let created = try #require(calls.withLock { $0.first { $0.contains("new-session") } })
+        #expect(!created.contains("-e"))
+        let records = ConversationRecordStore(directory: directory)
+        let deadline = Date().addingTimeInterval(await LaunchBudget.deadline(launches: 1, floor: 10, ceiling: 60))
+        var record = try records.load(conversationID: conversationID)
+        while record == nil, Date() < deadline {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            record = try records.load(conversationID: conversationID)
+        }
+        let written = try #require(record, "the observer in the first pane wrote no record")
+        #expect(written.observedBy == .hook)
+        #expect(try fixture.sessionEnvironment(handle).contains("\(key)=\(directory.path)"))
+        #expect(!(try fixture.serverGlobalEnvironment()).contains(key))
     }
 
     @Test("Resuming a handle nothing was launched under says so")
