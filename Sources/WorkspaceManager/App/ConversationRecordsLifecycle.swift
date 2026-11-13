@@ -34,7 +34,7 @@ final class ConversationRecordsLifecycle {
     static let shared = ConversationRecordsLifecycle()
 
     private var watcher: AgentLaunchRecordWatcher?
-    private var indexer: ConversationIndexer?
+    private var passes: SerialPasses?
 
     private init() {}
 
@@ -50,24 +50,64 @@ final class ConversationRecordsLifecycle {
             records: ConversationRecordStore(directory: ConversationRecordsLocation.directory),
             localState: localStateStore
         )
-        self.indexer = indexer
-        Task.detached(priority: .utility) {
-            do {
-                try await indexer.launch()
-            } catch {
-                log.error("conversation index rebuild failed: \(String(describing: error), privacy: .public)")
-            }
-        }
-        let watcher = AgentLaunchRecordWatcher(directory: ConversationRecordsLocation.directory) {
-            Task.detached(priority: .utility) {
+        let passes = SerialPasses(
+            first: {
+                do {
+                    try await indexer.launch()
+                } catch {
+                    log.error("conversation index rebuild failed: \(String(describing: error), privacy: .public)")
+                }
+            },
+            then: {
                 do {
                     try await indexer.sync()
                 } catch {
                     log.error("conversation index sync failed: \(String(describing: error), privacy: .public)")
                 }
             }
+        )
+        self.passes = passes
+        Task.detached(priority: .utility) { await passes.request() }
+        let watcher = AgentLaunchRecordWatcher(
+            directory: ConversationRecordsLocation.directory,
+            directoryPermissions: ConversationRecordStore.directoryPermissions
+        ) {
+            Task.detached(priority: .utility) { await passes.request() }
         }
         watcher.start()
         self.watcher = watcher
+    }
+}
+
+/// Runs passes one at a time: `first` once, then `then` for every later request. A request
+/// that arrives while a pass runs folds into one more pass after it, so a steady stream of
+/// record writes keeps at most one pass running and one waiting, and a sync never reads the
+/// index while the launch rebuild is still writing it.
+actor SerialPasses {
+    private let first: @Sendable () async -> Void
+    private let then: @Sendable () async -> Void
+    private var ranFirst = false
+    private var running = false
+    private var requested = false
+
+    init(first: @escaping @Sendable () async -> Void, then: @escaping @Sendable () async -> Void) {
+        self.first = first
+        self.then = then
+    }
+
+    func request() async {
+        requested = true
+        guard !running else { return }
+        running = true
+        while requested {
+            requested = false
+            if ranFirst {
+                await then()
+            } else {
+                ranFirst = true
+                await first()
+            }
+        }
+        running = false
     }
 }

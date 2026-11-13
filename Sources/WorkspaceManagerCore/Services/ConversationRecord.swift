@@ -225,6 +225,10 @@ public struct ConversationRecordStore: Sendable {
     /// the hook's own `XDG_CONFIG_HOME` differs from the app's (#1417).
     public static let directoryEnvironmentKey = "WORKSPACES_CONVERSATIONS_DIR"
 
+    /// The directory and its lock directory are the owner's alone, whichever process makes
+    /// them first: a record names the person's working directories and transcripts.
+    public static let directoryPermissions = 0o700
+
     public let directory: URL
 
     public init(directory: URL = ConversationRecordStore.resolvedDirectory()) {
@@ -303,7 +307,7 @@ public struct ConversationRecordStore: Sendable {
 
         let locks = directory.appendingPathComponent(".locks", isDirectory: true)
         try FileManager.default.createDirectory(
-            at: locks, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            at: locks, withIntermediateDirectories: true, attributes: [.posixPermissions: Self.directoryPermissions])
         let lockPath = locks.appendingPathComponent("\(conversationID).write").path
         let descriptor = open(lockPath, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
