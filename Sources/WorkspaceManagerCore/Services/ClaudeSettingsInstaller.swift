@@ -372,7 +372,7 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
                 lines.append("replace an earlier conversation observer command in \(event)")
             }
             let present = groups.contains { group in
-                claudeGroupContainsHandler(group) { isCanonicalWorkspacesCommandHook($0, contribution: observer) }
+                claudeGroupContainsHandler(group) { isCanonicalConversationObserverHook($0, contribution: observer) }
             }
             if !present {
                 groups.append(["hooks": [["type": "command", "command": observer.command, "async": true]]])
@@ -590,15 +590,27 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         return unquoted.hasSuffix("/HookForwarders/event-forwarder.sh")
     }
 
-    /// Any WorkSpaces conversation observer other than this install's canonical command — an
-    /// unescaped spelling of it, or a copy extracted somewhere else — so one SessionStart
-    /// never runs two observers.
+    /// The observer as this install writes it: its command, run with `async: true`. Without
+    /// `async`, Claude waits on the observer's stdin read, file writes and tmux probe before
+    /// the session starts. Other fields a person added are left alone.
+    private func isCanonicalConversationObserverHook(
+        _ handler: [String: Any],
+        contribution: CommandContribution
+    ) -> Bool {
+        isCanonicalWorkspacesCommandHook(handler, contribution: contribution) && handler["async"] as? Bool == true
+    }
+
+    /// Any WorkSpaces conversation observer other than the canonical one — an unescaped
+    /// spelling of its command, a copy extracted somewhere else, or the right command without
+    /// `async` — so one SessionStart runs exactly one observer, and that one asynchronously.
     private func isStaleConversationObserverHook(
         _ handler: [String: Any],
         contribution: CommandContribution
     ) -> Bool {
-        guard (handler["type"] as? String) == "command" else { return false }
-        guard let command = handler["command"] as? String, command != contribution.command else { return false }
+        guard (handler["type"] as? String) == "command",
+            let command = handler["command"] as? String,
+            !isCanonicalConversationObserverHook(handler, contribution: contribution)
+        else { return false }
         return unquoteSingleQuotedCommand(command).hasSuffix("/conversation-observer.sh")
     }
 

@@ -95,6 +95,31 @@ struct ClaudeSettingsInstallerConversationObserverTests {
         }
     }
 
+    @Test("The observer's command without async is not installed until it runs async")
+    func synchronousObserverIsMadeAsync() async throws {
+        try await withHome { home in
+            let synchronous: [String: Any] = [
+                "hooks": [
+                    "SessionStart": [
+                        ["hooks": [["type": "command", "command": observer, "async": false, "timeout": 5]]],
+                        ["hooks": [["type": "command", "command": observer]]],
+                    ]
+                ]
+            ]
+            try JSONSerialization.data(withJSONObject: synchronous).write(
+                to: home.appendingPathComponent(".claude/settings.json"))
+
+            let installer = installer(home: home)
+            #expect(await !installer.isInstalled())
+            try await installer.install()
+
+            let observers = try sessionStartHandlers(home: home).filter { $0["command"] as? String == observer }
+            #expect(observers.count == 1)
+            #expect(observers.first?["async"] as? Bool == true)
+            #expect(await installer.isInstalled())
+        }
+    }
+
     @Test("Without an observer path the installer writes no observer")
     func noObserverPathWritesNone() async throws {
         try await withHome { home in
