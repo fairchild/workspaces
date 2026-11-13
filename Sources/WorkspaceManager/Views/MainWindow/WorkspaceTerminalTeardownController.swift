@@ -32,7 +32,12 @@ struct WorkspaceTerminalTeardownController {
     /// question answerable — a name on the shared socket proves nothing about ownership.
     let killTmuxSession: @MainActor (HostTerminalSession) async -> Bool
     /// The graceful retirement close for one session (`GhosttySurfaceRetirementCloser` semantics).
+    /// A failed attempt keeps the session's exit marked as its retirement, since the client's
+    /// exit can land between attempts or before the scope retires.
     let closeForRetirement: @MainActor (UUID) async throws -> Void
+    /// Withdraws a session's retirement mark when teardown returns, so a tile left in place by
+    /// a blocked teardown has its later exit read for what it is.
+    var abandonRetirement: @MainActor (UUID) -> Void = { _ in }
     /// Remove the scope's rows from the tile tree, returning the retired session ids.
     let retireSessions: @MainActor (HostTerminalSessionKey) -> [UUID]
     /// How long a close whose tmux session was just killed may keep reporting a live process
@@ -44,6 +49,11 @@ struct WorkspaceTerminalTeardownController {
 
     func teardown(scopeKey: HostTerminalSessionKey) async -> Outcome {
         let sessions = sessionsInScope(scopeKey)
+        defer {
+            for session in sessions {
+                abandonRetirement(session.id)
+            }
+        }
 
         // tmux dies first: killing the session ends the client process inside each surface, which
         // is what lets the close below complete without the runtime's process-alive confirmation.

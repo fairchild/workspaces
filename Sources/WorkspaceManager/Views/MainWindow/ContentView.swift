@@ -1167,8 +1167,9 @@ struct ContentView: View {
                     forceCloseTerminalTab(sessionID: confirmation.sessionID)
                 }
                 Button("Cancel", role: .cancel) {
-                    tileTreeStore.withdrawUserCloseRequests()
-                    viewState.terminalCloseConfirmation = nil
+                    if let confirmation = MainWindowPresentation.consume($viewState.terminalCloseConfirmation) {
+                        tileTreeStore.closeConfirmationCancelled(for: confirmation.sessionID)
+                    }
                 }
             } message: {
                 Text(
@@ -1793,7 +1794,10 @@ struct ContentView: View {
                     .didKill
             },
             closeForRetirement: { sessionID in
-                try await tileTreeStore.closeForRetirement(sessionID: sessionID)
+                try await tileTreeStore.closeForRetirement(sessionID: sessionID, holdingRequestOnFailure: true)
+            },
+            abandonRetirement: { sessionID in
+                tileTreeStore.abandonRetirement(sessionID)
             },
             retireSessions: { key in
                 tileTreeStore.retireSessions(inScope: key)
@@ -1922,6 +1926,11 @@ struct ContentView: View {
 
     @MainActor
     private func requestCloseConfirmationForTerminalTab(sessionID: UUID) {
+        // The sheet holds one confirmation; a newer one replaces the one it was showing.
+        if let shown = viewState.terminalCloseConfirmation, shown.sessionID != sessionID {
+            tileTreeStore.closeConfirmationCancelled(for: shown.sessionID)
+        }
+        tileTreeStore.closeConfirmationRaised(for: sessionID)
         viewState.terminalCloseConfirmation = terminalSessionController.closeConfirmation(
             sessionID: sessionID,
             tileTreeStore: tileTreeStore
