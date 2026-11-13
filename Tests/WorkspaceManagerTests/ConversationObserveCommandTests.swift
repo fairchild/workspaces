@@ -231,6 +231,37 @@ struct ConversationObserveCommandTests {
         #expect(fixture.records.all().isEmpty)
     }
 
+    /// The deadline outlives the client it guards by however long the shell takes to stop
+    /// it, and a reaped pid can be reused, so the kill it ends with checks the target is still
+    /// the hook's own child.
+    @Test("The hook's deadline kills its own child and nothing else")
+    func deadlineKillsOnlyItsChild() throws {
+        let script = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/WorkspaceManager/Resources/HookForwarders/conversation-observer.sh")
+        let stranger = Process()
+        stranger.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        stranger.arguments = ["30"]
+        try stranger.run()
+        defer { stranger.terminate() }
+
+        let probe = Process()
+        let output = Pipe()
+        probe.executableURL = URL(fileURLWithPath: "/bin/bash")
+        probe.arguments = [
+            "-c",
+            #"source "$1"; kill_child "$2"; sleep 30 & own=$!; kill_child "$own"; wait "$own"; echo "own=$?""#,
+            "probe", script.path, String(stranger.processIdentifier),
+        ]
+        probe.standardOutput = output
+        try probe.run()
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        probe.waitUntilExit()
+
+        #expect(stranger.isRunning)
+        #expect(text.contains("own=137"))
+    }
+
     @Test("The installed hook script starts the CLI only inside WorkSpaces, and exits 0 either way")
     func hookScriptGatesOnTheTileEnvironment() async throws {
         let fixture = try Fixture()

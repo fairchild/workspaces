@@ -887,13 +887,17 @@ struct CLIDetachedSessionTests {
         return (fields[0], try #require(Int32(fields[1])), String(fields[2].dropFirst()))
     }
 
-    /// Runs the hook outside any tile key with `tmux` as `$TMUX`, and how long it took. A
-    /// hook that outlives `limit` is killed, so a hang fails the test rather than the suite.
+    /// Runs the hook outside any tile key with `tmux` as `$TMUX`, and how long it took. With
+    /// `signal`, sends it that signal `signalAfter` seconds in. A hook that outlives `limit`
+    /// is killed, so a hang fails the test rather than the suite.
     private func runHook(
         _ script: URL,
         tmux: String,
         conversationID: String,
         fixture: Fixture,
+        temporaryDirectory: URL? = nil,
+        signal: Int32? = nil,
+        signalAfter: TimeInterval = 0.3,
         limit: TimeInterval = 15
     ) throws -> TimeInterval {
         let process = Process()
@@ -902,6 +906,7 @@ struct CLIDetachedSessionTests {
         process.environment = [
             "PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin", "HOME": fixture.root.path, "TMUX": tmux,
             "XDG_CONFIG_HOME": fixture.root.appendingPathComponent("config").path,
+            "TMPDIR": (temporaryDirectory ?? fixture.root).path,
         ]
         process.standardInput = input
         process.standardOutput = FileHandle.nullDevice
@@ -911,7 +916,12 @@ struct CLIDetachedSessionTests {
         input.fileHandleForWriting.write(
             Data(#"{"session_id":"\#(conversationID)","cwd":"\#(fixture.root.path)"}"#.utf8))
         try input.fileHandleForWriting.close()
+        var signalled = signal == nil
         while process.isRunning, Date().timeIntervalSince(started) < limit {
+            if !signalled, let signal, Date().timeIntervalSince(started) >= signalAfter {
+                kill(process.processIdentifier, signal)
+                signalled = true
+            }
             Thread.sleep(forTimeInterval: 0.02)
         }
         if process.isRunning {
@@ -971,6 +981,43 @@ struct CLIDetachedSessionTests {
         }
         #expect(elapsed < 5, "the hook took \(elapsed) s against a stopped server")
         #expect(records.load(conversationID: conversationID) == nil)
+    }
+
+    @Test(
+        "A hook signalled while its tmux server does not answer leaves no lookup behind",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it"),
+        arguments: [SIGTERM, SIGINT]
+    )
+    func signalledHookCleansUp(_ signal: Int32) async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let script = try installHookScript(in: fixture)
+        let temporary = fixture.root.appendingPathComponent("hook-tmp")
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        let tmux = try await sessionNamingTheRecordsDirectory(
+            "wm-signalled-00000000", fixture: fixture, environment: environment)
+
+        kill(tmux.serverPID, SIGSTOP)
+        let elapsed: TimeInterval
+        let clientsLeft: Int32
+        do {
+            defer { kill(tmux.serverPID, SIGCONT) }
+            elapsed = try runHook(
+                script, tmux: "\(tmux.socket),\(tmux.serverPID),\(tmux.session)",
+                conversationID: UUID().uuidString.lowercased(), fixture: fixture,
+                temporaryDirectory: temporary, signal: signal)
+            // Asked while the server is still stopped, when a leaked client would still be waiting.
+            let clients = Process()
+            clients.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+            clients.arguments = ["-f", "-q", "\(tmux.socket) display-message -p -t \\$\(tmux.session) "]
+            try clients.run()
+            clients.waitUntilExit()
+            clientsLeft = clients.terminationStatus
+        }
+        #expect(elapsed < 5, "the hook took \(elapsed) s to end after the signal")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: temporary.path) == [])
+        #expect(clientsLeft == 1, "a lookup client outlived the hook")
     }
 
     @Test(
