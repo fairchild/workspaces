@@ -67,3 +67,27 @@ struct GhosttySurfaceChildProcessTests {
         return info
     }
 }
+
+@Suite("Retired surface overdue reasons")
+struct GhosttyRetiredSurfaceOverdueReasonTests {
+    @Test("A command still running is not said to have survived a signal that was never sent")
+    func failedLookupWithACachedCommand() {
+        let reason = GhosttyAppManager.overdueReason(fate: .running, lookupFailed: true)
+        #expect(reason == "its command is still running, and the lookup to signal it failed")
+    }
+
+    @Test("Each fate has its own reason")
+    func eachFate() {
+        let fates: [GhosttySurfaceChildProcess.Fate?] = [nil, .running, .exited, .gone, .replaced, .unavailable]
+        let reasons = fates.map { GhosttyAppManager.overdueReason(fate: $0, lookupFailed: false) }
+        #expect(Set(reasons).count == fates.count)
+        #expect(GhosttyAppManager.overdueReason(fate: .running, lookupFailed: false) == "its command is still running")
+        #expect(GhosttyAppManager.overdueReason(fate: .gone, lookupFailed: false) == "its command has only just gone")
+    }
+
+    @Test("A command never found because every lookup failed says so")
+    func neverLookedUp() {
+        #expect(GhosttyAppManager.overdueReason(fate: nil, lookupFailed: true) == "its command could not be looked up")
+        #expect(GhosttyAppManager.overdueReason(fate: nil, lookupFailed: false) == "its command was never found")
+    }
+}

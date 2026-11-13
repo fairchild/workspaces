@@ -301,7 +301,9 @@ final class GhosttyAppManager: NSObject {
             guard let deadline = retired.nextStepAt, now >= deadline else { return }
             retired.shutdown = .overdue
             let address = UInt(bitPattern: retired.surface)
-            let reason = overdueReason(of: retired)
+            let reason = Self.overdueReason(
+                fate: retired.command.map { GhosttySurfaceChildProcess.fate(of: $0, in: processTable) },
+                lookupFailed: retired.lookupFailed)
             log.error(
                 """
                 [GhosttyAppManager] leaving surface \(address, privacy: .public) unfreed for now: \
@@ -315,14 +317,19 @@ final class GhosttyAppManager: NSObject {
         }
     }
 
-    private func overdueReason(of retired: RetiredSurface) -> String {
-        switch retired.command.map({ GhosttySurfaceChildProcess.fate(of: $0, in: processTable) }) {
-        case nil: retired.lookupFailed ? "its command could not be looked up" : "its command was never found"
-        case .unavailable: "its command could not be looked up"
-        case .replaced: "its command's pid now names another process"
-        case .exited: "its command exited and was never reaped"
-        case .running, .gone: "its command survived SIGKILL"
-        }
+    /// Why an overdue surface stays unfreed, from what became of its command and whether the
+    /// latest lookup to signal it failed, in which case nothing was sent.
+    nonisolated static func overdueReason(fate: GhosttySurfaceChildProcess.Fate?, lookupFailed: Bool) -> String {
+        let state =
+            switch fate {
+            case nil: lookupFailed ? "its command could not be looked up" : "its command was never found"
+            case .unavailable: "its command's process could not be queried"
+            case .replaced: "its command's pid now names another process"
+            case .exited: "its command exited and was never reaped"
+            case .running: "its command is still running"
+            case .gone: "its command has only just gone"
+            }
+        return fate != nil && lookupFailed ? state + ", and the lookup to signal it failed" : state
     }
 
     // MARK: Terminal Theme
