@@ -244,6 +244,20 @@ struct ConversationRecordStoreTests {
         }
     }
 
+    @Test("Records are private to their owner from the moment they exist")
+    func recordsArePrivate() throws {
+        try withStore { store in
+            try store.record(observation(at: 1_800_000_000))
+            let url = try #require(store.fileURL(conversationID: Self.conversationID))
+            func mode(_ path: String) throws -> Int {
+                try #require(FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? Int)
+            }
+            #expect(try mode(store.directory.path) == 0o700)
+            #expect(try mode(store.directory.appendingPathComponent(".locks").path) == 0o700)
+            #expect(try mode(url.path) == 0o600)
+        }
+    }
+
     @Test("Two spellings of one id are one record")
     func idSpellingIsNormalized() throws {
         try withStore { store in

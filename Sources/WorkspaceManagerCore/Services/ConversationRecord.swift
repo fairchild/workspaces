@@ -413,7 +413,8 @@ public struct ConversationRecordStore: Sendable {
         observation.conversationID = conversationID
 
         let locks = directory.appendingPathComponent(".locks", isDirectory: true)
-        try FileManager.default.createDirectory(at: locks, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: locks, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let lockPath = locks.appendingPathComponent("\(conversationID).write").path
         let descriptor = open(lockPath, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
@@ -423,12 +424,27 @@ public struct ConversationRecordStore: Sendable {
         let merged = ConversationRecordJSON.merge(observation, into: try Self.existingObject(at: url))
         let data = try JSONSerialization.data(withJSONObject: merged, options: [.prettyPrinted, .sortedKeys])
         let temporary = directory.appendingPathComponent(".\(conversationID).\(getpid()).\(UUID().uuidString).tmp")
-        try data.write(to: temporary)
+        try Self.writePrivately(data, to: temporary)
         guard rename(temporary.path, url.path) == 0 else {
             try? FileManager.default.removeItem(at: temporary)
             throw CocoaError(.fileWriteUnknown)
         }
         return .written
+    }
+
+    /// Records name workspaces, transcripts and config homes, so the file is 0600 from the
+    /// moment it exists rather than after a chmod.
+    private static func writePrivately(_ data: Data, to url: URL) throws {
+        let descriptor = open(url.path, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        do {
+            try handle.write(contentsOf: data)
+            try handle.close()
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
     }
 
     private static func lock(_ descriptor: Int32, within budget: Duration) -> Bool {
