@@ -56,12 +56,14 @@ struct WorkspaceTerminalTeardownControllerTests {
         let sessionsByID = [primary.id: primary, pane.id: pane]
         let controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [pane, primary] },
-            killTmuxSession: { killedSession in
+            killTmuxSession: { target in
+                let killedSession = target.session
                 let name = killedSession.effectiveTmuxSessionName
                 killOrder.append(name)
                 return server.live.remove(name) != nil
             },
-            closeForRetirement: { sessionID in
+            closeForRetirement: { target in
+                let sessionID = target.session.id
                 let name = sessionsByID[sessionID]?.effectiveTmuxSessionName ?? ""
                 if server.live.contains(name) {
                     // The tmux client still runs: the runtime would prompt.
@@ -69,7 +71,7 @@ struct WorkspaceTerminalTeardownControllerTests {
                 }
                 closedSessions.append(sessionID)
             },
-            retireSessions: { key in
+            retireSessions: { key, _ in
                 retiredScopes.append(key)
                 return [pane.id, primary.id]
             }
@@ -105,7 +107,7 @@ struct WorkspaceTerminalTeardownControllerTests {
                     throw GhosttySurfaceRetirementCloseError.processStillRunning(title: "ws")
                 }
             },
-            retireSessions: { _ in [racing.id] }
+            retireSessions: { _, _ in [racing.id] }
         )
         // The budget is effectively unbounded so the loop terminates on the fake's success, never
         // the clock — under parallel suite load a tuned real-time budget loses the race (observed:
@@ -135,7 +137,7 @@ struct WorkspaceTerminalTeardownControllerTests {
             closeForRetirement: { _ in
                 throw GhosttySurfaceRetirementCloseError.processStillRunning(title: "ws")
             },
-            retireSessions: { _ in
+            retireSessions: { _, _ in
                 retired = true
                 return [stuck.id]
             }
@@ -162,7 +164,7 @@ struct WorkspaceTerminalTeardownControllerTests {
             closeForRetirement: { _ in
                 throw GhosttySurfaceRetirementCloseError.processStillRunning(title: "ws")
             },
-            retireSessions: { _ in
+            retireSessions: { _, _ in
                 retired = true
                 return [live.id]
             }
@@ -187,7 +189,7 @@ struct WorkspaceTerminalTeardownControllerTests {
             closeForRetirement: { _ in
                 throw GhosttySurfaceRetirementCloseError.timedOut(title: "ws")
             },
-            retireSessions: { _ in [slow.id] }
+            retireSessions: { _, _ in [slow.id] }
         )
 
         let outcome = await controller.teardown(scopeKey: Self.scope)
@@ -215,12 +217,13 @@ struct WorkspaceTerminalTeardownControllerTests {
         var attempts: [UUID] = []
         let controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [unrecorded, recorded] },
-            killTmuxSession: { killedSession in
+            killTmuxSession: { target in
+                let killedSession = target.session
                 attempts.append(killedSession.id)
                 return killedSession.id == recorded.id
             },
             closeForRetirement: { _ in },
-            retireSessions: { _ in [unrecorded.id, recorded.id] }
+            retireSessions: { _, _ in [unrecorded.id, recorded.id] }
         )
 
         let outcome = await controller.teardown(scopeKey: Self.scope)
@@ -244,8 +247,8 @@ struct WorkspaceTerminalTeardownControllerTests {
                 killCalls += 1
                 return true
             },
-            closeForRetirement: { closed.append($0) },
-            retireSessions: { _ in [idle.id] }
+            closeForRetirement: { closed.append($0.session.id) },
+            retireSessions: { _, _ in [idle.id] }
         )
 
         let outcome = await controller.teardown(scopeKey: Self.scope)
@@ -269,13 +272,14 @@ struct WorkspaceTerminalTeardownControllerTests {
         var killCalls: [String] = []
         let controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [a, b, stubborn] },
-            killTmuxSession: { killedSession in
+            killTmuxSession: { target in
+                let killedSession = target.session
                 let name = killedSession.effectiveTmuxSessionName
                 killCalls.append(name)
                 return name != "wm-stuck-p1"
             },
             closeForRetirement: { _ in },
-            retireSessions: { _ in [a.id, b.id, stubborn.id] }
+            retireSessions: { _, _ in [a.id, b.id, stubborn.id] }
         )
 
         let outcome = await controller.teardown(scopeKey: Self.scope)
@@ -314,12 +318,13 @@ struct WorkspaceTerminalTeardownControllerTests {
         var closed: [UUID] = []
         let controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [remote] },
-            killTmuxSession: { killedSession in
+            killTmuxSession: { target in
+                let killedSession = target.session
                 killCalls.append(killedSession.effectiveTmuxSessionName)
                 return true
             },
-            closeForRetirement: { closed.append($0) },
-            retireSessions: { _ in [remote.id] }
+            closeForRetirement: { closed.append($0.session.id) },
+            retireSessions: { _, _ in [remote.id] }
         )
 
         let outcome = await controller.teardown(scopeKey: Self.scope)

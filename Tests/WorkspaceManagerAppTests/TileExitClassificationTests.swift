@@ -1083,14 +1083,15 @@ struct TileExitClassificationTests {
         var attempts = 0
         var controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [session] },
+            captureTarget: { store.retirementTarget(for: $0) },
             killTmuxSession: { _ in tmuxKilled },
-            closeForRetirement: { sessionID in
+            closeForRetirement: { target in
                 attempts += 1
                 beforeAttempt(attempts)
-                try await store.closeForRetirement(sessionID: sessionID)
+                try await store.closeForRetirement(target)
             },
             beginRetirement: { store.beginRetirement(of: $0) },
-            retireSessions: { _ in [] }
+            retireSessions: { _, _ in [] }
         )
         controller.killedProcessExitBudget = .seconds(3600)
         controller.closeRetryInterval = .milliseconds(1)
@@ -1169,6 +1170,10 @@ extension TileExitClassificationTests {
         func fail(_ call: Int) {
             held.removeValue(forKey: call)?.resume(
                 throwing: GhosttySurfaceRetirementCloseError.processStillRunning(title: "tab"))
+        }
+
+        func release(_ call: Int) {
+            held.removeValue(forKey: call)?.resume()
         }
     }
 
@@ -1314,13 +1319,14 @@ extension TileExitClassificationTests {
         let store = harness.store
         let controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [tab] },
-            killTmuxSession: { session in
-                store.handleProcessExit(for: session.id)
+            captureTarget: { store.retirementTarget(for: $0) },
+            killTmuxSession: { target in
+                store.handleProcessExit(for: target.session.id)
                 return true
             },
-            closeForRetirement: { try await store.closeForRetirement(sessionID: $0) },
+            closeForRetirement: { try await store.closeForRetirement($0) },
             beginRetirement: { store.beginRetirement(of: $0) },
-            retireSessions: { store.retireSessions(inScope: $0) }
+            retireSessions: { store.retire($1, inScope: $0) }
         )
 
         _ = await controller.teardown(scopeKey: tab.key)
@@ -1417,5 +1423,134 @@ extension TileExitClassificationTests {
         #expect(store.handleProcessExit(for: otherTab.id))
 
         #expect(await harness.rowWrites(for: otherTab.id) == [.deselected(otherTab.id)])
+    }
+}
+
+/// A retiring pass acts on the tiles it found before its first await. A restore that brings a
+/// session back under the same id mid-pass gives it a new tile on a new tmux session, and
+/// neither is the pass's to kill, close or retire.
+extension TileExitClassificationTests {
+    private actor IssuedKills {
+        private(set) var arguments: [[String]] = []
+        func append(_ arguments: [String]) { self.arguments.append(arguments) }
+    }
+
+    /// A tab whose tile exits while teardown is busy with the scope's first tile, and that a
+    /// restore brings back under its id on tmux session `$90`, recorded in the ledger.
+    private struct TeardownRace {
+        let first: HostTerminalSession
+        let raced: HostTerminalSession
+        let kills: IssuedKills
+        let replacement: TmuxLiveSession
+    }
+
+    private func teardownRace(_ store: TileTreeStore) throws -> TeardownRace {
+        let (first, raced) = try openTwoTmuxTiles(store)
+        let replacement = TmuxLiveSession(
+            sessionID: "$90", name: raced.effectiveTmuxSessionName,
+            createdAt: Date(timeIntervalSince1970: 900), serverPID: 4242)
+        let kills = IssuedKills()
+        let listing = "$90\t\(replacement.name)\t900\t4242\n"
+        store.terminateOwnedTmuxSession = nil
+        store.tmuxSessionProbe = TmuxSessionProbe(
+            run: { _, arguments, _ in
+                await kills.append(arguments)
+                return 0
+            },
+            runForOutput: { _, _, _ in listing }, environment: [:])
+        return TeardownRace(first: first, raced: raced, kills: kills, replacement: replacement)
+    }
+
+    /// Brings `raced` back under its id, as a restore does, on the replacement tmux session.
+    private func restore(_ race: TeardownRace, in store: TileTreeStore) {
+        let raced = race.raced
+        #expect(store.handleProcessExit(for: raced.id))
+        let returned = store.createRestoredSession(
+            key: raced.key, directory: raced.directoryURL, recordedTerminalMode: raced.terminalMode,
+            tmuxSessionNameOverride: raced.tmuxSessionName, adoptedHostSessionID: raced.id)
+        #expect(returned.id == raced.id)
+        store.tmuxOwnershipLedger.record(
+            hostSessionID: returned.id, identity: race.replacement, launchedAt: race.replacement.createdAt)
+    }
+
+    /// Teardown wired as the app wires it, with the race run while the first tile's kill is out.
+    private func racedTeardown(_ race: TeardownRace, in store: TileTreeStore) -> WorkspaceTerminalTeardownController {
+        var controller = WorkspaceTerminalTeardownController(tileTreeStore: store)
+        let kill = controller.killTmuxSession
+        controller.killTmuxSession = { target in
+            if target.session.id == race.first.id {
+                restore(race, in: store)
+            }
+            return await kill(target)
+        }
+        return controller
+    }
+
+    @Test("A blocked teardown neither kills nor closes a tile a restore brought back mid-teardown")
+    func blockedTeardownLeavesARestoredTile() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let store = harness.store
+        let race = try teardownRace(store)
+        let blocked = try #require(store.createTab(from: race.first.id))
+        var closed: [UUID] = []
+        store.closeSurfaceForRetirement = { sessionID in
+            closed.append(sessionID)
+            if sessionID == blocked.id {
+                throw GhosttySurfaceRetirementCloseError.processStillRunning(title: "blocked")
+            }
+        }
+
+        let outcome = await racedTeardown(race, in: store).teardown(scopeKey: race.first.key)
+
+        guard case .closeBlockedByConfirmation = outcome else {
+            Issue.record("expected close_blocked_by_confirmation, got \(outcome)")
+            return
+        }
+        #expect(await race.kills.arguments.isEmpty)
+        #expect(closed == [race.first.id, blocked.id])
+        #expect(store.allLiveSessions.contains { $0.id == race.raced.id })
+    }
+
+    @Test("A completed teardown retires only the tiles it found, leaving a tile a restore brought back")
+    func completedTeardownLeavesARestoredTile() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let store = harness.store
+        let race = try teardownRace(store)
+        store.closeSurfaceForRetirement = { _ in }
+
+        let outcome = await racedTeardown(race, in: store).teardown(scopeKey: race.first.key)
+
+        guard case .completed = outcome else {
+            Issue.record("expected completion, got \(outcome)")
+            return
+        }
+        #expect(await race.kills.arguments.isEmpty)
+        #expect(!store.allLiveSessions.contains { $0.id == race.first.id })
+        #expect(store.allLiveSessions.contains { $0.id == race.raced.id })
+    }
+
+    @Test("A retire pass neither closes nor retires a tile a restore brought back mid-pass")
+    func retirePassLeavesARestoredTile() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let store = harness.store
+        let race = try teardownRace(store)
+        let held = HeldRetirementClose()
+        var closed: [UUID] = []
+        store.closeSurfaceForRetirement = { sessionID in
+            closed.append(sessionID)
+            if sessionID == race.first.id {
+                try await held.close()
+            }
+        }
+
+        let pass = Task { try await store.closeAndRetireSessions(inScope: race.first.key) }
+        await held.waitForCall(1)
+        restore(race, in: store)
+        held.release(1)
+        let retired = try await pass.value
+
+        #expect(closed == [race.first.id])
+        #expect(retired == [race.first.id])
+        #expect(store.allLiveSessions.contains { $0.id == race.raced.id })
     }
 }

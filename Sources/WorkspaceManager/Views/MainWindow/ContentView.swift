@@ -1777,27 +1777,7 @@ struct ContentView: View {
     /// the store's seams, and the graceful retirement close from the surface store.
     @MainActor
     private func makeWorkspaceTerminalTeardownController() -> WorkspaceTerminalTeardownController {
-        WorkspaceTerminalTeardownController(
-            sessionsInScope: { key in
-                tileTreeStore.sessions(inScope: key).flatMap { primary in
-                    tileTreeStore.splitSessions(forPrimarySessionID: primary.id) + [primary]
-                }
-            },
-            killTmuxSession: { session in
-                await TmuxOwnedSessionTerminator(ledger: tileTreeStore.tmuxOwnershipLedger)
-                    .terminate(hostSessionID: session.id, requiringCreation: false)
-                    .didKill
-            },
-            closeForRetirement: { sessionID in
-                try await tileTreeStore.closeForRetirement(sessionID: sessionID)
-            },
-            beginRetirement: { sessionIDs in
-                tileTreeStore.beginRetirement(of: sessionIDs)
-            },
-            retireSessions: { key in
-                tileTreeStore.retireSessions(inScope: key)
-            }
-        )
+        WorkspaceTerminalTeardownController(tileTreeStore: tileTreeStore)
     }
 
     @MainActor

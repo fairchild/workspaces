@@ -23,24 +23,33 @@ struct WorkspaceTerminalTeardownController {
         case closeBlockedByConfirmation(message: String)
     }
 
+    typealias Target = TileTreeStore.RetirementTarget
+
     /// All terminal sessions in the scope, split panes before their primary (close order).
     let sessionsInScope: @MainActor (HostTerminalSessionKey) -> [HostTerminalSession]
-    /// End the tmux session backing a host session, when the app's ownership ledger
-    /// authorizes it. `false` when nothing died: the kill failed, the session was already
-    /// gone, or the app could not attribute the session to a surface it launched and left
-    /// it running (#1267). Taking the session rather than a name is what makes that
-    /// question answerable — a name on the shared socket proves nothing about ownership.
-    let killTmuxSession: @MainActor (HostTerminalSession) async -> Bool
-    /// The graceful retirement close for one session (`GhosttySurfaceRetirementCloser` semantics).
-    let closeForRetirement: @MainActor (UUID) async throws -> Void
+    /// What teardown acts on for each session, captured before its first await: the tile that
+    /// holds it and the tmux session the ledger holds for it. A restore can bring a session
+    /// back under the same id while teardown awaits, and that tile and its tmux session are
+    /// not teardown's.
+    var captureTarget: @MainActor (HostTerminalSession) -> Target = {
+        Target(session: $0, tileID: nil, ownership: nil)
+    }
+    /// End the tmux session the target captured, when the app's ownership ledger authorized
+    /// it. `false` when nothing died: the kill failed, the session was already gone, or the
+    /// app could not attribute the session to a surface it launched and left it running
+    /// (#1267). Taking the captured ownership rather than a name is what makes that question
+    /// answerable — a name on the shared socket proves nothing about ownership.
+    var killTmuxSession: @MainActor (Target) async -> Bool
+    /// The graceful retirement close for one target (`GhosttySurfaceRetirementCloser` semantics).
+    let closeForRetirement: @MainActor (Target) async throws -> Void
     /// Marks the coming exit of each session as its retirement, before the tmux kill or the
     /// close that can cause it, and returns what withdraws exactly those marks. Teardown holds
     /// them across every attempt, since a client's exit can land at any point, and withdraws
     /// them when it returns, so a tile a blocked teardown leaves in place has its later exit
     /// read for what it is.
     var beginRetirement: @MainActor ([UUID]) -> @MainActor () -> Void = { _ in {} }
-    /// Remove the scope's rows from the tile tree, returning the retired session ids.
-    let retireSessions: @MainActor (HostTerminalSessionKey) -> [UUID]
+    /// Remove the targets' rows from the tile tree, returning the retired session ids.
+    let retireSessions: @MainActor (HostTerminalSessionKey, [Target]) -> [UUID]
     /// How long a close whose tmux session was just killed may keep reporting a live process
     /// before the blocked arm is declared. A killed tmux session ends its client asynchronously,
     /// so a close requested inside that window still sees the process and fires the confirmation
@@ -50,6 +59,7 @@ struct WorkspaceTerminalTeardownController {
 
     func teardown(scopeKey: HostTerminalSessionKey) async -> Outcome {
         let sessions = sessionsInScope(scopeKey)
+        let targets = sessions.map(captureTarget)
         let withdrawRetirement = beginRetirement(sessions.map(\.id))
         defer { withdrawRetirement() }
 
@@ -63,9 +73,9 @@ struct WorkspaceTerminalTeardownController {
         // (#1267).
         var killed: [String] = []
         var killedNames = Set<String>()
-        for session in sessions {
-            guard let name = session.tmuxSessionName, !killedNames.contains(name) else { continue }
-            if await killTmuxSession(session) {
+        for target in targets {
+            guard let name = target.session.tmuxSessionName, !killedNames.contains(name) else { continue }
+            if await killTmuxSession(target) {
                 killedNames.insert(name)
                 killed.append(name)
             }
@@ -77,12 +87,13 @@ struct WorkspaceTerminalTeardownController {
         // within the budget; anywhere else it is a process the kill could not end — the dialog
         // arm. Fail typed instead of tearing down under the prompt.
         var blockedNames: [String] = []
-        for session in sessions {
+        for target in targets {
+            let session = target.session
             let tmuxWasKilled = session.tmuxSessionName.map(killedNames.contains) ?? false
             let deadline = ContinuousClock.now.advanced(by: killedProcessExitBudget)
             while true {
                 do {
-                    try await closeForRetirement(session.id)
+                    try await closeForRetirement(target)
                     break
                 } catch let error as GhosttySurfaceRetirementCloseError {
                     guard case .processStillRunning = error else { break }
@@ -111,12 +122,33 @@ struct WorkspaceTerminalTeardownController {
         // Retire whatever the process-exit path has not already reclaimed. The report names the
         // sessions enumerated at entry: completion means every one of them is gone, whether the
         // exit-driven reclaim or this retire call removed its row.
-        _ = retireSessions(scopeKey)
+        _ = retireSessions(scopeKey, targets)
         return .completed(
             AutomationWorkspaceArchiveTeardownReport(
                 retiredSurfaceIDs: sessions.map(\.id.uuidString),
                 killedTmuxSessions: killed
             )
+        )
+    }
+}
+
+extension WorkspaceTerminalTeardownController {
+    /// Teardown wired to the live tile tree: scope enumeration, capture and retirement from
+    /// the store, tmux kills of the captured ownership, and the graceful retirement close.
+    init(tileTreeStore: TileTreeStore) {
+        self.init(
+            sessionsInScope: { key in
+                tileTreeStore.sessions(inScope: key).flatMap { primary in
+                    tileTreeStore.splitSessions(forPrimarySessionID: primary.id) + [primary]
+                }
+            },
+            captureTarget: { tileTreeStore.retirementTarget(for: $0) },
+            killTmuxSession: { target in
+                await tileTreeStore.terminateTmuxSession(of: target.session.id, ownership: target.ownership).didKill
+            },
+            closeForRetirement: { try await tileTreeStore.closeForRetirement($0) },
+            beginRetirement: { tileTreeStore.beginRetirement(of: $0) },
+            retireSessions: { key, targets in tileTreeStore.retire(targets, inScope: key) }
         )
     }
 }

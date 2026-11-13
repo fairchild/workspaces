@@ -572,23 +572,78 @@ final class TileTreeStore: ObservableObject {
     /// of the tree, returning the retired session ids. Every exit the pass causes reads as the
     /// retirement. A close that fails stops the pass with every tile not yet exited left in
     /// place, and a later exit of any of them is read for what it is.
+    ///
+    /// The pass acts on the tiles it found before its first await (`RetirementTarget`). A
+    /// tile a restore has since put in one's place, under the same id or a new one, is not
+    /// the pass's to close or retire.
     @discardableResult
     func closeAndRetireSessions(inScope scopeKey: HostTerminalSessionKey) async throws -> [UUID] {
-        let sessionIDs = terminalSessionIDs(inScope: scopeKey)
-        let withdrawRetirement = beginRetirement(of: sessionIDs)
-        defer { withdrawRetirement() }
-        for sessionID in sessionIDs {
-            try await closeForRetirement(sessionID: sessionID)
+        let targets = terminalSessionIDs(inScope: scopeKey).compactMap { sessionID in
+            allLiveSessions.first { $0.id == sessionID }.map(retirementTarget)
         }
-        return retireSessions(inScope: scopeKey)
+        let withdrawRetirement = beginRetirement(of: targets.map(\.session.id))
+        defer { withdrawRetirement() }
+        for target in targets {
+            try await closeForRetirement(target)
+        }
+        return retire(targets, inScope: scopeKey)
     }
 
-    /// Drives the retirement close of a session's surface. A session already gone has nothing
-    /// to close. Ghostty may report the surface as exited rather than closed, so the pass
-    /// that retires the session marks that exit as the retirement first (`beginRetirement`).
-    func closeForRetirement(sessionID: UUID) async throws {
-        guard allLiveSessions.contains(where: { $0.id == sessionID }) else { return }
-        try await closeSurfaceForRetirement(sessionID)
+    /// A tile a retiring pass set out to close, as it stood before the pass's first await: the
+    /// tile holding the session, and the tmux session the ledger held for it. While the pass
+    /// awaits, the tile can exit and a restore can bring the session back under the same id,
+    /// in a new tile on a new tmux session; neither is the pass's to close or kill.
+    struct RetirementTarget {
+        let session: HostTerminalSession
+        /// The tile holding the session when the pass began; `nil` for one no tile held.
+        let tileID: TileID?
+        let ownership: TmuxSessionOwnership?
+    }
+
+    func retirementTarget(for session: HostTerminalSession) -> RetirementTarget {
+        let held = allLiveSessions.contains { $0.id == session.id }
+        return RetirementTarget(
+            session: session,
+            tileID: held ? renderTileID(for: session.id) : nil,
+            ownership: tmuxOwnershipLedger.ownership(forHostSessionID: session.id)
+        )
+    }
+
+    /// Whether the tile `target` captured still holds its session.
+    func stillHolds(_ target: RetirementTarget) -> Bool {
+        guard let tileID = target.tileID else { return false }
+        return tileIDBySessionID[target.session.id] == tileID
+            && allLiveSessions.contains { $0.id == target.session.id }
+    }
+
+    /// Drives the retirement close of the target's surface, while its tile still holds it.
+    /// Ghostty may report the surface as exited rather than closed, so the pass that retires
+    /// the session marks that exit as the retirement first (`beginRetirement`).
+    func closeForRetirement(_ target: RetirementTarget) async throws {
+        guard stillHolds(target) else { return }
+        try await closeSurfaceForRetirement(target.session.id)
+    }
+
+    /// Takes out of the tree the tabs whose captured tile still holds its session, with their
+    /// panes, and leaves every other tile in the scope.
+    @discardableResult
+    func retire(_ targets: [RetirementTarget], inScope scopeKey: HostTerminalSessionKey) -> [UUID] {
+        let held = Set(targets.filter(stillHolds).map(\.session.id))
+        let others = Set(coordinator.sessions(inScope: scopeKey).map(\.id)).subtracting(held)
+        return retireSessions(inScope: scopeKey, keeping: others)
+    }
+
+    /// Ends the tmux session `ownership` names, as the ledger held it when the kill was
+    /// decided, never whatever the ledger holds for `hostSessionID` by the time the socket
+    /// answers.
+    func terminateTmuxSession(
+        of hostSessionID: UUID, ownership: TmuxSessionOwnership?
+    ) async -> TmuxOwnedSessionTerminator.Outcome {
+        if let terminate = terminateOwnedTmuxSession {
+            return await terminate(hostSessionID, ownership)
+        }
+        return await TmuxOwnedSessionTerminator(ledger: tmuxOwnershipLedger, probe: tmuxSessionProbe)
+            .terminate(ownership, requiringCreation: false)
     }
 
     /// Marks the coming exit of each live session in `sessionIDs` as its retirement, before
@@ -1599,15 +1654,7 @@ final class TileTreeStore: ObservableObject {
         let ownership = tmuxOwnershipLedger.ownership(forHostSessionID: hostSessionID)
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let outcome: TmuxOwnedSessionTerminator.Outcome
-            if let terminate = self.terminateOwnedTmuxSession {
-                outcome = await terminate(hostSessionID, ownership)
-            } else {
-                let terminator = TmuxOwnedSessionTerminator(
-                    ledger: self.tmuxOwnershipLedger, probe: self.tmuxSessionProbe)
-                outcome = await terminator.terminate(ownership, requiringCreation: false)
-            }
-            switch outcome {
+            switch await self.terminateTmuxSession(of: hostSessionID, ownership: ownership) {
             case .killed(let id, _):
                 log.info(
                     "[TileTreeStore] reclaimed pane tmux session \(sessionName, privacy: .public) (\(id, privacy: .public)) on close"
