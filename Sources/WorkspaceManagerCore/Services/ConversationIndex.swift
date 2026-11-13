@@ -18,10 +18,8 @@ public struct ConversationIndexEntry: Equatable, Sendable {
     public let tmuxSessionID: String?
     public let cwd: String
     public let observedAt: Date
-    public let fileModifiedAt: Date
 
-    public init(file: ConversationRecordFile) {
-        let record = file.record
+    public init(record: ConversationRecord) {
         conversationID = record.conversationID
         harness = record.harness
         hostSessionID = record.lastSeenIn?.hostSessionID.flatMap(UUID.init(uuidString:))
@@ -29,15 +27,13 @@ public struct ConversationIndexEntry: Equatable, Sendable {
         tmuxSessionID = record.lastSeenIn?.tmux?.sessionID
         cwd = record.cwd
         observedAt = Self.millisecondPrecision(record.observedAt)
-        fileModifiedAt = Self.millisecondPrecision(file.modifiedAt)
     }
 
     init?(row: Row) {
         guard let conversationID: String = row["conversation_id"],
             let harness: String = row["harness"],
             let cwd: String = row["cwd"],
-            let observedAt = (row["observed_at"] as String?).flatMap(ConversationRecordJSON.date),
-            let fileModifiedAt = (row["file_mtime"] as String?).flatMap(ConversationRecordJSON.date)
+            let observedAt = (row["observed_at"] as String?).flatMap(ConversationRecordJSON.date)
         else { return nil }
         self.conversationID = conversationID
         self.harness = harness
@@ -46,7 +42,6 @@ public struct ConversationIndexEntry: Equatable, Sendable {
         tmuxSessionID = row["tmux_session_id"]
         self.cwd = cwd
         self.observedAt = observedAt
-        self.fileModifiedAt = fileModifiedAt
     }
 
     /// The table stores times as ISO-8601 with milliseconds, so an entry read from a file and
@@ -97,7 +92,7 @@ public struct ConversationIndexer: Sendable {
     }
 
     private func entries() -> [ConversationIndexEntry] {
-        records.files().map(ConversationIndexEntry.init(file:))
+        records.all().map(ConversationIndexEntry.init(record:))
     }
 
     /// What one migration pass did with each observation it had.

@@ -228,7 +228,7 @@ struct ConversationObserveCommandTests {
                 ) == 0
             )
         }
-        #expect(fixture.records.files().isEmpty)
+        #expect(fixture.records.all().isEmpty)
     }
 
     @Test("The installed hook script starts the CLI only inside WorkSpaces, and exits 0 either way")

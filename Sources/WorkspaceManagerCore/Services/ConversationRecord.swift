@@ -320,11 +320,6 @@ extension ConversationRecordJSON {
 
 // MARK: - Store
 
-public struct ConversationRecordFile: Equatable, Sendable {
-    public let record: ConversationRecord
-    public let modifiedAt: Date
-}
-
 public struct ConversationRecordStore: Sendable {
     /// Names the directory the records live in. The app puts the directory it resolved into
     /// each tile's environment under this key, so a hook writes where the app reads even when
@@ -373,23 +368,18 @@ public struct ConversationRecordStore: Sendable {
 
     /// Every readable record. An unreadable one is skipped: nothing can act on a record whose
     /// conversation it cannot name.
-    public func files() -> [ConversationRecordFile] {
+    public func all() -> [ConversationRecord] {
         let urls =
             (try? FileManager.default.contentsOfDirectory(
                 at: directory,
-                includingPropertiesForKeys: [.contentModificationDateKey],
+                includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles]
             )) ?? []
         return urls.compactMap { url in
             guard url.pathExtension == "json",
-                ConversationRecord.normalizedID(url.deletingPathExtension().lastPathComponent) != nil,
-                let object = Self.readObject(at: url),
-                let record = ConversationRecordJSON.record(from: object)
+                ConversationRecord.normalizedID(url.deletingPathExtension().lastPathComponent) != nil
             else { return nil }
-            let modifiedAt =
-                (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
-                ?? record.observedAt
-            return ConversationRecordFile(record: record, modifiedAt: modifiedAt)
+            return Self.readObject(at: url).flatMap(ConversationRecordJSON.record(from:))
         }
     }
 

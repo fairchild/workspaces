@@ -84,7 +84,7 @@ struct ConversationRecordStoreTests {
             )
             try Data("{}".utf8).write(to: store.directory.appendingPathComponent("not-a-conversation.json"))
 
-            #expect(store.files().map(\.record.conversationID) == [Self.conversationID])
+            #expect(store.all().map(\.conversationID) == [Self.conversationID])
             #expect(store.load(conversationID: broken) == nil)
         }
     }
@@ -123,7 +123,7 @@ struct ConversationRecordStoreTests {
                 .filter { $0.hasPrefix("\(Self.conversationID).json.corrupt-") }
             #expect(aside.count == 1)
             #expect(try Data(contentsOf: store.directory.appendingPathComponent(aside[0])) == garbage)
-            #expect(store.files().count == 1)
+            #expect(store.all().count == 1)
         }
     }
 
@@ -265,7 +265,7 @@ struct ConversationRecordStoreTests {
             shouting.conversationID = Self.conversationID.uppercased()
             try store.record(shouting)
             try store.record(observation(at: 1_800_000_010))
-            #expect(store.files().count == 1)
+            #expect(store.all().count == 1)
             #expect(store.load(conversationID: Self.conversationID.uppercased())?.conversationID == Self.conversationID)
         }
     }

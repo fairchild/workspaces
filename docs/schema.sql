@@ -237,8 +237,7 @@ CREATE TABLE IF NOT EXISTS conversation_index (
     tmux_server_pid INTEGER,
     tmux_session_id TEXT,
     cwd TEXT NOT NULL,
-    observed_at TEXT NOT NULL,
-    file_mtime TEXT NOT NULL
+    observed_at TEXT NOT NULL
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_conversation_index_host_session

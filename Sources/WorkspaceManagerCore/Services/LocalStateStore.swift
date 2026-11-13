@@ -1268,21 +1268,19 @@ public actor LocalStateStore {
             sql: """
                 INSERT INTO conversation_index (
                     conversation_id, harness, host_session_id, tmux_server_pid, tmux_session_id,
-                    cwd, observed_at, file_mtime
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    cwd, observed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(conversation_id) DO UPDATE SET
                     harness = excluded.harness,
                     host_session_id = excluded.host_session_id,
                     tmux_server_pid = excluded.tmux_server_pid,
                     tmux_session_id = excluded.tmux_session_id,
                     cwd = excluded.cwd,
-                    observed_at = excluded.observed_at,
-                    file_mtime = excluded.file_mtime
+                    observed_at = excluded.observed_at
                 """
         ).execute(arguments: [
             entry.conversationID, entry.harness, entry.hostSessionID?.uuidString, entry.tmuxServerPID,
             entry.tmuxSessionID, entry.cwd, ConversationRecordJSON.string(entry.observedAt),
-            ConversationRecordJSON.string(entry.fileModifiedAt),
         ])
     }
 
@@ -1548,8 +1546,7 @@ public actor LocalStateStore {
                         tmux_server_pid INTEGER,
                         tmux_session_id TEXT,
                         cwd TEXT NOT NULL,
-                        observed_at TEXT NOT NULL,
-                        file_mtime TEXT NOT NULL
+                        observed_at TEXT NOT NULL
                     ) STRICT;
 
                     CREATE INDEX IF NOT EXISTS idx_conversation_index_host_session
