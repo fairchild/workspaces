@@ -14,12 +14,13 @@ struct SurfaceStoreTests {
         let tile = TileID()
         let session = makeSession()
         var closed = 0
-        let old = store.terminalSurface(for: tile, session: session, onProcessExit: { closed += 1 })
+        store.onTerminalProcessExit = { _ in closed += 1 }
+        let old = store.terminalSurface(for: tile, session: session)
         let queuedExit = try #require(old.surfaceView.onProcessExit)
         // Queue before refresh, while still on the main actor, reproducing a late Docker exit.
         queuedExit()
         #expect(store.restartTerminalSurface(for: tile))
-        let replacement = store.terminalSurface(for: tile, session: session, onProcessExit: { closed += 1 })
+        let replacement = store.terminalSurface(for: tile, session: session)
 
         await Task.yield()
 

@@ -7,6 +7,8 @@
 //  reading is covered against an isolated server in TerminalSessionExitTests.
 //
 
+import AppKit
+import Combine
 import Foundation
 import SwiftUI
 import Testing
@@ -94,6 +96,99 @@ struct TileExitClassificationTests {
             store.tmuxOwnershipLedger.record(
                 hostSessionID: session.id, identity: identity, launchedAt: identity.createdAt)
         }
+    }
+
+    /// Every tile the store reported closed by a process exit, in order.
+    @MainActor
+    private final class ExitLog {
+        private(set) var events: [TileTreeStore.ProcessExit] = []
+        private var subscription: AnyCancellable?
+        var sessionIDs: [UUID] { events.map(\.sessionID) }
+
+        init(_ store: TileTreeStore) {
+            subscription = store.processExits.sink { [weak self] exit in
+                MainActor.assumeIsolated { self?.events.append(exit) }
+            }
+        }
+    }
+
+    /// Hosts the modifier the main window watches exits through, recording each session it is
+    /// told to move focus for.
+    @MainActor
+    private final class FocusLog {
+        private(set) var sessionIDs: [UUID] = []
+        private var host: NSHostingView<AnyView>?
+
+        init(_ store: TileTreeStore) {
+            let view = Color.clear.onTerminalProcessExit(of: store) { [weak self] sessionID in
+                self?.sessionIDs.append(sessionID)
+            }
+            let host = NSHostingView(rootView: AnyView(view))
+            host.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
+            host.layoutSubtreeIfNeeded()
+            self.host = host
+        }
+    }
+
+    /// Bounds a failure only: a passing wait returns as soon as its condition holds, so the
+    /// deadline is generous rather than tuned.
+    private static let deadline: Duration = .seconds(30)
+
+    /// Polls `condition` until it holds or the deadline passes.
+    private func eventually(_ condition: () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + Self.deadline
+        while !condition() {
+            guard ContinuousClock.now < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return true
+    }
+
+    /// Returns once every exit already handed to a surface has been dispatched. A surface's exit
+    /// runs as a main-actor job, and the main actor runs its jobs in the order they were
+    /// enqueued, so a job enqueued after them finishes after they do.
+    private func drainQueuedExits() async {
+        await Task { @MainActor in }.value
+    }
+
+    /// A visited scope, and a second scope that exists but nobody has opened — the reattach
+    /// pass's target, whose tile is realized without ever rendering. Their surfaces run a plain
+    /// shell, so no tmux client starts; tests that want the tmux question record the launch.
+    private func openVisitedAndUnvisitedScopes(
+        _ store: TileTreeStore
+    ) -> (visited: HostTerminalSession, unvisited: HostTerminalSession) {
+        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
+        let visitedDirectory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let unvisitedDirectory = URL(fileURLWithPath: "/Users/test/code/other")
+        let visited = store.activateSession(key: .repoPath(visitedDirectory.path), directory: visitedDirectory)
+            .session
+        let unvisited = store.ensureSession(key: .repoPath(unvisitedDirectory.path), directory: unvisitedDirectory)
+            .session
+        return (visited, unvisited)
+    }
+
+    /// Mounts a tile the way the main window does and waits until SwiftUI has put its surface
+    /// on screen.
+    private func render(
+        _ session: HostTerminalSession,
+        in store: TileTreeStore
+    ) -> NSHostingView<PersistentHostTerminalContainerView> {
+        let tile = store.renderTileID(forSession: session)
+        let host = NSHostingView(
+            rootView: PersistentHostTerminalContainerView(
+                tileID: tile,
+                session: session,
+                surfaceStore: store.surfaceStore
+            )
+        )
+        host.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+        let deadline = ContinuousClock.now + Self.deadline
+        while ContinuousClock.now < deadline {
+            host.layoutSubtreeIfNeeded()
+            if let mounted = store.surfaceStore.terminal(for: session.id), mounted.isDescendant(of: host) { break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        return host
     }
 
     @Test("A tile whose tmux server died keeps its row open, marked holder lost")
@@ -327,12 +422,11 @@ struct TileExitClassificationTests {
         let (_, tab) = try openTwoTmuxTiles(harness.store)
         let store = harness.store
         let tile = store.renderTileID(forSession: tab)
-        let wireExit: () -> Void = { _ = store.handleProcessExit(for: tab.id) }
 
-        let evicted = store.surfaceStore.terminalSurface(for: tile, session: tab, onProcessExit: wireExit)
+        let evicted = store.surfaceStore.terminalSurface(for: tile, session: tab)
         let evictedExit = try #require(evicted.surfaceView.onProcessExit)
         store.surfaceStore.invalidate(tileID: tile)
-        let replaced = store.surfaceStore.terminalSurface(for: tile, session: tab, onProcessExit: wireExit)
+        let replaced = store.surfaceStore.terminalSurface(for: tile, session: tab)
         let replacedExit = try #require(replaced.surfaceView.onProcessExit)
         #expect(store.surfaceStore.restartTerminalSurface(for: tile))
         store.surfaceStore.noteLaunch(sessionID: tab.id, throughTmux: true)
@@ -342,17 +436,16 @@ struct TileExitClassificationTests {
         }
         evictedExit()
         replacedExit()
-        for _ in 0..<100 { await Task.yield() }
+        await drainQueuedExits()
 
         #expect(store.sessions.contains { $0.id == tab.id })
         #expect(await harness.rowWrites(for: tab.id).isEmpty)
         #expect(await harness.probeCalls.sessionNames.isEmpty)
 
-        let live = store.surfaceStore.terminalSurface(for: tile, session: tab, onProcessExit: wireExit)
+        let live = store.surfaceStore.terminalSurface(for: tile, session: tab)
         store.surfaceStore.noteLaunch(sessionID: tab.id, throughTmux: true)
         live.surfaceView.runtimeDidRequestClose(processAlive: false)
-        for _ in 0..<100 where store.sessions.contains(where: { $0.id == tab.id }) { await Task.yield() }
-        #expect(!store.sessions.contains { $0.id == tab.id })
+        #expect(await eventually { !store.sessions.contains { $0.id == tab.id } })
         #expect(await harness.rowWrites(for: tab.id) == [.holderLost(tab.id)])
     }
 
@@ -1139,6 +1232,204 @@ struct TileExitClassificationTests {
         #expect(store.handleProcessExit(for: tab.id))
 
         #expect(await harness.rowWrites(for: tab.id) == [.holderLost(tab.id)])
+    }
+
+    // MARK: - Surfaces realized before they render
+
+    /// The reattach pass realizes surfaces for scopes nobody has opened. A shell that ends
+    /// before its view is ever rendered still takes the tile with it and ends its row, so the
+    /// next launch does not offer a session that is gone.
+    @Test("A surface realized before it renders closes its tile and ends its row when its shell exits")
+    func unrenderedSurfaceExitClosesItsTile() async throws {
+        let harness = makeHarness(answer: .sessionGone(serverPID: 4242))
+        let store = harness.store
+        let exits = ExitLog(store)
+        let (visited, unvisited) = openVisitedAndUnvisitedScopes(store)
+
+        let surfaceView = store.terminalSurfaceView(for: unvisited)
+        store.surfaceStore.noteLaunch(sessionID: unvisited.id, throughTmux: true, tmuxServerPID: 4242)
+        #expect(surfaceView.window == nil)
+        surfaceView.runtimeDidRequestClose(processAlive: false)
+
+        #expect(await eventually { exits.sessionIDs == [unvisited.id] })
+        #expect(exits.events == [.init(sessionID: unvisited.id, movesFocus: false)])
+        #expect(!store.sessions.contains { $0.id == unvisited.id })
+        #expect(!store.hasRealizedTerminalSurface(for: unvisited.id))
+        #expect(await harness.rowWrites(for: unvisited.id) == [.ended(unvisited.id)])
+        #expect(await harness.probeCalls.sessionNames == [unvisited.effectiveTmuxSessionName])
+        #expect(store.activeSessionID == visited.id)
+        #expect(await harness.rowWrites(for: visited.id).isEmpty)
+    }
+
+    /// A realized surface that was evicted or replaced before rendering is not the tile's
+    /// surface any more. Its command ending — a retired shell or tmux client finishing — says
+    /// nothing about the tile, which only its current surface can close.
+    @Test("An evicted or replaced surface realized before rendering leaves the tile and its row alone when it exits")
+    func unrenderedRetiredSurfaceExitIsIgnored() async throws {
+        let harness = makeHarness(answer: .sessionGone(serverPID: 4242))
+        let store = harness.store
+        let exits = ExitLog(store)
+        let (_, unvisited) = openVisitedAndUnvisitedScopes(store)
+        let tile = store.renderTileID(forSession: unvisited)
+
+        // Held, as a retiring surface can still be while its command winds down, so only the
+        // store's current-surface check stands between its exit and the tile.
+        let realize = { try #require(store.surfaceStore.surface(for: tile) as? TerminalSurface) }
+
+        store.terminalSurfaceView(for: unvisited)
+        let evicted = try realize()
+        let evictedExit = try #require(evicted.surfaceView.onProcessExit)
+        store.surfaceStore.invalidate(tileID: tile)
+        store.terminalSurfaceView(for: unvisited)
+        let replaced = try realize()
+        let replacedExit = try #require(replaced.surfaceView.onProcessExit)
+        #expect(store.surfaceStore.restartTerminalSurface(for: tile))
+        let live = store.terminalSurfaceView(for: unvisited)
+        store.surfaceStore.noteLaunch(sessionID: unvisited.id, throughTmux: true, tmuxServerPID: 4242)
+
+        for retired in [evicted, replaced] {
+            retired.surfaceView.runtimeDidRequestClose(processAlive: false)
+        }
+        evictedExit()
+        replacedExit()
+        await drainQueuedExits()
+
+        #expect(exits.sessionIDs.isEmpty)
+        #expect(store.sessions.contains { $0.id == unvisited.id })
+        #expect(store.surfaceStore.terminal(for: unvisited.id) === live)
+        #expect(await harness.rowWrites(for: unvisited.id).isEmpty)
+        #expect(await harness.probeCalls.sessionNames.isEmpty)
+
+        live.runtimeDidRequestClose(processAlive: false)
+        #expect(await eventually { exits.sessionIDs == [unvisited.id] })
+        #expect(!store.sessions.contains { $0.id == unvisited.id })
+        let writes = await harness.rowWrites(for: unvisited.id)
+        #expect(writes == [.ended(unvisited.id)])
+    }
+
+    /// A rendered tile reports its exit exactly as before, whether rendering created its surface
+    /// or mounted one the reattach pass had already realized.
+    @Test("A rendered tile's exit closes it once, whether rendering created its surface or found it realized")
+    func renderedSurfaceExitClosesItsTileOnce() async throws {
+        let harness = makeHarness(answer: .sessionGone(serverPID: 4242))
+        let store = harness.store
+        let exits = ExitLog(store)
+        let (visited, unvisited) = openVisitedAndUnvisitedScopes(store)
+        let realized = store.terminalSurfaceView(for: unvisited)
+
+        let visitedHost = render(visited, in: store)
+        let unvisitedHost = render(unvisited, in: store)
+        let visitedView = try #require(store.surfaceStore.terminal(for: visited.id))
+        #expect(visitedView.isDescendant(of: visitedHost))
+        #expect(store.surfaceStore.terminal(for: unvisited.id) === realized)
+        #expect(realized.isDescendant(of: unvisitedHost))
+        for session in [visited, unvisited] {
+            store.surfaceStore.noteLaunch(sessionID: session.id, throughTmux: true, tmuxServerPID: 4242)
+        }
+
+        visitedView.runtimeDidRequestClose(processAlive: false)
+        realized.runtimeDidRequestClose(processAlive: false)
+
+        #expect(await eventually { exits.sessionIDs.count == 2 })
+        #expect(
+            exits.events == [
+                .init(sessionID: visited.id, movesFocus: true), .init(sessionID: unvisited.id, movesFocus: true),
+            ])
+        #expect(store.sessions.isEmpty)
+        #expect(await harness.rowWrites(for: visited.id) == [.ended(visited.id)])
+        #expect(await harness.rowWrites(for: unvisited.id) == [.ended(unvisited.id)])
+    }
+
+    /// A window shows only its active tab, so keyboard focus can be in no other terminal. A
+    /// background terminal's exit — in a workspace nobody has open, or a tab behind the active
+    /// one — closes its tile and ends its row without asking the window to move focus, which may
+    /// be in a file being edited or a tab being renamed. The active tab's exit still moves it.
+    @Test("A background terminal's exit leaves focus where it is; the active tab's exit still moves it")
+    func backgroundExitLeavesFocusAlone() async throws {
+        let harness = makeHarness(answer: .sessionGone(serverPID: 4242))
+        let store = harness.store
+        let exits = ExitLog(store)
+        let focus = FocusLog(store)
+        let (visited, unvisited) = openVisitedAndUnvisitedScopes(store)
+        let (behind, kept) = (
+            store.createRestoredSession(key: visited.key, directory: visited.directoryURL, recordedTerminalMode: nil),
+            store.createRestoredSession(key: visited.key, directory: visited.directoryURL, recordedTerminalMode: nil)
+        )
+        #expect(store.activateExistingSession(sessionID: visited.id))
+        let exiting = [unvisited, behind, visited]
+        let views = exiting.map { store.terminalSurfaceView(for: $0) }
+        for session in exiting {
+            store.surfaceStore.noteLaunch(sessionID: session.id, throughTmux: true, tmuxServerPID: 4242)
+        }
+
+        views[0].runtimeDidRequestClose(processAlive: false)
+        views[1].runtimeDidRequestClose(processAlive: false)
+        #expect(await eventually { exits.sessionIDs == [unvisited.id, behind.id] })
+        #expect(await harness.rowWrites(for: unvisited.id) == [.ended(unvisited.id)])
+        #expect(await harness.rowWrites(for: behind.id) == [.ended(behind.id)])
+        #expect(focus.sessionIDs.isEmpty)
+        #expect(store.activeSessionID == visited.id)
+
+        views[2].runtimeDidRequestClose(processAlive: false)
+        #expect(await eventually { focus.sessionIDs == [visited.id] })
+        #expect(exits.events.map(\.movesFocus) == [false, false, true])
+        #expect(store.sessions.map(\.id) == [kept.id])
+    }
+
+    // MARK: - Who holds the store
+
+    /// The store routes its own surfaces' exits and holds itself weakly to do it, so a store that
+    /// nothing else holds goes away with its surfaces.
+    @Test("A tile tree store with realized surfaces is released once nothing else holds it")
+    func storeWithRealizedSurfacesIsReleased() async {
+        weak var released: TileTreeStore?
+        do {
+            let store = TileTreeStore()
+            let (visited, unvisited) = openVisitedAndUnvisitedScopes(store)
+            store.terminalSurfaceView(for: visited)
+            store.terminalSurfaceView(for: unvisited)
+            released = store
+        }
+        #expect(await eventually { released == nil })
+    }
+
+    /// A window hears exits through a subscription that ends with it. While it shows, an exit
+    /// reaches it. Once it has gone, an exit still closes the tile and ends the row, nothing is
+    /// told to move focus, and nothing keeps the store alive.
+    @Test("A closed window neither keeps its store alive nor hears exits, which still end their rows")
+    func closedWindowReleasesItsStore() async {
+        weak var released: TileTreeStore?
+        var heard: [UUID] = []
+        do {
+            let harness = makeHarness(answer: .sessionGone(serverPID: 4242))
+            let store = harness.store
+            released = store
+            let (visited, unvisited) = openVisitedAndUnvisitedScopes(store)
+            let visitedView = store.terminalSurfaceView(for: visited)
+            let unvisitedView = store.terminalSurfaceView(for: unvisited)
+
+            var window: NSHostingView<AnyView>? = autoreleasepool {
+                // The handler reads the store, as the main window's does, so whatever holds the
+                // subscription holds the store too.
+                let view = Color.clear.onTerminalProcessExit(of: store) { sessionID in
+                    if !store.sessions.contains(where: { $0.id == sessionID }) { heard.append(sessionID) }
+                }
+                let host = NSHostingView(rootView: AnyView(view))
+                host.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
+                host.layoutSubtreeIfNeeded()
+                return host
+            }
+            visitedView.runtimeDidRequestClose(processAlive: false)
+            #expect(await eventually { heard == [visited.id] })
+
+            autoreleasepool { window = nil }
+            unvisitedView.runtimeDidRequestClose(processAlive: false)
+            #expect(await eventually { !store.sessions.contains { $0.id == unvisited.id } })
+            #expect(await harness.rowWrites(for: unvisited.id) == [.ended(unvisited.id)])
+            #expect(heard == [visited.id])
+            #expect(window == nil)
+        }
+        #expect(await eventually { released == nil })
     }
 }
 

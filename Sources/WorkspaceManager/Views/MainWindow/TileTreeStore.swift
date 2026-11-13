@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import WorkspaceManagerCore
 import os.log
@@ -107,8 +108,30 @@ final class TileTreeStore: ObservableObject {
     /// The socket production's pane reclamation reads and kills on. Tests answer it from a stub.
     var tmuxSessionProbe = TmuxSessionProbe()
 
+    /// A tile a process exit has just closed. The tile and its row are already handled by then,
+    /// window or no window; `movesFocus` says whether the window showing this store has focus
+    /// to move: the tile was the active tab, the only one a window shows and so the only one
+    /// keyboard focus can be in, or no tile is left. A tile that exits in the background leaves
+    /// focus where it is.
+    struct ProcessExit: Equatable {
+        let sessionID: UUID
+        let movesFocus: Bool
+    }
+
+    /// Every tile a process exit closes, for the window showing this store
+    /// (`onTerminalProcessExit(of:perform:)`). A window that has gone has no subscription, so
+    /// an exit after it closes moves nothing.
+    let processExits = PassthroughSubject<ProcessExit, Never>()
+
     init() {
         surfaceStore.tmuxOwnershipLedger = tmuxOwnershipLedger
+        surfaceStore.onTerminalProcessExit = { [weak self] sessionID in
+            guard let self else { return }
+            let wasActive =
+                self.coordinator.activeSessionID.map { self.primarySessionID(containing: sessionID) == $0 } ?? false
+            guard self.handleProcessExit(for: sessionID) else { return }
+            self.processExits.send(ProcessExit(sessionID: sessionID, movesFocus: wasActive || self.sessions.isEmpty))
+        }
         surfaceStore.onTerminalTitleChanged = { [weak self] _ in
             self?.objectWillChange.send()
         }
@@ -1105,15 +1128,12 @@ final class TileTreeStore: ObservableObject {
         return focusTargetAfterRemoval(defaultHomeDirectory: defaultHomeDirectory)
     }
 
-    private func focusTargetAfterRemoval(defaultHomeDirectory: URL) -> UUID? {
+    /// Where focus goes once a tile has left the tree: the active session, or a fresh Home
+    /// session when the last one left.
+    func focusTargetAfterRemoval(defaultHomeDirectory: URL) -> UUID? {
         if sessions.isEmpty {
-            let replacement = activateSession(
-                key: .defaultHome,
-                directory: defaultHomeDirectory
-            )
-            return replacement.session.id
+            return activateSession(key: .defaultHome, directory: defaultHomeDirectory).session.id
         }
-
         return activeSessionID
     }
 
@@ -1791,6 +1811,17 @@ final class TileTreeStore: ObservableObject {
             return -delta
         default:
             return nil
+        }
+    }
+}
+
+extension View {
+    /// Runs `action` for each session whose tile a process exit closed in `store` with focus to
+    /// move (`TileTreeStore.ProcessExit.movesFocus`), while this view is showing. The
+    /// subscription ends with the view, so the store never holds the window that watches it.
+    func onTerminalProcessExit(of store: TileTreeStore, perform action: @escaping (UUID) -> Void) -> some View {
+        onReceive(store.processExits) { exit in
+            if exit.movesFocus { action(exit.sessionID) }
         }
     }
 }

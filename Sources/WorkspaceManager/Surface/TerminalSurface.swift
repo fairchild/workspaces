@@ -22,7 +22,6 @@ final class TerminalSurface: Surface {
         session: HostTerminalSession,
         hooksSocketPath: String?,
         automationEnvironment: AutomationTerminalEnvironment? = nil,
-        onProcessExit: (() -> Void)? = nil,
         onCloseConfirmationRequired: (() -> Void)? = nil,
         contextMenuProvider: (() -> NSMenu?)? = nil
     ) {
@@ -36,19 +35,17 @@ final class TerminalSurface: Surface {
         )
         self.surfaceView = GhosttySurfaceView(
             launchContext: launchContext,
-            onProcessExit: onProcessExit,
             onCloseConfirmationRequired: onCloseConfirmationRequired
         )
         self.surfaceView.contextMenuProvider = contextMenuProvider
     }
 
-    /// Refresh the per-render callbacks on surface reuse, mirroring the legacy store's reuse path.
+    /// Refresh the per-render callbacks on surface reuse. The process-exit hook is not one of
+    /// them: `SurfaceStore` installs it once, at creation.
     func update(
-        onProcessExit: (() -> Void)?,
         onCloseConfirmationRequired: (() -> Void)?,
         contextMenuProvider: (() -> NSMenu?)?
     ) {
-        surfaceView.onProcessExit = onProcessExit
         surfaceView.onCloseConfirmationRequired = onCloseConfirmationRequired
         surfaceView.contextMenuProvider = contextMenuProvider
     }

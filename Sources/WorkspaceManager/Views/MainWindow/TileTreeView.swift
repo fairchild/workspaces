@@ -12,7 +12,6 @@ struct TileTreeView: View {
     let surfaceStore: SurfaceStore
     let onSetSplitRatio: (SplitID, CGFloat) -> Void
     var onCloseConfirmationRequired: ((UUID) -> Void)?
-    var onTerminalProcessExit: ((UUID) -> Void)?
     var contextMenuProvider: ((HostTerminalSession) -> NSMenu?)?
 
     var body: some View {
@@ -49,7 +48,6 @@ struct TileTreeView: View {
                 session: session,
                 surfaceStore: surfaceStore,
                 onCloseConfirmationRequired: onCloseConfirmationRequired,
-                onTerminalProcessExit: onTerminalProcessExit,
                 contextMenuProvider: contextMenuProvider
             )
             .id(session.id)
@@ -74,7 +72,6 @@ struct HostTerminalPaneView: View {
     let session: HostTerminalSession
     let surfaceStore: SurfaceStore
     var onCloseConfirmationRequired: ((UUID) -> Void)?
-    var onTerminalProcessExit: ((UUID) -> Void)?
     var contextMenuProvider: ((HostTerminalSession) -> NSMenu?)?
 
     var body: some View {
@@ -87,9 +84,6 @@ struct HostTerminalPaneView: View {
                 tileID: tileID,
                 session: session,
                 surfaceStore: surfaceStore,
-                onProcessExit: {
-                    onTerminalProcessExit?(session.id)
-                },
                 onCloseConfirmationRequired: {
                     onCloseConfirmationRequired?(session.id)
                 },

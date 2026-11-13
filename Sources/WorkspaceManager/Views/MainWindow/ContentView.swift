@@ -701,7 +701,6 @@ struct ContentView: View {
             onCloseTerminalTab: closeTerminalTab(sessionID:),
             onRenameTerminalTab: renameTerminalTab(sessionID:title:),
             onTerminalCloseConfirmationRequired: requestCloseConfirmationForTerminalTab(sessionID:),
-            onTerminalProcessExit: handleTerminalProcessExit(sessionID:),
             selectedCodePreview: $viewState.selectedCodePreview,
             isTerminalPanelVisible: $viewState.isTerminalPanelVisible,
             onFileSelected: handleCodePreviewSelection,
@@ -1022,6 +1021,7 @@ struct ContentView: View {
                     _ = await seedLandingWorkspaceEnvironmentStateIfNeeded()
                 }
             }
+            .onTerminalProcessExit(of: tileTreeStore, perform: handleTerminalProcessExit(sessionID:))
             .onReceive(agentSessionRegistry.statusesDidChange) { _ in
                 scheduleWorkspaceStatusAggregatorRefresh()
             }
@@ -1741,7 +1741,7 @@ struct ContentView: View {
 
     private func handleTerminalProcessExit(sessionID: UUID) {
         guard
-            let result = terminalSessionController.handleProcessExit(
+            let result = terminalSessionController.focusAfterProcessExit(
                 sessionID: sessionID,
                 tileTreeStore: tileTreeStore,
                 defaultHomeDirectory: resolvedDefaultHostDirectory,

@@ -31,7 +31,6 @@ struct MainTerminalDetailView: View {
     var onCloseTerminalTab: ((UUID) -> Void)?
     var onRenameTerminalTab: ((UUID, String?) -> Void)?
     var onTerminalCloseConfirmationRequired: ((UUID) -> Void)?
-    var onTerminalProcessExit: ((UUID) -> Void)?
     @Binding var selectedCodePreview: CodePreviewSelection?
     @Binding var isTerminalPanelVisible: Bool
     let onFileSelected: (CodePreviewSelection) -> Void
@@ -188,7 +187,6 @@ struct MainTerminalDetailView: View {
             onCloseTab: onCloseTerminalTab,
             onRenameTab: onRenameTerminalTab,
             onCloseConfirmationRequired: onTerminalCloseConfirmationRequired,
-            onTerminalProcessExit: onTerminalProcessExit,
             contextMenuProvider: terminalContextMenuProvider
         )
     }
