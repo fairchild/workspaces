@@ -478,8 +478,9 @@ struct CLIConversationResumeTests {
             "env CLAUDE_CONFIG_DIR=/wrong-profile STUB_STAY=1 STUB_LOG=\(log.path) /bin/sh",
         ])
         try await waitUntil(launches: 2) {
-            try fixture.tmux(["display-message", "-p", "-t", "=target:", "#{pane_current_command}"])
-                .trimmingCharacters(in: .whitespacesAndNewlines) == "sh"
+            TmuxSessionControl.isIdleShell(
+                paneCommand: try fixture.tmux(["display-message", "-p", "-t", "=target:", "#{pane_current_command}"])
+                    .trimmingCharacters(in: .whitespacesAndNewlines))
         }
 
         let resume = try fixture.run(["conversation", "resume", conversationID, "--into", "target"])
@@ -507,8 +508,9 @@ struct CLIConversationResumeTests {
             "env STUB_STAY=1 /bin/sh -c 'read go < \(gate.path); exec /bin/sh'",
         ])
         try await waitUntil(launches: 2) {
-            try fixture.tmux(["display-message", "-p", "-t", "=busy:", "#{pane_current_command}"])
-                .trimmingCharacters(in: .whitespacesAndNewlines) == "sh"
+            TmuxSessionControl.isIdleShell(
+                paneCommand: try fixture.tmux(["display-message", "-p", "-t", "=busy:", "#{pane_current_command}"])
+                    .trimmingCharacters(in: .whitespacesAndNewlines))
         }
 
         let typed = try fixture.run(["conversation", "resume", conversationID, "--into", "busy"])
