@@ -219,11 +219,8 @@ struct TmuxSessionOwnershipTests {
         let bystander = live("$0", "probe-bystander", 1_788_320_000)
 
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: unknownSurface,
-                liveSessions: [bystander],
-                requiringCreation: false
-            ) == nil
+            ledger.ownership(forHostSessionID: unknownSurface)?.killTarget(
+                in: [bystander], requiringCreation: false) == nil
         )
     }
 
@@ -246,12 +243,12 @@ struct TmuxSessionOwnershipTests {
         )
 
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface, liveSessions: [foreign], requiringCreation: true) == nil
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [foreign], requiringCreation: true) == nil
         )
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface, liveSessions: [foreign], requiringCreation: false) == "$0"
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [foreign], requiringCreation: false) == "$0"
         )
     }
 
@@ -266,8 +263,8 @@ struct TmuxSessionOwnershipTests {
             launchedAt: Date(timeIntervalSince1970: 1_788_328_040))
 
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface, liveSessions: [seed], requiringCreation: true) == "$4"
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [seed], requiringCreation: true) == "$4"
         )
     }
 
@@ -285,23 +282,17 @@ struct TmuxSessionOwnershipTests {
         )
 
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface, liveSessions: [], requiringCreation: true) == nil
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [], requiringCreation: true) == nil
         )
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface,
-                liveSessions: [live("$4", "renamed-by-someone", 1_788_328_041)],
-                requiringCreation: true
-            ) == nil
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [live("$4", "renamed-by-someone", 1_788_328_041)], requiringCreation: true) == nil
         )
         // A different session that has taken the recorded *name* is not the recorded session.
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface,
-                liveSessions: [live("$9", "wm-repo-abcd1234", 1_788_329_000)],
-                requiringCreation: true
-            ) == nil
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [live("$9", "wm-repo-abcd1234", 1_788_329_000)], requiringCreation: true) == nil
         )
     }
 
@@ -327,13 +318,13 @@ struct TmuxSessionOwnershipTests {
             createdAt: Date(timeIntervalSince1970: 1_788_400_000), serverPID: 90210)
 
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface, liveSessions: [afterRestart], requiringCreation: true)
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [afterRestart], requiringCreation: true)
                 == nil
         )
         #expect(
-            ledger.authorizedKillTarget(
-                forHostSessionID: surface, liveSessions: [afterRestart], requiringCreation: false)
+            ledger.ownership(forHostSessionID: surface)?.killTarget(
+                in: [afterRestart], requiringCreation: false)
                 == nil
         )
     }

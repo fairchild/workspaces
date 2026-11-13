@@ -67,11 +67,25 @@ public struct TmuxSessionOwnership: Sendable, Equatable {
         self.provenance = provenance
     }
 
-    /// The session id a kill of this session may target, or `nil` when `liveSessions`, a
-    /// fresh read of the socket, no longer shows it. The live row must match in every
-    /// field: id, name, creation time and server pid (see
-    /// `TmuxSessionOwnershipLedger.authorizedKillTarget`). `requiringCreation` accepts only
-    /// a session this launch created.
+    /// The session id a kill of this session may target, or `nil` when the app cannot
+    /// prove the session is still the one it recorded.
+    ///
+    /// `liveSessions` is the caller's *fresh* read of the socket, not a remembered one,
+    /// and the live row must match the recorded one in **every** field: id, name,
+    /// creation time and server pid.
+    ///
+    /// Matching on id and name alone is not enough, and the gap is not hypothetical.
+    /// Session ids are unique for a *server's* lifetime, so a tmux server that dies and
+    /// restarts issues `$0` again — and the names on this socket are directory
+    /// derivations, so the app opening the same directory again produces the same name.
+    /// An id-and-name pair can therefore be reissued to a session that has nothing to do
+    /// with the one recorded. The creation time and the server pid are what separate the
+    /// two server lifetimes, which is why they are captured at all.
+    ///
+    /// `requiringCreation` is the launch-time posture: the pre-restore pass exists only
+    /// to clear away seeds this launch made moments earlier, so it accepts nothing else.
+    /// Teardown paths run because a person asked for this surface to go, and accept an
+    /// adopted session too — the surface is bound to it either way.
     public func killTarget(in liveSessions: [TmuxLiveSession], requiringCreation: Bool) -> String? {
         if requiringCreation, provenance != .createdByThisLaunch { return nil }
         guard liveSessions.contains(identity) else { return nil }
@@ -139,34 +153,6 @@ public final class TmuxSessionOwnershipLedger {
     /// records what it actually landed on.
     public func forget(hostSessionID: UUID) {
         ownershipByHostSessionID[hostSessionID] = nil
-    }
-
-    /// The session id a kill for `hostSessionID` may target, or `nil` when the app
-    /// cannot prove the session is still the one it recorded.
-    ///
-    /// `liveSessions` is the caller's *fresh* read of the socket, not a remembered one,
-    /// and the live row must match the recorded one in **every** field: id, name,
-    /// creation time and server pid.
-    ///
-    /// Matching on id and name alone is not enough, and the gap is not hypothetical.
-    /// Session ids are unique for a *server's* lifetime, so a tmux server that dies and
-    /// restarts issues `$0` again — and the names on this socket are directory
-    /// derivations, so the app opening the same directory again produces the same name.
-    /// An id-and-name pair can therefore be reissued to a session that has nothing to do
-    /// with the one recorded. The creation time and the server pid are what separate the
-    /// two server lifetimes, which is why they are captured at all.
-    ///
-    /// `requiringCreation` is the launch-time posture: the pre-restore pass exists only
-    /// to clear away seeds this launch made moments earlier, so it accepts nothing else.
-    /// Teardown paths run because a person asked for this surface to go, and accept an
-    /// adopted session too — the surface is bound to it either way.
-    public func authorizedKillTarget(
-        forHostSessionID hostSessionID: UUID,
-        liveSessions: [TmuxLiveSession],
-        requiringCreation: Bool
-    ) -> String? {
-        ownershipByHostSessionID[hostSessionID]?.killTarget(
-            in: liveSessions, requiringCreation: requiringCreation)
     }
 }
 
