@@ -288,8 +288,8 @@ public struct ConversationRecordStore: Sendable {
     /// one and never half of either.
     ///
     /// A record that exists but cannot be read is left alone and the write throws. One that
-    /// reads but is not a JSON object is moved aside to `<id>.json.corrupt-<epoch>`, where no
-    /// reader looks and a person still can, and the write starts a fresh record.
+    /// reads but is not a JSON object is moved aside to `<id>.json.corrupt-<epoch>-<random>`,
+    /// where no reader looks and a person still can, and the write starts a fresh record.
     @discardableResult
     public func record(
         _ observation: ConversationObservation,
@@ -358,9 +358,21 @@ public struct ConversationRecordStore: Sendable {
         if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             return object
         }
-        let aside = "\(url.path).corrupt-\(Int(Date().timeIntervalSince1970))"
-        guard rename(url.path, aside) == 0 else { throw WriteError.unreadableRecord }
+        guard moveAside(url) else { throw WriteError.unreadableRecord }
         return nil
+    }
+
+    /// Renames `url` to a name no earlier aside holds: the rename refuses an existing
+    /// destination rather than replacing it, so every damaged copy is kept.
+    private static func moveAside(_ url: URL) -> Bool {
+        let stamp = Int(Date().timeIntervalSince1970)
+        for _ in 0..<4 {
+            let suffix = UUID().uuidString.prefix(8).lowercased()
+            let aside = "\(url.path).corrupt-\(stamp)-\(suffix)"
+            if renamex_np(url.path, aside, UInt32(RENAME_EXCL)) == 0 { return true }
+            guard errno == EEXIST else { return false }
+        }
+        return false
     }
 
     private static func readObject(at url: URL) -> [String: Any]? {

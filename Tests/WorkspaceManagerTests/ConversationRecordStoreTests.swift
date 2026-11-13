@@ -127,6 +127,25 @@ struct ConversationRecordStoreTests {
         }
     }
 
+    @Test("Two damaged copies of one record in the same second are both kept")
+    func twoCorruptionsInOneSecondKeepBoth() throws {
+        try withStore { store in
+            try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
+            let url = try #require(store.fileURL(conversationID: Self.conversationID))
+            let damaged = [Data("{ first".utf8), Data("[\"second\"]".utf8)]
+            for copy in damaged {
+                try copy.write(to: url)
+                try store.record(observation(at: 1_800_000_000))
+            }
+
+            let asides = try FileManager.default.contentsOfDirectory(atPath: store.directory.path)
+                .filter { $0.hasPrefix("\(Self.conversationID).json.corrupt-") }
+            let kept = try Set(asides.map { try Data(contentsOf: store.directory.appendingPathComponent($0)) })
+            #expect(kept == Set(damaged))
+            #expect(store.all().count == 1)
+        }
+    }
+
     @Test("An older sighting fills only what the record lacks, and observedAt never moves back")
     func olderSightingOnlyFills() throws {
         try withStore { store in
