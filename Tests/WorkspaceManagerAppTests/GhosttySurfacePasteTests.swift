@@ -16,108 +16,113 @@ import Testing
 
 @testable import WorkspaceManager
 
-@Suite("Ghostty surface paste routing", .serialized)
-@MainActor
-struct GhosttySurfacePasteTests {
-    private static let pasteStart = "\u{1b}[200~"
-    private static let pasteEnd = "\u{1b}[201~"
+/// Nested in the mailbox-deadlock suite so its `.serialized` keeps the two apart: that suite
+/// suspends the app mailbox's drain while it fills the mailbox, and no surface's title, this
+/// suite's ready signal among them, reaches the main thread until the drain resumes.
+extension GhosttySurfaceMailboxDeadlockTests {
+    @Suite("Ghostty surface paste routing", .serialized)
+    @MainActor
+    struct GhosttySurfacePasteTests {
+        private static let pasteStart = "\u{1b}[200~"
+        private static let pasteEnd = "\u{1b}[201~"
 
-    @Test("Pasted text is framed once the program enables bracketed paste; typed text beside it is not")
-    func bracketedPasteFramesPastesButNotTypedKeys() async throws {
-        let program = try await PTYRecorder.start(.rawBracketed)
-        defer { program.cleanUp() }
+        @Test("Pasted text is framed once the program enables bracketed paste; typed text beside it is not")
+        func bracketedPasteFramesPastesButNotTypedKeys() async throws {
+            let program = try await PTYRecorder.start(.rawBracketed)
+            defer { program.cleanUp() }
 
-        program.type("hi")
-        #expect(GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: "echo paste") == .delivered)
-        program.type("ok")
+            program.type("hi")
+            #expect(GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: "echo paste") == .delivered)
+            program.type("ok")
 
-        let expected = "hi" + Self.pasteStart + "echo paste" + Self.pasteEnd + "ok"
-        #expect(try await program.received(byteCount: expected.utf8.count) == expected)
-    }
+            let expected = "hi" + Self.pasteStart + "echo paste" + Self.pasteEnd + "ok"
+            #expect(try await program.received(byteCount: expected.utf8.count) == expected)
+        }
 
-    @Test("A paste reaches a program without bracketed paste unframed and unchanged")
-    func unbracketedPasteArrivesUnframed() async throws {
-        let program = try await PTYRecorder.start(.raw)
-        defer { program.cleanUp() }
+        @Test("A paste reaches a program without bracketed paste unframed and unchanged")
+        func unbracketedPasteArrivesUnframed() async throws {
+            let program = try await PTYRecorder.start(.raw)
+            defer { program.cleanUp() }
 
-        let text = "echo 'héllo' $HOME ✓"
-        #expect(GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: text) == .delivered)
+            let text = "echo 'héllo' $HOME ✓"
+            #expect(GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: text) == .delivered)
 
-        #expect(try await program.received(byteCount: text.utf8.count) == text)
-    }
+            #expect(try await program.received(byteCount: text.utf8.count) == text)
+        }
 
-    @Test("Multi-line text pastes as one framed unit into a program with bracketed paste")
-    func multiLinePasteIntoBracketedProgramIsDelivered() async throws {
-        let program = try await PTYRecorder.start(.rawBracketed)
-        defer { program.cleanUp() }
+        @Test("Multi-line text pastes as one framed unit into a program with bracketed paste")
+        func multiLinePasteIntoBracketedProgramIsDelivered() async throws {
+            let program = try await PTYRecorder.start(.rawBracketed)
+            defer { program.cleanUp() }
 
-        #expect(GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: "one\ntwo") == .delivered)
+            #expect(GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: "one\ntwo") == .delivered)
 
-        let expected = Self.pasteStart + "one\ntwo" + Self.pasteEnd
-        #expect(try await program.received(byteCount: expected.utf8.count) == expected)
-    }
+            let expected = Self.pasteStart + "one\ntwo" + Self.pasteEnd
+            #expect(try await program.received(byteCount: expected.utf8.count) == expected)
+        }
 
-    @Test("Paste protection holds multi-line text for a program without bracketed paste")
-    func pasteProtectionHoldsMultiLineTextWhenUnbracketed() async throws {
-        let program = try await PTYRecorder.start(.raw)
-        defer { program.cleanUp() }
+        @Test("Paste protection holds multi-line text for a program without bracketed paste")
+        func pasteProtectionHoldsMultiLineTextWhenUnbracketed() async throws {
+            let program = try await PTYRecorder.start(.raw)
+            defer { program.cleanUp() }
 
-        let held = GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: "rm -rf build\necho done")
-        #expect(held == .heldByPasteProtection)
+            let held = GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: "rm -rf build\necho done")
+            #expect(held == .heldByPasteProtection)
 
-        // The sentinel is the first byte the program ever reads: the held paste sent nothing.
-        #expect(GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: "sentinel") == .delivered)
-        #expect(try await program.received(byteCount: "sentinel".utf8.count) == "sentinel")
-    }
+            // The sentinel is the first byte the program ever reads: the held paste sent nothing.
+            #expect(GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: "sentinel") == .delivered)
+            #expect(try await program.received(byteCount: "sentinel".utf8.count) == "sentinel")
+        }
 
-    @Test("Paste protection holds text carrying an end-of-paste marker even when bracketed")
-    func pasteProtectionHoldsFrameEscapeWhenBracketed() async throws {
-        let program = try await PTYRecorder.start(.rawBracketed)
-        defer { program.cleanUp() }
+        @Test("Paste protection holds text carrying an end-of-paste marker even when bracketed")
+        func pasteProtectionHoldsFrameEscapeWhenBracketed() async throws {
+            let program = try await PTYRecorder.start(.rawBracketed)
+            defer { program.cleanUp() }
 
-        let escape = "harmless" + Self.pasteEnd + "touch pwned"
-        #expect(GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: escape) == .heldByPasteProtection)
+            let escape = "harmless" + Self.pasteEnd + "touch pwned"
+            #expect(GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: escape) == .heldByPasteProtection)
 
-        #expect(GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: "sentinel") == .delivered)
-        let expected = Self.pasteStart + "sentinel" + Self.pasteEnd
-        #expect(try await program.received(byteCount: expected.utf8.count) == expected)
-    }
+            #expect(GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: "sentinel") == .delivered)
+            let expected = Self.pasteStart + "sentinel" + Self.pasteEnd
+            #expect(try await program.received(byteCount: expected.utf8.count) == expected)
+        }
 
-    @Test("The automation input verb's paste and submit deliver a line to a shell byte for byte")
-    func automationInputReachesShellByteForByte() async throws {
-        let program = try await PTYRecorder.start(.shellLine)
-        defer { program.cleanUp() }
+        @Test("The automation input verb's paste and submit deliver a line to a shell byte for byte")
+        func automationInputReachesShellByteForByte() async throws {
+            let program = try await PTYRecorder.start(.shellLine)
+            defer { program.cleanUp() }
 
-        // The verb is these two calls: the text as a paste, then Return as a key event.
-        let line = "printf '%s\\n' \"héllo wörld\" $HOME ~/x\t✓ 'it''s' \\t"
-        #expect(GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: line) == .delivered)
-        #expect(GhosttySurfaceTextInputBridge.sendAutomationReturn(into: program.view))
+            // The verb is these two calls: the text as a paste, then Return as a key event.
+            let line = "printf '%s\\n' \"héllo wörld\" $HOME ~/x\t✓ 'it''s' \\t"
+            #expect(GhosttySurfaceTextInputBridge.pasteText(into: program.view, text: line) == .delivered)
+            #expect(GhosttySurfaceTextInputBridge.sendAutomationReturn(into: program.view))
 
-        #expect(try await program.received(byteCount: line.utf8.count) == line)
-    }
+            #expect(try await program.received(byteCount: line.utf8.count) == line)
+        }
 
-    @Test("IME commit text stays on the text path, which paste protection does not hold")
-    func imeCommitSkipsPasteProtection() async throws {
-        let program = try await PTYRecorder.start(.raw)
-        defer { program.cleanUp() }
+        @Test("IME commit text stays on the text path, which paste protection does not hold")
+        func imeCommitSkipsPasteProtection() async throws {
+            let program = try await PTYRecorder.start(.raw)
+            defer { program.cleanUp() }
 
-        // Outside a key event `insertText` is an IME commit. The paste path would hold this
-        // text; the text path delivers it, converting the newline as an unbracketed paste does.
-        program.view.insertText("日本\n語", replacementRange: NSRange(location: NSNotFound, length: 0))
+            // Outside a key event `insertText` is an IME commit. The paste path would hold this
+            // text; the text path delivers it, converting the newline as an unbracketed paste does.
+            program.view.insertText("日本\n語", replacementRange: NSRange(location: NSNotFound, length: 0))
 
-        let expected = "日本\r語"
-        #expect(try await program.received(byteCount: expected.utf8.count) == expected)
-    }
+            let expected = "日本\r語"
+            #expect(try await program.received(byteCount: expected.utf8.count) == expected)
+        }
 
-    @Test("A launch command the app composed skips paste protection")
-    func launchCommandSkipsPasteProtection() async throws {
-        let program = try await PTYRecorder.start(.raw)
-        defer { program.cleanUp() }
+        @Test("A launch command the app composed skips paste protection")
+        func launchCommandSkipsPasteProtection() async throws {
+            let program = try await PTYRecorder.start(.raw)
+            defer { program.cleanUp() }
 
-        #expect(GhosttySurfaceTextInputBridge.writeLaunchCommand(into: program.view, text: "cd /tmp\nexec claude"))
+            #expect(GhosttySurfaceTextInputBridge.writeLaunchCommand(into: program.view, text: "cd /tmp\nexec claude"))
 
-        let expected = "cd /tmp\rexec claude"
-        #expect(try await program.received(byteCount: expected.utf8.count) == expected)
+            let expected = "cd /tmp\rexec claude"
+            #expect(try await program.received(byteCount: expected.utf8.count) == expected)
+        }
     }
 }
 
