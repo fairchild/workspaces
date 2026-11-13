@@ -262,22 +262,24 @@ struct ConversationObserveCommandTests {
         #expect(text.contains("own=137"))
     }
 
-    /// Where Codex's probes put a TERM: a second one while cleanup asks `ps` about the client;
-    /// one while the shell is stopped after starting the client and before recording it; and
-    /// one to the whole process group as soon as the lookup file exists.
+    /// Where Codex's probes interrupt the lookup: a second TERM while cleanup asks `ps` about
+    /// the client; a TERM while the shell is stopped after starting the client and before
+    /// recording it; a TERM to the whole process group as soon as the lookup directory exists;
+    /// and a link to a FIFO planted at the lookup's path while the shell is stopped just before
+    /// creating it, which an open of the path would block on with no reader.
     enum LookupInterruption: String, CaseIterable, Sendable {
         case duringCleanup = "during-cleanup"
         case beforeTheClientIsRecorded = "before-the-client-is-recorded"
-        case groupOnceTheFileExists = "group-once-the-file-exists"
+        case groupOnceTheLookupExists = "group-once-the-lookup-exists"
+        case fifoRacedIn = "fifo-raced-in"
     }
 
-    /// The hook runs as its own process group. The stand-in `tmux` writes its pid and waits,
-    /// as a client of a stopped server does; the stand-in `ps` marks that it was asked and
-    /// pauses before answering truly, so a signal can land inside cleanup; and the stand-in
-    /// `mktemp` makes the real file and pauses before printing its path, so a hook that made
-    /// its file through a child would be signalled while only that child knew the path.
+    /// The hook runs as its own process group, under a umask that would let other users read
+    /// what it writes. The stand-in `tmux` writes its pid and waits, as a client of a stopped
+    /// server does; the stand-in `ps` marks that it was asked and pauses before answering
+    /// truly, so a signal can land inside cleanup.
     @Test(
-        "A signal at any point of the hook's lookup leaves no client and no lookup file",
+        "A signal or a planted link at any point of the hook's lookup leaves no client and no lookup files",
         arguments: LookupInterruption.allCases)
     func interruptedLookupCleansUp(_ interruption: LookupInterruption) throws {
         let source = URL(fileURLWithPath: #filePath)
@@ -306,16 +308,17 @@ struct ConversationObserveCommandTests {
         }
         _ = try install("tmux", #"echo $$ > "$EDGE_ROOT/client"; exec /bin/sleep 30"#, in: bin)
         _ = try install("ps", #"echo ready > "$EDGE_ROOT/in-ps"; /bin/sleep 0.3; exec /bin/ps "$@""#, in: bin)
-        _ = try install(
-            "mktemp", #"f=$(/usr/bin/mktemp "$@") || exit; /bin/sleep 0.3; echo "$f""#,
-            in: bin)
         let wrapper = try install(
             "wrapper.sh",
             #"""
             source "$1"
+            umask 022
             if [[ "$2" == before-the-client-is-recorded ]]; then
                 set -T
                 trap 'if [[ "$BASH_COMMAND" == "lookup_client="* && "$BASH_SUBSHELL" == 0 && ! -e "$EDGE_ROOT/stopped" ]]; then echo ready > "$EDGE_ROOT/stopped"; builtin kill -STOP "$$"; fi' DEBUG
+            elif [[ "$2" == fifo-raced-in ]]; then
+                set -T
+                trap 'if [[ ( "$BASH_COMMAND" == "mkdir "* || "$BASH_COMMAND" == ":"* ) && "$BASH_SUBSHELL" == 0 && ! -e "$EDGE_ROOT/stopped" ]]; then echo "${lookup_dir:-$lookup_out}" > "$EDGE_ROOT/stopped"; builtin kill -STOP "$$"; fi' DEBUG
             fi
             main
             """#,
@@ -343,9 +346,17 @@ struct ConversationObserveCommandTests {
             if client > 0 { kill(client, SIGKILL) }
         }
 
+        var planted: [String] = []
         switch interruption {
         case .duringCleanup:
             try waitFor("client")
+            let lookup = try #require(try FileManager.default.contentsOfDirectory(atPath: temporary.path).first)
+            let directory = temporary.appendingPathComponent(lookup)
+            func mode(_ url: URL) throws -> Int? {
+                try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
+            }
+            #expect(try mode(directory) == 0o700)
+            #expect(try mode(directory.appendingPathComponent("out")) == 0o600)
             kill(hook, SIGTERM)
             try waitFor("in-ps")
             kill(hook, SIGTERM)
@@ -353,13 +364,22 @@ struct ConversationObserveCommandTests {
             try waitFor("stopped")
             kill(hook, SIGTERM)
             kill(hook, SIGCONT)
-        case .groupOnceTheFileExists:
+        case .groupOnceTheLookupExists:
             let deadline = Date().addingTimeInterval(5)
             while try FileManager.default.contentsOfDirectory(atPath: temporary.path).isEmpty {
-                try #require(Date() < deadline, "the lookup file never appeared")
+                try #require(Date() < deadline, "the lookup directory never appeared")
                 Thread.sleep(forTimeInterval: 0.002)
             }
             killpg(hook, SIGTERM)
+        case .fifoRacedIn:
+            try waitFor("stopped")
+            let path = String(decoding: try Data(contentsOf: marker("stopped")), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let fifo = root.appendingPathComponent("fifo")
+            try #require(mkfifo(fifo.path, 0o666) == 0 && chmod(fifo.path, 0o666) == 0)
+            try FileManager.default.createSymbolicLink(atPath: path, withDestinationPath: fifo.path)
+            planted = [URL(fileURLWithPath: path).lastPathComponent]
+            kill(hook, SIGCONT)
         }
         let deadline = Date().addingTimeInterval(5)
         while !reap(), Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
@@ -371,7 +391,7 @@ struct ConversationObserveCommandTests {
 
         #expect(status & 0x7f == 0 && (status >> 8) & 0xff == 0, "the hook ended with wait status \(status)")
         #expect(client == 0 || kill(client, 0) != 0, "the lookup's tmux client outlived the hook")
-        #expect(try FileManager.default.contentsOfDirectory(atPath: temporary.path) == [])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: temporary.path) == planted)
     }
 
     /// Starts `path` as the leader of a new process group, so a test can signal the group,

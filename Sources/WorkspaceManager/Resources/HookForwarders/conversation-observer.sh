@@ -10,20 +10,23 @@
 # environment lacks the key; the session still has it, if the server answering
 # on `$TMUX`'s socket is the one `$TMUX` names and it answers within a second.
 # The answer goes through a file, not a pipe: a tmux client hands its output
-# descriptor to the server, so a stopped server would hold a pipe open. One
-# owner cleans up the lookup's file, client and deadline, on return or on any
-# signal; a signal while they are being started waits until all three are
-# recorded, and cleanup ignores further signals once it begins. The file is
-# named and created by this shell itself, with noclobber, so its path is known
-# before it exists and no child dies holding it. The deadline
-# kills only a process that is still this shell's child, and it is stopped
-# before this shell starts any other child. The app writes the bundled CLI's
-# path in place of the placeholder when it extracts this file. Exits 0 unless
-# signalled while the CLI runs: a failure here is never Claude's to report.
+# descriptor to the server, so a stopped server would hold a pipe open. The
+# file sits in a private directory this shell names before `mkdir -m 700`
+# makes it: mkdir refuses any existing path, links included, and the shell
+# knows the name even if mkdir dies. The client writes the file under umask
+# 077. One owner cleans up the lookup's directory, client and deadline, on
+# return or on any signal; a signal while they are being started waits until
+# all three are recorded, and cleanup ignores further signals once it begins.
+# The deadline kills only a process that is still this shell's child, and it
+# is stopped before this shell starts any other child. The app writes the
+# bundled CLI's path in place of the placeholder when it extracts this file.
+# Exits 0 unless signalled while the CLI runs: a failure here is never
+# Claude's to report.
 
 set -u
 
 readonly KEY=WORKSPACES_CONVERSATIONS_DIR
+lookup_dir=""
 lookup_out=""
 lookup_client=""
 lookup_guard=""
@@ -75,28 +78,31 @@ ask_session() {
 
 start_lookup() {
     local socket=$1 session=$2
-    create_lookup_file || return 1
-    PATH="$PATH:/opt/homebrew/bin:/usr/local/bin" tmux -S "$socket" \
-        display-message -p -t "$session" '#{pid}' \; show-environment -t "$session" "$KEY" \
-        </dev/null >"$lookup_out" 2>/dev/null &
+    create_lookup_dir || return 1
+    (
+        umask 077
+        PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+        exec tmux -S "$socket" \
+            display-message -p -t "$session" '#{pid}' \; show-environment -t "$session" "$KEY" \
+            </dev/null >"$lookup_out" 2>/dev/null
+    ) &
     lookup_client=$!
     end_at_deadline "$lookup_client" </dev/null >/dev/null 2>&1 &
     lookup_guard=$!
 }
 
-create_lookup_file() {
-    local attempt made
+create_lookup_dir() {
+    local attempt
     for attempt in 1 2 3 4 5 6 7 8; do
-        lookup_out="${TMPDIR:-/tmp}"
-        lookup_out="${lookup_out%/}/workspaces-observer.$$.$RANDOM"
-        [[ -e "$lookup_out" || -L "$lookup_out" ]] && continue
-        set -C
-        : 2>/dev/null >"$lookup_out"
-        made=$?
-        set +C
-        ((made == 0)) && return 0
+        lookup_dir="${TMPDIR:-/tmp}"
+        lookup_dir="${lookup_dir%/}/workspaces-observer.$$.$RANDOM"
+        if mkdir -m 700 "$lookup_dir" 2>/dev/null; then
+            lookup_out="$lookup_dir/out"
+            return 0
+        fi
+        [[ -z "$lookup_interrupted" ]] || return 1
     done
-    lookup_out=""
+    lookup_dir=""
     return 1
 }
 
@@ -113,8 +119,10 @@ end_lookup() {
         wait "$lookup_client" 2>/dev/null
         lookup_client=""
     fi
-    if [[ -n "$lookup_out" ]]; then
-        rm -f "$lookup_out"
+    if [[ -n "$lookup_dir" ]]; then
+        rm -f "$lookup_dir/out"
+        rmdir "$lookup_dir" 2>/dev/null
+        lookup_dir=""
         lookup_out=""
     fi
 }
