@@ -4,9 +4,11 @@
 //
 //  The guarded resume verb: continues a recorded conversation so that exactly one agent ever
 //  holds it. Two tiles, two app builds, or a double Return all go through one per-conversation
-//  lock, and under it the holder probe decides. `--here` replaces the calling process with
-//  the harness, and the lock's descriptor closes in that same exec, so the conversation goes
-//  from free to held with no moment in which a second resume could find it free.
+//  lock, and under it the holder probe decides. `--here` records its own process as the
+//  conversation's, then replaces itself with the harness; the lock's descriptor closes in that
+//  same exec, so the conversation goes from free to held with no moment in which a second
+//  resume could find it free. `--into` starts that same `--here` under a handle, so ownership
+//  is decided when the command runs there, however long after it was typed.
 //
 
 import Foundation
@@ -192,6 +194,7 @@ public struct ConversationResumer: Sendable {
     let describeTmux: @Sendable (TmuxEnvironment) -> ConversationRecord.TmuxSession?
     let exec: Exec
     let warn: @Sendable (String) -> Void
+    let cliPath: String
 
     public init(
         records: ConversationRecordStore,
@@ -208,7 +211,8 @@ public struct ConversationResumer: Sendable {
             TmuxEnvironment.describe($0)
         },
         exec: @escaping Exec = { try HarnessExec.replaceProcess(with: $0, handOff: $1) },
-        warn: @escaping @Sendable (String) -> Void = { _ in }
+        warn: @escaping @Sendable (String) -> Void = { _ in },
+        cliPath: String? = nil
     ) {
         self.records = records
         self.launches = launches
@@ -231,6 +235,7 @@ public struct ConversationResumer: Sendable {
         self.describeTmux = describeTmux
         self.exec = exec
         self.warn = warn
+        self.cliPath = cliPath ?? Bundle.main.executablePath ?? "workspaces"
     }
 
     // MARK: - Reading
@@ -289,14 +294,19 @@ public struct ConversationResumer: Sendable {
         return try await resume(record, target: target)
     }
 
-    /// Resumes `subject` unless something holds it. Everything up to the start runs under the
-    /// conversation's lock, and the record is read again once the lock is held, since the
-    /// resume that held it last may have just moved the conversation; what was checked on
-    /// `subject` is checked again on what was read.
+    /// Resumes `subject` unless something holds it. The decision runs under the conversation's
+    /// lock, and the record is read again once the lock is held, since the resume that held
+    /// it last may have just moved the conversation; what the caller filled in on `subject`
+    /// is kept, and what was checked on it is checked again on what was read.
     public func resume(_ subject: ConversationRecord, target: Target) async throws -> Outcome {
         let id = subject.conversationID
         try require(subject)
 
+        // An `--into` resume holds a hand-off claim until the conversation is taken up where
+        // it sent it, so a second `--into` waits and then finds it held rather than free.
+        var handOff: AgentConversationLock?
+        if case .into = target { handOff = try await claim(id, for: .handOff) }
+        defer { handOff?.release() }
         let lock = try await claim(id)
         defer { lock.release() }
         var record = records.load(conversationID: id) ?? subject
@@ -307,13 +317,9 @@ public struct ConversationResumer: Sendable {
         if case .into(let handle) = target {
             targetLive = await control.isLive(handle: handle)
         }
-        let window: (Bool) -> TimeInterval = { recordedSessionGone in
-            if let targetLive { return targetLive ? 0 : Self.holderExitWindow }
-            return recordedSessionGone ? Self.holderExitWindow : 0
-        }
 
         let transcript: HarnessTranscript
-        switch await status(of: record, exitWindow: window) {
+        switch await status(of: record, exitWindow: { $0 ? Self.holderExitWindow : 0 }) {
         case .open(let holders):
             return .held(holders: holders, targetLive: targetLive)
         case .unknown(.otherHost(let recordedHost)):
@@ -345,9 +351,51 @@ public struct ConversationResumer: Sendable {
                 throw Refusal.cannotStart(failure.localizedDescription)
             }
         case .into(let handle):
-            try await start(command, conversationID: id, record: record, handle: handle, live: targetLive == true)
+            // The `--here` started there takes this same lock, so it is released first.
+            keepFilledIn(record)
+            lock.release()
+            if let holders = try await start(
+                record: record, handle: handle, live: targetLive == true, harnessCommand: command)
+            {
+                return .held(holders: holders, targetLive: targetLive)
+            }
         }
         return .resumed(command: command)
+    }
+
+    /// The command that resumes the conversation in whatever terminal runs it: this verb with
+    /// `--here`, so it takes the lock and asks the probe at the moment it runs.
+    func guardedCommand(conversationID: String) -> String {
+        "\(RaceGroupPlanner.shellQuoted(cliPath)) conversation resume \(conversationID) --here"
+    }
+
+    /// Writes what the caller filled in on a record (a launch's requested effort, or the whole
+    /// record for a launch from before records existed) so the `--here` run under a handle
+    /// reads it too.
+    private func keepFilledIn(_ record: ConversationRecord) {
+        let stored = records.load(conversationID: record.conversationID)
+        guard stored == nil || (stored?.launch == nil && record.launch != nil) else { return }
+        let observation = ConversationObservation(
+            harness: record.harness,
+            conversationID: record.conversationID,
+            host: record.host,
+            cwd: record.cwd,
+            configHome: record.configHome,
+            transcriptPath: record.transcriptPath,
+            workspacePath: record.workspacePath,
+            workspaceCreatedAt: record.workspaceCreatedAt,
+            socketLabel: record.socketLabel,
+            observedAt: record.observedAt,
+            observedBy: record.observedBy,
+            launch: record.launch
+        )
+        do {
+            if try records.record(observation, lockBudget: .seconds(2)) == .lockBusy {
+                warn("warning: the conversation record was busy, so the resume may not keep the launch's effort.")
+            }
+        } catch {
+            warn("warning: the conversation record was not updated: \(error.localizedDescription).")
+        }
     }
 
     private func require(_ record: ConversationRecord) throws {
@@ -360,9 +408,12 @@ public struct ConversationResumer: Sendable {
         try requireDirectories(of: record)
     }
 
-    private func claim(_ conversationID: String) async throws -> AgentConversationLock {
+    private func claim(
+        _ conversationID: String,
+        for kind: ConversationRecordStore.ClaimKind = .start
+    ) async throws -> AgentConversationLock {
         do {
-            return try await records.claim(conversationID)
+            return try await records.claim(conversationID, for: kind)
         } catch ConversationRecordStore.ClaimError.held {
             throw Refusal.lockBusy(conversationID)
         } catch {
@@ -415,16 +466,17 @@ public struct ConversationResumer: Sendable {
         }
     }
 
-    /// Starts the command under `handle`: a new session when there is none, or typed into
-    /// the idle shell there when nobody is looking at it. Returns once the harness holds the
-    /// conversation, which is what makes it safe to let the lock go.
+    /// Starts the guarded command under `handle`: a new session when there is none, or typed
+    /// into the idle shell there when nobody is looking at it. Returns nil once the command
+    /// there has become the harness, or the holders when it found the conversation held.
     private func start(
-        _ command: String,
-        conversationID: String,
         record: ConversationRecord,
         handle: String,
-        live: Bool
-    ) async throws {
+        live: Bool,
+        harnessCommand: String
+    ) async throws -> [ConversationHolder]? {
+        let command = guardedCommand(conversationID: record.conversationID)
+        let startedAt = Date()
         do {
             if live {
                 let paneCommand = await control.paneCommand(handle: handle)
@@ -432,7 +484,7 @@ public struct ConversationResumer: Sendable {
                     throw Refusal.paneBusy(handle: handle, paneCommand: paneCommand)
                 }
                 guard await control.attachedClients(handle: handle) == 0 else {
-                    throw Refusal.paneAttached(handle: handle, command: command)
+                    throw Refusal.paneAttached(handle: handle, command: harnessCommand)
                 }
                 try await control.adoptSessionEnvironment(handle: handle)
                 try await control.clearInputLine(handle: handle)
@@ -447,19 +499,33 @@ public struct ConversationResumer: Sendable {
         } catch let error as TmuxSessionControl.ControlError {
             throw Refusal.tmux(error.localizedDescription)
         }
-        guard await waitForHolder(of: record) else {
-            throw Refusal.startFailed(handle: handle, conversationID: conversationID)
+        if await waitForHandOff(of: record.conversationID, in: handle, since: startedAt) { return nil }
+        if case .held(let holders, _) = await probe.probe(records.load(conversationID: record.conversationID) ?? record)
+        {
+            return holders
         }
+        throw Refusal.startFailed(handle: handle, conversationID: record.conversationID)
     }
 
-    /// Until the harness's probe finds the new agent. `false` if none appeared, which is a
-    /// start that failed.
-    private func waitForHolder(of record: ConversationRecord) async -> Bool {
+    /// Until the `--here` run under `handle` has recorded itself and exec'd into the harness.
+    /// `false` if it did not within ten seconds: it failed, refused, or has not run yet.
+    private func waitForHandOff(of conversationID: String, in handle: String, since startedAt: Date) async -> Bool {
         for _ in 0..<100 {
-            if case .held = await probe.probe(record) { return true }
+            if let seen = records.load(conversationID: conversationID)?.lastSeenIn,
+                let harness = seen.harness, let observedAt = seen.harnessObservedAt, observedAt >= startedAt,
+                seen.tmux.map({ $0.name == nil || $0.name == handle }) == true,
+                inspector.isRunning(harness), let arguments = inspector.arguments(harness.pid),
+                !Self.isResumeVerb(arguments)
+            {
+                return true
+            }
             try? await Task.sleep(for: .milliseconds(100))
         }
         return false
+    }
+
+    static func isResumeVerb(_ arguments: [String]) -> Bool {
+        arguments.count >= 3 && arguments[1] == "conversation" && arguments[2] == "resume"
     }
 }
 

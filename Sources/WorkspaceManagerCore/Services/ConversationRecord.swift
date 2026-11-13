@@ -365,12 +365,21 @@ public struct ConversationRecordStore: Sendable {
         case held
     }
 
+    /// What a claim is for. `start` decides who holds the conversation. `handOff` is held by
+    /// a resume that started the conversation somewhere else and waits for it to be taken
+    /// up there, which needs `start` free for the process doing the taking.
+    public enum ClaimKind: String, Sendable {
+        case start = "claim"
+        case handOff = "hand-off"
+    }
+
     /// Waits for the conversation to be free, then claims it. The lock sits beside the record,
     /// so every launch and resume that names the conversation contends on one file wherever
     /// its own config directory points: a tile's `XDG_CONFIG_HOME` can differ from the
     /// caller's, and the records directory is the one they are made to agree on (#1417).
     public func claim(
         _ conversationID: String,
+        for kind: ClaimKind = .start,
         timeout: Duration = .seconds(30)
     ) async throws -> AgentConversationLock {
         guard let id = ConversationRecord.normalizedID(conversationID) else { throw ClaimError.invalidConversationID }
@@ -380,7 +389,8 @@ public struct ConversationRecordStore: Sendable {
         // Close-on-exec: a lock stays held for as long as anything that inherited the
         // descriptor runs, and a resume can start a tmux server. `resume --here` relies on
         // it the other way: the exec that starts the harness is what lets the lock go.
-        let descriptor = open(locks.appendingPathComponent("\(id).claim").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        let descriptor = open(
+            locks.appendingPathComponent("\(id).\(kind.rawValue)").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
 
         let deadline = ContinuousClock.now.advanced(by: timeout)

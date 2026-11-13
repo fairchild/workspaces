@@ -145,12 +145,44 @@ public enum AgentSessionInspection {
         } || options.contains { word in flags.contains { word == "\($0)=\(conversationID)" } }
     }
 
-    /// `claude`, or an interpreter running it. Only the first two words count: a tmux server
-    /// keeps the argv of the client that started it, which can name `claude` further along.
+    /// `claude`, or a program running it, reached through `env` or not. A JavaScript runtime's
+    /// script is its first word that is not an option, so `node --no-warnings cli.js` counts;
+    /// any other program counts only when its first argument is claude, as with `sh claude`.
+    /// Nothing further along does: a tmux server keeps the argv of the client that started
+    /// it, which can name `claude` later, and a shell's `-c` string is a command line.
     static func isClaude(_ command: [String]) -> Bool {
-        command.prefix(2).contains { word in
-            URL(fileURLWithPath: word).lastPathComponent == "claude" || word.hasSuffix("/claude-code/cli.js")
+        var words = command[...]
+        if let first = words.first, programName(first) == "env" {
+            words = words.dropFirst()
+            while let word = words.first, word.hasPrefix("-") || word.contains("=") {
+                words = words.dropFirst(Self.envOptionsWithValue.contains(word) ? 2 : 1)
+            }
         }
+        guard let program = words.first else { return false }
+        if isClaudeEntry(program) { return true }
+        var arguments = words.dropFirst()
+        guard Self.scriptRuntimes.contains(programName(program)) else {
+            return arguments.first.map(isClaudeEntry) ?? false
+        }
+        while let word = arguments.first, word.hasPrefix("-") {
+            arguments = arguments.dropFirst(Self.runtimeOptionsWithValue.contains(word) ? 2 : 1)
+        }
+        return arguments.first.map(isClaudeEntry) ?? false
+    }
+
+    private static let scriptRuntimes: Set<String> = ["node", "nodejs", "bun"]
+    private static let runtimeOptionsWithValue: Set<String> = [
+        "-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "-C", "--conditions",
+        "--title",
+    ]
+    private static let envOptionsWithValue: Set<String> = ["-u", "--unset", "-C", "--chdir", "-P", "-S"]
+
+    private static func programName(_ word: String) -> String {
+        URL(fileURLWithPath: word).lastPathComponent
+    }
+
+    private static func isClaudeEntry(_ word: String) -> Bool {
+        programName(word) == "claude" || word.hasSuffix("/claude-code/cli.js")
     }
 
     public static func verdict(

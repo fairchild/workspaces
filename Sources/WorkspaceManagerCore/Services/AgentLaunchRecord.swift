@@ -53,15 +53,21 @@ public struct AgentLaunchRecord: Codable, Sendable, Equatable {
 /// An exclusive claim on one conversation, for the span between seeing that nothing holds it
 /// and a new holder being visible. The kernel drops it when the process ends, so a crashed
 /// resume leaves nothing behind. `ConversationRecordStore.claim` takes it.
-public final class AgentConversationLock: Sendable {
-    private let descriptor: Int32
+public final class AgentConversationLock: @unchecked Sendable {
+    private let state = NSLock()
+    private var descriptor: Int32?
 
     init(descriptor: Int32) {
         self.descriptor = descriptor
     }
 
+    /// Lets the claim go. A second release does nothing, rather than closing a descriptor
+    /// number something else may have been handed since.
     public func release() {
-        close(descriptor)
+        state.withLock {
+            if let descriptor { close(descriptor) }
+            descriptor = nil
+        }
     }
 }
 

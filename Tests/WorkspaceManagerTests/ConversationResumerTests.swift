@@ -195,6 +195,34 @@ struct ConversationResumerTests {
         )
     }
 
+    /// The grace a holder gets to finish exiting follows what is known about it: one in a
+    /// session that is still there is not exiting, wherever the resume was headed.
+    @Test("A holder in the live session the conversation was last seen in refuses at once, whatever the target")
+    func liveRecordedHolderRefusesAtOnce() async throws {
+        let world = try World()
+        defer { world.teardown() }
+        try world.recordConversation(
+            lastSeenIn: .init(hostSessionID: nil, tmux: .init(serverPID: 4242, sessionID: "$7", name: "tile-session"))
+        )
+        let table = ProcessTable(rows: [
+            .init(pid: 100, parentPID: 1, arguments: ["-zsh"]),
+            .init(pid: 101, parentPID: 100, arguments: ["/opt/bin/claude"]),
+        ])
+        let resumer = world.resumer(
+            processTable: table, recordedSession: .live(sessionID: "$7", name: "tile-session", panePIDs: [100]))
+
+        let started = Date()
+        let outcome = try await resumer.resume(conversationID: world.conversationID, target: .into(handle: "wm-absent"))
+
+        #expect(Date().timeIntervalSince(started) < 5)
+        guard case .held(let holders, let targetLive) = outcome else {
+            Issue.record("expected held, got \(outcome)")
+            return
+        }
+        #expect(holders.map(\.pid) == [101])
+        #expect(targetLive == false)
+    }
+
     @Test("The record read under the lock keeps the launch the caller filled in")
     func reloadKeepsTheCallersLaunch() async throws {
         let world = try World()

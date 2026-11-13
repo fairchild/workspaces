@@ -17,14 +17,29 @@ import Testing
 @Suite("CLI conversation resume", .serialized)
 struct CLIConversationResumeTests {
 
-    /// Stands in for claude: says what it was started with, runs the SessionStart hook for
-    /// each id in `STUB_HOOK_IDS` the way claude does (a child of this process), then exits,
-    /// or stays alive under its own name when `STUB_STAY` is set, as an agent holding its
-    /// conversation does. It stays at most five minutes, and no longer than its fixture: a
-    /// killed test run leaves nothing behind that outlives either.
+    /// Stands in for claude: says what it was started with (also into `STUB_LOG`, for a run
+    /// whose output lands in a pane), runs the SessionStart hook for each id in
+    /// `STUB_HOOK_IDS` the way claude does (a child of this process), then exits, or stays
+    /// alive when `STUB_STAY` is set, as an agent holding its conversation does. It stays at
+    /// most five minutes, and no longer than its fixture: a killed test run leaves nothing
+    /// behind that outlives either. With `STUB_VIA` set to `node` or `env`, it first execs
+    /// itself through a stand-in JavaScript runtime with an option before the script, the way
+    /// an npm install's wrapper does, so nothing in the final arguments says claude.
     private static let stubClaude = #"""
         #!/bin/sh
+        if [ -n "$STUB_VIA" ]; then
+          via=$STUB_VIA
+          unset STUB_VIA
+          here=$(dirname "$0")
+          if [ "$via" = env ]; then
+            exec /usr/bin/env "$here/node" --no-warnings "$here/../lib/claude-code/cli.js" "$@"
+          fi
+          exec "$here/node" --no-warnings "$here/../lib/claude-code/cli.js" "$@"
+        fi
         printf 'stub argv=%s\n' "$*"
+        if [ -n "$STUB_LOG" ]; then
+          printf 'argv=%s config=%s\n' "$*" "${CLAUDE_CONFIG_DIR-unset}" >> "$STUB_LOG"
+        fi
         printf 'stub config=%s\n' "${CLAUDE_CONFIG_DIR-unset}"
         printf 'stub pwd=%s\n' "$(pwd -P)"
         for id in $STUB_HOOK_IDS; do
@@ -155,8 +170,10 @@ struct CLIConversationResumeTests {
         for directory in [fixture.bin, fixture.home, fixture.work] {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
-        try Self.stubClaude.write(to: fixture.stub, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fixture.stub.path)
+        for stub in [fixture.stub, fixture.bin.appendingPathComponent("node")] {
+            try Self.stubClaude.write(to: stub, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
+        }
         return fixture
     }
 
@@ -209,9 +226,14 @@ struct CLIConversationResumeTests {
     }
 
     /// A split config is two callers whose `XDG_CONFIG_HOME` differ, as a tile's and a
-    /// login shell's can; the records directory is what they share.
-    @Test("Two concurrent resumes of one conversation start one agent", arguments: [false, true])
-    func concurrentResumesStartOneAgent(splitConfig: Bool) async throws {
+    /// login shell's can; the records directory is what they share. A runtime harness execs
+    /// through a JavaScript runtime whose arguments do not say claude, so only the process
+    /// the winning resume recorded as its own can show the loser the conversation is held.
+    @Test(
+        "Two concurrent resumes of one conversation start one agent",
+        arguments: ["same-config", "split-config", "node-runtime", "env-node-runtime"]
+    )
+    func concurrentResumesStartOneAgent(setup: String) async throws {
         let fixture = try makeFixture()
         defer { fixture.teardown() }
         let conversationID = try recordConversation(in: fixture)
@@ -219,8 +241,12 @@ struct CLIConversationResumeTests {
         let outputs = (0..<2).map { fixture.root.appendingPathComponent("resume-\($0).log") }
         let resumes = try outputs.enumerated().map { index, output in
             var environment = ["STUB_STAY": "1", "CLAUDE_CONFIG_DIR": "/nonexistent-caller-profile"]
-            if splitConfig {
+            switch setup {
+            case "split-config":
                 environment["XDG_CONFIG_HOME"] = fixture.root.appendingPathComponent("config-\(index)").path
+            case "node-runtime": environment["STUB_VIA"] = "node"
+            case "env-node-runtime": environment["STUB_VIA"] = "env"
+            default: break
             }
             return try fixture.start(
                 ["conversation", "resume", conversationID, "--here"], extraEnvironment: environment, output: output)
@@ -241,7 +267,7 @@ struct CLIConversationResumeTests {
         #expect(refusal.contains("pid \(agent.processIdentifier)"))
         #expect(!refusal.contains("may have switched"))
         let started = try String(contentsOf: outputs[1 - refused], encoding: .utf8)
-        #expect(started.contains("stub argv=--resume \(conversationID)"))
+        #expect(started.contains("--resume \(conversationID)"))
         #expect(started.contains("stub config=unset"))
         #expect(try await holders(of: conversationID, in: fixture).map(\.pid) == [agent.processIdentifier])
     }
@@ -397,6 +423,117 @@ struct CLIConversationResumeTests {
         let resumed = try fixture.run(["conversation", "resume", before, "--here"])
         #expect(resumed.status == 0)
         #expect(resumed.stdout.contains("stub argv=--resume \(before)"))
+    }
+
+    private func waitForFile(_ url: URL, toContain text: String) async throws -> String {
+        var contents = ""
+        try await waitUntil(launches: 3) {
+            contents = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            return contents.contains(text)
+        }
+        return contents
+    }
+
+    @Test(
+        "ws resume keeps the effort its launch asked for when the conversation's record has none",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; --into starts a session")
+    )
+    func wsResumeKeepsTheLaunchEffort() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        // The hook made this record, so it has no launch; the transcript names no effort.
+        let conversationID = try recordConversation(in: fixture)
+        let handle = "wm-parity-\(fixture.socketLabel)"
+        try AgentLaunchRecordStore(directory: fixture.root.appendingPathComponent("config/workspaces-cli/launches"))
+            .save(
+                AgentLaunchRecord(
+                    handle: handle, workspacePath: fixture.work.path, socketLabel: fixture.socketLabel,
+                    launchedAt: Date(),
+                    identity: .init(conversationID: conversationID, requestedModel: nil, requestedEffort: "high")))
+        let log = fixture.root.appendingPathComponent("stub.log")
+
+        let resume = try fixture.run(
+            ["ws", "resume", handle, "--json"], extraEnvironment: ["STUB_STAY": "1", "STUB_LOG": log.path])
+        #expect(resume.status == 0, "\(resume.stderr)")
+        let result = try JSONDecoder().decode(WorkspaceResumeResult.self, from: Data(resume.stdout.utf8))
+        #expect(result.command == "claude --resume \(conversationID) --effort high")
+        let started = try await waitForFile(log, toContain: "argv=")
+        #expect(started.contains("argv=--resume \(conversationID) --effort high"))
+    }
+
+    /// The shell is the kind a tile leaves behind with someone's own profile exported. What
+    /// `--into` types is the `--here` resume, so the harness gets the environment `--here`
+    /// would give it: the transcript's config home, here the default, which is never exported.
+    @Test(
+        "--into hands the harness the same environment --here does, whatever the shell exports",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; --into types into a session")
+    )
+    func intoMatchesHere() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = try recordConversation(in: fixture)
+        let log = fixture.root.appendingPathComponent("stub.log")
+        _ = try fixture.tmux([
+            "new-session", "-d", "-s", "target",
+            "env CLAUDE_CONFIG_DIR=/wrong-profile STUB_STAY=1 STUB_LOG=\(log.path) /bin/sh",
+        ])
+        try await waitUntil(launches: 2) {
+            try fixture.tmux(["display-message", "-p", "-t", "=target:", "#{pane_current_command}"])
+                .trimmingCharacters(in: .whitespacesAndNewlines) == "sh"
+        }
+
+        let resume = try fixture.run(["conversation", "resume", conversationID, "--into", "target"])
+        #expect(resume.status == 0, "\(resume.stderr)")
+        #expect(resume.stdout.contains("Resumed conversation \(conversationID) in target"))
+        let started = try await waitForFile(log, toContain: "argv=")
+        #expect(started.contains("argv=--resume \(conversationID) config=unset"))
+    }
+
+    /// A shell running a builtin that waits looks idle to tmux, so the resume is typed and
+    /// waits in the terminal's input. When it finally runs, after the resume that typed it
+    /// gave up and another agent took the conversation, it has to find that agent.
+    @Test(
+        "A resume typed into a shell that runs it late refuses once something else holds the conversation",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; --into types into a session")
+    )
+    func lateTypedResumeRefuses() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = try recordConversation(in: fixture)
+        let gate = fixture.root.appendingPathComponent("gate")
+        try #require(mkfifo(gate.path, 0o600) == 0)
+        _ = try fixture.tmux([
+            "new-session", "-d", "-s", "busy",
+            "env STUB_STAY=1 /bin/sh -c 'read go < \(gate.path); exec /bin/sh'",
+        ])
+        try await waitUntil(launches: 2) {
+            try fixture.tmux(["display-message", "-p", "-t", "=busy:", "#{pane_current_command}"])
+                .trimmingCharacters(in: .whitespacesAndNewlines) == "sh"
+        }
+
+        let typed = try fixture.run(["conversation", "resume", conversationID, "--into", "busy"])
+        #expect(typed.status == 1)
+        #expect(typed.stderr.contains("nothing took up conversation"))
+
+        let agent = try fixture.start(
+            ["conversation", "resume", conversationID, "--here"], extraEnvironment: ["STUB_STAY": "1"],
+            output: fixture.root.appendingPathComponent("agent.log"))
+        defer { Self.kill([agent]) }
+        try await waitUntil(launches: 2) { try await !holders(of: conversationID, in: fixture).isEmpty }
+
+        let writer = try #require(FileHandle(forWritingAtPath: gate.path))
+        writer.write(Data("go\n".utf8))
+        try writer.close()
+        var pane = ""
+        try await waitUntil(launches: 3) {
+            pane = try fixture.tmux(["capture-pane", "-p", "-t", "=busy:"])
+            return pane.contains("already held")
+        }
+        #expect(pane.contains("already held"))
+        let agents = try #require(await ProcessTable.read()).rows.filter {
+            $0.arguments.contains(fixture.stub.path) && $0.arguments.contains(conversationID)
+        }
+        #expect(agents.map(\.pid) == [agent.processIdentifier])
     }
 
     @Test("A record from another host refuses with fork advice, and nothing starts")

@@ -94,8 +94,12 @@ struct ConversationHolderProbeTests {
         let listing = """
                 5   1 node /opt/homebrew/bin/claude --resume \(Self.id)
                 6   1 node /opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js --resume \(Self.id)
+                7   1 node --no-warnings /opt/lib/node_modules/@anthropic-ai/claude-code/cli.js --resume \(Self.id)
+                8   1 /usr/bin/env node --no-warnings /opt/lib/claude-code/cli.js --resume \(Self.id)
+                9   1 env -u CLAUDECODE NODE_OPTIONS=x node --require /opt/hook.js /opt/claude-code/cli.js -r \(Self.id)
+               10   1 bun /opt/bin/claude --resume \(Self.id)
             """
-        #expect(try await Self.argumentHolders(listing) == [5, 6])
+        #expect(try await Self.argumentHolders(listing) == [5, 6, 7, 8, 9, 10])
     }
 
     @Test("A conversation id past `--` is a prompt, and a program merely naming claude holds nothing")
@@ -158,7 +162,7 @@ struct ConversationHolderProbeTests {
 
     @Test(
         "A recorded harness that ended, gave its pid away, or moved to another conversation holds nothing",
-        arguments: ["ended", "reused", "not-claude", "moved"]
+        arguments: ["ended", "reused", "moved"]
     )
     func recordedHarnessReleases(change: String) async throws {
         let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
@@ -168,7 +172,6 @@ struct ConversationHolderProbeTests {
             switch change {
             case "ended": [:]
             case "reused": [60: (2_000, ["/usr/local/bin/claude"])]
-            case "not-claude": [60: (1_000, ["/bin/zsh"])]
             default: [60: (1_000, ["/usr/local/bin/claude"])]
             }
         let listing = processes[60].map { "60 1 \($0.1.joined(separator: " "))" } ?? "1 0 /sbin/launchd"
@@ -178,6 +181,26 @@ struct ConversationHolderProbeTests {
             of: record,
             in: Self.context(try Self.table(listing), inspector: Self.inspector(processes), current: current))
         #expect(probe == .free)
+    }
+
+    /// A harness started through a wrapper or a runtime execs in place: the recorded process
+    /// is the harness for the rest of its life, whatever its arguments come to say.
+    @Test("A recorded process holds the conversation whatever its arguments say")
+    func recordedHarnessIgnoresArguments() async throws {
+        let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
+        let record = Self.record(
+            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true, harness: harness, harnessObservedAt: Date()))
+        let arguments = ["/bin/sh", "/opt/bin/node", "--no-warnings", "/opt/lib/wrapper.js"]
+        let probe = await ClaudeHarnessAdapter().holders(
+            of: record,
+            in: Self.context(
+                try Self.table("60 1 \(arguments.joined(separator: " "))"),
+                inspector: Self.inspector([60: (1_000, arguments)]), current: [harness: Self.id]))
+        #expect(
+            probe
+                == .held(
+                    [.init(pid: 60, foundBy: .recordedHarness, startedAt: harness.startedAt)],
+                    recordedSessionGone: false))
     }
 
     @Test("With a recorded harness, the session's other panes are not asked about, and a silent server does not refuse")

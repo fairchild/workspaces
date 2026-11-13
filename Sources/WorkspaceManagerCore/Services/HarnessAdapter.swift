@@ -166,8 +166,10 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
 
     /// Claude's holders, by three rules. A process whose arguments name the conversation
     /// holds it, unless a newer sighting moved that process to another one, as `/clear` does.
-    /// When the record names the process its hook ran under, that process holds it while it
-    /// lives as the same claude and has not moved on. A record from before hooks named their
+    /// When the record names the process it was last run by, that process holds it for as long
+    /// as it lives and has not moved on: a pid with its start time is one process lifetime, and
+    /// an exec keeps both, so whatever wrapper or runtime the harness execs through stays the
+    /// recorded process whatever its arguments say. A record from before hooks named their
     /// process falls back to the tmux session it was last seen in: any claude in that session
     /// is counted, since it may be this conversation under an id its arguments do not carry.
     public func holders(of record: ConversationRecord, in context: HolderProbeContext) async -> HolderProbe {
@@ -201,13 +203,11 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
         let counted = Set(holders.map(\.pid))
 
         if let harness = seen?.harness {
-            if !counted.contains(harness.pid), context.inspector.isRunning(harness),
-                let row = table.row(harness.pid), AgentSessionInspection.isClaude(row.arguments),
-                !movedOn(harness.pid).1
-            {
+            if !counted.contains(harness.pid), context.inspector.isRunning(harness), !movedOn(harness.pid).1 {
                 holders.append(recordedPlace(harness.pid, .recordedHarness, harness))
             }
-            return holders.isEmpty ? .free : .held(holders, recordedSessionGone: context.recordedServerGone(record))
+            guard !holders.isEmpty else { return .free }
+            return .held(holders, recordedSessionGone: await context.recordedSessionGone(record))
         }
 
         guard seen?.tmux != nil else {

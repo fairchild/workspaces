@@ -68,8 +68,8 @@ public struct ConversationHolder: Codable, Equatable, Sendable {
 /// can be ruled out, and a caller that would start an agent refuses on it.
 public enum HolderProbe: Equatable, Sendable {
     case free
-    /// `recordedSessionGone` is whether the tmux server the conversation was last seen under
-    /// is gone, which makes these holders likely to be on their way out.
+    /// `recordedSessionGone` is whether the tmux session the conversation was last seen in is
+    /// positively gone, which makes these holders likely to be on their way out.
     case held([ConversationHolder], recordedSessionGone: Bool)
     case unknown(String)
 }
@@ -106,10 +106,12 @@ public struct HolderProbeContext: Sendable {
         self.currentConversation = currentConversation
     }
 
-    /// Whether the record's tmux server is gone: dead, or its pid taken by a later process.
-    public func recordedServerGone(_ record: ConversationRecord) -> Bool {
-        guard let tmux = record.lastSeenIn?.tmux else { return false }
-        return !ConversationHolderProbe.serverIsRecorded(tmux, inspector: inspector)
+    /// Whether the tmux session the conversation was last seen in is positively gone, which
+    /// makes a holder found there likely to be on its way out. A session that could not be
+    /// asked about is not gone.
+    public func recordedSessionGone(_ record: ConversationRecord) async -> Bool {
+        guard record.lastSeenIn?.tmux != nil else { return false }
+        return await recordedSession(record) == .gone
     }
 }
 
