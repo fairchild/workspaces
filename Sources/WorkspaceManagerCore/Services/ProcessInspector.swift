@@ -36,48 +36,100 @@ public struct ProcessIdentity: Hashable, Sendable {
     }
 }
 
+/// What the kernel said about a pid: a process and when it started, no process at all, or
+/// nothing, because it could not be asked. Only the first two are answers.
+public enum ProcessRead: Equatable, Sendable {
+    case found(ProcessIdentity)
+    case absent
+    case unreadable
+}
+
+/// Whether a recorded process lifetime is still running, from one kernel read.
+public enum ProcessLiveness: Equatable, Sendable {
+    case running
+    /// It exited, and its pid is free or belongs to a later process.
+    case ended
+    /// The kernel could not be asked, so neither of the others can be ruled out.
+    case unreadable
+}
+
 /// Seams over the kernel's process table, so a probe's answers are reachable without the
 /// processes it reasons about.
 public struct ProcessInspector: Sendable {
-    public var identity: @Sendable (Int32) -> ProcessIdentity?
+    public var read: @Sendable (Int32) -> ProcessRead
     public var parent: @Sendable (Int32) -> Int32?
     public var arguments: @Sendable (Int32) -> [String]?
 
+    public init(
+        read: @escaping @Sendable (Int32) -> ProcessRead,
+        parent: @escaping @Sendable (Int32) -> Int32?,
+        arguments: @escaping @Sendable (Int32) -> [String]?
+    ) {
+        self.read = read
+        self.parent = parent
+        self.arguments = arguments
+    }
+
+    /// An inspector whose kernel always answers: a pid `identity` does not know is absent.
     public init(
         identity: @escaping @Sendable (Int32) -> ProcessIdentity?,
         parent: @escaping @Sendable (Int32) -> Int32?,
         arguments: @escaping @Sendable (Int32) -> [String]?
     ) {
-        self.identity = identity
-        self.parent = parent
-        self.arguments = arguments
+        self.init(read: { identity($0).map(ProcessRead.found) ?? .absent }, parent: parent, arguments: arguments)
     }
 
     public static let live = ProcessInspector(
-        identity: { pid in
-            info(pid).map { process in
+        read: { pid in
+            switch info(pid) {
+            case .failure: return .unreadable
+            case .success(nil): return .absent
+            case .success(let process?):
                 let start = process.kp_proc.p_un.__p_starttime
-                return ProcessIdentity(
-                    pid: pid,
-                    startedAtMicroseconds: Int64(start.tv_sec) * 1_000_000 + Int64(start.tv_usec)
-                )
+                return .found(
+                    ProcessIdentity(
+                        pid: pid,
+                        startedAtMicroseconds: Int64(start.tv_sec) * 1_000_000 + Int64(start.tv_usec)
+                    ))
             }
         },
-        parent: { pid in info(pid).map { $0.kp_eproc.e_ppid } },
+        parent: { pid in (try? info(pid).get())?.kp_eproc.e_ppid },
         arguments: { pid in processArguments(pid) }
     )
 
-    /// Whether `identity` is still the process it was: alive, and started when it did.
-    public func isRunning(_ identity: ProcessIdentity) -> Bool {
-        self.identity(identity.pid) == identity
+    /// The process at `pid` now, or nil when there is none or the kernel could not say.
+    public func identity(_ pid: Int32) -> ProcessIdentity? {
+        guard case .found(let identity) = read(pid) else { return nil }
+        return identity
     }
 
-    private static func info(_ pid: Int32) -> kinfo_proc? {
+    public func liveness(_ identity: ProcessIdentity) -> ProcessLiveness {
+        switch read(identity.pid) {
+        case .found(let now): now == identity ? .running : .ended
+        case .absent: .ended
+        case .unreadable: .unreadable
+        }
+    }
+
+    /// Whether `identity` is still the process it was: alive, and started when it did.
+    public func isRunning(_ identity: ProcessIdentity) -> Bool {
+        liveness(identity) == .running
+    }
+
+    struct KernelError: Error {
+        let code: Int32
+    }
+
+    /// `KERN_PROC_PID` answers a pid with no process by returning nothing, and fails only when
+    /// it could not look.
+    private static func info(_ pid: Int32) -> Result<kinfo_proc?, KernelError> {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
         var process = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.stride
-        guard sysctl(&mib, UInt32(mib.count), &process, &size, nil, 0) == 0, size > 0 else { return nil }
-        return process
+        guard sysctl(&mib, UInt32(mib.count), &process, &size, nil, 0) == 0 else {
+            return .failure(KernelError(code: errno))
+        }
+        return .success(size > 0 ? process : nil)
     }
 
     /// `KERN_PROCARGS2`: an argument count, the executable path, padding, then the arguments.

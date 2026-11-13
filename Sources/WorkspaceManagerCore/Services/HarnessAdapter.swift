@@ -179,7 +179,14 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
         let id = record.conversationID
         let table = context.processTable
         let seen = record.lastSeenIn
-        let recorded = seen?.harness.flatMap { context.inspector.isRunning($0) ? $0 : nil }
+        var recorded: ProcessIdentity?
+        if let harness = seen?.harness {
+            switch context.inspector.liveness(harness) {
+            case .running: recorded = harness
+            case .ended: recorded = nil
+            case .unreadable: return .unknown("Could not ask the kernel about process \(harness.pid)")
+            }
+        }
         func isHere(_ identity: ProcessIdentity?) -> Bool {
             identity.flatMap(context.currentConversation).map { $0 == id } ?? true
         }

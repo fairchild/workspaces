@@ -411,6 +411,47 @@ struct ConversationHolderProbeTests {
         #expect(await Self.lookup(sessions: answer, server: (4242, after))(Self.tmuxRecord(tmux)) == .gone)
     }
 
+    /// A kernel that cannot be asked about `unreadable`, and knows every other pid in `processes`.
+    private static func failingInspector(
+        _ unreadable: Int32, _ processes: [Int32: (Int64, [String])] = [:]
+    ) -> ProcessInspector {
+        ProcessInspector(
+            read: { pid in
+                guard pid != unreadable else { return .unreadable }
+                return processes[pid].map { .found(ProcessIdentity(pid: pid, startedAtMicroseconds: $0.0)) } ?? .absent
+            },
+            parent: { _ in nil },
+            arguments: { processes[$0]?.1 }
+        )
+    }
+
+    @Test("A recorded harness the kernel cannot be asked about is unknown, never free")
+    func unreadableHarnessIsUnknown() async throws {
+        let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
+        let record = Self.record(
+            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true, harness: harness, harnessObservedAt: Date()))
+        let probe = await ClaudeHarnessAdapter().holders(
+            of: record,
+            in: Self.context(
+                try Self.table("60 1 /usr/local/bin/claude"), inspector: Self.failingInspector(60),
+                current: [harness: Self.id]))
+        guard case .unknown = probe else {
+            Issue.record("expected unknown, got \(probe)")
+            return
+        }
+    }
+
+    @Test("A recorded tmux server the kernel cannot be asked about is unknown, never gone")
+    func unreadableServerIsUnknown() async {
+        let lookup = ConversationHolderProbe.tmuxRecordedSession(
+            fallbackSocketLabel: "fallback",
+            run: { _, _, _ in ProcessResult(exitCode: 0, stdout: "", stderr: "") },
+            environment: [:],
+            inspector: Self.failingInspector(4242)
+        )
+        #expect(await lookup(Self.tmuxRecord()) == nil)
+    }
+
     // MARK: - The probe entrypoint
 
     @Test("An unreadable process table is unknown, whatever the record says")

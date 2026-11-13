@@ -177,9 +177,15 @@ public struct ConversationHolderProbe: Sendable {
     // MARK: - The recorded tmux session
 
     /// Whether the process at the recorded server pid is that server: alive, started when it
-    /// was recorded as starting, or for an older record, started before the session was.
-    static func serverIsRecorded(_ tmux: ConversationRecord.TmuxSession, inspector: ProcessInspector) -> Bool {
-        guard let server = inspector.identity(Int32(tmux.serverPID)) else { return false }
+    /// was recorded as starting, or for an older record, started before the session was. Nil
+    /// when the kernel could not be asked.
+    static func serverIsRecorded(_ tmux: ConversationRecord.TmuxSession, inspector: ProcessInspector) -> Bool? {
+        let server: ProcessIdentity
+        switch inspector.read(Int32(tmux.serverPID)) {
+        case .unreadable: return nil
+        case .absent: return false
+        case .found(let found): server = found
+        }
         if let started = tmux.serverStartedAtMicroseconds { return server.startedAtMicroseconds == started }
         if let created = tmux.createdAt { return server.startedAt <= created.addingTimeInterval(1) }
         return true
@@ -196,7 +202,8 @@ public struct ConversationHolderProbe: Sendable {
     ) -> @Sendable (ConversationRecord) async -> RecordedTmuxSession? {
         { record in
             guard let tmux = record.lastSeenIn?.tmux else { return .notRecorded }
-            guard serverIsRecorded(tmux, inspector: inspector) else { return .gone }
+            guard let isRecorded = serverIsRecorded(tmux, inspector: inspector) else { return nil }
+            guard isRecorded else { return .gone }
             let address: [String]
             if let path = tmux.socketPath {
                 address = ["-S", path]
