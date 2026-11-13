@@ -314,6 +314,11 @@ public struct ConversationRecordStore: Sendable {
         case lockBusy
     }
 
+    public enum WriteError: Error, Equatable {
+        /// The observation's id is not a UUID, so no record file can be named for it.
+        case invalidConversationID
+    }
+
     public func fileURL(conversationID: String) -> URL? {
         ConversationRecord.normalizedID(conversationID).map { directory.appendingPathComponent("\($0).json") }
     }
@@ -356,7 +361,7 @@ public struct ConversationRecordStore: Sendable {
     ) throws -> WriteOutcome {
         guard let conversationID = ConversationRecord.normalizedID(observation.conversationID),
             let url = fileURL(conversationID: conversationID)
-        else { throw CocoaError(.fileWriteInvalidFileName) }
+        else { throw WriteError.invalidConversationID }
         var observation = observation
         observation.conversationID = conversationID
 

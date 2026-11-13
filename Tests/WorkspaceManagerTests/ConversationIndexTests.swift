@@ -158,7 +158,7 @@ struct ConversationIndexTests {
 
         let thisRun = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_001_000))
         let indexer = fixture.indexer(thisRun)
-        #expect(try await indexer.migrateOnce() == 2)
+        #expect(try await indexer.migrateOnce() == .init(written: 2))
 
         let fromLaunch = try #require(fixture.records.load(conversationID: launched))
         #expect(fromLaunch.observedBy == .migration)
@@ -168,11 +168,99 @@ struct ConversationIndexTests {
         #expect(fromTile.observedAt == Date(timeIntervalSince1970: 1_800_000_050))
 
         try FileManager.default.removeItem(at: try #require(fixture.records.fileURL(conversationID: typed)))
-        #expect(try await indexer.migrateOnce() == 0)
+        #expect(try await indexer.migrateOnce() == .init(alreadyDone: true))
         #expect(fixture.records.load(conversationID: typed) == nil)
 
         try await indexer.rebuild()
         #expect(try await thisRun.fetchCurrentConversation(hostSessionID: tile) == nil)
+    }
+
+    /// A tile's sighting from the previous run, written to `localState` the way the listener
+    /// records a SessionStart.
+    private func recordPreviousRunSighting(
+        _ id: String,
+        tile: UUID,
+        in localState: LocalStateStore
+    ) async throws {
+        try await localState.recordTerminalSession(
+            HostTerminalSession(
+                id: tile,
+                key: .repoPath("/tmp/repo"),
+                directory: URL(fileURLWithPath: "/tmp/repo"),
+                terminalMode: .tmuxPerSession
+            ),
+            isActive: true,
+            hooksSocketPath: nil
+        )
+        try await localState.recordAgentEvents(
+            [.sessionStart(agentSessionID: id, cwd: "/tmp/repo", kind: .claudeCode)],
+            hostSessionID: tile,
+            origin: .hook,
+            status: AgentSessionStatus(
+                hostSessionID: tile,
+                agentSessionID: id,
+                kind: .claudeCode,
+                cwd: "/tmp/repo",
+                run: .idle,
+                lastEventAt: Date(timeIntervalSince1970: 1_800_000_050),
+                hookActive: true,
+                createdAt: Date(timeIntervalSince1970: 1_800_000_050)
+            ),
+            occurredAt: Date(timeIntervalSince1970: 1_800_000_050)
+        )
+    }
+
+    @Test("A migration whose writes failed stays open and carries the ids over once the destination works")
+    func failedMigrationRunsAgain() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let typed = UUID().uuidString.lowercased()
+        try await recordPreviousRunSighting(
+            typed, tile: UUID(),
+            in: try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_000_000)))
+        let thisRun = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_001_000))
+        let indexer = fixture.indexer(thisRun)
+        try Data().write(to: fixture.records.directory)
+
+        #expect(try await indexer.migrateOnce() == .init(failed: 1))
+        #expect(try await thisRun.metadataValue(forKey: indexer.migrationMetadataKey) == nil)
+
+        try FileManager.default.removeItem(at: fixture.records.directory)
+        #expect(try await indexer.migrateOnce() == .init(written: 1))
+        #expect(fixture.records.load(conversationID: typed) != nil)
+        #expect(try await indexer.migrateOnce() == .init(alreadyDone: true))
+    }
+
+    @Test("An id no record can hold is rejected without holding the migration open")
+    func invalidIDIsRejectedNotRetried() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let typed = UUID().uuidString.lowercased()
+        let previousRun = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_000_000))
+        try await recordPreviousRunSighting(typed, tile: UUID(), in: previousRun)
+        try await recordPreviousRunSighting("not-a-conversation-id", tile: UUID(), in: previousRun)
+        let indexer = fixture.indexer(try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_001_000)))
+
+        #expect(try await indexer.migrateOnce() == .init(written: 1, rejected: 1))
+        #expect(try await indexer.migrateOnce() == .init(alreadyDone: true))
+    }
+
+    @Test("Pointing the same database at a new records directory migrates into it")
+    func newDestinationIsBootstrapped() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let typed = UUID().uuidString.lowercased()
+        try await recordPreviousRunSighting(
+            typed, tile: UUID(),
+            in: try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_000_000)))
+        let thisRun = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_001_000))
+        #expect(try await fixture.indexer(thisRun).migrateOnce() == .init(written: 1))
+
+        let moved = ConversationRecordStore(directory: fixture.root.appendingPathComponent("elsewhere"))
+        let movedIndexer = ConversationIndexer(
+            records: moved, localState: thisRun, launchRecords: fixture.launchRecords)
+        #expect(try await movedIndexer.migrateOnce() == .init(written: 1))
+        #expect(moved.load(conversationID: typed) != nil)
     }
 
     @Test("/resume inside a tile makes the tile's current conversation the new id, through the app's writer")

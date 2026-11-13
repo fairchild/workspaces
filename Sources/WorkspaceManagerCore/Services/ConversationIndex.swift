@@ -65,7 +65,7 @@ public struct ConversationSighting: Equatable, Sendable {
 }
 
 public struct ConversationIndexer: Sendable {
-    public static let migrationMetadataKey = "conversation_records_migrated_at"
+    public static let migrationMetadataKeyPrefix = "conversation_records_migrated_at"
 
     public let records: ConversationRecordStore
     public let localState: LocalStateStore
@@ -100,16 +100,44 @@ public struct ConversationIndexer: Sendable {
         records.files().map(ConversationIndexEntry.init(file:))
     }
 
+    /// What one migration pass did with each observation it had.
+    public struct MigrationOutcome: Equatable, Sendable {
+        public var written = 0
+        /// Observations no record can hold, such as an id that is not a UUID. Retrying
+        /// cannot change them, so they do not hold the migration open.
+        public var rejected = 0
+        /// Writes that may succeed later: a busy lock, an unwritable directory.
+        public var failed = 0
+        /// The marker was already there, so nothing was attempted.
+        public var alreadyDone = false
+
+        public init(written: Int = 0, rejected: Int = 0, failed: Int = 0, alreadyDone: Bool = false) {
+            self.written = written
+            self.rejected = rejected
+            self.failed = failed
+            self.alreadyDone = alreadyDone
+        }
+    }
+
+    /// The marker is per destination: the same database pointed at a new records directory
+    /// has carried nothing there yet.
+    public var migrationMetadataKey: String {
+        "\(Self.migrationMetadataKeyPrefix):\(records.directory.resolvingSymlinksInPath().path)"
+    }
+
     /// Writes a record for every conversation the app already knew before records existed:
     /// each Launch Record that names one, and each id the current and previous runs' tiles
-    /// reported. Runs once per database. Running it again would bring back a record that a
-    /// later cleanup removed on purpose.
+    /// reported. It is marked done for this database and destination only once every
+    /// observation was written or rejected, so a failed pass runs again at the next launch.
+    /// After that it never runs again: a rerun would bring back a record a later cleanup
+    /// removed on purpose.
     ///
     /// Each sighting carries the time it was made, so against a record a hook has written
     /// since, it only fills what that record lacks.
     @discardableResult
-    public func migrateOnce(now: Date = Date()) async throws -> Int {
-        guard try await localState.metadataValue(forKey: Self.migrationMetadataKey) == nil else { return 0 }
+    public func migrateOnce(now: Date = Date()) async throws -> MigrationOutcome {
+        let key = migrationMetadataKey
+        guard try await localState.metadataValue(forKey: key) == nil else { return .init(alreadyDone: true) }
         var observations = launchRecordObservations()
         observations += try await localState.fetchRecentConversationSightings().map { sighting in
             ConversationObservation(
@@ -120,13 +148,23 @@ public struct ConversationIndexer: Sendable {
                 lastSeenIn: .init(hostSessionID: sighting.hostSessionID.uuidString)
             )
         }
-        var written = 0
-        for observation in observations
-        where (try? records.record(observation, lockBudget: .seconds(1))) == .written {
-            written += 1
+        var outcome = MigrationOutcome()
+        for observation in observations {
+            do {
+                switch try records.record(observation, lockBudget: .seconds(1)) {
+                case .written: outcome.written += 1
+                case .lockBusy: outcome.failed += 1
+                }
+            } catch ConversationRecordStore.WriteError.invalidConversationID {
+                outcome.rejected += 1
+            } catch {
+                outcome.failed += 1
+            }
         }
-        try await localState.setMetadataValue(ConversationRecordJSON.string(now), forKey: Self.migrationMetadataKey)
-        return written
+        if outcome.failed == 0 {
+            try await localState.setMetadataValue(ConversationRecordJSON.string(now), forKey: key)
+        }
+        return outcome
     }
 
     private func launchRecordObservations() -> [ConversationObservation] {
