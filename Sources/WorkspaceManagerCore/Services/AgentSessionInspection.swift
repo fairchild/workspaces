@@ -147,20 +147,22 @@ public enum AgentSessionInspection {
             let words = line.split(separator: " ").map(String.init)
             guard let elapsed = words.first.flatMap(elapsedSeconds) else { return nil }
             let command = Array(words.dropFirst())
-            guard isClaude(command) else { return nil }
-            let flags = AgentLaunchCommand.conversationFlags
-            let options = command.prefix { $0 != "--" }
-            let holds =
-                zip(options, options.dropFirst()).contains { flag, value in
-                    value == conversationID && flags.contains(flag)
-                } || options.contains { word in flags.contains { word == "\($0)=\(conversationID)" } }
-            return holds ? elapsed : nil
+            return isClaude(command) && names(conversationID, command) ? elapsed : nil
         }
+    }
+
+    /// Whether `command`'s options name `conversationID` with a flag that picks a conversation.
+    static func names(_ conversationID: String, _ command: [String]) -> Bool {
+        let flags = AgentLaunchCommand.conversationFlags
+        let options = command.prefix { $0 != "--" }
+        return zip(options, options.dropFirst()).contains { flag, value in
+            value == conversationID && flags.contains(flag)
+        } || options.contains { word in flags.contains { word == "\($0)=\(conversationID)" } }
     }
 
     /// `claude`, or an interpreter running it. Only the first two words count: a tmux server
     /// keeps the argv of the client that started it, which can name `claude` further along.
-    private static func isClaude(_ command: [String]) -> Bool {
+    static func isClaude(_ command: [String]) -> Bool {
         command.prefix(2).contains { word in
             URL(fileURLWithPath: word).lastPathComponent == "claude" || word.hasSuffix("/claude-code/cli.js")
         }
