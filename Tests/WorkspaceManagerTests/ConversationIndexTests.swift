@@ -94,6 +94,29 @@ struct ConversationIndexTests {
         #expect(try await incremental.fetchCurrentConversation(hostSessionID: tileB)?.conversationID == first)
     }
 
+    @Test("A sync picks up a rewrite whose modification time matches the indexed one")
+    func syncDoesNotTrustModificationTimes() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let localState = try fixture.localState()
+        let id = UUID().uuidString.lowercased()
+        var before = sighting(id, tile: UUID(), at: 1_800_000_000)
+        before.cwd = "/before"
+        try fixture.records.record(before)
+        try await fixture.indexer(localState).sync()
+        let url = try #require(fixture.records.fileURL(conversationID: id))
+        let modifiedAt = try #require(
+            try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date)
+
+        var after = sighting(id, tile: UUID(), at: 1_800_000_010)
+        after.cwd = "/after"
+        try fixture.records.record(after)
+        try FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: url.path)
+        try await fixture.indexer(localState).sync()
+
+        #expect(try await localState.fetchConversationIndex().map(\.cwd) == ["/after"])
+    }
+
     @Test("An unreadable record is skipped by the index")
     func unreadableRecordIsNotIndexed() async throws {
         let fixture = try Fixture()

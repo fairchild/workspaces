@@ -1163,17 +1163,18 @@ public actor LocalStateStore {
         }
     }
 
-    /// Brings the index level with `entries` by touching only what changed: a file whose
-    /// modification time moved is read again, and a file that is gone leaves the index.
+    /// Brings the index level with `entries`: every entry is written, and a conversation whose
+    /// file is gone leaves the index. The caller has already read every file, so comparing
+    /// modification times first would save no reads and could miss two writes inside one
+    /// stored millisecond.
     public func syncConversationIndex(_ entries: [ConversationIndexEntry]) async throws {
         try await dbPool.write { db in
-            let indexed = try Row.fetchAll(db, sql: "SELECT conversation_id, file_mtime FROM conversation_index")
-                .reduce(into: [String: String]()) { $0[$1["conversation_id"]] = $1["file_mtime"] }
+            let indexed = try String.fetchAll(db, sql: "SELECT conversation_id FROM conversation_index")
             let current = Set(entries.map(\.conversationID))
-            for gone in indexed.keys where !current.contains(gone) {
+            for gone in indexed where !current.contains(gone) {
                 try db.execute(sql: "DELETE FROM conversation_index WHERE conversation_id = ?", arguments: [gone])
             }
-            for entry in entries where indexed[entry.conversationID] != Self.isoString(entry.fileModifiedAt) {
+            for entry in entries {
                 try Self.upsertConversationIndexEntry(entry, in: db)
             }
         }
