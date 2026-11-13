@@ -710,6 +710,7 @@ struct CLIConversationResumeTests {
         let resume = try fixture.run(["conversation", "resume", conversationID, "--here"])
         #expect(resume.status == 1)
         #expect(resume.stderr.contains("Could not record that this terminal now holds conversation"))
+        #expect(resume.stderr.contains("its record stayed locked for two seconds"))
         #expect(!resume.stdout.contains("stub argv"))
     }
 
