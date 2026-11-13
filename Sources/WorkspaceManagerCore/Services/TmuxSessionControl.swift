@@ -156,6 +156,9 @@ public struct TmuxSessionControl: Sendable {
     /// `set-environment` chained in the same client invocation gives them to every later
     /// pane. A first pane without a command is a plain shell that lacks them; a hook in it
     /// reads them from the session (`conversation-observer.sh`).
+    ///
+    /// Every argument carrying data passes through `TmuxSessionProbe.literalArgument`, so
+    /// a value or command ending in `;` reaches the session rather than splitting the launch.
     public static func newSessionArguments(
         socketLabel: String,
         handle: String,
@@ -167,26 +170,29 @@ public struct TmuxSessionControl: Sendable {
         var arguments = [
             "tmux", "-L", socketLabel, "new-session", "-d",
             "-s", handle,
-            "-c", directory.path,
+            "-c", TmuxSessionProbe.literalArgument(directory.path),
             "-x", String(detachedPaneWidth), "-y", String(detachedPaneHeight),
         ]
+        let literal = TmuxSessionProbe.literalArgument
         let pairs = sessionEnvironment.keys.sorted().map { (key: $0, value: sessionEnvironment[$0] ?? "") }
         if seedsEnvironmentOnCreate {
             for pair in pairs {
-                arguments.append(contentsOf: ["-e", "\(pair.key)=\(pair.value)"])
+                arguments.append(contentsOf: ["-e", literal("\(pair.key)=\(pair.value)")])
             }
         }
         if let command, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             arguments.append("--")
             if !seedsEnvironmentOnCreate, !pairs.isEmpty {
                 arguments.append("/usr/bin/env")
-                arguments.append(contentsOf: pairs.map { "\($0.key)=\($0.value)" })
+                arguments.append(contentsOf: pairs.map { literal("\($0.key)=\($0.value)") })
             }
-            arguments.append(contentsOf: ["/bin/zsh", "-lc", command])
+            arguments.append(contentsOf: ["/bin/zsh", "-lc", literal(command)])
         }
         if !seedsEnvironmentOnCreate {
             for pair in pairs {
-                arguments.append(contentsOf: [";", "set-environment", "-t", "=\(handle)", pair.key, pair.value])
+                arguments.append(contentsOf: [
+                    ";", "set-environment", "-t", "=\(handle)", literal(pair.key), literal(pair.value),
+                ])
             }
         }
         return arguments
@@ -581,7 +587,10 @@ public struct TmuxSessionControl: Sendable {
         key: String,
         value: String
     ) -> [String] {
-        ["tmux", "-L", socketLabel, "set-environment", "-t", "=\(handle)", key, value]
+        [
+            "tmux", "-L", socketLabel, "set-environment", "-t", "=\(handle)",
+            TmuxSessionProbe.literalArgument(key), TmuxSessionProbe.literalArgument(value),
+        ]
     }
 
     /// Puts `sessionEnvironment` on a session that was made without it, such as one that

@@ -1370,6 +1370,53 @@ struct CLIDetachedSessionTests {
         #expect(!(try fixture.serverGlobalEnvironment()).contains(key))
     }
 
+    /// tmux ends a command at a `;` closing any argument, so each value here would split or
+    /// trim a launch handed to it raw. The command ends in `\;` for the same reason: the
+    /// pane's shell receives it as an argument only if the command reached tmux intact.
+    @Test(
+        "Values ending in ;, \\; or \\ reach the pane and the session intact, with new-session -e and without",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func sessionEnvironmentSurvivesTmuxsArgumentParser() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let key = "WORKSPACES_PROBE_VALUE"
+        let values = ["/tmp/records;", #"/tmp/records\;"#, #"/tmp/records\"#]
+
+        for (index, value) in values.enumerated() {
+            for seeds in [true, false] {
+                let control = TmuxSessionControl(
+                    socketLabel: fixture.socketLabel,
+                    run: { executable, arguments, environment in
+                        guard arguments == ["tmux", "-V"] else {
+                            return await TmuxSessionControl.defaultRunner(executable, arguments, environment)
+                        }
+                        return ProcessResult(exitCode: 0, stdout: seeds ? "tmux 3.2\n" : "tmux 3.1c\n", stderr: "")
+                    },
+                    environment: ProcessInfo.processInfo.environment.merging(fixture.environment) { _, new in new },
+                    sessionEnvironment: [key: value]
+                )
+                let path = seeds ? "e" : "env"
+                let withCommand = "wm-escape-\(index)-\(path)-cmd"
+                let bare = "wm-escape-\(index)-\(path)-bare"
+                let out = fixture.root.appendingPathComponent("\(withCommand).out")
+                let script = #"printf "%s|%s|__done__" "$\#(key)" "$2" > "$1"; exec sleep 30"#
+
+                try await control.launch(
+                    handle: withCommand, directory: fixture.root,
+                    command: #"exec /bin/sh -c '\#(script)' sh '\#(out.path)' \;"#
+                )
+                try await control.launch(handle: bare, directory: fixture.root, command: nil)
+
+                #expect(try await contentsOnceWritten(out) == "\(value)|;|__done__", "\(withCommand)")
+                for handle in [withCommand, bare] {
+                    let lines = try fixture.sessionEnvironment(handle).split(separator: "\n").map(String.init)
+                    #expect(lines.contains("\(key)=\(value)"), "\(handle): \(lines.filter { $0.hasPrefix(key) })")
+                }
+            }
+        }
+    }
+
     @Test("Resuming a handle nothing was launched under says so")
     func resumeWithoutARecord() throws {
         let fixture = try makeFixture()

@@ -266,6 +266,45 @@ struct TmuxSessionControlTests {
         #expect(!recorder.calls[2].contains("-e"))
     }
 
+    @Test(
+        "Only a trailing ; is rewritten for tmux's argument parser",
+        arguments: [
+            ("/tmp/records", "/tmp/records"),
+            ("/tmp/records;", #"/tmp/records\;"#),
+            (#"/tmp/records\;"#, #"/tmp/records\\;"#),
+            (#"/tmp/records\"#, #"/tmp/records\"#),
+            ("a;b", "a;b"),
+            (";", #"\;"#),
+            ("", ""),
+        ]
+    )
+    func literalArgumentEscapesOnlyATrailingSemicolon(_ value: String, _ written: String) {
+        #expect(TmuxSessionProbe.literalArgument(value) == written)
+    }
+
+    @Test("Every data argument of a launch is written for tmux's parser, with -e and without")
+    func newSessionArgumentsWriteDataLiterally() {
+        let environment = ["WORKSPACES_CONVERSATIONS_DIR": "/tmp/records;"]
+        let directory = URL(fileURLWithPath: "/tmp/repo;")
+        let command = #"find . -exec true {} \;"#
+        let seeded = TmuxSessionControl.newSessionArguments(
+            socketLabel: "workspaces", handle: "wm-a-1", directory: directory, command: command,
+            sessionEnvironment: environment)
+        let fallback = TmuxSessionControl.newSessionArguments(
+            socketLabel: "workspaces", handle: "wm-a-1", directory: directory, command: command,
+            sessionEnvironment: environment, seedsEnvironmentOnCreate: false)
+        let adopted = TmuxSessionControl.setSessionEnvironmentArguments(
+            socketLabel: "workspaces", handle: "wm-a-1", key: "WORKSPACES_CONVERSATIONS_DIR", value: "/tmp/records;")
+
+        #expect(seeded.contains(#"WORKSPACES_CONVERSATIONS_DIR=/tmp/records\;"#))
+        #expect(seeded.contains(#"/tmp/repo\;"#))
+        #expect(seeded.last == #"find . -exec true {} \\;"#)
+        #expect(fallback.contains(#"WORKSPACES_CONVERSATIONS_DIR=/tmp/records\;"#))
+        #expect(fallback.contains(#"find . -exec true {} \\;"#))
+        #expect(fallback.last == #"/tmp/records\;"#)
+        #expect(adopted.last == #"/tmp/records\;"#)
+    }
+
     @Test("Without -e, a launch with no command still gives the session its environment")
     func newSessionWithoutTheFlagAndWithoutACommand() {
         let arguments = TmuxSessionControl.newSessionArguments(
