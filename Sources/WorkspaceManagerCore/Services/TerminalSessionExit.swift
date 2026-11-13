@@ -189,14 +189,17 @@ public struct TmuxHolderProbe: Sendable {
         }
     }
 
-    /// The pid of the server holding `sessionName` with `clientPID` attached to it, or `nil`
-    /// when no server answers with that client on that session.
+    /// The pid of the server holding `sessionName` with a client from the process group
+    /// `foregroundGroup` attached to it, or `nil` when no server answers with such a client.
     ///
     /// This is how a launch proves which server it landed on. A session name alone cannot:
     /// a server started after the launch's own died can hold the same name, with or without
-    /// clients of its own. The launch script execs tmux, so the surface's own command is the
-    /// client, and a server listing it on the session is the one the surface attached to.
-    public func serverPID(attachingClient clientPID: Int, toSessionNamed sessionName: String) async -> Int? {
+    /// clients of its own. The surface's tmux client runs in its pty's foreground process
+    /// group, which `login` leads and no other terminal's processes join, so a server listing
+    /// a client from that group on the session is the one the surface attached to.
+    public func serverPID(
+        attachingClientInGroup foregroundGroup: Int, toSessionNamed sessionName: String
+    ) async -> Int? {
         let arguments = [
             "tmux", "-L", socketLabel,
             "display-message", "-p", "#{pid}", ";",
@@ -211,16 +214,23 @@ public struct TmuxHolderProbe: Sendable {
                 timeout: 5
             )
             guard result.exitCode == 0 else { return nil }
-            return Self.serverPID(listing: result.stdout, attachingClient: clientPID, toSessionNamed: sessionName)
+            return Self.serverPID(
+                listing: result.stdout, attachingClientInGroup: foregroundGroup, toSessionNamed: sessionName)
         } catch {
             return nil
         }
     }
 
     /// Reads `display-message -p '#{pid}' ; list-clients -F '#{client_pid}<tab>#{session_name}'`:
-    /// the server's pid, then one line per client.
+    /// the server's pid, then one line per client. `processGroup` reads a live client's group.
     static func serverPID(
-        listing stdout: String, attachingClient clientPID: Int, toSessionNamed sessionName: String
+        listing stdout: String,
+        attachingClientInGroup foregroundGroup: Int,
+        toSessionNamed sessionName: String,
+        processGroup: (Int) -> Int? = { pid in
+            let group = getpgid(pid_t(pid))
+            return group > 0 ? Int(group) : nil
+        }
     ) -> Int? {
         var lines = stdout.split(separator: "\n").map(String.init)
         guard !lines.isEmpty, let serverPID = Int(lines.removeFirst().trimmingCharacters(in: .whitespaces)) else {
@@ -228,7 +238,8 @@ public struct TmuxHolderProbe: Sendable {
         }
         let attached = lines.contains { line in
             let fields = line.split(separator: "\t", maxSplits: 1).map(String.init)
-            return fields.count == 2 && Int(fields[0]) == clientPID && fields[1] == sessionName
+            guard fields.count == 2, fields[1] == sessionName, let clientPID = Int(fields[0]) else { return false }
+            return processGroup(clientPID) == foregroundGroup
         }
         return attached ? serverPID : nil
     }

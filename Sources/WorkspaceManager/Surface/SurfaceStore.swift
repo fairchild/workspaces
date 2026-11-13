@@ -414,9 +414,9 @@ final class SurfaceStore: ObservableObject {
         return false
     }
 
-    /// Records which tmux server this surface's launch landed on, once that server lists the
-    /// surface's own command as a client of the session, and learns whether that server keeps
-    /// running when empty.
+    /// Records which tmux server this surface's launch landed on, once that server lists a
+    /// client from the surface's own foreground process group on the session, and learns
+    /// whether that server keeps running when empty.
     ///
     /// The session's name alone cannot prove it: a server started after the launch's own
     /// died can hold the same name, and certifying it would let that server's later answer
@@ -431,19 +431,20 @@ final class SurfaceStore: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(500))
             }
             guard surfaces[terminal.tileID] === terminal else { return }
-            guard let clientPID = terminal.surfaceView.foregroundProcessID,
-                let serverPID = await probe.serverPID(attachingClient: clientPID, toSessionNamed: sessionName)
+            guard let foregroundGroup = terminal.surfaceView.foregroundProcessGroupID,
+                let serverPID = await probe.serverPID(
+                    attachingClientInGroup: foregroundGroup, toSessionNamed: sessionName)
             else { continue }
             guard surfaces[terminal.tileID] === terminal else { return }
             launchesBySessionID[session.id]?.tmuxServerPID = serverPID
             log.info(
-                "[SurfaceStore] tmux server \(serverPID, privacy: .public) holds \(sessionName, privacy: .public) with client \(clientPID, privacy: .public) for session \(session.id.uuidString, privacy: .public)"
+                "[SurfaceStore] tmux server \(serverPID, privacy: .public) holds \(sessionName, privacy: .public) with a client in process group \(foregroundGroup, privacy: .public) for session \(session.id.uuidString, privacy: .public)"
             )
             await tmuxExitEmptyCapability.learn(onSocket: probe.socketLabel, serverPID: serverPID)
             return
         }
         log.notice(
-            "[SurfaceStore] no tmux server shows session \(session.id.uuidString, privacy: .public)'s command attached to \(sessionName, privacy: .public); its launch server stays unknown"
+            "[SurfaceStore] no tmux server shows a client of session \(session.id.uuidString, privacy: .public)'s terminal attached to \(sessionName, privacy: .public); its launch server stays unknown"
         )
     }
 

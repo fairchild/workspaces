@@ -398,19 +398,22 @@ struct TerminalSessionExitTests {
         #expect(await capability.keepsRunningWhenEmpty(onSocket: "x", serverPID: 4242) == nil)
     }
 
-    /// A tmux client attached to `session` under a pseudo-terminal, as a terminal tile's
-    /// command is. Its pid is the client's own, not the `script` that holds the pty.
+    /// A tmux client attached to `session` under a pseudo-terminal, as a terminal tile's is:
+    /// a shell leads the pty's foreground process group, as `login` does for a tile, and runs
+    /// the client as a child in that group.
     private struct AttachedClient {
         let script: Process
         let input: Pipe
+        /// The pty's foreground process group, led by the shell.
+        let group: Int
         let clientPID: Int
 
         static func attach(_ server: IsolatedTmuxServer, session: String) async throws -> AttachedClient {
             let script = Process()
             script.executableURL = URL(fileURLWithPath: "/usr/bin/script")
             script.arguments = [
-                "-q", "/dev/null", "/usr/bin/env", "tmux", "-f", "/dev/null", "-L", server.label, "attach", "-t",
-                "=\(session)",
+                "-q", "/dev/null", "/bin/sh", "-c",
+                "/usr/bin/env tmux -f /dev/null -L \(server.label) attach -t '=\(session)'; :",
             ]
             var environment = TmuxSessionProbe.defaultEnvironment
             environment["TERM"] = "xterm-256color"
@@ -421,21 +424,29 @@ struct TerminalSessionExitTests {
             script.standardError = FileHandle.nullDevice
             try script.run()
             let scriptPID = Int(script.processIdentifier)
-            let attached = await waitUntil(timeout: 10) {
+            var found: (group: Int, client: Int)?
+            _ = await waitUntil(timeout: 10) {
                 guard let listing = try? server.tmux(["list-clients", "-F", "#{client_pid}"]).output else {
                     return false
                 }
-                return listing.split(separator: "\n").contains { Self.parent(of: Int($0) ?? 0) == scriptPID }
+                return listing.split(separator: "\n").contains { line in
+                    guard let client = Int(line), let shell = Self.parent(of: client) else { return false }
+                    return Self.parent(of: shell) == scriptPID && Int(getpgid(pid_t(client))) == shell
+                }
             }
             let listing = try server.tmux(["list-clients", "-F", "#{client_pid}"]).output
-            let clientPID = listing.split(separator: "\n").compactMap { Int($0) }.first {
-                Self.parent(of: $0) == scriptPID
+            for client in listing.split(separator: "\n").compactMap({ Int($0) }) {
+                if let shell = Self.parent(of: client), Self.parent(of: shell) == scriptPID,
+                    Int(getpgid(pid_t(client))) == shell
+                {
+                    found = (shell, client)
+                }
             }
-            guard attached, let clientPID else {
+            guard let found else {
                 script.terminate()
                 throw AttachFailed()
             }
-            return AttachedClient(script: script, input: input, clientPID: clientPID)
+            return AttachedClient(script: script, input: input, group: found.group, clientPID: found.client)
         }
 
         private struct AttachFailed: Error {}
@@ -446,11 +457,11 @@ struct TerminalSessionExitTests {
             return size == Int32(MemoryLayout<proc_bsdinfo>.size) ? Int(info.pbi_ppid) : nil
         }
 
-        /// Kills the client only while it is still the `script`'s child, so a reused pid is
-        /// left alone.
+        /// Kills the group only while its shell is still the `script`'s child, so a reused
+        /// pid is left alone.
         func detach() {
-            if Self.parent(of: clientPID) == Int(script.processIdentifier) {
-                kill(pid_t(clientPID), SIGKILL)
+            if Self.parent(of: group) == Int(script.processIdentifier) {
+                kill(-pid_t(group), SIGKILL)
             }
             if script.isRunning {
                 kill(script.processIdentifier, SIGKILL)
@@ -459,7 +470,7 @@ struct TerminalSessionExitTests {
     }
 
     @Test(
-        "A launch's server is the one its own client is attached to",
+        "A launch's server is the one a client from its terminal's foreground group is attached to",
         .enabled(if: tmuxIsInstalled, "tmux is not installed")
     )
     func launchServerIsTheOneItsClientIsAttachedTo() async throws {
@@ -470,9 +481,12 @@ struct TerminalSessionExitTests {
         defer { client.detach() }
         let probe = TmuxHolderProbe(socketLabel: server.label)
 
-        #expect(await probe.serverPID(attachingClient: client.clientPID, toSessionNamed: "tile") == server.serverPID)
-        #expect(await probe.serverPID(attachingClient: client.clientPID, toSessionNamed: "other") == nil)
-        #expect(await probe.serverPID(attachingClient: Int(getpid()), toSessionNamed: "tile") == nil)
+        #expect(client.clientPID != client.group)
+        #expect(
+            await probe.serverPID(attachingClientInGroup: client.group, toSessionNamed: "tile") == server.serverPID)
+        #expect(await probe.serverPID(attachingClientInGroup: client.group, toSessionNamed: "other") == nil)
+        #expect(
+            await probe.serverPID(attachingClientInGroup: Int(getpgrp()), toSessionNamed: "tile") == nil)
     }
 
     /// The launch's server died before its identity was read, and a new server on the
@@ -495,20 +509,27 @@ struct TerminalSessionExitTests {
         let probe = TmuxHolderProbe(socketLabel: original.label)
 
         #expect(
-            await probe.serverPID(attachingClient: launchClient.clientPID, toSessionNamed: "tile") == nil)
+            await probe.serverPID(attachingClientInGroup: launchClient.group, toSessionNamed: "tile") == nil)
         #expect(
-            await probe.serverPID(attachingClient: foreignClient.clientPID, toSessionNamed: "tile")
+            await probe.serverPID(attachingClientInGroup: foreignClient.group, toSessionNamed: "tile")
                 == replacement.serverPID)
     }
 
-    @Test("A server's identity needs its listing to show this client on this session")
+    @Test("A server's identity needs its listing to show a client from this group on this session")
     func serverIdentityParsing() {
-        let listing = "4242\n777\ttile\n888\tother\n"
-        #expect(TmuxHolderProbe.serverPID(listing: listing, attachingClient: 777, toSessionNamed: "tile") == 4242)
-        #expect(TmuxHolderProbe.serverPID(listing: listing, attachingClient: 888, toSessionNamed: "tile") == nil)
-        #expect(TmuxHolderProbe.serverPID(listing: listing, attachingClient: 777, toSessionNamed: "til") == nil)
-        #expect(TmuxHolderProbe.serverPID(listing: "4242\n", attachingClient: 777, toSessionNamed: "tile") == nil)
-        #expect(TmuxHolderProbe.serverPID(listing: "", attachingClient: 777, toSessionNamed: "tile") == nil)
+        let listing = "4242\n777\ttile\n888\tother\n999\ttile\n"
+        let groups = [777: 70, 888: 80]
+        func serverPID(_ listing: String, group: Int, session: String) -> Int? {
+            TmuxHolderProbe.serverPID(
+                listing: listing, attachingClientInGroup: group, toSessionNamed: session,
+                processGroup: { groups[$0] })
+        }
+        #expect(serverPID(listing, group: 70, session: "tile") == 4242)
+        #expect(serverPID(listing, group: 80, session: "tile") == nil)
+        #expect(serverPID(listing, group: 777, session: "tile") == nil)
+        #expect(serverPID(listing, group: 70, session: "til") == nil)
+        #expect(serverPID("4242\n", group: 70, session: "tile") == nil)
+        #expect(serverPID("", group: 70, session: "tile") == nil)
     }
 
     @Test("An unanswered probe keeps the row open, as its own reason")

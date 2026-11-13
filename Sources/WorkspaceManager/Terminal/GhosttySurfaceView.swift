@@ -327,10 +327,10 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
         return ghostty_surface_process_exited(surface)
     }
 
-    /// The pty's foreground process group, which is the surface's command while that command
-    /// runs in the foreground: a tmux launch execs its client, so this is the client's pid.
-    /// `nil` when the surface is gone or libghostty cannot say.
-    var foregroundProcessID: Int? {
+    /// The pty's foreground process group (libghostty names it a pid; it reads `tcgetpgrp`).
+    /// `login` leads it and the surface's command runs in it, so for a tmux launch it holds
+    /// the tmux client. `nil` when the surface is gone or libghostty cannot say.
+    var foregroundProcessGroupID: Int? {
         guard let surface else { return nil }
         let pid = ghostty_surface_foreground_pid(surface)
         return pid > 0 ? Int(pid) : nil
