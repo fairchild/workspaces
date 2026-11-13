@@ -39,7 +39,7 @@ struct ConversationHolderProbeTests {
     private static func context(
         _ table: ProcessTable,
         inspector: ProcessInspector = .none,
-        recordedSession: RecordedTmuxSession? = .notRecorded
+        recordedSession: RecordedTmuxSession? = nil
     ) -> HolderProbeContext {
         HolderProbeContext(
             processTable: table,
@@ -123,7 +123,7 @@ struct ConversationHolderProbeTests {
         let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
         let tile = UUID().uuidString
         let record = Self.record(
-            lastSeenIn: .init(hostSessionID: tile, outsideTmux: true, harness: harness, harnessObservedAt: Date()))
+            lastSeenIn: .init(hostSessionID: tile, outsideTmux: true, harness: harness))
         let table = try Self.table("60 1 /usr/local/bin/claude")
         let alive = Self.inspector([60: (1_000, ["/usr/local/bin/claude"])])
 
@@ -145,7 +145,7 @@ struct ConversationHolderProbeTests {
     func recordedHarnessReleases(change: String) async throws {
         let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
         let record = Self.record(
-            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true, harness: harness, harnessObservedAt: Date()))
+            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true, harness: harness))
         let processes: [Int32: (Int64, [String])] =
             switch change {
             case "ended": [:]
@@ -165,7 +165,7 @@ struct ConversationHolderProbeTests {
     func recordedHarnessIgnoresArguments() async throws {
         let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
         let record = Self.record(
-            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true, harness: harness, harnessObservedAt: Date()))
+            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true, harness: harness))
         let arguments = ["/bin/sh", "/opt/bin/node", "--no-warnings", "/opt/lib/wrapper.js"]
         let probe = await ClaudeHarnessAdapter().holders(
             of: record,
@@ -188,11 +188,11 @@ struct ConversationHolderProbeTests {
         record(
             lastSeenIn: .init(
                 hostSessionID: "tile", tmux: .init(serverPID: 4242, sessionID: "$7", name: "recorded-name"),
-                harness: harness, harnessObservedAt: harness.map { _ in Date() }))
+                harness: harness))
     }
 
     @Test(
-        "While the recorded harness holds, the session's other panes are not asked about, and a silent server does not refuse"
+        "While the recorded harness holds, the session's other panes are not asked about, and a silent server does not refuse or place it"
     )
     func liveRecordedHarnessSkipsThePaneTree() async throws {
         let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
@@ -206,7 +206,7 @@ struct ConversationHolderProbeTests {
             Issue.record("expected held, got \(probe)")
             return
         }
-        #expect(holders.map(\.pid) == [60])
+        #expect(holders == [.init(pid: 60, foundBy: .recordedHarness, startedAt: Date(timeIntervalSince1970: 0.001))])
     }
 
     @Test(
@@ -413,7 +413,7 @@ struct ConversationHolderProbeTests {
     func unreadableHarnessIsUnknown() async throws {
         let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
         let record = Self.record(
-            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true, harness: harness, harnessObservedAt: Date()))
+            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true, harness: harness))
         let probe = await ClaudeHarnessAdapter().holders(
             of: record,
             in: Self.context(
@@ -440,7 +440,7 @@ struct ConversationHolderProbeTests {
     @Test("An unreadable process table is unknown, whatever the record says")
     func unreadableTableIsUnknown() async {
         let probe = ConversationHolderProbe(
-            records: nil, readProcessTable: { nil }, inspector: .none, recordedSession: { _ in .notRecorded })
+            records: nil, readProcessTable: { nil }, inspector: .none, recordedSession: { _ in nil })
         #expect(await probe.probe(Self.record()) == .unknown("Could not read the process table"))
     }
 
@@ -511,15 +511,6 @@ struct ConversationHolderProbeTests {
     }
 
     // MARK: - The adapter's other answers
-
-    @Test("Claude's conversations get records from its hook, and a launch can name the id up front")
-    func identityAndLaunch() throws {
-        let adapter = ClaudeHarnessAdapter()
-        #expect(adapter.identitySource == .hook)
-        let command = try #require(adapter.launchCommand(conversationID: Self.id.uppercased()))
-        #expect(AgentLaunchCommand.plan(command: command).identity?.conversationID == Self.id)
-        #expect(adapter.launchCommand(conversationID: "not-an-id") == nil)
-    }
 
     @Test("The process table reads ps output and walks a pane's descendants")
     func processTableWalksDescendants() throws {

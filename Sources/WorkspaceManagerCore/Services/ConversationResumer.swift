@@ -274,13 +274,6 @@ public struct ConversationResumer: Sendable {
             .map { ConversationRecord(launch: $0, host: host, harness: adapter.harness) }
     }
 
-    /// Advisory: what the conversation looks like now, outside the lock. For display only;
-    /// `resume` asks again under the lock and acts on that answer.
-    public func conversationStatus(conversationID: String) async -> ConversationStatus {
-        guard let record = subject(conversationID: conversationID) else { return .unknown(.noRecord) }
-        return await status(of: record) { _ in 0 }
-    }
-
     /// The record's host, then holders, then the transcript, in that order: a held
     /// conversation is open whatever its transcript looks like. Holders found while the
     /// window `exitWindow` gives is open are looked for again until they leave or it closes;
@@ -482,8 +475,7 @@ public struct ConversationResumer: Sendable {
                 hostSessionID: environment["WORKSPACES_HOST_SESSION_ID"].flatMap { UUID(uuidString: $0)?.uuidString },
                 tmux: tmux.flatMap(describeTmux),
                 outsideTmux: tmux == nil,
-                harness: harness,
-                harnessObservedAt: Date()
+                harness: harness
             )
         )
         let outcome: ConversationRecordStore.WriteOutcome
@@ -547,7 +539,7 @@ public struct ConversationResumer: Sendable {
         var askedHandle = false
         for _ in 0..<100 {
             if let seen = records.load(conversationID: conversationID)?.lastSeenIn,
-                let harness = seen.harness, let observedAt = seen.harnessObservedAt, observedAt >= startedAt,
+                let harness = seen.harness, harness.startedAt >= startedAt,
                 let tmux = seen.tmux, inspector.isRunning(harness), let arguments = inspector.arguments(harness.pid),
                 !Self.isResumeVerb(arguments)
             {

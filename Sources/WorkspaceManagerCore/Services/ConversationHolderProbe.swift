@@ -47,6 +47,12 @@ public struct ConversationHolder: Codable, Equatable, Sendable {
         self.hostSessionID = hostSessionID
     }
 
+    func placed(tmuxSessionID: String? = nil, tmuxSessionName: String? = nil, hostSessionID: String?) -> Self {
+        Self(
+            pid: pid, foundBy: foundBy, startedAt: startedAt, tmuxSessionID: tmuxSessionID,
+            tmuxSessionName: tmuxSessionName, hostSessionID: hostSessionID)
+    }
+
     public var placeDescription: String {
         var parts = ["pid \(pid)"]
         if let tmuxSessionName {
@@ -84,7 +90,6 @@ public enum HolderProbe: Equatable, Sendable {
 /// for it now. `gone` is only ever a positive answer: the recorded server is dead, a later
 /// process has its pid, or that same server says the session is not there.
 public enum RecordedTmuxSession: Equatable, Sendable {
-    case notRecorded
     case gone
     case live(sessionID: String, name: String?, panePIDs: Set<Int32>)
 }
@@ -105,14 +110,6 @@ public struct HolderProbeContext: Sendable {
         self.processTable = processTable
         self.inspector = inspector
         self.recordedSession = recordedSession
-    }
-
-    /// Whether the tmux session the conversation was last seen in is positively gone, which
-    /// makes a holder found there likely to be on its way out. A session that could not be
-    /// asked about is not gone.
-    public func recordedSessionGone(_ record: ConversationRecord) async -> Bool {
-        guard record.lastSeenIn?.tmux != nil else { return false }
-        return await recordedSession(record) == .gone
     }
 }
 
@@ -186,7 +183,7 @@ public struct ConversationHolderProbe: Sendable {
         inspector: ProcessInspector = .live
     ) -> @Sendable (ConversationRecord) async -> RecordedTmuxSession? {
         { record in
-            guard let tmux = record.lastSeenIn?.tmux else { return .notRecorded }
+            guard let tmux = record.lastSeenIn?.tmux else { return nil }
             guard let isRecorded = serverIsRecorded(tmux, inspector: inspector) else { return nil }
             guard isRecorded else { return .gone }
             let address: [String]

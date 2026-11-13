@@ -58,7 +58,7 @@ struct ConversationResumerTests {
 
         func resumer(
             processTable: ProcessTable?,
-            recordedSession: RecordedTmuxSession? = .notRecorded
+            recordedSession: RecordedTmuxSession? = nil
         ) -> ConversationResumer {
             let execs = execs
             return ConversationResumer(
@@ -145,7 +145,7 @@ struct ConversationResumerTests {
             environment: ["PATH": "/usr/bin:/bin"],
             homeDirectory: world.root.appendingPathComponent("home"),
             readProcessTable: { Self.quietTable },
-            recordedSession: { _ in .notRecorded },
+            recordedSession: { _ in nil },
             inspector: .onlySelf,
             describeTmux: { _ in nil },
             exec: { _, handOff in
@@ -180,10 +180,12 @@ struct ConversationResumerTests {
             .init(pid: 101, parentPID: 100, arguments: ["node", "/opt/bin/claude"]),
         ])
 
-        let status = await world.resumer(
+        let resumer = world.resumer(
             processTable: table,
             recordedSession: .live(sessionID: "$7", name: "tile-session", panePIDs: [100])
-        ).conversationStatus(conversationID: world.conversationID)
+        )
+        let subject = try #require(resumer.subject(conversationID: world.conversationID))
+        let status = await resumer.status(of: subject, exitWindow: { _ in 0 })
 
         #expect(
             status
@@ -274,7 +276,7 @@ struct ConversationResumerTests {
             environment: ["PATH": world.root.appendingPathComponent("empty").path],
             homeDirectory: world.root.appendingPathComponent("home"),
             readProcessTable: { Self.quietTable },
-            recordedSession: { _ in .notRecorded },
+            recordedSession: { _ in nil },
             inspector: .none,
             describeTmux: { _ in nil }
         )
@@ -300,7 +302,7 @@ struct ConversationResumerTests {
                 lastSeenIn: .init(hostSessionID: nil, tmux: .init(serverPID: 1, sessionID: "$1"))))
 
         do {
-            _ = try await world.resumer(processTable: Self.quietTable).resume(
+            _ = try await world.resumer(processTable: Self.quietTable, recordedSession: .gone).resume(
                 conversationID: world.conversationID, target: .here)
             Issue.record("the resume went ahead")
         } catch ConversationResumer.Refusal.unrecorded(_, let reason) {

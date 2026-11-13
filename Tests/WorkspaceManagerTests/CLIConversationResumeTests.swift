@@ -585,8 +585,7 @@ struct CLIConversationResumeTests {
         let conversationID = try recordConversation(
             in: fixture,
             lastSeenIn: .init(
-                hostSessionID: nil, tmux: try tmuxSession(identity, recordingSocket: true), harness: endedIdentity,
-                harnessObservedAt: Date()))
+                hostSessionID: nil, tmux: try tmuxSession(identity, recordingSocket: true), harness: endedIdentity))
 
         let resume = try fixture.run(["conversation", "resume", conversationID, "--here", "--json"])
         #expect(resume.status == 3)

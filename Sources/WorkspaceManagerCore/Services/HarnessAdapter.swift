@@ -2,22 +2,14 @@
 //  HarnessAdapter.swift
 //  WorkspaceManagerCore
 //
-//  What the guarded resume verb needs from one agent harness: how its conversations get an
-//  id, the command that continues one, where its transcript lives, and which processes hold
-//  one now, as far as its records and the process table can show. The vocabulary is Agent Client Protocol's (open, saved, unknown); the transport
-//  is the harness's own CLI in a terminal. Claude is the only conformer until Codex and Pi.
+//  What the guarded resume verb needs from one agent harness: the command that continues a
+//  conversation, where its transcript lives, and which processes hold one now, as far as its
+//  records and the process table can show. The vocabulary is Agent Client Protocol's (open,
+//  saved, unknown); the transport is the harness's own CLI in a terminal. Claude is the only
+//  conformer until Codex and Pi.
 //
 
 import Foundation
-
-/// How a harness's conversations come to have records: from a hook the harness runs, from
-/// watching its session files, or only from launches that name the id up front. A harness
-/// whose conversations get records only at launch has no record for one started by hand.
-public enum HarnessIdentitySource: String, Codable, Sendable {
-    case hook
-    case sessionFileWatch = "session-file-watch"
-    case launchOnly = "launch-only"
-}
 
 /// Why a conversation's state could not be read as open or saved. Each asks something
 /// different of the caller: there is nothing to resume, look again, it has expired, or it
@@ -53,11 +45,6 @@ public enum ConversationStatus: Equatable, Sendable {
 public protocol HarnessAdapter: Sendable {
     /// The `harness` value of this harness's Conversation records.
     var harness: String { get }
-    var identitySource: HarnessIdentitySource { get }
-
-    /// A launch command naming a new conversation's id up front, for a harness that takes
-    /// one; nil for a harness that assigns its own.
-    func launchCommand(conversationID: String) -> String?
 
     /// The argument vector that continues the conversation; nil for an id the harness
     /// could not have issued.
@@ -85,19 +72,10 @@ public protocol HarnessAdapter: Sendable {
     func forkAdvice(conversationID: String) -> String
 }
 
-extension HarnessAdapter {
-    public func launchCommand(conversationID: String) -> String? { nil }
-}
-
 public struct ClaudeHarnessAdapter: HarnessAdapter {
     public init() {}
 
     public var harness: String { ConversationRecord.claudeHarness }
-    public var identitySource: HarnessIdentitySource { .hook }
-
-    public func launchCommand(conversationID: String) -> String? {
-        ConversationRecord.normalizedID(conversationID).map { "claude --session-id \($0)" }
-    }
 
     public static let configHomeKey = "CLAUDE_CONFIG_DIR"
 
@@ -173,8 +151,10 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
     /// conversation, as `/clear` does: only a hook could say so, and a hook can be late,
     /// dropped, or fired by something beneath it. When no recorded process holds it, the tmux
     /// session it was last seen in is asked, and any claude there is counted, since it may be
-    /// this conversation under an id its arguments do not carry. A holder is placed in that
-    /// session only while the session's server says it runs there.
+    /// this conversation under an id its arguments do not carry. Holders are found first and
+    /// placed once: in that session only when its server answers that they run there, and,
+    /// outside tmux, the recorded process in the tile it was seen in.
+    ///
     /// A conversation whose newest hook could not name its claude, and that nothing else
     /// holds, is unknown: that claude may still run, and nothing says when it exits.
     public func holders(of record: ConversationRecord, in context: HolderProbeContext) async -> HolderProbe {
@@ -198,25 +178,20 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
             case .unreadable: return .unknown("Could not ask the kernel about process \(harness.pid)")
             }
         }
-        func holder(_ pid: Int32, _ evidence: HolderEvidence, _ identity: ProcessIdentity?) -> ConversationHolder {
-            guard identity != nil, identity == recorded else {
-                return ConversationHolder(pid: pid, foundBy: evidence, startedAt: identity?.startedAt)
-            }
-            return ConversationHolder(
-                pid: pid, foundBy: evidence, startedAt: identity?.startedAt,
-                tmuxSessionID: seen?.tmux?.sessionID, tmuxSessionName: seen?.tmux?.name,
-                hostSessionID: seen?.hostSessionID)
-        }
-
         var holders = table.rows
             .filter { AgentSessionInspection.isClaude($0.arguments) && AgentSessionInspection.names(id, $0.arguments) }
-            .map { holder($0.pid, .arguments, context.inspector.identity($0.pid)) }
+            .map {
+                ConversationHolder(
+                    pid: $0.pid, foundBy: .arguments, startedAt: context.inspector.identity($0.pid)?.startedAt)
+            }
         let counted = Set(holders.map(\.pid))
         if let recorded, !counted.contains(recorded.pid) {
-            holders.append(holder(recorded.pid, .recordedHarness, recorded))
+            holders.append(
+                ConversationHolder(pid: recorded.pid, foundBy: .recordedHarness, startedAt: recorded.startedAt))
         }
 
         guard seen?.tmux != nil else {
+            holders = holders.map { $0.pid == recorded?.pid ? $0.placed(hostSessionID: seen?.hostSessionID) : $0 }
             return holders.isEmpty ? .free : .held(holders, recordedSessionGone: false)
         }
         guard let session = await context.recordedSession(record) else {
@@ -224,30 +199,24 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
             return .held(holders, recordedSessionGone: false)
         }
         guard case .live(let sessionID, let name, let panePIDs) = session else {
-            let gone = session == .gone
-            holders = holders.map {
-                gone ? ConversationHolder(pid: $0.pid, foundBy: $0.foundBy, startedAt: $0.startedAt) : $0
-            }
-            return holders.isEmpty ? .free : .held(holders, recordedSessionGone: gone)
+            return holders.isEmpty ? .free : .held(holders, recordedSessionGone: true)
         }
         let inSession = Set(table.descendants(of: panePIDs).map(\.pid))
-        func placed(_ pid: Int32, _ evidence: HolderEvidence, _ startedAt: Date?) -> ConversationHolder {
-            ConversationHolder(
-                pid: pid, foundBy: evidence, startedAt: startedAt,
-                tmuxSessionID: sessionID, tmuxSessionName: name, hostSessionID: seen?.hostSessionID)
-        }
-        holders = holders.map {
-            inSession.contains($0.pid)
-                ? placed($0.pid, $0.foundBy, $0.startedAt)
-                : ConversationHolder(pid: $0.pid, foundBy: $0.foundBy, startedAt: $0.startedAt)
-        }
         if recorded == nil {
             for row in table.rows
             where inSession.contains(row.pid) && !counted.contains(row.pid)
                 && AgentSessionInspection.isClaude(row.arguments)
             {
-                holders.append(placed(row.pid, .sessionPaneTree, context.inspector.identity(row.pid)?.startedAt))
+                holders.append(
+                    ConversationHolder(
+                        pid: row.pid, foundBy: .sessionPaneTree,
+                        startedAt: context.inspector.identity(row.pid)?.startedAt))
             }
+        }
+        holders = holders.map {
+            inSession.contains($0.pid)
+                ? $0.placed(
+                    tmuxSessionID: sessionID, tmuxSessionName: name, hostSessionID: seen?.hostSessionID) : $0
         }
         return holders.isEmpty ? .free : .held(holders, recordedSessionGone: false)
     }

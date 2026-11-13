@@ -73,9 +73,8 @@ public struct ConversationRecord: Equatable, Sendable {
     /// tmux session but no tile. `outsideTmux` is an observed fact, a hook that ran with no
     /// `$TMUX`, which a missing `tmux` alone does not say.
     ///
-    /// `harness` is the process that ran the conversation when it was seen there, and
-    /// `harnessObservedAt` when that was; a process that later started another conversation
-    /// has a newer sighting in that conversation's record. `harnessUnnamed` says a hook saw it
+    /// `harness` is the process that ran the conversation when it was seen there.
+    /// `harnessUnnamed` says a hook saw it
     /// there and could not name the claude it ran under, which a sighting with no harness at
     /// all, from a writer that never looks, does not say.
     public struct LastSeenIn: Equatable, Sendable {
@@ -83,7 +82,6 @@ public struct ConversationRecord: Equatable, Sendable {
         public var tmux: TmuxSession?
         public var outsideTmux: Bool
         public var harness: ProcessIdentity?
-        public var harnessObservedAt: Date?
         public var harnessUnnamed: Bool
 
         public init(
@@ -91,14 +89,12 @@ public struct ConversationRecord: Equatable, Sendable {
             tmux: TmuxSession? = nil,
             outsideTmux: Bool = false,
             harness: ProcessIdentity? = nil,
-            harnessObservedAt: Date? = nil,
             harnessUnnamed: Bool = false
         ) {
             self.hostSessionID = hostSessionID
             self.tmux = tmux
             self.outsideTmux = tmux == nil && outsideTmux
             self.harness = harness
-            self.harnessObservedAt = harnessObservedAt
             self.harnessUnnamed = harness == nil && harnessUnnamed
         }
     }
@@ -258,7 +254,6 @@ enum ConversationRecordJSON {
             tmux: tmux,
             outsideTmux: object["outsideTmux"] as? Bool == true,
             harness: harness.flatMap(ProcessIdentity.init(recorded:)),
-            harnessObservedAt: date(object["harnessObservedAt"]),
             harnessUnnamed: harness == Sighting.unnamedHarness
         )
     }

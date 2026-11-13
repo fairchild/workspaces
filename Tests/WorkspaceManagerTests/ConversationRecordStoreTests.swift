@@ -129,8 +129,7 @@ struct ConversationRecordStoreTests {
                 observation(
                     at: 1_800_000_000,
                     lastSeenIn: .init(
-                        hostSessionID: Self.tile.uuidString, tmux: tmux, harness: harness,
-                        harnessObservedAt: Date(timeIntervalSince1970: 1_800_000_000))))
+                        hostSessionID: Self.tile.uuidString, tmux: tmux, harness: harness)))
             let url = try #require(store.fileURL(conversationID: Self.conversationID))
             var written = try object(at: url)
             written["lastSeenIn"] = Self.previousBuildPlace(written)

@@ -324,7 +324,6 @@ struct LocationHistory {
             Sighting.takeNewer(Sighting.harnessAttribute, from: sighting.object, into: &harness)
         }
         place[Sighting.harnessAttribute] = harness[Sighting.harnessAttribute]
-        place["\(Sighting.harnessAttribute)ObservedAt"] = harness["\(Sighting.harnessAttribute)ObservedAt"]
         if let session = sightings.first(where: { if case .session = $0.tmux { true } else { false } }) {
             var merged: [String: Any] = [:]
             for sighting in sightings where sighting.tmux == session.tmux {

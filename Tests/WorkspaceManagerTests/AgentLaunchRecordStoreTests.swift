@@ -95,7 +95,7 @@ struct AgentLaunchRecordStoreTests {
             socketLabel: "workspaces",
             tmuxSessionName: "wm-a-1",
             holders: ConversationHolderProbe(
-                records: nil, readProcessTable: { table }, inspector: .none, recordedSession: { _ in .notRecorded }),
+                records: nil, readProcessTable: { table }, inspector: .none, recordedSession: { _ in nil }),
             resumability: ClaudeTranscriptResumability(
                 environment: [:],
                 homeDirectory: URL(fileURLWithPath: "/tmp/no-such-home"),
