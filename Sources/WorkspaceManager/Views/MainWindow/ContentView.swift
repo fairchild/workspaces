@@ -1165,7 +1165,7 @@ struct ContentView: View {
                         let confirmation = MainWindowPresentation.consume(
                             $viewState.terminalCloseConfirmation)
                     else { return }
-                    forceCloseTerminalTab(sessionID: confirmation.sessionID)
+                    completeTerminalCloseConfirmation(confirmation)
                 }
                 Button("Cancel", role: .cancel) {
                     dismissTerminalCloseConfirmation()
@@ -1941,10 +1941,10 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func forceCloseTerminalTab(sessionID: UUID) {
+    private func completeTerminalCloseConfirmation(_ confirmation: TerminalCloseConfirmation) {
         guard
-            let result = terminalSessionController.forceCloseTab(
-                sessionID: sessionID,
+            let result = terminalSessionController.completeCloseConfirmation(
+                confirmation,
                 tileTreeStore: tileTreeStore,
                 defaultHomeDirectory: resolvedDefaultHostDirectory,
                 repos: repos,

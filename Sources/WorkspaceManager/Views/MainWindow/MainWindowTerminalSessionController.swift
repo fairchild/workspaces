@@ -214,6 +214,30 @@ struct MainWindowTerminalSessionController {
         )
     }
 
+    /// The person answered the sheet with Close: its confirmation completes the close.
+    func completeCloseConfirmation(
+        _ confirmation: TerminalCloseConfirmation,
+        tileTreeStore: TileTreeStore,
+        defaultHomeDirectory: URL,
+        repos: [Repo],
+        normalizePath: (String) -> String
+    ) -> SessionFocusResult? {
+        guard
+            let focusSessionID = tileTreeStore.completeCloseConfirmationAndResolveFocusTarget(
+                confirmation.context,
+                defaultHomeDirectory: defaultHomeDirectory
+            )
+        else {
+            return nil
+        }
+        return focusResult(
+            sessionID: focusSessionID,
+            tileTreeStore: tileTreeStore,
+            repos: repos,
+            normalizePath: normalizePath
+        )
+    }
+
     /// Takes the sheet's confirmation down and cancels its close. A sheet already answered
     /// has nothing left to cancel.
     func dismissCloseConfirmation(

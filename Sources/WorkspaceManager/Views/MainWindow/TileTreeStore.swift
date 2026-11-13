@@ -622,19 +622,32 @@ final class TileTreeStore: ObservableObject {
     }
 
     /// A close the confirmation sheet is asking the person about, and the only owner of that
-    /// close until it is answered.
+    /// close from the moment the sheet is raised until it is answered.
     ///
-    /// It holds every row the close covers, as the tile stood when the sheet was raised: the
-    /// tile's own and, for a tab, its split panes'. Close ends each of those rows and reclaims
-    /// its tmux session whatever the tile's exit did meanwhile (`handleProcessExit`); Cancel,
-    /// or any other dismissal, leaves the rows as that exit left them.
+    /// It holds every row the close covers, each with the tile that held it when the sheet
+    /// was raised: the tile's own and, for a tab, its split panes'. Close ends each of those
+    /// rows once and reclaims its tmux session, whatever exits did meanwhile; a row another
+    /// reason already ended stays as it is, and a tile that now holds one of those sessions
+    /// under another tile identity is not one of the close's tiles. Cancel, or any other
+    /// dismissal, leaves the rows as their exits left them.
     final class CloseConfirmation: Equatable {
-        let sessionID: UUID
-        let rows: [HostTerminalSession]
+        struct Target {
+            let session: HostTerminalSession
+            let tileID: TileID
+        }
 
-        fileprivate init(sessionID: UUID, rows: [HostTerminalSession]) {
+        let sessionID: UUID
+        let targets: [Target]
+        /// Rows among the targets that a reason has already ended.
+        fileprivate var ended: Set<UUID> = []
+
+        fileprivate init(sessionID: UUID, targets: [Target]) {
             self.sessionID = sessionID
-            self.rows = rows
+            self.targets = targets
+        }
+
+        func covers(_ sessionID: UUID) -> Bool {
+            targets.contains { $0.session.id == sessionID }
         }
 
         static func == (lhs: CloseConfirmation, rhs: CloseConfirmation) -> Bool { lhs === rhs }
@@ -650,7 +663,8 @@ final class TileTreeStore: ObservableObject {
         let rows = allLiveSessions.first(where: { $0.id == sessionID }).map {
             [$0] + splitSessions(forPrimarySessionID: sessionID)
         }
-        let confirmation = CloseConfirmation(sessionID: sessionID, rows: rows ?? [])
+        let targets = (rows ?? []).map { CloseConfirmation.Target(session: $0, tileID: renderTileID(for: $0.id)) }
+        let confirmation = CloseConfirmation(sessionID: sessionID, targets: targets)
         closeConfirmations[sessionID] = confirmation
         return confirmation
     }
@@ -662,21 +676,55 @@ final class TileTreeStore: ObservableObject {
         closeConfirmations.removeValue(forKey: confirmation.sessionID)
     }
 
-    /// Ends the rows a confirmed close covers that the tile's own exit path will not reach:
-    /// rows an earlier exit already settled, and rows waiting in another tile's exit. Rows
-    /// still in the tree, and rows waiting in this tile's own exit, are settled by that path.
-    private func settleConfirmedRows(_ confirmation: CloseConfirmation, as exit: TerminalSessionExit) {
-        let now = Date()
-        for row in confirmation.rows {
-            if let exitID = tileExitIDBySessionID[row.id] {
-                guard exitID != confirmation.sessionID, row.id != confirmation.sessionID else { continue }
-                settle(row.id, inExit: exitID, as: exit)
-            } else if !allLiveSessions.contains(where: { $0.id == row.id }) {
-                log.info(
-                    "[TileTreeStore] session \(row.id.uuidString, privacy: .public) closed from its confirmation after its exit settled: reason \(String(describing: exit), privacy: .public)"
+    /// The person answered the sheet with Close. Returns whether a tile left the tree.
+    ///
+    /// Each target's row is settled once, as a user close. A target still in its original
+    /// tile leaves the tree through the same exit a user close takes; one waiting in an exit
+    /// is settled alone in it, leaving that exit's other rows to their own reason; one whose
+    /// tile is gone has its row written directly. A target another reason ended, or whose
+    /// session a different tile now holds, is left alone. A confirmation no longer raised
+    /// (cancelled or replaced), or one whose tab has gained panes it never asked about,
+    /// closes nothing.
+    @discardableResult
+    func completeCloseConfirmation(_ confirmation: CloseConfirmation) -> Bool {
+        guard closeConfirmations[confirmation.sessionID] === confirmation else { return false }
+        closeConfirmations.removeValue(forKey: confirmation.sessionID)
+        let inOriginalTile = { (target: CloseConfirmation.Target) in
+            self.tileIDBySessionID[target.session.id] == target.tileID
+                && self.allLiveSessions.contains { $0.id == target.session.id }
+        }
+        let liveTile = confirmation.targets.first.flatMap { inOriginalTile($0) ? $0.session : nil }
+        if let liveTile {
+            let tabRows = [liveTile.id] + splitSessions(forPrimarySessionID: liveTile.id).map(\.id)
+            guard tabRows.allSatisfy(confirmation.covers) else {
+                log.notice(
+                    "[TileTreeStore] session \(liveTile.id.uuidString, privacy: .public) gained panes after its close was confirmed; it stays open"
                 )
-                record(row, exit, at: now)
+                return false
             }
+        }
+        let now = Date()
+        for target in confirmation.targets where !inOriginalTile(target) {
+            let id = target.session.id
+            guard !confirmation.ended.contains(id), !allLiveSessions.contains(where: { $0.id == id }) else { continue }
+            log.info(
+                "[TileTreeStore] session \(id.uuidString, privacy: .public) closed from its confirmation after its tile left"
+            )
+            if let exitID = tileExitIDBySessionID[id] {
+                settle(id, inExit: exitID, as: .userClosed, alone: true)
+            } else {
+                record(target.session, .userClosed, at: now)
+            }
+        }
+        guard let liveTile else { return false }
+        return handleProcessExit(for: liveTile.id, cause: .userClosed)
+    }
+
+    /// Notes that a reason ended `sessionID`'s row, so a confirmation covering it does not
+    /// end it again.
+    private func noteRowEnded(_ sessionID: UUID) {
+        for confirmation in closeConfirmations.values where confirmation.covers(sessionID) {
+            confirmation.ended.insert(sessionID)
         }
     }
 
@@ -727,8 +775,7 @@ final class TileTreeStore: ObservableObject {
     /// exited. `noteCloseRequested` marks the request so that exit still counts as the
     /// user's. A close that reaches a tile already gone with an exit still waiting on its
     /// reason settles that tile's row (`TileExit`). A close the person confirmed in the sheet
-    /// ends every row the confirmation covers, before, during or after the tile's own exit
-    /// settles them (`CloseConfirmation`).
+    /// completes through its confirmation instead (`completeCloseConfirmation`).
     ///
     /// A process exit of a tile that launched through tmux asks the tmux socket, off the
     /// main actor, which reason it was (see `TerminalSessionExit.classifyProcessExit`). A
@@ -737,9 +784,6 @@ final class TileTreeStore: ObservableObject {
     @discardableResult
     func handleProcessExit(for sessionID: UUID, cause: TerminalSessionExit? = nil) -> Bool {
         let knownExit = closeRequests.removeValue(forKey: sessionID)?.exit ?? cause
-        if let knownExit, let confirmation = closeConfirmations.removeValue(forKey: sessionID) {
-            settleConfirmedRows(confirmation, as: knownExit)
-        }
         if let exitID = tileExitIDBySessionID[sessionID] {
             if let knownExit {
                 log.info(
@@ -809,17 +853,24 @@ final class TileTreeStore: ObservableObject {
 
     /// Gives `sessionID`'s row its reason in the exit it left with: writes the row, and kills
     /// its tmux session when the reason reclaims one. The exiting tile's reason settles every
-    /// row still waiting, each pane taking `collateralExit`; any other row's settles it alone.
-    private func settle(_ sessionID: UUID, inExit exitID: UUID, as exit: TerminalSessionExit) {
+    /// row still waiting, each pane taking `collateralExit`, unless it settles that row
+    /// `alone`; any other row's settles it alone. An exit with no row left waiting is done.
+    private func settle(
+        _ sessionID: UUID, inExit exitID: UUID, as exit: TerminalSessionExit, alone: Bool = false
+    ) {
         guard var tileExit = tileExits.removeValue(forKey: exitID) else { return }
         let settled: [(HostTerminalSession, TerminalSessionExit)]
-        if sessionID == exitID {
+        if sessionID == exitID, !alone {
             tileExit.classification?.cancel()
             settled = tileExit.unsettled.map { ($0, $0.id == exitID ? exit : exit.collateralExit) }
         } else {
             settled = tileExit.unsettled.filter { $0.id == sessionID }.map { ($0, exit) }
             tileExit.unsettled.removeAll { $0.id == sessionID }
-            tileExits[exitID] = tileExit
+            if tileExit.unsettled.isEmpty {
+                tileExit.classification?.cancel()
+            } else {
+                tileExits[exitID] = tileExit
+            }
         }
         for (session, rowExit) in settled {
             tileExitIDBySessionID.removeValue(forKey: session.id)
@@ -831,6 +882,9 @@ final class TileTreeStore: ObservableObject {
     /// reason reclaims one.
     private func record(_ session: HostTerminalSession, _ exit: TerminalSessionExit, at exitedAt: Date) {
         continuityRecorder?.recordExit(session.id, exit, at: exitedAt)
+        if exit.rowOutcome == .end {
+            noteRowEnded(session.id)
+        }
         if exit.reclaimsTmuxSession {
             killPaneScopedTmuxSession(for: session)
         }
@@ -854,7 +908,20 @@ final class TileTreeStore: ObservableObject {
         guard handleProcessExit(for: sessionID, cause: cause) else {
             return nil
         }
+        return focusTargetAfterRemoval(defaultHomeDirectory: defaultHomeDirectory)
+    }
 
+    /// Completes a confirmed close (`completeCloseConfirmation`) and resolves which session
+    /// should receive focus. Returns `nil` when no tile left the tree.
+    func completeCloseConfirmationAndResolveFocusTarget(
+        _ confirmation: CloseConfirmation,
+        defaultHomeDirectory: URL
+    ) -> UUID? {
+        guard completeCloseConfirmation(confirmation) else { return nil }
+        return focusTargetAfterRemoval(defaultHomeDirectory: defaultHomeDirectory)
+    }
+
+    private func focusTargetAfterRemoval(defaultHomeDirectory: URL) -> UUID? {
         if sessions.isEmpty {
             let replacement = activateSession(
                 key: .defaultHome,
@@ -1481,6 +1548,7 @@ final class TileTreeStore: ObservableObject {
         // A row an exit took is written once the exit knows its reason (`settle`).
         guard tileExitIDBySessionID[sessionID] == nil else { return }
         continuityRecorder?.recordEnded(sessionID)
+        noteRowEnded(sessionID)
     }
 
     func automationEnvironment(for session: HostTerminalSession) -> AutomationTerminalEnvironment? {

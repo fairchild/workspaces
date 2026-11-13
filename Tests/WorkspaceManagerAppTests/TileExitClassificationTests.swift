@@ -426,8 +426,8 @@ struct TileExitClassificationTests {
 
         func close() {
             guard let confirmation = MainWindowPresentation.consume(binding) else { return }
-            _ = controller.forceCloseTab(
-                sessionID: confirmation.sessionID, tileTreeStore: store,
+            _ = controller.completeCloseConfirmation(
+                confirmation, tileTreeStore: store,
                 defaultHomeDirectory: URL(fileURLWithPath: "/private/tmp"), repos: [], normalizePath: { $0 })
         }
     }
@@ -498,8 +498,9 @@ struct TileExitClassificationTests {
 
         #expect(harness.store.handleProcessExit(for: primary.id))
         #expect(await harness.rowWrites(for: split.id) == [.holderLost(split.id)])
+        let cancelled = try #require(sheet.shown).context
         sheet.cancel()
-        #expect(!harness.store.handleProcessExit(for: split.id, cause: .userClosed))
+        #expect(!harness.store.completeCloseConfirmation(cancelled))
         #expect(harness.store.handleProcessExit(for: otherTab.id, cause: .userClosed))
 
         #expect(await harness.rowWrites(for: split.id) == [.holderLost(split.id)])
@@ -554,12 +555,13 @@ struct TileExitClassificationTests {
         let (_, tab) = try openTwoTmuxTiles(harness.store)
         let store = harness.store
         let older = store.raiseCloseConfirmation(for: tab.id)
-        _ = store.raiseCloseConfirmation(for: tab.id)
+        let newer = store.raiseCloseConfirmation(for: tab.id)
 
         store.cancelCloseConfirmation(older)
         #expect(store.handleProcessExit(for: tab.id))
         #expect(await harness.rowWrites(for: tab.id) == [.holderLost(tab.id)])
-        #expect(!store.handleProcessExit(for: tab.id, cause: .userClosed))
+        #expect(!store.completeCloseConfirmation(older))
+        #expect(!store.completeCloseConfirmation(newer))
 
         #expect(await harness.rowWrites(for: tab.id) == [.holderLost(tab.id), .ended(tab.id)])
     }
@@ -574,17 +576,131 @@ struct TileExitClassificationTests {
         let sheet = CloseSheet(store)
         store.noteCloseRequested(primary.id)
         sheet.raise(primary.id)
+        let dismissed = try #require(sheet.shown).context
 
         sheet.dismissByFramework()
         #expect(sheet.shown == nil)
         #expect(store.handleProcessExit(for: primary.id))
         #expect(await harness.rowWrites(for: split.id) == [.deselected(split.id)])
-        #expect(!store.handleProcessExit(for: primary.id, cause: .userClosed))
+        #expect(!store.completeCloseConfirmation(dismissed))
         #expect(store.handleProcessExit(for: otherTab.id, cause: .userClosed))
 
         #expect(await harness.rowWrites(for: primary.id) == [.deselected(primary.id)])
         #expect(await harness.rowWrites(for: split.id) == [.deselected(split.id)])
         #expect(await harness.reclaimed(awaiting: 1) == [otherTab.id.uuidString])
+    }
+
+    /// The split detached and was adopted again as a tab of its own: a different tile now
+    /// holds its session. The old sheet's Close is about the tab as it was, so it closes the
+    /// tab and leaves the adopted tile, its row and its tmux session alone.
+    @Test("Confirming a tab leaves a split that another tile has since adopted")
+    func confirmedTabCloseLeavesAnAdoptedSplit() async throws {
+        let harness = makeHarness(answer: .sessionPresent(serverPID: 4242))
+        let (primary, split, otherTab) = try openSplitTab(harness.store)
+        let store = harness.store
+        let sheet = CloseSheet(store)
+        store.noteCloseRequested(primary.id)
+        sheet.raise(primary.id)
+        #expect(store.handleProcessExit(for: split.id))
+        #expect(await harness.rowWrites(for: split.id) == [.deselected(split.id)])
+        let adopted = store.createRestoredSession(
+            key: split.key, directory: split.directoryURL, recordedTerminalMode: split.terminalMode,
+            tmuxSessionNameOverride: split.tmuxSessionName, adoptedHostSessionID: split.id)
+
+        sheet.close()
+        #expect(store.handleProcessExit(for: otherTab.id, cause: .userClosed))
+
+        #expect(await harness.rowWrites(for: primary.id) == [.ended(primary.id)])
+        #expect(await harness.rowWrites(for: split.id) == [.deselected(split.id)])
+        #expect(store.allLiveSessions.contains { $0.id == adopted.id })
+        #expect(await harness.reclaimed(awaiting: 1) == [otherTab.id.uuidString])
+    }
+
+    /// The tab's exit settled while its sheet was up, and a restore brought its session back
+    /// in a new tile that has since gained a pane of its own. The old sheet's Close ends the
+    /// rows it covered that no tile holds, and touches neither the new tile nor its pane.
+    @Test("Confirming a tab's old sheet leaves a new tile holding its session, and that tile's panes")
+    func confirmedTabCloseLeavesAReplacementTile() async throws {
+        let harness = makeHarness(answer: .sessionPresent(serverPID: 4242))
+        let (primary, oldSplit, _) = try openSplitTab(harness.store)
+        let store = harness.store
+        let sheet = CloseSheet(store)
+        store.noteCloseRequested(primary.id)
+        sheet.raise(primary.id)
+        #expect(store.handleProcessExit(for: primary.id))
+        #expect(await harness.rowWrites(for: primary.id) == [.deselected(primary.id)])
+        let replacement = store.createRestoredSession(
+            key: primary.key, directory: primary.directoryURL, recordedTerminalMode: primary.terminalMode,
+            tmuxSessionNameOverride: primary.tmuxSessionName, adoptedHostSessionID: primary.id)
+        let newSplit = try #require(store.splitFocusedTile(inTabContaining: replacement.id))
+
+        sheet.close()
+
+        #expect(await harness.rowWrites(for: primary.id) == [.deselected(primary.id)])
+        #expect(await harness.rowWrites(for: newSplit.id) == [])
+        #expect(store.allLiveSessions.contains { $0.id == newSplit.id })
+        #expect(await harness.rowWrites(for: oldSplit.id) == [.deselected(oldSplit.id), .ended(oldSplit.id)])
+        #expect(await harness.reclaimed(awaiting: 1) == [oldSplit.id.uuidString])
+    }
+
+    /// A split the person closed, or whose shell ended, already has its row ended. Confirming
+    /// the tab afterwards ends the rest of the tab and neither writes nor reclaims that split
+    /// again.
+    @Test("Confirming a tab leaves a split another reason already ended", arguments: [true, false])
+    func confirmedTabCloseSkipsAnEndedSplit(_ splitClosedByThePerson: Bool) async throws {
+        let harness = makeHarness(answer: .sessionGone(serverPID: 4242))
+        let (primary, split, otherTab) = try openSplitTab(harness.store)
+        let store = harness.store
+        let sheet = CloseSheet(store)
+        sheet.raise(primary.id)
+        #expect(store.handleProcessExit(for: split.id, cause: splitClosedByThePerson ? .userClosed : nil))
+        #expect(await harness.rowWrites(for: split.id) == [.ended(split.id)])
+
+        sheet.close()
+        #expect(store.handleProcessExit(for: otherTab.id, cause: .userClosed))
+
+        #expect(await harness.rowWrites(for: split.id) == [.ended(split.id)])
+        #expect(await harness.rowWrites(for: primary.id) == [.ended(primary.id)])
+        let expected = (splitClosedByThePerson ? [split.id.uuidString] : []) + [otherTab.id.uuidString]
+        #expect(await harness.reclaimed(awaiting: expected.count) == expected)
+    }
+
+    /// A sheet raised again for the same tile owns its close; the older one's Close is stale.
+    @Test("A superseded sheet's Close closes nothing")
+    func supersededSheetClosesNothing() async throws {
+        let harness = makeHarness(answer: .sessionPresent(serverPID: 4242))
+        let (primary, _, _) = try openSplitTab(harness.store)
+        let store = harness.store
+        let first = CloseSheet(store)
+        let second = CloseSheet(store)
+        first.raise(primary.id)
+        let added = try #require(store.splitFocusedTile(inTabContaining: primary.id))
+        second.raise(primary.id)
+
+        first.close()
+
+        #expect(store.allLiveSessions.contains { $0.id == primary.id })
+        #expect(await harness.rowWrites(for: added.id) == [])
+        #expect(second.shown != nil)
+    }
+
+    /// The sheet asked about the tab as it was. A pane added while it was up was never part
+    /// of the question, so Close leaves the tab open rather than end that pane unasked.
+    @Test("Confirming a tab that gained a pane after its sheet was raised closes nothing")
+    func confirmedTabCloseRefusesAGrownTab() async throws {
+        let harness = makeHarness(answer: .sessionPresent(serverPID: 4242))
+        let (primary, split, _) = try openSplitTab(harness.store)
+        let store = harness.store
+        let sheet = CloseSheet(store)
+        sheet.raise(primary.id)
+        let added = try #require(store.splitFocusedTile(inTabContaining: primary.id))
+
+        sheet.close()
+
+        #expect(store.allLiveSessions.contains { $0.id == primary.id })
+        #expect(store.allLiveSessions.contains { $0.id == added.id })
+        #expect(await harness.rowWrites(for: split.id) == [])
+        #expect(await harness.rowWrites(for: added.id) == [])
     }
 
     @Test("A retirement that lands as a process exit ends the row, asks tmux nothing and kills nothing")
