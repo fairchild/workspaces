@@ -98,16 +98,35 @@ struct TileExitClassificationTests {
         }
     }
 
-    /// Every session the store reported closed by a process exit, in order.
+    /// Every tile the store reported closed by a process exit, in order.
     @MainActor
     private final class ExitLog {
-        private(set) var sessionIDs: [UUID] = []
+        private(set) var events: [TileTreeStore.ProcessExit] = []
         private var subscription: AnyCancellable?
+        var sessionIDs: [UUID] { events.map(\.sessionID) }
 
         init(_ store: TileTreeStore) {
-            subscription = store.processExits.sink { [weak self] sessionID in
-                MainActor.assumeIsolated { self?.sessionIDs.append(sessionID) }
+            subscription = store.processExits.sink { [weak self] exit in
+                MainActor.assumeIsolated { self?.events.append(exit) }
             }
+        }
+    }
+
+    /// Hosts the modifier the main window watches exits through, recording each session it is
+    /// told to move focus for.
+    @MainActor
+    private final class FocusLog {
+        private(set) var sessionIDs: [UUID] = []
+        private var host: NSHostingView<AnyView>?
+
+        init(_ store: TileTreeStore) {
+            let view = Color.clear.onTerminalProcessExit(of: store) { [weak self] sessionID in
+                self?.sessionIDs.append(sessionID)
+            }
+            let host = NSHostingView(rootView: AnyView(view))
+            host.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
+            host.layoutSubtreeIfNeeded()
+            self.host = host
         }
     }
 
@@ -1233,6 +1252,7 @@ struct TileExitClassificationTests {
         surfaceView.runtimeDidRequestClose(processAlive: false)
 
         #expect(await eventually { exits.sessionIDs == [unvisited.id] })
+        #expect(exits.events == [.init(sessionID: unvisited.id, movesFocus: false)])
         #expect(!store.sessions.contains { $0.id == unvisited.id })
         #expect(!store.hasRealizedTerminalSurface(for: unvisited.id))
         #expect(await harness.rowWrites(for: unvisited.id) == [.ended(unvisited.id)])
@@ -1311,10 +1331,49 @@ struct TileExitClassificationTests {
         realized.runtimeDidRequestClose(processAlive: false)
 
         #expect(await eventually { exits.sessionIDs.count == 2 })
-        #expect(exits.sessionIDs == [visited.id, unvisited.id])
+        #expect(
+            exits.events == [
+                .init(sessionID: visited.id, movesFocus: true), .init(sessionID: unvisited.id, movesFocus: true),
+            ])
         #expect(store.sessions.isEmpty)
         #expect(await harness.rowWrites(for: visited.id) == [.ended(visited.id)])
         #expect(await harness.rowWrites(for: unvisited.id) == [.ended(unvisited.id)])
+    }
+
+    /// A window shows only its active tab, so keyboard focus can be in no other terminal. A
+    /// background terminal's exit — in a workspace nobody has open, or a tab behind the active
+    /// one — closes its tile and ends its row without asking the window to move focus, which may
+    /// be in a file being edited or a tab being renamed. The active tab's exit still moves it.
+    @Test("A background terminal's exit leaves focus where it is; the active tab's exit still moves it")
+    func backgroundExitLeavesFocusAlone() async throws {
+        let harness = makeHarness(answer: .sessionGone(serverPID: 4242))
+        let store = harness.store
+        let exits = ExitLog(store)
+        let focus = FocusLog(store)
+        let (visited, unvisited) = openVisitedAndUnvisitedScopes(store)
+        let (behind, kept) = (
+            store.createRestoredSession(key: visited.key, directory: visited.directoryURL, recordedTerminalMode: nil),
+            store.createRestoredSession(key: visited.key, directory: visited.directoryURL, recordedTerminalMode: nil)
+        )
+        #expect(store.activateExistingSession(sessionID: visited.id))
+        let exiting = [unvisited, behind, visited]
+        let views = exiting.map { store.terminalSurfaceView(for: $0) }
+        for session in exiting {
+            store.surfaceStore.noteLaunch(sessionID: session.id, throughTmux: true, tmuxServerPID: 4242)
+        }
+
+        views[0].runtimeDidRequestClose(processAlive: false)
+        views[1].runtimeDidRequestClose(processAlive: false)
+        #expect(await eventually { exits.sessionIDs == [unvisited.id, behind.id] })
+        #expect(await harness.rowWrites(for: unvisited.id) == [.ended(unvisited.id)])
+        #expect(await harness.rowWrites(for: behind.id) == [.ended(behind.id)])
+        #expect(focus.sessionIDs.isEmpty)
+        #expect(store.activeSessionID == visited.id)
+
+        views[2].runtimeDidRequestClose(processAlive: false)
+        #expect(await eventually { focus.sessionIDs == [visited.id] })
+        #expect(exits.events.map(\.movesFocus) == [false, false, true])
+        #expect(store.sessions.map(\.id) == [kept.id])
     }
 
     // MARK: - Who holds the store

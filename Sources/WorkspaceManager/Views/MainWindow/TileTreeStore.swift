@@ -108,17 +108,29 @@ final class TileTreeStore: ObservableObject {
     /// The socket production's pane reclamation reads and kills on. Tests answer it from a stub.
     var tmuxSessionProbe = TmuxSessionProbe()
 
-    /// Sessions whose tile a process exit has just closed, for the window showing this store to
-    /// move focus (`onTerminalProcessExit(of:perform:)`). The tile and its row are already
-    /// handled by then, window or no window; a window that has gone has no subscription, so an
-    /// exit after it closes moves nothing.
-    let processExits = PassthroughSubject<UUID, Never>()
+    /// A tile a process exit has just closed. The tile and its row are already handled by then,
+    /// window or no window; `movesFocus` says whether the window showing this store has focus
+    /// to move: the tile was the active tab, the only one a window shows and so the only one
+    /// keyboard focus can be in, or no tile is left. A tile that exits in the background leaves
+    /// focus where it is.
+    struct ProcessExit: Equatable {
+        let sessionID: UUID
+        let movesFocus: Bool
+    }
+
+    /// Every tile a process exit closes, for the window showing this store
+    /// (`onTerminalProcessExit(of:perform:)`). A window that has gone has no subscription, so
+    /// an exit after it closes moves nothing.
+    let processExits = PassthroughSubject<ProcessExit, Never>()
 
     init() {
         surfaceStore.tmuxOwnershipLedger = tmuxOwnershipLedger
         surfaceStore.onTerminalProcessExit = { [weak self] sessionID in
-            guard let self, self.handleProcessExit(for: sessionID) else { return }
-            self.processExits.send(sessionID)
+            guard let self else { return }
+            let wasActive =
+                self.coordinator.activeSessionID.map { self.primarySessionID(containing: sessionID) == $0 } ?? false
+            guard self.handleProcessExit(for: sessionID) else { return }
+            self.processExits.send(ProcessExit(sessionID: sessionID, movesFocus: wasActive || self.sessions.isEmpty))
         }
         surfaceStore.onTerminalTitleChanged = { [weak self] _ in
             self?.objectWillChange.send()
@@ -1804,10 +1816,12 @@ final class TileTreeStore: ObservableObject {
 }
 
 extension View {
-    /// Runs `action` for each session whose tile a process exit closed in `store`, while this
-    /// view is showing. The subscription ends with the view, so the store never holds the
-    /// window that watches it.
+    /// Runs `action` for each session whose tile a process exit closed in `store` with focus to
+    /// move (`TileTreeStore.ProcessExit.movesFocus`), while this view is showing. The
+    /// subscription ends with the view, so the store never holds the window that watches it.
     func onTerminalProcessExit(of store: TileTreeStore, perform action: @escaping (UUID) -> Void) -> some View {
-        onReceive(store.processExits, perform: action)
+        onReceive(store.processExits) { exit in
+            if exit.movesFocus { action(exit.sessionID) }
+        }
     }
 }
