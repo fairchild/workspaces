@@ -382,6 +382,7 @@ public struct TmuxSessionProbe: Sendable {
     /// Production runner: `ProcessRunner.run` with a short timeout so a wedged
     /// tmux server cannot stall restore; any throw maps to `nil` (not alive).
     public static let defaultRunner: CommandRunner = { executable, arguments, environment in
+        guard TmuxLiveSocketGuard.permits(tmuxArguments: arguments) else { return nil }
         do {
             let result = try await ProcessRunner.run(
                 executable: executable,
@@ -398,6 +399,7 @@ public struct TmuxSessionProbe: Sendable {
     /// Production output runner: `ProcessRunner.run` with a short timeout; returns
     /// stdout only on success so a wedged/missing tmux server maps to `nil`.
     public static let defaultOutputRunner: OutputCommandRunner = { executable, arguments, environment in
+        guard TmuxLiveSocketGuard.permits(tmuxArguments: arguments) else { return nil }
         do {
             let result = try await ProcessRunner.run(
                 executable: executable,
@@ -413,7 +415,8 @@ public struct TmuxSessionProbe: Sendable {
 
     /// Production synchronous runner: `synchronousOutput` at the standard deadline.
     public static let defaultSynchronousOutputRunner: SynchronousOutputRunner = { executable, arguments, environment in
-        synchronousOutput(executable: executable, arguments: arguments, environment: environment)
+        guard TmuxLiveSocketGuard.permits(tmuxArguments: arguments) else { return nil }
+        return synchronousOutput(executable: executable, arguments: arguments, environment: environment)
     }
 
     /// Scores a run against its deadline: true when the child exited before it.

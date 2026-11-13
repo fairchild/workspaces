@@ -153,14 +153,16 @@ public struct TmuxHolderProbe: Sendable {
     /// One tmux call: the server's pid, then every session name. A server with no
     /// sessions still answers the pid, which `exit-empty off` makes an ordinary state.
     public func holderState(forSessionNamed sessionName: String) async -> TmuxHolderState {
+        let arguments = [
+            "tmux", "-L", socketLabel,
+            "display-message", "-p", "#{pid}", ";",
+            "list-sessions", "-F", "#{session_name}",
+        ]
+        guard TmuxLiveSocketGuard.permits(tmuxArguments: arguments) else { return .unanswered }
         do {
             let result = try await ProcessRunner.run(
                 executable: "/usr/bin/env",
-                arguments: [
-                    "tmux", "-L", socketLabel,
-                    "display-message", "-p", "#{pid}", ";",
-                    "list-sessions", "-F", "#{session_name}",
-                ],
+                arguments: arguments,
                 environment: environment,
                 timeout: 5
             )

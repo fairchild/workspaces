@@ -464,7 +464,7 @@ final class SurfaceStore: ObservableObject {
             "[SurfaceStore] launch contract unmet for session \(session.id.uuidString, privacy: .public): tmux \(sessionName, privacy: .public) has no attached client; repairing over the text bridge"
         )
 
-        TmuxLaunchGuard.check(launchScript: tmuxLaunchScript)
+        TmuxLiveSocketGuard.check(launchScript: tmuxLaunchScript)
         guard
             GhosttySurfaceTextInputBridge.writeLaunchCommand(
                 into: terminal.surfaceView,

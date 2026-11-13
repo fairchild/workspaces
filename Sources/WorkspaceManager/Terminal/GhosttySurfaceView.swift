@@ -378,7 +378,7 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
             return
         }
 
-        TmuxLaunchGuard.check(launchScript: terminalConfig.tmuxLaunchScript)
+        TmuxLiveSocketGuard.check(launchScript: terminalConfig.tmuxLaunchScript)
         let createdSurface = terminalConfig.withCValue(view: self, userdata: callbackUserdata) { config in
             ghostty_surface_new(app, &config)
         }
