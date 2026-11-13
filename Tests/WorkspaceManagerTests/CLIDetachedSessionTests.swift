@@ -1373,7 +1373,8 @@ struct CLIDetachedSessionTests {
     /// tmux ends a command at a `;` closing any argument, so each value here would split or
     /// trim a launch handed to it raw; U+0600 makes the last `;` share a `Character` with
     /// it. The command ends in `\;` for the same reason: the pane's shell receives it as an
-    /// argument only if the command reached tmux intact.
+    /// argument only if the command reached tmux intact. Every session outlives the checks;
+    /// teardown's `kill-server` ends them.
     @Test(
         "Values ending in ;, \\; or \\ reach the pane and the session intact, with new-session -e and without",
         .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
@@ -1401,7 +1402,7 @@ struct CLIDetachedSessionTests {
                 let withCommand = "wm-escape-\(index)-\(path)-cmd"
                 let bare = "wm-escape-\(index)-\(path)-bare"
                 let out = fixture.root.appendingPathComponent("\(withCommand).out")
-                let script = #"printf "%s|%s|__done__" "$\#(key)" "$2" > "$1"; exec sleep 30"#
+                let script = #"printf "%s|%s|__done__" "$\#(key)" "$2" > "$1"; exec sleep 600"#
 
                 try await control.launch(
                     handle: withCommand, directory: fixture.root,
