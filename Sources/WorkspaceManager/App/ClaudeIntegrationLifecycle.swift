@@ -46,6 +46,10 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
     private var didStart = false
     private var defaults: UserDefaults = LaunchPreferences.defaults
     private var socketURLOverride: URL?
+    /// Where the hook listener writes Conversation records on an id change; nil writes none.
+    private var conversationRecordsDirectory: URL? =
+        ConversationRecordsLifecycle.isAllowed(environment: ProcessInfo.processInfo.environment)
+        ? ConversationRecordsLocation.directory : nil
     private var installerFactory: @Sendable (String) async -> any ClaudeSettingsInstalling = {
         _ in
         let eventForwarderPath = ClaudeIntegrationLifecycle.extractEventForwarderScript()
@@ -62,9 +66,22 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
             )
         }
 
+        // Named even when nothing is there, so the installer removes a handler that would run
+        // a missing script.
+        let conversationObserverPath =
+            ClaudeIntegrationLifecycle.extractConversationObserverScript()
+            ?? ClaudeIntegrationLifecycle.hookForwarderInstallDirectory()
+            .appendingPathComponent("conversation-observer.sh").path
+        if !FileManager.default.isExecutableFile(atPath: conversationObserverPath) {
+            log.error(
+                "[ClaudeIntegration] no conversation-observer.sh at \(conversationObserverPath, privacy: .public); SessionStart conversation observer will be skipped this session"
+            )
+        }
+
         return ClaudeSettingsInstaller(
             eventForwarderScriptPath: eventForwarderPath,
-            statusLineForwarderPath: statusLinePath
+            statusLineForwarderPath: statusLinePath,
+            conversationObserverScriptPath: conversationObserverPath
         )
     }
 
@@ -91,6 +108,7 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         self.defaults = defaults
         self.installerFactory = installerFactory
         self.socketURLOverride = socketURLOverride
+        self.conversationRecordsDirectory = nil
         self.didStart = false
         self.listener = nil
         self.notificationPoster = nil
@@ -123,11 +141,18 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         let envSocketOverride = ProcessInfo.processInfo
             .environment["WORKSPACES_HOOKS_SOCKET_OVERRIDE"]
             .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+        let conversationRecorder = conversationRecordsDirectory.map {
+            ConversationIdentityRecorder(
+                store: ConversationRecordStore(directory: $0),
+                socketLabel: TmuxSessionProbe.socketLabel
+            )
+        }
         let listener = AgentHookListener(
             bundleIdentifier: bundleID,
             registry: registry,
             commandStatusRegistry: commandStatusRegistry,
-            socketURLOverride: socketURLOverride ?? envSocketOverride
+            socketURLOverride: socketURLOverride ?? envSocketOverride,
+            conversationRecorder: conversationRecorder
         )
         self.listener = listener
         self.socketPath = listener.socketPath
@@ -299,6 +324,72 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
     /// extraction failed.
     nonisolated static func extractStatusLineForwarderScript() -> String? {
         extractHookForwarderScript(named: "statusline")
+    }
+
+    /// Copy the SessionStart conversation observer beside the forwarders, with this build's
+    /// bundled CLI written into it. The settings entry names the stable copy, which every
+    /// Claude on the machine runs, so only the installed app writes it (see
+    /// `ownsMachineWideObserver`). Any other build returns the copy already there, so its
+    /// settings install still names the same entry. Nil when there is no copy to name.
+    nonisolated static func extractConversationObserverScript(
+        bundleURL: URL = Bundle.main.bundleURL,
+        cliURL: URL? = CommandLineToolService.defaultSourceCommandURL(fileManager: .default),
+        installDirectory: URL = hookForwarderInstallDirectory()
+    ) -> String? {
+        guard ownsMachineWideObserver(bundleURL: bundleURL) else {
+            let existing = installDirectory.appendingPathComponent("conversation-observer.sh")
+            return FileManager.default.isExecutableFile(atPath: existing.path) ? existing.path : nil
+        }
+        guard let cliURL,
+            let template = bundledHookForwarderURL(named: "conversation-observer")
+                .flatMap({ try? String(contentsOf: $0, encoding: .utf8) })
+        else { return nil }
+        return writeConversationObserverScript(
+            template: template,
+            cliPath: cliURL.path,
+            installDirectory: installDirectory
+        )
+    }
+
+    /// The installed app is an `.app` anywhere under `/Applications` or `~/Applications`, at
+    /// any depth (`Utilities`, `Setapp`), where `install-local.sh`, the release and app
+    /// managers put it. Debug binaries under `.build`, packaged evidence and test bundles, a
+    /// checkout's `build/` copy, and a translocated launch all live elsewhere or move, and a
+    /// CLI path written from one of them stops working when that tree goes, silencing the
+    /// observer for every Claude on the machine. The path is resolved first, so a link from
+    /// an Applications folder into a build tree does not count.
+    nonisolated static func ownsMachineWideObserver(
+        bundleURL: URL,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> Bool {
+        guard bundleURL.pathExtension == "app" else { return false }
+        let components = bundleURL.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        guard !components.contains(where: { $0 == ".build" || $0 == "AppTranslocation" }) else { return false }
+        let roots = [
+            URL(fileURLWithPath: "/Applications"),
+            homeDirectory.appendingPathComponent("Applications"),
+        ].map { $0.resolvingSymlinksInPath().standardizedFileURL.pathComponents }
+        return roots.contains { root in
+            components.count > root.count && Array(components.prefix(root.count)) == root
+        }
+    }
+
+    nonisolated static func writeConversationObserverScript(
+        template: String,
+        cliPath: String,
+        installDirectory: URL
+    ) -> String? {
+        let quoted = cliPath.replacingOccurrences(of: "'", with: "'\\''")
+        let script = template.replacingOccurrences(of: "@WORKSPACES_CLI@", with: quoted)
+        let destination = installDirectory.appendingPathComponent("conversation-observer.sh")
+        do {
+            try FileManager.default.createDirectory(at: installDirectory, withIntermediateDirectories: true)
+            try Data(script.utf8).write(to: destination, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
+            return destination.path
+        } catch {
+            return nil
+        }
     }
 
     /// Stable, space-free directory the app extracts hook/status forwarders into.

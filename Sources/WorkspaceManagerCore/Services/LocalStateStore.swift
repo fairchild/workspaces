@@ -1150,6 +1150,153 @@ public actor LocalStateStore {
         )
     }
 
+    // MARK: - Conversation index
+
+    /// Replaces the whole index with `entries`, read from the Conversation record files. The
+    /// files are the truth and this table a lookup over them, so dropping it loses nothing.
+    public func rebuildConversationIndex(_ entries: [ConversationIndexEntry]) async throws {
+        try await dbPool.write { db in
+            try db.execute(sql: "DELETE FROM conversation_index")
+            for entry in entries {
+                try Self.upsertConversationIndexEntry(entry, in: db)
+            }
+        }
+    }
+
+    /// Brings the index level with `entries`: every entry is written, and a conversation whose
+    /// file is gone leaves the index. The caller has already read every file, so comparing
+    /// modification times first would save no reads and could miss two writes inside one
+    /// stored millisecond.
+    public func syncConversationIndex(_ entries: [ConversationIndexEntry]) async throws {
+        try await dbPool.write { db in
+            let indexed = try String.fetchAll(db, sql: "SELECT conversation_id FROM conversation_index")
+            let current = Set(entries.map(\.conversationID))
+            for gone in indexed where !current.contains(gone) {
+                try db.execute(sql: "DELETE FROM conversation_index WHERE conversation_id = ?", arguments: [gone])
+            }
+            for entry in entries {
+                try Self.upsertConversationIndexEntry(entry, in: db)
+            }
+        }
+    }
+
+    public func fetchConversationIndex() async throws -> [ConversationIndexEntry] {
+        try await dbPool.read { db in
+            try Row.fetchAll(db, sql: "SELECT * FROM conversation_index ORDER BY conversation_id")
+                .compactMap(ConversationIndexEntry.init(row:))
+        }
+    }
+
+    /// The conversation a tile holds now: the one seen in it most recently.
+    public func fetchCurrentConversation(hostSessionID: UUID) async throws -> ConversationIndexEntry? {
+        try await dbPool.read { db in
+            try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT * FROM conversation_index
+                    WHERE host_session_id = ?
+                    ORDER BY observed_at DESC, conversation_id DESC
+                    LIMIT 1
+                    """,
+                arguments: [hostSessionID.uuidString]
+            ).flatMap(ConversationIndexEntry.init(row:))
+        }
+    }
+
+    /// Each Claude conversation a recorded tile reported, newest sighting per tile, from every
+    /// run the database holds, read through one snapshot that holds no write lock. It reads
+    /// nothing but the database, so any store on it gathers the same set from the same state.
+    /// The newest time per pair comes from one grouped pass; only then is each pair's newest
+    /// row looked up for its directory.
+    public func conversationSightings() async throws -> [ConversationSighting] {
+        try await dbPool.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT pair.host_session_id, pair.agent_session_id, pair.event_at,
+                        (
+                            SELECT cwd FROM agent_status_events newest
+                            WHERE newest.host_session_id = pair.host_session_id
+                                AND newest.agent_session_id = pair.agent_session_id
+                                AND newest.agent_kind = ?
+                            ORDER BY newest.event_at DESC, newest.id DESC
+                            LIMIT 1
+                        ) AS cwd
+                    FROM (
+                        SELECT host_session_id, agent_session_id, MAX(event_at) AS event_at
+                        FROM agent_status_events
+                        WHERE agent_session_id IS NOT NULL AND agent_kind = ?
+                            AND host_session_id IN (SELECT host_session_id FROM terminal_sessions)
+                        GROUP BY host_session_id, agent_session_id
+                    ) pair
+                    ORDER BY pair.event_at, pair.host_session_id, pair.agent_session_id
+                    """,
+                arguments: [AgentKind.claudeCode.rawValue, AgentKind.claudeCode.rawValue]
+            ).compactMap { row in
+                guard let hostSessionID = UUID(uuidString: row["host_session_id"]),
+                    let observedAt = Self.date(fromISOString: row["event_at"])
+                else { return nil }
+                return ConversationSighting(
+                    hostSessionID: hostSessionID,
+                    conversationID: row["agent_session_id"],
+                    cwd: row["cwd"],
+                    observedAt: observedAt
+                )
+            }
+        }
+    }
+
+    public func metadataValue(forKey key: String) async throws -> String? {
+        try await dbPool.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM local_state_metadata WHERE key = ?", arguments: [key])
+        }
+    }
+
+    /// Replaces `key`'s value with `transform(current)` inside one `BEGIN IMMEDIATE`
+    /// transaction, which takes the database's write lock before the read, so no other
+    /// connection, from this store or another on the same file, writes between them. A nil
+    /// result leaves the value as it is. Returns the value found and the value left.
+    func updateMetadataValue(
+        forKey key: String,
+        _ transform: @escaping @Sendable (String?) throws -> String?
+    ) async throws -> (found: String?, left: String?) {
+        try await dbPool.writeWithoutTransaction { db in
+            var values: (found: String?, left: String?) = (nil, nil)
+            try db.inTransaction(.immediate) {
+                let current = try String.fetchOne(
+                    db, sql: "SELECT value FROM local_state_metadata WHERE key = ?", arguments: [key])
+                values = (current, current)
+                if let next = try transform(current) {
+                    try Self.writeMetadataValue(db, key: key, value: next)
+                    values.left = next
+                }
+                return .commit
+            }
+            return values
+        }
+    }
+
+    private static func upsertConversationIndexEntry(_ entry: ConversationIndexEntry, in db: Database) throws {
+        try db.cachedStatement(
+            sql: """
+                INSERT INTO conversation_index (
+                    conversation_id, harness, host_session_id, tmux_server_pid, tmux_session_id,
+                    cwd, observed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    harness = excluded.harness,
+                    host_session_id = excluded.host_session_id,
+                    tmux_server_pid = excluded.tmux_server_pid,
+                    tmux_session_id = excluded.tmux_session_id,
+                    cwd = excluded.cwd,
+                    observed_at = excluded.observed_at
+                """
+        ).execute(arguments: [
+            entry.conversationID, entry.harness, entry.hostSessionID?.uuidString, entry.tmuxServerPID,
+            entry.tmuxSessionID, entry.cwd, ConversationRecordJSON.string(entry.observedAt),
+        ])
+    }
+
     /// Standalone `PRAGMA quick_check` probe. Returns `true` when SQLite reports a
     /// structurally sound database (`["ok"]`).
     public func checkIntegrity() async throws -> Bool {
@@ -1166,6 +1313,7 @@ public actor LocalStateStore {
             "agent_status_events",
             "diagnostic_events",
             "diagnostic_exports",
+            "conversation_index",
         ]
 
         let counts = try await dbPool.read { db -> [String: Int] in
@@ -1238,7 +1386,7 @@ public actor LocalStateStore {
             arguments: [key, value, Self.isoString(Date())])
     }
 
-    private static var migrator: DatabaseMigrator {
+    static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1") { db in
             try db.execute(
@@ -1394,7 +1542,30 @@ public actor LocalStateStore {
                     ALTER TABLE terminal_sessions ADD COLUMN holder_lost_at TEXT;
                     """)
         }
+        registerConversationIndexMigration(in: &migrator)
         return migrator
+    }
+
+    /// A lookup over the Conversation record files, rebuilt from them at launch and kept
+    /// level by the record watcher. Nothing else writes it.
+    private static func registerConversationIndexMigration(in migrator: inout DatabaseMigrator) {
+        migrator.registerMigration("conversation_index") { db in
+            try db.execute(
+                sql: """
+                    CREATE TABLE IF NOT EXISTS conversation_index (
+                        conversation_id TEXT PRIMARY KEY NOT NULL,
+                        harness TEXT NOT NULL,
+                        host_session_id TEXT,
+                        tmux_server_pid INTEGER,
+                        tmux_session_id TEXT,
+                        cwd TEXT NOT NULL,
+                        observed_at TEXT NOT NULL
+                    ) STRICT;
+
+                    CREATE INDEX IF NOT EXISTS idx_conversation_index_host_session
+                        ON conversation_index(host_session_id, observed_at DESC);
+                    """)
+        }
     }
 
     private static func targetFields(

@@ -223,6 +223,26 @@ CREATE TABLE IF NOT EXISTS diagnostic_exports (
 CREATE INDEX IF NOT EXISTS idx_diagnostic_exports_created
     ON diagnostic_exports(created_at DESC);
 
+-- A lookup over the Conversation record files, one row per file in
+-- $WORKSPACES_CONVERSATIONS_DIR (default <CLI config dir>/conversations). The
+-- files are the truth: the app rebuilds this table from them at launch and
+-- syncs it when the directory changes, and nothing else writes it, so it can be
+-- dropped at any time. The current conversation of a tile is the row with the
+-- newest observed_at for its host_session_id. Added by the GRDB migration named
+-- "conversation_index"; liveness, run state, and prompt text are never stored.
+CREATE TABLE IF NOT EXISTS conversation_index (
+    conversation_id TEXT PRIMARY KEY NOT NULL,
+    harness TEXT NOT NULL,
+    host_session_id TEXT,
+    tmux_server_pid INTEGER,
+    tmux_session_id TEXT,
+    cwd TEXT NOT NULL,
+    observed_at TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_conversation_index_host_session
+    ON conversation_index(host_session_id, observed_at DESC);
+
 COMMIT;
 
 -- Useful exploration queries:
@@ -238,6 +258,13 @@ COMMIT;
 --   FROM agent_status_events
 --   WHERE host_session_id = '<uuid>'
 --   ORDER BY event_at ASC;
+--
+-- The conversation a tile holds now:
+--   SELECT conversation_id, observed_at
+--   FROM conversation_index
+--   WHERE host_session_id = '<uuid>'
+--   ORDER BY observed_at DESC
+--   LIMIT 1;
 --
 -- Diagnostic event counts:
 --   SELECT metric, count(*) AS events, max(event_at) AS latest

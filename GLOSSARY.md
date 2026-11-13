@@ -44,6 +44,10 @@ _Avoid_: Pane (in domain types), slot, cell
 The file `ws launch` writes for one handle, naming the conversation with its requested model and effort. It says what was asked for; the transcript says what ran. The CLI reads it to check and resume, and the app reads it to add a row.
 _Avoid_: Launch state, session file
 
+**Conversation Record**:
+The file that names one **Agent** conversation by its id and says where it ran and where it was last seen: the host, working directory, transcript path, and the **Terminal Session** and tmux session that held it most recently. Every path that learns a conversation's id writes it — `ws launch`, the SessionStart hook, the running app, a one-time migration — and none of them needs the app running. It holds facts about the conversation, never whether something holds it now. The app's conversation index is a lookup over these files.
+_Avoid_: Session record, conversation state, transcript
+
 **Workspace Note**:
 One short line about where a **Workspace**'s work stream stands, written by whoever is driving it — a person through the sidebar row's menu, or an agent through `workspace.note` at a checkpoint. Rendered under the row. Distinct from the workspace's lifecycle **status** (which the app owns) and from the sidebar's transient action message (which is about this moment); a note outlives the action that wrote it.
 _Avoid_: Comment, status text, label, description
@@ -114,6 +118,7 @@ _Avoid_: Notification row, alert item, task card
 - A terminal tab arranges its panes as a **Tile Tree**; each **Tile** binds one **Terminal Session** (or, through the same seam, a **Web Source** view).
 - The **Detail Pane** follows the selected **Surface** when that surface has repository or workspace context.
 - An **Agent** runs inside a **Terminal Session** and emits **Workspace Events** that the **Workspace Journal** persists.
+- An **Agent** conversation has at most one **Conversation Record**; the **Terminal Session** it was seen in last is that session's current conversation. A **Launch Record** names a conversation by handle; the **Conversation Record** names it by id.
 - **GitHub Activity** is external webhook activity and does not write to the **Workspace Journal**.
 - A **Terminal Session** observes its own **Terminal Command Status** independently of any **Agent** running inside it.
 - **Attention** rolls up across all **Workspaces** and **Repositories**; the rollup at any moment determines the toolbar indicator.

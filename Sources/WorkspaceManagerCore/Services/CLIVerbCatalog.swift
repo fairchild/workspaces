@@ -13,7 +13,7 @@ import Foundation
 public enum CLIVerbCatalog {
     /// Verbs that operate on CLI-local state or the local filesystem; no running app required.
     public static let localVerbs: Set<String> = [
-        "repo", "ws", "open", "run", "resume", "status", "recent", "doctor",
+        "repo", "ws", "open", "run", "resume", "status", "recent", "doctor", "conversation",
     ]
 
     /// Grouped subcommands of `workspaces automation ...` — every verb that talks to the
@@ -78,6 +78,7 @@ public enum CLIVerbCatalog {
           workspaces status <workspace> [--watch] [--interval <seconds>]
           workspaces recent
           workspaces doctor
+          workspaces conversation observe   (Claude SessionStart hook; payload on stdin)
 
         Automation commands (operator scope; require the app running with the
         Automation Operator experiment enabled — or WORKSPACES_AUTOMATION_OPERATOR=1

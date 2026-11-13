@@ -64,6 +64,7 @@ class AppCaptureWindowTests(unittest.TestCase):
             self.checkout / "scripts" / "launch-dev.sh",
             f"""\
             #!/bin/sh
+            echo "${{WORKSPACES_CONVERSATIONS_DIR-unset}}" > "{self.root}/launch-conversations"
             nohup "{self.binary}" 60 >/dev/null 2>&1 &
             echo $! > "{self.pid_file}"
             sleep 0.2
@@ -123,7 +124,12 @@ class AppCaptureWindowTests(unittest.TestCase):
             "HOME": str(self.home),
             "PATH": f"{self.stub_bin}:{os.environ['PATH']}",
         }
-        for key in ("WORKSPACES_SYNTHETIC_ROOT", "WORKSPACES_AUTOMATION_SOCKET", "WORKSPACES_AUTOMATION_HANDLE"):
+        for key in (
+            "WORKSPACES_SYNTHETIC_ROOT",
+            "WORKSPACES_AUTOMATION_SOCKET",
+            "WORKSPACES_AUTOMATION_HANDLE",
+            "WORKSPACES_CONVERSATIONS_DIR",
+        ):
             env.pop(key, None)
         env.update(extra_env or {})
         return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, timeout=60)
@@ -196,6 +202,18 @@ class AppCaptureWindowTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(set((self.root / "cli-env").read_text().splitlines()), {"unset unset"})
+
+    # intent: fix
+    def test_a_capture_from_a_workspaces_terminal_records_conversations_in_its_own_data_dir(self) -> None:
+        """A WorkSpaces terminal exports the installed app's records directory, and the
+        app takes an inherited value as explicit."""
+        self.stub_cli("launched")
+        result = self.capture(extra_env={"WORKSPACES_CONVERSATIONS_DIR": "/installed/conversations"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            (self.root / "launch-conversations").read_text().strip(),
+            f"{self.checkout}/.dev-data/evidence-lane/conversations",
+        )
 
     # intent: guard
     def test_an_app_without_operator_scope_fails_at_once_with_the_reason(self) -> None:

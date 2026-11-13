@@ -159,6 +159,7 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
         var environment = [
             "WORKSPACES_HOOKS_SOCKET": hooksSocketPath,
             "WORKSPACES_HOST_SESSION_ID": hostSessionID.uuidString,
+            ConversationRecordStore.directoryEnvironmentKey: ConversationRecordsLocation.directory.path,
         ]
         if let commandStatusHookPath {
             environment["WORKSPACES_COMMAND_STATUS_ZSH"] = commandStatusHookPath

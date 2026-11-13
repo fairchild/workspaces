@@ -455,6 +455,13 @@ class StructureOnlyOverARealBundleTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Missing Compose sandbox resource: compose.yaml", result.stderr)
 
+    # intent: guard
+    def test_missing_conversation_observer_fails_because_no_record_would_be_written(self) -> None:
+        (self.bundle / "Contents" / "Resources" / "HookForwarders" / "conversation-observer.sh").unlink()
+        result = run_verifier("--structure-only", str(self.bundle))
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Missing Claude conversation observer", result.stderr)
+
     def test_a_complete_unsigned_bundle_passes_structure_only_without_home(self) -> None:
         """A `HOME`-less environment verifies for real now, instead of exiting 0 blind.
 
@@ -662,7 +669,7 @@ def build_structurally_valid_bundle(root: Path) -> Path:
 
     (resources / "terminfo" / "78" / "xterm-ghostty").write_bytes(b"\x1a\x01")
     (resources / "Assets.car").write_bytes(b"car")
-    for forwarder in ("event-forwarder.sh", "statusline.sh"):
+    for forwarder in ("event-forwarder.sh", "statusline.sh", "conversation-observer.sh"):
         (resources / "HookForwarders" / forwarder).write_text("#!/bin/sh\n", encoding="utf-8")
     for compose_resource in ("compose.yaml", "Dockerfile", ".dockerignore"):
         (resources / "ComposeSandbox" / compose_resource).write_text("# fixture\n", encoding="utf-8")

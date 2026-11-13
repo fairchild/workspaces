@@ -14,6 +14,7 @@
 //
 
 import Foundation
+import os
 import Testing
 
 @testable import WorkspaceManagerCore
@@ -47,6 +48,7 @@ struct CLIDetachedSessionTests {
         var environment: [String: String] {
             [
                 "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
+                ConversationRecordStore.directoryEnvironmentKey: root.appendingPathComponent("conversations").path,
                 "WORKSPACES_SYNTHETIC_ROOT": root.appendingPathComponent("workspaces").path,
                 "TMUX_TMPDIR": root.path,
                 TmuxSessionControl.socketLabelEnvironmentKey: socketLabel,
@@ -64,6 +66,21 @@ struct CLIDetachedSessionTests {
                 currentDirectory: root,
                 environment: environment.merging(extraEnvironment) { _, new in new }
             )
+        }
+
+        /// One session's own environment on this fixture's socket, as `KEY=value` lines.
+        func sessionEnvironment(_ handle: String) throws -> String {
+            let process = Process()
+            let output = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["tmux", "-L", socketLabel, "show-environment", "-t", "=\(handle)"]
+            process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return String(decoding: data, as: UTF8.self)
         }
 
         /// The tmux server's global environment on this fixture's socket, as `KEY=value` lines.
@@ -326,6 +343,15 @@ struct CLIDetachedSessionTests {
         }
     }
 
+    /// A launched pane's tile-scoped keys: only the conversations directory, set by the launch
+    /// to the one it resolved rather than inherited, so the pane's SessionStart observer
+    /// writes where the launch did.
+    private static func expectOnlyTheLaunchConversationsDirectory(in paneEnvironment: String, fixture: Fixture) {
+        let key = ConversationRecordStore.directoryEnvironmentKey
+        #expect(callerKeys(in: paneEnvironment) == [key])
+        #expect(paneEnvironment.contains("\(key)=\(fixture.root.appendingPathComponent("conversations").path)\n"))
+    }
+
     /// Waits for a file a launched command writes, past the moment it starts existing.
     private func contentsOnceWritten(_ url: URL) async throws -> String {
         let deadline = Date().addingTimeInterval(
@@ -360,7 +386,7 @@ struct CLIDetachedSessionTests {
 
         let paneEnvironment = try await contentsOnceWritten(captured)
         #expect(paneEnvironment.contains("__done__"))
-        #expect(Self.callerKeys(in: paneEnvironment).isEmpty)
+        Self.expectOnlyTheLaunchConversationsDirectory(in: paneEnvironment, fixture: fixture)
 
         let serverEnvironment = try fixture.serverGlobalEnvironment()
         #expect(serverEnvironment.contains("WS_DETACHED_CONTROL=ordinary"))
@@ -399,7 +425,7 @@ struct CLIDetachedSessionTests {
 
         let paneEnvironment = try await contentsOnceWritten(captured)
         #expect(paneEnvironment.contains("__done__"))
-        #expect(Self.callerKeys(in: paneEnvironment).isEmpty)
+        Self.expectOnlyTheLaunchConversationsDirectory(in: paneEnvironment, fixture: fixture)
         #expect(Self.callerKeys(in: try fixture.serverGlobalEnvironment()).isEmpty)
     }
 
@@ -461,6 +487,7 @@ struct CLIDetachedSessionTests {
           printf '{"type":"assistant","isSidechain":false,"timestamp":"%s","effort":"%s","message":{"model":"%s"}}\n' \
             "$now" "${ran_effort:-$effort}" "$model" >> "$dir/$id.jsonl"
         fi
+        printf 'stub-records=%s\n' "${WORKSPACES_CONVERSATIONS_DIR:-none}"
         printf 'stub-started id=%s effort=%s\n' "$id" "$effort"
         printf '────\n❯ \n────\n'
         [ "$mode" = "quit" ] && exit 0
@@ -732,6 +759,293 @@ struct CLIDetachedSessionTests {
     }
 
     @Test(
+        "Resume into a shell older than the records directory hands the agent the directory",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func resumeIntoAPreRecordsShell() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let directory = fixture.root.appendingPathComponent("conversations").path
+
+        let launch = try launchResult(
+            fixture.run(
+                ["ws", "launch", fixture.workspaceSelector, "--cmd", "claude --stub-quit", "--json"],
+                extraEnvironment: environment
+            )
+        )
+        try await waitUntilGone(launch.handle, fixture: fixture, environment: environment)
+        try startSession(
+            launch.handle, running: "env -u \(ConversationRecordStore.directoryEnvironmentKey) /bin/sh",
+            fixture: fixture, environment: environment
+        )
+
+        let resume = try resumeResult(
+            fixture.run(["ws", "resume", launch.handle, "--json"], extraEnvironment: environment)
+        )
+        #expect(resume.resumed)
+        let text = try await readUntil(fixture, selector: launch.handle) { $0.contains("stub-started") }
+        #expect(text.contains("stub-records=\(directory)"))
+        let assignment = "\(ConversationRecordStore.directoryEnvironmentKey)=\(directory)"
+        #expect(try fixture.sessionEnvironment(launch.handle).contains(assignment))
+    }
+
+    @Test(
+        "A hook in a shell older than its session's records directory reads it from the session",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func hookInAPreRecordsShellReadsTheSession() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let key = ConversationRecordStore.directoryEnvironmentKey
+        let directory = fixture.root.appendingPathComponent("conversations")
+        let script = try installHookScript(in: fixture)
+        let trigger = fixture.root.appendingPathComponent("go")
+        let conversationID = UUID().uuidString.lowercased()
+        let payload = #"{"session_id":"\#(conversationID)","cwd":"\#(fixture.root.path)"}"#
+        let handle = "wm-pre-records-00000000"
+
+        // A shell started without the key, waiting until the session has it, then a
+        // SessionStart hook in that same shell.
+        try startSession(
+            handle,
+            running: "env -u \(key) -u WORKSPACES_HOST_SESSION_ID /bin/sh -c "
+                + RaceGroupPlanner.shellQuoted(
+                    "while [ ! -e '\(trigger.path)' ]; do sleep 0.1; done; "
+                        + "printf '%s' '\(payload)' | '\(script.path)'; sleep 60"
+                ),
+            fixture: fixture, environment: environment
+        )
+        let control = TmuxSessionControl(
+            socketLabel: fixture.socketLabel,
+            environment: ProcessInfo.processInfo.environment.merging(fixture.environment) { _, new in new }
+                .filter { $0.key != key },
+            sessionEnvironment: [key: directory.path]
+        )
+        try await control.adoptSessionEnvironment(handle: handle)
+        FileManager.default.createFile(atPath: trigger.path, contents: nil)
+
+        let records = ConversationRecordStore(directory: directory)
+        let deadline = Date().addingTimeInterval(await LaunchBudget.deadline(launches: 2, floor: 10, ceiling: 60))
+        var record = try records.load(conversationID: conversationID)
+        while record == nil, Date() < deadline {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            record = try records.load(conversationID: conversationID)
+        }
+        let written = try #require(record, "the hook in the surviving shell wrote no record")
+        #expect(written.observedBy == .hook)
+        #expect(written.lastSeenIn?.tmux?.sessionID.hasPrefix("$") == true)
+    }
+
+    /// The hook script as the app extracts it, naming this fixture's CLI.
+    private func installHookScript(in fixture: Fixture) throws -> URL {
+        let template = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/WorkspaceManager/Resources/HookForwarders/conversation-observer.sh"),
+            encoding: .utf8
+        )
+        let script = fixture.root.appendingPathComponent("conversation-observer.sh")
+        try template.replacingOccurrences(of: "@WORKSPACES_CLI@", with: fixture.binary.path)
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+
+    /// A session made without the records directory, which the session's environment then
+    /// names, as a surviving session has it after a resume or a tile attaches. Returns the
+    /// `$TMUX` its panes see: socket path, server pid, session number.
+    private func sessionNamingTheRecordsDirectory(
+        _ handle: String,
+        fixture: Fixture,
+        environment: [String: String],
+        directory: URL? = nil
+    ) async throws -> (socket: String, serverPID: Int32, session: String) {
+        let key = ConversationRecordStore.directoryEnvironmentKey
+        try startSession(handle, running: "env -u \(key) sleep 120", fixture: fixture, environment: environment)
+        let tmuxEnvironment = ProcessInfo.processInfo.environment.merging(fixture.environment) { _, new in new }
+            .filter { $0.key != key }
+        try await TmuxSessionControl(
+            socketLabel: fixture.socketLabel,
+            environment: tmuxEnvironment,
+            sessionEnvironment: [key: (directory ?? fixture.root.appendingPathComponent("conversations")).path]
+        ).adoptSessionEnvironment(handle: handle)
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [
+            "tmux", "-L", fixture.socketLabel, "display-message", "-p", "-t", "=\(handle):",
+            "#{socket_path}\t#{pid}\t#{session_id}",
+        ]
+        process.environment = tmuxEnvironment
+        process.standardOutput = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let fields = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .newlines)
+            .split(separator: "\t").map(String.init)
+        try #require(fields.count == 3)
+        return (fields[0], try #require(Int32(fields[1])), String(fields[2].dropFirst()))
+    }
+
+    /// Runs the hook outside any tile key with `tmux` as `$TMUX`, and how long it took. With
+    /// `signal`, sends it that signal `signalAfter` seconds in. A hook that outlives `limit`
+    /// is killed, so a hang fails the test rather than the suite.
+    private func runHook(
+        _ script: URL,
+        tmux: String,
+        conversationID: String,
+        fixture: Fixture,
+        temporaryDirectory: URL? = nil,
+        signal: Int32? = nil,
+        signalAfter: TimeInterval = 0.3,
+        limit: TimeInterval = 15
+    ) throws -> TimeInterval {
+        let process = Process()
+        let input = Pipe()
+        process.executableURL = script
+        process.environment = [
+            "PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin", "HOME": fixture.root.path, "TMUX": tmux,
+            "XDG_CONFIG_HOME": fixture.root.appendingPathComponent("config").path,
+            "TMPDIR": (temporaryDirectory ?? fixture.root).path,
+        ]
+        process.standardInput = input
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let started = Date()
+        try process.run()
+        input.fileHandleForWriting.write(
+            Data(#"{"session_id":"\#(conversationID)","cwd":"\#(fixture.root.path)"}"#.utf8))
+        try input.fileHandleForWriting.close()
+        var signalled = signal == nil
+        while process.isRunning, Date().timeIntervalSince(started) < limit {
+            if !signalled, let signal, Date().timeIntervalSince(started) >= signalAfter {
+                kill(process.processIdentifier, signal)
+                signalled = true
+            }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+        }
+        process.waitUntilExit()
+        return Date().timeIntervalSince(started)
+    }
+
+    @Test(
+        "A hook declines the records directory of a server other than the one its $TMUX names",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func hookDeclinesAnotherServersDirectory() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let script = try installHookScript(in: fixture)
+        let records = ConversationRecordStore(directory: fixture.root.appendingPathComponent("conversations"))
+        let tmux = try await sessionNamingTheRecordsDirectory(
+            "wm-replaced-00000000", fixture: fixture, environment: environment)
+
+        let elsewhere = UUID().uuidString.lowercased()
+        _ = try runHook(
+            script, tmux: "\(tmux.socket),\(tmux.serverPID + 1),\(tmux.session)",
+            conversationID: elsewhere, fixture: fixture)
+        #expect(records.load(conversationID: elsewhere) == nil)
+
+        let here = UUID().uuidString.lowercased()
+        _ = try runHook(
+            script, tmux: "\(tmux.socket),\(tmux.serverPID),\(tmux.session)",
+            conversationID: here, fixture: fixture)
+        #expect(records.load(conversationID: here) != nil)
+    }
+
+    @Test(
+        "A hook reads a records directory ending in a newline from the session byte for byte",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func hookReadsATrailingNewlineFromTheSession() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let script = try installHookScript(in: fixture)
+        let directory = fixture.root.appendingPathComponent("conversations\n")
+        let tmux = try await sessionNamingTheRecordsDirectory(
+            "wm-newline-00000000", fixture: fixture, environment: environment, directory: directory)
+
+        let conversationID = UUID().uuidString.lowercased()
+        _ = try runHook(
+            script, tmux: "\(tmux.socket),\(tmux.serverPID),\(tmux.session)",
+            conversationID: conversationID, fixture: fixture)
+
+        #expect(ConversationRecordStore(directory: directory).load(conversationID: conversationID) != nil)
+        let trimmed = fixture.root.appendingPathComponent("conversations")
+        #expect(ConversationRecordStore(directory: trimmed).load(conversationID: conversationID) == nil)
+    }
+
+    @Test(
+        "A hook whose tmux server does not answer gives up within its bound and writes nothing",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func hookGivesUpOnAStoppedServer() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let script = try installHookScript(in: fixture)
+        let records = ConversationRecordStore(directory: fixture.root.appendingPathComponent("conversations"))
+        let tmux = try await sessionNamingTheRecordsDirectory(
+            "wm-stopped-00000000", fixture: fixture, environment: environment)
+
+        let conversationID = UUID().uuidString.lowercased()
+        kill(tmux.serverPID, SIGSTOP)
+        let elapsed: TimeInterval
+        do {
+            defer { kill(tmux.serverPID, SIGCONT) }
+            elapsed = try runHook(
+                script, tmux: "\(tmux.socket),\(tmux.serverPID),\(tmux.session)",
+                conversationID: conversationID, fixture: fixture)
+        }
+        #expect(elapsed < 5, "the hook took \(elapsed) s against a stopped server")
+        #expect(records.load(conversationID: conversationID) == nil)
+    }
+
+    @Test(
+        "A hook signalled while its tmux server does not answer leaves no lookup behind",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it"),
+        arguments: [SIGTERM, SIGINT]
+    )
+    func signalledHookCleansUp(_ signal: Int32) async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let script = try installHookScript(in: fixture)
+        let temporary = fixture.root.appendingPathComponent("hook-tmp")
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        let tmux = try await sessionNamingTheRecordsDirectory(
+            "wm-signalled-00000000", fixture: fixture, environment: environment)
+
+        kill(tmux.serverPID, SIGSTOP)
+        let elapsed: TimeInterval
+        let clientsLeft: Int32
+        do {
+            defer { kill(tmux.serverPID, SIGCONT) }
+            elapsed = try runHook(
+                script, tmux: "\(tmux.socket),\(tmux.serverPID),\(tmux.session)",
+                conversationID: UUID().uuidString.lowercased(), fixture: fixture,
+                temporaryDirectory: temporary, signal: signal)
+            // Asked while the server is still stopped, when a leaked client would still be waiting.
+            let clients = Process()
+            clients.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+            clients.arguments = ["-f", "-q", "\(tmux.socket) display-message -p -t \\$\(tmux.session) "]
+            try clients.run()
+            clients.waitUntilExit()
+            clientsLeft = clients.terminationStatus
+        }
+        #expect(elapsed < 5, "the hook took \(elapsed) s to end after the signal")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: temporary.path) == [])
+        #expect(clientsLeft == 1, "a lookup client outlived the hook")
+    }
+
+    @Test(
         "Resume refuses to type into a session running something else",
         .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
     )
@@ -953,6 +1267,183 @@ struct CLIDetachedSessionTests {
         let resume = try fixture.run(["ws", "resume", launch.handle], extraEnvironment: environment)
         #expect(resume.status == 1)
         #expect(resume.stderr.contains("nothing took up conversation"))
+    }
+
+    @Test(
+        "ws launch writes the conversation record and the launch record together",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func launchWritesTheConversationRecord() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+
+        let launch = try launchResult(
+            fixture.run(
+                [
+                    "ws", "launch", fixture.workspaceSelector, "--cmd", "claude --model claude-opus-5-5 --effort low",
+                    "--json",
+                ],
+                extraEnvironment: environment
+            )
+        )
+
+        let launches = fixture.root.appendingPathComponent("config/workspaces-cli/launches")
+        let launchRecord = try #require(
+            AgentLaunchRecordStore(directory: launches).load(socketLabel: fixture.socketLabel, handle: launch.handle)
+        )
+        let conversationID = try #require(launchRecord.identity?.conversationID)
+        let record = try #require(
+            ConversationRecordStore(directory: fixture.root.appendingPathComponent("conversations"))
+                .load(conversationID: conversationID)
+        )
+        #expect(launch.conversationID == conversationID)
+        #expect(record.observedBy == .wsLaunch)
+        #expect(record.launch == .init(handle: launch.handle, model: "claude-opus-5-5", effort: "low"))
+        #expect(record.cwd == launchRecord.workspacePath)
+        #expect(record.workspacePath == launchRecord.workspacePath)
+        #expect(record.socketLabel == fixture.socketLabel)
+        #expect(record.lastSeenIn?.hostSessionID == nil)
+        #expect(record.lastSeenIn?.tmux?.name == launch.handle)
+        #expect(record.lastSeenIn?.tmux?.sessionID.hasPrefix("$") == true)
+    }
+
+    /// The client that starts a detached session has tile-scoped keys stripped, so without
+    /// `-e` the pane would carry no conversations directory and the SessionStart observer
+    /// inside it would treat itself as outside WorkSpaces and write nothing.
+    @Test(
+        "An observer inside a detached session writes to the launch's conversations directory",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func detachedSessionCarriesTheConversationsDirectory() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let conversationID = UUID().uuidString.lowercased()
+        let payload = #"{"session_id":"\#(conversationID)","cwd":"\#(fixture.root.path)"}"#
+        let command = "printf '%s' '\(payload)' | '\(fixture.binary.path)' conversation observe; sleep 30"
+
+        try fixture.run(
+            ["ws", "launch", fixture.workspaceSelector, "--cmd", command, "--json"],
+            extraEnvironment: environment.merging([
+                "WORKSPACES_HOST_SESSION_ID": UUID().uuidString
+            ]) { _, new in new }
+        )
+
+        let records = ConversationRecordStore(directory: fixture.root.appendingPathComponent("conversations"))
+        let deadline = Date().addingTimeInterval(
+            await LaunchBudget.deadline(launches: 2, floor: 10, ceiling: 60)
+        )
+        var record = try records.load(conversationID: conversationID)
+        while record == nil, Date() < deadline {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            record = try records.load(conversationID: conversationID)
+        }
+        let written = try #require(record, "the observer in the detached pane wrote no record")
+        #expect(written.observedBy == .hook)
+        #expect(written.lastSeenIn?.hostSessionID == nil)
+        #expect(written.lastSeenIn?.tmux?.sessionID.hasPrefix("$") == true)
+        #expect(!(try fixture.serverGlobalEnvironment()).contains(ConversationRecordStore.directoryEnvironmentKey))
+    }
+
+    /// The launch a tmux older than 3.2 gets, run on the real tmux here with only its version
+    /// answer replaced: no `-e`, the command under `env`, and a chained `set-environment`.
+    /// The observer in the first pane still writes where the launch named, and the session
+    /// names the directory for any later pane.
+    @Test(
+        "Without new-session -e, an observer in the detached pane still writes to the launch's directory",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func detachedSessionWithoutTheEnvironmentFlag() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let key = ConversationRecordStore.directoryEnvironmentKey
+        let directory = fixture.root.appendingPathComponent("conversations")
+        let conversationID = UUID().uuidString.lowercased()
+        let payload = #"{"session_id":"\#(conversationID)","cwd":"\#(fixture.root.path)"}"#
+        let handle = "wm-old-tmux-00000000"
+        let calls = OSAllocatedUnfairLock<[[String]]>(initialState: [])
+        let control = TmuxSessionControl(
+            socketLabel: fixture.socketLabel,
+            run: { executable, arguments, environment in
+                calls.withLock { $0.append(arguments) }
+                if arguments == ["tmux", "-V"] { return ProcessResult(exitCode: 0, stdout: "tmux 3.1c\n", stderr: "") }
+                return await TmuxSessionControl.defaultRunner(executable, arguments, environment)
+            },
+            environment: ProcessInfo.processInfo.environment.merging(fixture.environment) { _, new in new }
+                .filter { $0.key != key },
+            sessionEnvironment: [key: directory.path]
+        )
+
+        try await control.launch(
+            handle: handle, directory: fixture.root,
+            command: "printf '%s' '\(payload)' | '\(fixture.binary.path)' conversation observe; sleep 30")
+
+        let created = try #require(calls.withLock { $0.first { $0.contains("new-session") } })
+        #expect(!created.contains("-e"))
+        let records = ConversationRecordStore(directory: directory)
+        let deadline = Date().addingTimeInterval(await LaunchBudget.deadline(launches: 1, floor: 10, ceiling: 60))
+        var record = try records.load(conversationID: conversationID)
+        while record == nil, Date() < deadline {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            record = try records.load(conversationID: conversationID)
+        }
+        let written = try #require(record, "the observer in the first pane wrote no record")
+        #expect(written.observedBy == .hook)
+        #expect(try fixture.sessionEnvironment(handle).contains("\(key)=\(directory.path)"))
+        #expect(!(try fixture.serverGlobalEnvironment()).contains(key))
+    }
+
+    /// tmux ends a command at a `;` closing any argument, so each value here would split or
+    /// trim a launch handed to it raw; U+0600 makes the last `;` share a `Character` with
+    /// it. The command ends in `\;` for the same reason: the pane's shell receives it as an
+    /// argument only if the command reached tmux intact. Every session outlives the checks;
+    /// teardown's `kill-server` ends them.
+    @Test(
+        "Values ending in ;, \\; or \\ reach the pane and the session intact, with new-session -e and without",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func sessionEnvironmentSurvivesTmuxsArgumentParser() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let key = "WORKSPACES_PROBE_VALUE"
+        let values = ["/tmp/records;", #"/tmp/records\;"#, #"/tmp/records\"#, "/tmp/records\u{0600};"]
+
+        for (index, value) in values.enumerated() {
+            for seeds in [true, false] {
+                let control = TmuxSessionControl(
+                    socketLabel: fixture.socketLabel,
+                    run: { executable, arguments, environment in
+                        guard arguments == ["tmux", "-V"] else {
+                            return await TmuxSessionControl.defaultRunner(executable, arguments, environment)
+                        }
+                        return ProcessResult(exitCode: 0, stdout: seeds ? "tmux 3.2\n" : "tmux 3.1c\n", stderr: "")
+                    },
+                    environment: ProcessInfo.processInfo.environment.merging(fixture.environment) { _, new in new },
+                    sessionEnvironment: [key: value]
+                )
+                let path = seeds ? "e" : "env"
+                let withCommand = "wm-escape-\(index)-\(path)-cmd"
+                let bare = "wm-escape-\(index)-\(path)-bare"
+                let out = fixture.root.appendingPathComponent("\(withCommand).out")
+                let script = #"printf "%s|%s|__done__" "$\#(key)" "$2" > "$1"; exec sleep 600"#
+
+                try await control.launch(
+                    handle: withCommand, directory: fixture.root,
+                    command: #"exec /bin/sh -c '\#(script)' sh '\#(out.path)' \;"#
+                )
+                try await control.launch(handle: bare, directory: fixture.root, command: nil)
+
+                #expect(try await contentsOnceWritten(out) == "\(value)|;|__done__", "\(withCommand)")
+                for handle in [withCommand, bare] {
+                    let query = ["tmux", "-u", "-L", fixture.socketLabel, "show-environment", "-t", "=\(handle)", key]
+                    let shown = await TmuxSessionControl.defaultRunner(
+                        "/usr/bin/env", query,
+                        ProcessInfo.processInfo.environment.merging(fixture.environment) { _, new in new })
+                    #expect(shown?.stdout == "\(key)=\(value)\n", "\(handle): \(shown?.stdout ?? "no answer")")
+                }
+            }
+        }
     }
 
     @Test("Resuming a handle nothing was launched under says so")

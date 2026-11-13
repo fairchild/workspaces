@@ -294,6 +294,61 @@ struct ClaudeIntegrationLifecycleTests {
         #expect(didPublishInstaller)
     }
 
+    static let ownershipCases: [(String, Bool)] = [
+        ("/Applications/WorkSpaces.app", true),
+        ("/Applications/Utilities/WorkSpaces.app", true),
+        ("/Applications/Setapp/WorkSpaces.app", true),
+        ("/Users/someone/Applications/WorkSpaces.app", true),
+        ("/Users/someone/Applications/Tools/WorkSpaces.app", true),
+        ("/Applications", false),
+        ("/Applications/WorkSpaces", false),
+        ("/private/tmp/dev/Applications/WorkSpaces.app", false),
+        ("/tmp/dev/Applications/WorkSpaces.app", false),
+        ("/private/tmp/evidence-1234/WorkSpaces.app", false),
+        ("/private/var/folders/xy/abc/T/AppTranslocation/0A1B2C3D/d/WorkSpaces.app", false),
+        ("/Applications/.build/WorkSpaces.app", false),
+        ("/Users/someone/code/workspaces/.build/arm64-apple-macosx/debug", false),
+        ("/Users/someone/code/workspaces/build/WorkSpaces.app", false),
+        ("/Users/other/Applications/WorkSpaces.app", false),
+    ]
+
+    @Test(
+        "Only an app installed under an Applications folder owns the machine-wide conversation observer",
+        arguments: ownershipCases)
+    func observerOwnership(path: String, owns: Bool) {
+        #expect(
+            ClaudeIntegrationLifecycle.ownsMachineWideObserver(
+                bundleURL: URL(fileURLWithPath: path), homeDirectory: URL(fileURLWithPath: "/Users/someone")) == owns)
+    }
+
+    @Test("A dev build names the installed observer without rewriting it, and the installed app rewrites it")
+    func devBuildLeavesTheObserverAlone() throws {
+        let installDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("observer-owner-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: installDirectory) }
+        let devBundle = URL(fileURLWithPath: "/Users/someone/code/workspaces/.build/arm64-apple-macosx/debug")
+        let devCLI = URL(fileURLWithPath: "/Users/someone/code/workspaces/.build/arm64-apple-macosx/debug/workspaces")
+        let script = installDirectory.appendingPathComponent("conversation-observer.sh")
+
+        #expect(
+            ClaudeIntegrationLifecycle.extractConversationObserverScript(
+                bundleURL: devBundle, cliURL: devCLI, installDirectory: installDirectory) == nil)
+        #expect(!FileManager.default.fileExists(atPath: script.path))
+
+        let installedPath = try #require(
+            ClaudeIntegrationLifecycle.extractConversationObserverScript(
+                bundleURL: URL(fileURLWithPath: "/Applications/WorkSpaces.app"),
+                cliURL: URL(fileURLWithPath: "/Applications/WorkSpaces.app/Contents/Helpers/workspaces"),
+                installDirectory: installDirectory))
+        let installed = try String(contentsOfFile: installedPath, encoding: .utf8)
+        #expect(installed.contains("'/Applications/WorkSpaces.app/Contents/Helpers/workspaces'"))
+
+        #expect(
+            ClaudeIntegrationLifecycle.extractConversationObserverScript(
+                bundleURL: devBundle, cliURL: devCLI, installDirectory: installDirectory) == installedPath)
+        #expect(try String(contentsOfFile: installedPath, encoding: .utf8) == installed)
+    }
+
     @Test("bundled hook forwarder resources resolve in SwiftPM debug builds")
     func bundledHookForwarderResourcesResolve() throws {
         let eventForwarder = try #require(

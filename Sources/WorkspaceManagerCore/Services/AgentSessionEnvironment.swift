@@ -21,15 +21,17 @@ public enum AgentSessionEnvironment {
     static let callerKeys: Set<String> = ["AI_AGENT"]
 
     /// Keys whose values belong to one tile and one launch: the automation handle a CLI
-    /// verb resolves its caller from, its socket, and the hook context that attributes
-    /// status to a host session. A session launched from a tile that kept these would
-    /// report its work as the tile's.
+    /// verb resolves its caller from, its socket, the hook context that attributes
+    /// status to a host session, and the directory that hook writes Conversation records
+    /// into. A session launched from a tile that kept these would report its work as the
+    /// tile's.
     public static let tileScopedKeys: [String] = [
         AutomationAPI.socketEnvironmentKey,
         AutomationAPI.handleEnvironmentKey,
         "WORKSPACES_HOOKS_SOCKET",
         "WORKSPACES_HOST_SESSION_ID",
         "WORKSPACES_COMMAND_STATUS_ZSH",
+        ConversationRecordStore.directoryEnvironmentKey,
     ]
 
     public static func isAgentIdentity(_ key: String) -> Bool {

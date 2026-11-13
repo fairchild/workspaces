@@ -81,6 +81,7 @@ public struct TmuxSessionControl: Sendable {
     public let socketLabel: String
     private let run: CommandRunner
     private let environment: [String: String]
+    private let sessionEnvironment: [String: String]
     private let sendChunkBytes: Int
     private let sendChunkPause: Duration
 
@@ -88,12 +89,14 @@ public struct TmuxSessionControl: Sendable {
         socketLabel: String = TmuxSessionControl.defaultSocketLabel,
         run: @escaping CommandRunner = TmuxSessionControl.defaultRunner,
         environment: [String: String] = TmuxSessionProbe.defaultEnvironment,
+        sessionEnvironment: [String: String] = [:],
         sendChunkBytes: Int = TmuxSessionControl.defaultSendChunkBytes,
         sendChunkPause: Duration = TmuxSessionControl.defaultSendChunkPause
     ) {
         self.socketLabel = socketLabel
         self.run = run
         self.environment = environment
+        self.sessionEnvironment = sessionEnvironment
         self.sendChunkBytes = sendChunkBytes
         self.sendChunkPause = sendChunkPause
     }
@@ -141,20 +144,56 @@ public struct TmuxSessionControl: Sendable {
     ///
     /// The session's lifetime is its command's: no `remain-on-exit`, matching both
     /// the app's own launches and what a person typing tmux by hand would get.
+    ///
+    /// `sessionEnvironment` goes on this session alone. The client's own environment has
+    /// tile-scoped keys stripped, and the server's global environment is shared by every
+    /// pane on the socket, so the session's own environment is the one place a value
+    /// reaches this session's panes and no other.
+    ///
+    /// With `seedsEnvironmentOnCreate`, `-e` sets it as the session is made. A tmux older
+    /// than `TmuxSessionProbe.sessionEnvironmentFlagVersion` rejects `-e` and would fail
+    /// the launch, so there the command runs under `env` with the same pairs, and a
+    /// `set-environment` chained in the same client invocation gives them to every later
+    /// pane. A first pane without a command is a plain shell that lacks them; a hook in it
+    /// reads them from the session (`conversation-observer.sh`).
+    ///
+    /// Every argument carrying data passes through `TmuxSessionProbe.literalArgument`, so
+    /// a value or command ending in `;` reaches the session rather than splitting the launch.
     public static func newSessionArguments(
         socketLabel: String,
         handle: String,
         directory: URL,
-        command: String?
+        command: String?,
+        sessionEnvironment: [String: String] = [:],
+        seedsEnvironmentOnCreate: Bool = true
     ) -> [String] {
         var arguments = [
             "tmux", "-L", socketLabel, "new-session", "-d",
             "-s", handle,
-            "-c", directory.path,
+            "-c", TmuxSessionProbe.literalArgument(directory.path),
             "-x", String(detachedPaneWidth), "-y", String(detachedPaneHeight),
         ]
+        let literal = TmuxSessionProbe.literalArgument
+        let pairs = sessionEnvironment.keys.sorted().map { (key: $0, value: sessionEnvironment[$0] ?? "") }
+        if seedsEnvironmentOnCreate {
+            for pair in pairs {
+                arguments.append(contentsOf: ["-e", literal("\(pair.key)=\(pair.value)")])
+            }
+        }
         if let command, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            arguments.append(contentsOf: ["--", "/bin/zsh", "-lc", command])
+            arguments.append("--")
+            if !seedsEnvironmentOnCreate, !pairs.isEmpty {
+                arguments.append("/usr/bin/env")
+                arguments.append(contentsOf: pairs.map { literal("\($0.key)=\($0.value)") })
+            }
+            arguments.append(contentsOf: ["/bin/zsh", "-lc", literal(command)])
+        }
+        if !seedsEnvironmentOnCreate {
+            for pair in pairs {
+                arguments.append(contentsOf: [
+                    ";", "set-environment", "-t", "=\(handle)", literal(pair.key), literal(pair.value),
+                ])
+            }
         }
         return arguments
     }
@@ -336,6 +375,15 @@ public struct TmuxSessionControl: Sendable {
         ["tmux", "-L", socketLabel, "send-keys", "-t", paneTarget(handle), "C-u"]
     }
 
+    /// The identity the server gave the session: its own pid, the session's id and creation
+    /// time, and the name. Tab-separated, because a name can hold spaces.
+    public static func sessionIdentityArguments(socketLabel: String, handle: String) -> [String] {
+        [
+            "tmux", "-L", socketLabel, "display-message", "-p", "-t", paneTarget(handle),
+            "#{pid}\t#{session_id}\t#{session_created}\t#{session_name}",
+        ]
+    }
+
     public static func hasSessionArguments(socketLabel: String, handle: String) -> [String] {
         ["tmux", "-L", socketLabel, "has-session", "-t", "=\(handle)"]
     }
@@ -410,6 +458,7 @@ public struct TmuxSessionControl: Sendable {
             throw ControlError.handleAlreadyLive(handle: handle)
         }
         await removeCallerIdentityFromServer()
+        let seedsEnvironmentOnCreate = sessionEnvironment.isEmpty ? true : await supportsSessionEnvironmentFlag()
         guard
             let result = await run(
                 "/usr/bin/env",
@@ -417,7 +466,9 @@ public struct TmuxSessionControl: Sendable {
                     socketLabel: socketLabel,
                     handle: handle,
                     directory: directory,
-                    command: command
+                    command: command,
+                    sessionEnvironment: sessionEnvironment,
+                    seedsEnvironmentOnCreate: seedsEnvironmentOnCreate
                 ),
                 environment
             )
@@ -428,6 +479,15 @@ public struct TmuxSessionControl: Sendable {
             throw ControlError.commandFailed(verb: "new-session", handle: handle, stderr: result.stderr)
         }
         return handle
+    }
+
+    /// Whether this tmux accepts `new-session -e`. An unreadable version reads as too old,
+    /// as the app's launches read it: the fallback costs a plain first pane its seeded
+    /// environment, while `-e` at a tmux that rejects it costs the whole session.
+    public func supportsSessionEnvironmentFlag() async -> Bool {
+        let result = await run("/usr/bin/env", ["tmux", "-V"], environment)
+        let version = result?.success == true ? TmuxSessionProbe.parseVersion(fromVersionOutput: result?.stdout) : nil
+        return TmuxSessionProbe.supportsSessionEnvironmentFlag(version: version)
     }
 
     /// Clears agent identity a running server already holds, so a pane spawned after this
@@ -482,6 +542,26 @@ public struct TmuxSessionControl: Sendable {
         return Int(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// Where the server says the session is, or `nil` when it did not answer.
+    public func sessionIdentity(handle: String) async -> ConversationRecord.TmuxSession? {
+        guard
+            let result = await run(
+                "/usr/bin/env",
+                Self.sessionIdentityArguments(socketLabel: socketLabel, handle: handle),
+                environment
+            ),
+            result.success
+        else { return nil }
+        let fields = result.stdout.trimmingCharacters(in: .newlines).split(separator: "\t", maxSplits: 3)
+        guard fields.count == 4, let pid = Int(fields[0]) else { return nil }
+        return ConversationRecord.TmuxSession(
+            serverPID: pid,
+            sessionID: String(fields[1]),
+            createdAt: TimeInterval(fields[2]).map { Date(timeIntervalSince1970: $0) },
+            name: String(fields[3])
+        )
+    }
+
     /// Empties the line at a shell prompt, so what is typed next is the whole command. The
     /// app prefills a resume command into a fresh shell, and typing another one after it
     /// would run neither.
@@ -498,6 +578,45 @@ public struct TmuxSessionControl: Sendable {
         guard result.success else {
             throw ControlError.commandFailed(verb: "send-keys C-u", handle: handle, stderr: result.stderr)
         }
+    }
+
+    /// `set-environment` of one pair on a session that already exists.
+    public static func setSessionEnvironmentArguments(
+        socketLabel: String,
+        handle: String,
+        key: String,
+        value: String
+    ) -> [String] {
+        [
+            "tmux", "-L", socketLabel, "set-environment", "-t", "=\(handle)",
+            TmuxSessionProbe.literalArgument(key), TmuxSessionProbe.literalArgument(value),
+        ]
+    }
+
+    /// Puts `sessionEnvironment` on a session that was made without it, such as one that
+    /// outlived the build that created it. Panes spawned later inherit it, and a hook in an
+    /// older pane reads it from the session (`conversation-observer.sh`).
+    public func adoptSessionEnvironment(handle: String) async throws {
+        for key in sessionEnvironment.keys.sorted() {
+            let arguments = Self.setSessionEnvironmentArguments(
+                socketLabel: socketLabel, handle: handle, key: key, value: sessionEnvironment[key] ?? "")
+            guard let result = await run("/usr/bin/env", arguments, environment) else {
+                throw ControlError.tmuxUnavailable
+            }
+            guard result.success else {
+                throw ControlError.commandFailed(verb: "set-environment", handle: handle, stderr: result.stderr)
+            }
+        }
+    }
+
+    /// `command` with `sessionEnvironment` as leading assignments, for typing into a shell
+    /// that is already running: it keeps the environment it started with, whatever the
+    /// session says now.
+    public func prefixingSessionEnvironment(_ command: String) -> String {
+        let assignments = sessionEnvironment.keys.sorted().map {
+            "\($0)=\(RaceGroupPlanner.shellQuoted(sessionEnvironment[$0] ?? ""))"
+        }
+        return (assignments + [command]).joined(separator: " ")
     }
 
     /// Whether a pane is at a shell prompt, which is the one state text can safely be typed

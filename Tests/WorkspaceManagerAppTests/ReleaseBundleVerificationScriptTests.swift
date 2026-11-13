@@ -257,7 +257,7 @@ struct ReleaseBundleVerificationScriptTests {
         if includeHookForwarders {
             let forwarders = resources.appendingPathComponent("HookForwarders", isDirectory: true)
             try FileManager.default.createDirectory(at: forwarders, withIntermediateDirectories: true)
-            for name in ["event-forwarder.sh", "statusline.sh"] {
+            for name in ["event-forwarder.sh", "statusline.sh", "conversation-observer.sh"] {
                 try Data().write(to: forwarders.appendingPathComponent(name))
             }
         }

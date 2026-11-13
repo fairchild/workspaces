@@ -48,6 +48,10 @@ struct WorkspaceManagerApp: App {
         // pre-wipe suite. It is constructed below instead.
         LaunchPreferences.bootstrapForApplicationLaunch()
 
+        // Read before the line below clears it: the records directory is a tile-scoped key,
+        // and a run isolated with it has to keep it.
+        _ = ConversationRecordsLocation.resolution
+
         // An app started from inside an agent session carries that session's variables
         // for its whole run, and every pane it opens would inherit them.
         let callerIdentity = AgentSessionEnvironment.removeCallerIdentityFromProcess()
@@ -123,6 +127,9 @@ struct WorkspaceManagerApp: App {
                 registry: registry,
                 commandStatusRegistry: commandStatusRegistry
             )
+            if ConversationRecordsLifecycle.isAllowed(environment: ProcessInfo.processInfo.environment) {
+                ConversationRecordsLifecycle.shared.start(localStateStore: localStateBootstrap.store)
+            }
             // Watch the app's own descendants and the scoped directories for runaway
             // memory whether or not the Diagnostics pane is open (#1368). The sweep
             // spawns nothing, so the standing cost is a few milliseconds every 30 s.

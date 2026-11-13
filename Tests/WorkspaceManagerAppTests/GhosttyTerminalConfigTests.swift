@@ -862,6 +862,32 @@ struct GhosttyTerminalConfigTests {
         #expect(seeded.map(\.key) == [AutomationAPI.handleEnvironmentKey, "WORKSPACES_HOST_SESSION_ID"])
     }
 
+    /// The SessionStart hook writes Conversation records wherever this key points, and it
+    /// runs in the pane, so the key has to reach the pane through the session's own
+    /// environment like the rest of the hook context.
+    @Test("A tile's session carries the directory its conversation records go to")
+    func tileSessionCarriesTheConversationsDirectory() {
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-c"),
+            environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: true,
+            tmuxSupportsSessionEnvironmentFlagOverride: true,
+            hostSessionID: UUID(uuidString: "2D4D6044-1E11-49C9-9CB0-A1D7B9F44E31")!,
+            hooksSocketPath: "/tmp/workspaces-hooks.sock",
+            tmuxSessionName: "wm-repo-c-00000000",
+            conversationsDirectory: URL(fileURLWithPath: "/tmp/lane/conversations")
+        )
+
+        let script = config.tmuxLaunchScript ?? ""
+        #expect(script.contains("-e 'WORKSPACES_CONVERSATIONS_DIR=/tmp/lane/conversations'"))
+        #expect(
+            script.contains(
+                "set-environment -t '=wm-repo-c-00000000' 'WORKSPACES_CONVERSATIONS_DIR' '/tmp/lane/conversations'"
+            )
+        )
+    }
+
     /// Dictionary iteration order is unstable; the launch command must not be, or
     /// restore comparisons and command-equality assertions become flaky.
     @Test("Seeded environment ordering is deterministic")

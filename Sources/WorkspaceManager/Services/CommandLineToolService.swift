@@ -476,7 +476,7 @@ struct CommandLineToolService {
         ]
     }
 
-    private static func defaultSourceCommandURL(fileManager: FileManager) -> URL? {
+    static func defaultSourceCommandURL(fileManager: FileManager) -> URL? {
         let bundleURL = Bundle.main.bundleURL
         let executableURL = Bundle.main.executableURL
 

@@ -62,6 +62,7 @@ public actor AgentHookListener {
     private let lockURL: URL
     private let registry: any AgentSessionRegistryProtocol
     private let commandStatusRegistry: LastCommandStatusRegistry?
+    private let conversationRecorder: ConversationIdentityRecorder?
     private let logger: @Sendable (String) -> Void
     private var listener: NWListener?
     private var lockFileDescriptor: Int32?
@@ -82,6 +83,7 @@ public actor AgentHookListener {
         commandStatusRegistry: LastCommandStatusRegistry? = nil,
         coalescingInterval: TimeInterval = AgentHookListener.defaultCoalescingInterval,
         socketURLOverride: URL? = nil,
+        conversationRecorder: ConversationIdentityRecorder? = nil,
         logger: @escaping @Sendable (String) -> Void = { message in
             let logger = Logger(subsystem: "com.cloudcompute.workspaces", category: "AgentHookListener")
             // This sink carries mixed-severity text from call sites throughout the actor, not just this
@@ -98,6 +100,7 @@ public actor AgentHookListener {
     ) {
         self.registry = registry
         self.commandStatusRegistry = commandStatusRegistry
+        self.conversationRecorder = conversationRecorder
         self.coalescingInterval = coalescingInterval
         self.logger = logger
         if let override = socketURLOverride {
@@ -310,9 +313,17 @@ public actor AgentHookListener {
             logger("decode error: \(error)")
             return
         }
-        guard let event else { return }
+        if let event {
+            enqueue(event, origin: .hook, for: hostSessionID)
+        }
 
-        enqueue(event, origin: .hook, for: hostSessionID)
+        // After the enqueue, so status never waits on a file write. Payloads that carry no
+        // status still name their conversation.
+        if let conversationRecorder,
+            let identity = ConversationIdentityRecorder.HookIdentity.decode(from: request.body)
+        {
+            await conversationRecorder.observe(identity, hostSessionID: hostSessionID)
+        }
     }
 
     private func processStatusLine(request: HTTPRequest) async {

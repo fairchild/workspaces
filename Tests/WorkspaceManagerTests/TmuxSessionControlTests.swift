@@ -218,6 +218,110 @@ struct TmuxSessionControlTests {
         #expect(recorder.calls[3].contains("new-session"))
     }
 
+    /// `new-session -e` arrived in tmux 3.2, and an older tmux rejects the whole command. The
+    /// version decides the shape: `-e` from 3.2, and otherwise the command under `env` with a
+    /// `set-environment` chained in the same invocation. An unreadable version reads as old.
+    @Test(
+        "A launch carrying a session environment seeds it with -e only on a tmux that accepts it",
+        arguments: [
+            ("tmux 3.5a", true), ("tmux 3.2", true), ("tmux next-3.6", true),
+            ("tmux 3.1c", false), ("tmux 2.9", false), ("tmux master", false),
+        ])
+    func launchGatesTheEnvironmentFlagOnTmuxVersion(_ version: String, _ accepted: Bool) async throws {
+        let recorder = RecordingRunner(responses: [
+            RecordingRunner.failure, RecordingRunner.failure, RecordingRunner.output(version), RecordingRunner.ok,
+        ])
+        let control = TmuxSessionControl(
+            socketLabel: "scratch", run: recorder.runner, environment: [:],
+            sessionEnvironment: ["WORKSPACES_CONVERSATIONS_DIR": "/tmp/records"])
+
+        _ = try await control.launch(handle: "wm-a-1", directory: Self.directory, command: "claude")
+
+        #expect(recorder.calls[2] == ["tmux", "-V"])
+        let created = recorder.calls[3]
+        #expect(created.prefix(4) == ["tmux", "-L", "scratch", "new-session"])
+        #expect(created.contains("-e") == accepted)
+        if accepted {
+            #expect(consecutive(created, "-e", "WORKSPACES_CONVERSATIONS_DIR=/tmp/records"))
+            #expect(created.suffix(4) == ["--", "/bin/zsh", "-lc", "claude"])
+        } else {
+            #expect(
+                created.suffix(12) == [
+                    "--", "/usr/bin/env", "WORKSPACES_CONVERSATIONS_DIR=/tmp/records", "/bin/zsh", "-lc", "claude",
+                    ";", "set-environment", "-t", "=wm-a-1", "WORKSPACES_CONVERSATIONS_DIR", "/tmp/records",
+                ])
+        }
+    }
+
+    @Test("A launch with no session environment never asks tmux its version")
+    func launchWithoutSessionEnvironmentSkipsTheVersion() async throws {
+        let recorder = RecordingRunner(responses: [
+            RecordingRunner.failure, RecordingRunner.failure, RecordingRunner.ok,
+        ])
+        let control = TmuxSessionControl(socketLabel: "scratch", run: recorder.runner, environment: [:])
+
+        _ = try await control.launch(handle: "wm-a-1", directory: Self.directory, command: nil)
+
+        #expect(!recorder.calls.contains(["tmux", "-V"]))
+        #expect(!recorder.calls[2].contains("-e"))
+    }
+
+    @Test(
+        "Only a trailing ; is rewritten for tmux's argument parser",
+        arguments: [
+            ("/tmp/records", "/tmp/records"),
+            ("/tmp/records;", #"/tmp/records\;"#),
+            (#"/tmp/records\;"#, #"/tmp/records\\;"#),
+            (#"/tmp/records\"#, #"/tmp/records\"#),
+            ("a;b", "a;b"),
+            (";", #"\;"#),
+            ("", ""),
+            ("/tmp/records\u{0600};", "/tmp/records\u{0600}\\;"),
+            ("/tmp/records\u{110BD};", "/tmp/records\u{110BD}\\;"),
+            ("/tmp/records;\u{0301}", "/tmp/records;\u{0301}"),
+        ]
+    )
+    func literalArgumentEscapesOnlyATrailingSemicolon(_ value: String, _ written: String) {
+        #expect(Array(TmuxSessionProbe.literalArgument(value).utf8) == Array(written.utf8))
+    }
+
+    @Test("Every data argument of a launch is written for tmux's parser, with -e and without")
+    func newSessionArgumentsWriteDataLiterally() {
+        let environment = ["WORKSPACES_CONVERSATIONS_DIR": "/tmp/records;"]
+        let directory = URL(fileURLWithPath: "/tmp/repo;")
+        let command = #"find . -exec true {} \;"#
+        let seeded = TmuxSessionControl.newSessionArguments(
+            socketLabel: "workspaces", handle: "wm-a-1", directory: directory, command: command,
+            sessionEnvironment: environment)
+        let fallback = TmuxSessionControl.newSessionArguments(
+            socketLabel: "workspaces", handle: "wm-a-1", directory: directory, command: command,
+            sessionEnvironment: environment, seedsEnvironmentOnCreate: false)
+        let adopted = TmuxSessionControl.setSessionEnvironmentArguments(
+            socketLabel: "workspaces", handle: "wm-a-1", key: "WORKSPACES_CONVERSATIONS_DIR", value: "/tmp/records;")
+
+        #expect(seeded.contains(#"WORKSPACES_CONVERSATIONS_DIR=/tmp/records\;"#))
+        #expect(seeded.contains(#"/tmp/repo\;"#))
+        #expect(seeded.last == #"find . -exec true {} \\;"#)
+        #expect(fallback.contains(#"WORKSPACES_CONVERSATIONS_DIR=/tmp/records\;"#))
+        #expect(fallback.contains(#"find . -exec true {} \\;"#))
+        #expect(fallback.last == #"/tmp/records\;"#)
+        #expect(adopted.last == #"/tmp/records\;"#)
+    }
+
+    @Test("Without -e, a launch with no command still gives the session its environment")
+    func newSessionWithoutTheFlagAndWithoutACommand() {
+        let arguments = TmuxSessionControl.newSessionArguments(
+            socketLabel: "workspaces", handle: "wm-a-1", directory: Self.directory, command: nil,
+            sessionEnvironment: ["WORKSPACES_CONVERSATIONS_DIR": "/tmp/records"], seedsEnvironmentOnCreate: false)
+
+        #expect(!arguments.contains("-e"))
+        #expect(!arguments.contains("--"))
+        #expect(
+            arguments.suffix(6) == [
+                ";", "set-environment", "-t", "=wm-a-1", "WORKSPACES_CONVERSATIONS_DIR", "/tmp/records",
+            ])
+    }
+
     @Test("A clean server is not written to")
     func launchLeavesACleanServerAlone() async throws {
         let recorder = RecordingRunner(responses: [

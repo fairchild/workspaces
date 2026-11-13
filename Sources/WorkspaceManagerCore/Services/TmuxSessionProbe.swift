@@ -334,6 +334,21 @@ public struct TmuxSessionProbe: Sendable {
     /// the flag outright, so a launch that emits it there loses the whole pane.
     public static let sessionEnvironmentFlagVersion = (major: 3, minor: 2)
 
+    /// `value` written so tmux hands it to the command unchanged. tmux reads a `;` that
+    /// is the last byte of any argument as a command separator, even inside one argv
+    /// element, and a `\;` there as a literal `;`. So a final `;` is written `\;`; every
+    /// other value, a trailing `\` included, already arrives as written.
+    ///
+    /// The test is on the last scalar, which ends on the last byte: a `;` can share a
+    /// `Character` with what precedes it (U+0600 does), so `hasSuffix` would miss it.
+    public static func literalArgument(_ value: String) -> String {
+        guard value.unicodeScalars.last == ";" else { return value }
+        var scalars = value.unicodeScalars
+        scalars.removeLast()
+        scalars.append(contentsOf: "\\;".unicodeScalars)
+        return String(scalars)
+    }
+
     /// The installed tmux's `major.minor`, or `nil` when tmux is absent, wedged, or
     /// prints a version line naming no number (`tmux master`). `tmux -V` answers
     /// from the binary and never contacts a server, so this is safe to run before
