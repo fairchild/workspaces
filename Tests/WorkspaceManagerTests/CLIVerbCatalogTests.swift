@@ -144,6 +144,7 @@ struct CLIVerbCatalogTests {
               workspaces status <workspace> [--watch] [--interval <seconds>]
               workspaces recent
               workspaces doctor
+              workspaces conversation observe   (Claude SessionStart hook; payload on stdin)
 
             Automation commands (operator scope; require the app running with the
             Automation Operator experiment enabled — or WORKSPACES_AUTOMATION_OPERATOR=1
