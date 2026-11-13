@@ -8,7 +8,8 @@
 //  (the `login` wrapper) stopped or out of sight, and check the order of events around it:
 //  the hang-up arrives while the main thread runs on, and the free begins only after the
 //  command exits or is killed. A watchdog off the main thread resumes or kills the command
-//  if a free blocks the main thread on it.
+//  if a free blocks the main thread on it. Waits on the command scale from the machine's
+//  launch cost (`LaunchBudget`); the free's hold on the main thread is a fixed bound.
 //
 
 import Darwin
@@ -24,7 +25,10 @@ extension GhosttySurfaceMailboxDeadlockTests {
     @Suite("GhosttySurface free and the main thread")
     @MainActor
     struct GhosttySurfaceFreeMainThreadTests {
-        /// Far below the seconds a free held the main thread while it waited on a command.
+        /// The property under test, so a fixed real-time bound rather than a launch-scaled wait:
+        /// the free runs on the main thread, and every window stalls for as long as it holds.
+        /// Measured frees take a few milliseconds, 156 ms at worst under load average 14, and the
+        /// regression held the main thread for seconds while it waited on a command.
         private static let freeHoldBound: Duration = .milliseconds(500)
 
         @Test(
@@ -38,16 +42,18 @@ extension GhosttySurfaceMailboxDeadlockTests {
                 try? FileManager.default.removeItem(at: script)
                 try? FileManager.default.removeItem(at: marker)
             }
+            let budgets = await Budgets.measured()
             var view: GhosttySurfaceView? = GhosttySurfaceView(customCommand: script.path)
             let surface = try #require(view?.surface, "the view needs a Ghostty surface to free")
-            await waitUntil(.seconds(30)) { view?.hasObservedPromptReadySignal == true }
+            await waitUntil(budgets.launch) { view?.hasObservedPromptReadySignal == true }
             try #require(view?.hasObservedPromptReadySignal == true, "the script never set its hang-up trap")
             let command = try #require(GhosttySurfaceChildProcess.pid(of: surface), "the surface's command has no pid")
 
             // Stopped, `login` cannot exit until it is resumed; the script under it still runs.
             try #require(kill(command, SIGSTOP) == 0)
+            // Long enough that only the test's release, never the kill, ends the stop.
             let grace = manager.hangUpGrace
-            manager.hangUpGrace = .seconds(60)
+            manager.hangUpGrace = budgets.exit * 3
             defer { manager.hangUpGrace = grace }
             let freed = FreeRecord()
             manager.onSurfaceFreed = { free in
@@ -57,21 +63,22 @@ extension GhosttySurfaceMailboxDeadlockTests {
             }
             defer { manager.onSurfaceFreed = nil }
             let observation = HangUpObservation()
-            let resumed = Self.resume(command, onceHungUp: marker, observation)
+            let resumed = Self.resume(
+                command, onceHungUp: marker, observation, hungUpWithin: budgets.exit, releasedWithin: budgets.watchdog)
             let released = WeakView(view)
             autoreleasepool { view = nil }
             try #require(released.view == nil, "the view outlived its last reference")
 
             // Only a main thread free of the free gets here before the command is resumed.
-            await waitUntil(.seconds(20)) { observation.hungUpAt != nil }
+            await waitUntil(budgets.exit) { observation.hungUpAt != nil }
             let freeBeganBeforeHangUpSeen = freed.started != nil
             let ticks = manager.tickCount
-            await waitUntil(.seconds(5)) { manager.tickCount - ticks >= 10 || freed.started != nil }
+            await waitUntil(budgets.exit) { manager.tickCount - ticks >= 10 || freed.started != nil }
             let ticksWhileStopped = manager.tickCount - ticks
             let freeBeganWhileStopped = freed.started != nil
             observation.release()
             let resumption = await resumed.value
-            await waitUntil(.seconds(20)) { freed.started != nil }
+            await waitUntil(budgets.exit) { freed.started != nil }
 
             let hungUpAt = try #require(observation.hungUpAt, "the command was not hung up while it was stopped")
             #expect(resumption.released, "the main thread never got back to release the stopped command")
@@ -102,9 +109,10 @@ extension GhosttySurfaceMailboxDeadlockTests {
                 try? FileManager.default.removeItem(at: script)
                 try? FileManager.default.removeItem(at: pidFile)
             }
+            let budgets = await Budgets.measured()
             var view: GhosttySurfaceView? = GhosttySurfaceView(customCommand: script.path)
             let surface = try #require(view?.surface, "the view needs a Ghostty surface to free")
-            await waitUntil(.seconds(30)) { view?.hasObservedPromptReadySignal == true }
+            await waitUntil(budgets.launch) { view?.hasObservedPromptReadySignal == true }
             try #require(view?.hasObservedPromptReadySignal == true, "the pipeline never started")
             let recorded = (try? String(contentsOf: pidFile, encoding: .utf8)) ?? ""
             let scriptPID = try #require(
@@ -112,10 +120,10 @@ extension GhosttySurfaceMailboxDeadlockTests {
             let command = getsid(scriptPID)
             try #require(command > 0, "the script's session is unreadable")
             var foreground: pid_t { pid_t(truncatingIfNeeded: ghostty_surface_foreground_pid(surface)) }
-            await waitUntil(.seconds(30)) { foreground > 0 && foreground != command }
+            await waitUntil(budgets.launch) { foreground > 0 && foreground != command }
             let pipeline = foreground
             try #require(pipeline > 0 && pipeline != command, "the pipeline never took the foreground")
-            await waitUntil(.seconds(30)) { getsid(pipeline) == -1 }
+            await waitUntil(budgets.launch) { getsid(pipeline) == -1 }
             try #require(getsid(pipeline) == -1 && foreground == pipeline, "the pipeline's first process never exited")
 
             let found = try #require(GhosttySurfaceChildProcess.command(of: surface).value)
@@ -123,19 +131,19 @@ extension GhosttySurfaceMailboxDeadlockTests {
 
             // With no kill until the grace runs out, only the hang-up can end the command.
             let grace = manager.hangUpGrace
-            manager.hangUpGrace = .seconds(600)
+            manager.hangUpGrace = budgets.exit * 3
             defer { manager.hangUpGrace = grace }
             let freed = FreeRecord()
             manager.onSurfaceFreed = { free in
                 if free.surfaceAddress == UInt(bitPattern: surface) { freed.started = free.started }
             }
             defer { manager.onSurfaceFreed = nil }
-            let exit = Self.watchExit(of: found, for: .seconds(60))
+            let exit = Self.watchExit(of: found, for: budgets.exit)
             let released = WeakView(view)
             autoreleasepool { view = nil }
             try #require(released.view == nil, "the view outlived its last reference")
             let watched = await exit.value
-            await waitUntil(.seconds(30)) { freed.started != nil }
+            await waitUntil(budgets.exit) { freed.started != nil }
 
             #expect(watched.ended, "the hang-up never ended the command")
             let started = try #require(freed.started, "the retired surface was never freed")
@@ -160,9 +168,10 @@ extension GhosttySurfaceMailboxDeadlockTests {
                 try? FileManager.default.removeItem(at: script)
                 try? FileManager.default.removeItem(at: pidFile)
             }
+            let budgets = await Budgets.measured()
             var view: GhosttySurfaceView? = GhosttySurfaceView(customCommand: script.path)
             let surface = try #require(view?.surface, "the view needs a Ghostty surface to free")
-            await waitUntil(.seconds(30)) { view?.hasObservedPromptReadySignal == true }
+            await waitUntil(budgets.launch) { view?.hasObservedPromptReadySignal == true }
             try #require(view?.hasObservedPromptReadySignal == true, "the script never started")
             let command = try #require(GhosttySurfaceChildProcess.pid(of: surface), "the surface's command has no pid")
             let immune = try Self.recordedPID(in: pidFile)
@@ -170,7 +179,7 @@ extension GhosttySurfaceMailboxDeadlockTests {
 
             // Stopped, `login` holds its hang-up until it is resumed, and the script ignores its own.
             try #require(kill(command, SIGSTOP) == 0)
-            let watchdog = Self.watchdog(sending: SIGCONT, to: [command], after: .seconds(40))
+            let watchdog = Self.watchdog(sending: SIGCONT, to: [command], after: budgets.watchdog)
             let grace = (hangUp: manager.hangUpGrace, kill: manager.killGrace)
             manager.hangUpGrace = .milliseconds(300)
             manager.killGrace = .seconds(10)
@@ -186,14 +195,14 @@ extension GhosttySurfaceMailboxDeadlockTests {
             let released = WeakView(view)
             autoreleasepool { view = nil }
             try #require(released.view == nil, "the view outlived its last reference")
-            await waitUntil(.seconds(30)) { freed.started != nil }
+            await waitUntil(budgets.exit) { freed.started != nil }
             watchdog.cancel()
             let resumedByWatchdog = await watchdog.value
             if freed.started == nil {
                 kill(command, SIGCONT)
-                await waitUntil(.seconds(30)) { freed.started != nil }
+                await waitUntil(budgets.exit) { freed.started != nil }
             }
-            await waitUntil(.seconds(10)) { kill(immune, 0) != 0 }
+            await waitUntil(budgets.exit) { kill(immune, 0) != 0 }
 
             #expect(!resumedByWatchdog, "the command stayed stopped until the test's watchdog resumed it")
             #expect(
@@ -227,9 +236,10 @@ extension GhosttySurfaceMailboxDeadlockTests {
                 try? FileManager.default.removeItem(at: script)
                 try? FileManager.default.removeItem(at: pidFile)
             }
+            let budgets = await Budgets.measured()
             var view: GhosttySurfaceView? = GhosttySurfaceView(customCommand: script.path)
             let surface = try #require(view?.surface, "the view needs a Ghostty surface to free")
-            await waitUntil(.seconds(30)) { view?.hasObservedPromptReadySignal == true }
+            await waitUntil(budgets.launch) { view?.hasObservedPromptReadySignal == true }
             try #require(view?.hasObservedPromptReadySignal == true, "the script never started its job")
             let shell = try Self.recordedPID(in: pidFile)
             let command = getsid(shell)
@@ -238,13 +248,15 @@ extension GhosttySurfaceMailboxDeadlockTests {
                 kill(command, SIGKILL)
                 kill(shell, SIGKILL)
             }
-            await waitUntil(.seconds(10)) { GhosttySurfaceChildProcess.pid(of: surface) == nil }
+            await waitUntil(budgets.launch) { GhosttySurfaceChildProcess.pid(of: surface) == nil }
             try #require(GhosttySurfaceChildProcess.pid(of: surface) == nil, "the foreground group never emptied")
 
-            let watchdog = Self.watchdog(sending: SIGKILL, to: [command, shell], after: .seconds(10))
             let grace = (hangUp: manager.hangUpGrace, kill: manager.killGrace)
             manager.hangUpGrace = .milliseconds(300)
             manager.killGrace = .milliseconds(300)
+            let window = Self.window(pastGraces: manager)
+            let watchdog = Self.watchdog(
+                sending: SIGKILL, to: [command, shell], after: window + budgets.exit + budgets.watchdog)
             defer { (manager.hangUpGrace, manager.killGrace) = grace }
             let freed = FreeRecord()
             manager.onSurfaceFreed = { free in
@@ -257,13 +269,13 @@ extension GhosttySurfaceMailboxDeadlockTests {
             autoreleasepool { view = nil }
             try #require(released.view == nil, "the view outlived its last reference")
             let ticks = manager.tickCount
-            await waitUntil(.seconds(2)) { freed.started != nil }
+            await watch(window, budgets.exit, ticksSince: ticks) { freed.started != nil }
             let freedOutOfSight = freed.started != nil
             let ticksOutOfSight = manager.tickCount - ticks
 
             kill(command, SIGKILL)
             kill(shell, SIGKILL)
-            await waitUntil(.seconds(30)) { freed.started != nil }
+            await waitUntil(budgets.exit) { freed.started != nil }
             watchdog.cancel()
             let killedByWatchdog = await watchdog.value
 
@@ -284,19 +296,22 @@ extension GhosttySurfaceMailboxDeadlockTests {
                 while :; do sleep 1; done
                 """)
             defer { try? FileManager.default.removeItem(at: script) }
+            let budgets = await Budgets.measured()
             var view: GhosttySurfaceView? = GhosttySurfaceView(customCommand: script.path)
             let surface = try #require(view?.surface, "the view needs a Ghostty surface to free")
-            await waitUntil(.seconds(30)) { view?.hasObservedPromptReadySignal == true }
+            await waitUntil(budgets.launch) { view?.hasObservedPromptReadySignal == true }
             try #require(view?.hasObservedPromptReadySignal == true, "the script never started")
             let command = try #require(GhosttySurfaceChildProcess.pid(of: surface), "the surface's command has no pid")
             defer { killpg(command, SIGKILL) }
 
             // Stopped, `login` cannot exit, so a free that waits on it holds the main thread.
             try #require(kill(command, SIGSTOP) == 0)
-            let watchdog = Self.watchdog(sending: SIGKILL, to: [-command], after: .seconds(10))
             let grace = (hangUp: manager.hangUpGrace, kill: manager.killGrace)
             manager.hangUpGrace = .milliseconds(300)
             manager.killGrace = .milliseconds(300)
+            let window = Self.window(pastGraces: manager)
+            let watchdog = Self.watchdog(
+                sending: SIGKILL, to: [-command], after: window + budgets.exit + budgets.watchdog)
             defer { (manager.hangUpGrace, manager.killGrace) = grace }
             let freed = FreeRecord()
             manager.onSurfaceFreed = { free in
@@ -314,12 +329,12 @@ extension GhosttySurfaceMailboxDeadlockTests {
             manager.processTable.process = { _ in .failed(errno: ENOMEM) }
             defer { manager.processTable = system }
             let ticks = manager.tickCount
-            await waitUntil(.seconds(2)) { freed.started != nil }
+            await watch(window, budgets.exit, ticksSince: ticks) { freed.started != nil }
             let freedWhileUnreadable = freed.started != nil
             let ticksWhileUnreadable = manager.tickCount - ticks
 
             manager.processTable = system
-            await waitUntil(.seconds(30)) { freed.started != nil }
+            await waitUntil(budgets.exit) { freed.started != nil }
             watchdog.cancel()
             let killedByWatchdog = await watchdog.value
 
@@ -335,10 +350,11 @@ extension GhosttySurfaceMailboxDeadlockTests {
         /// and resumes it, each wait bounded. Returns when it resumed the command, and whether
         /// the test had released it by then.
         nonisolated private static func resume(
-            _ command: pid_t, onceHungUp marker: URL, _ observation: HangUpObservation
+            _ command: pid_t, onceHungUp marker: URL, _ observation: HangUpObservation,
+            hungUpWithin: Duration, releasedWithin: Duration
         ) -> Task<(at: ContinuousClock.Instant, released: Bool), Never> {
             Task.detached {
-                let hungUpBy = ContinuousClock.now + .seconds(20)
+                let hungUpBy = ContinuousClock.now + hungUpWithin
                 while ContinuousClock.now < hungUpBy {
                     if FileManager.default.fileExists(atPath: marker.path) {
                         observation.hungUpAt = ContinuousClock.now
@@ -346,7 +362,7 @@ extension GhosttySurfaceMailboxDeadlockTests {
                     }
                     try? await Task.sleep(for: .milliseconds(5))
                 }
-                let releasedBy = ContinuousClock.now + .seconds(30)
+                let releasedBy = ContinuousClock.now + releasedWithin
                 while !observation.isReleased, ContinuousClock.now < releasedBy {
                     try? await Task.sleep(for: .milliseconds(5))
                 }
@@ -416,12 +432,53 @@ extension GhosttySurfaceMailboxDeadlockTests {
             return url
         }
 
+        /// How long a test watches for a free that must not happen: past both graces the test
+        /// set, by which time the drain would have freed the surface if it were going to, with
+        /// room for the drain's passes. Sized from the graces rather than from launch cost, since
+        /// nothing here waits on a process.
+        private static func window(pastGraces manager: GhosttyAppManager) -> Duration {
+            manager.hangUpGrace + manager.killGrace + .milliseconds(1400)
+        }
+
+        /// Watches for `freed` until `window` has passed and the main thread has ticked at least
+        /// ten times since `ticks`, so a slow machine still gives the drain its ticks. `budget`
+        /// bounds the ticks beyond the window.
+        private func watch(
+            _ window: Duration, _ budget: Duration, ticksSince ticks: Int, freed: () -> Bool
+        ) async {
+            let manager = GhosttyAppManager.shared
+            let watchedFrom = ContinuousClock.now
+            await waitUntil(window + budget) {
+                freed() || (ContinuousClock.now - watchedFrom >= window && manager.tickCount - ticks >= 10)
+            }
+        }
+
         private func waitUntil(_ timeout: Duration, _ condition: () -> Bool) async {
             let deadline = ContinuousClock.now + timeout
             while !condition(), ContinuousClock.now < deadline {
                 try? await Task.sleep(for: .milliseconds(10))
             }
         }
+    }
+}
+
+/// Deadlines for waits on a surface's command, scaled from this machine's measured cost of
+/// launching a child process (`LaunchBudget`): ~0.3 s on a laptop, ~35 s on a loaded runner.
+/// Each wait returns once its state is observed, so a generous budget costs a passing run
+/// nothing. Measured before the surface exists, so the probe never competes with it.
+private struct Budgets {
+    /// The command starting and reaching the state a test needs: its title, a foreground job.
+    let launch: Duration
+    /// A signal reaching the command, the command exiting, and its surface being freed.
+    let exit: Duration
+
+    /// Later than any `exit` wait it backstops, so it only ends a wait that already failed.
+    var watchdog: Duration { exit + .seconds(10) }
+
+    static func measured() async -> Budgets {
+        let launch = await LaunchBudget.deadline(launches: 2, floor: 30, ceiling: 180)
+        let exit = await LaunchBudget.deadline(launches: 2, floor: 20, ceiling: 180)
+        return Budgets(launch: .seconds(launch), exit: .seconds(exit))
     }
 }
 
