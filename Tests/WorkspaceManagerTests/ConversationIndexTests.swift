@@ -566,8 +566,11 @@ struct ConversationIndexTests {
     }
 
     /// Codex's cost finding: a gather can take seconds on a large database, so it reads
-    /// through a snapshot. Another connection holds the write lock for the whole gather and
-    /// releases it only once the gather is done.
+    /// through a snapshot. Another connection holds the write lock from before the gather
+    /// until `afterGathering`, and nothing else releases it. A gather that asked for the
+    /// write lock would wait out the store's busy timeout and throw `SQLITE_BUSY` before
+    /// reaching that release, so a migration that completes, having released the gate,
+    /// gathered without the lock however slowly the machine runs.
     @Test("Gathering holds no write lock")
     func gatherHoldsNoWriteLock() async throws {
         let fixture = try Fixture()
@@ -583,14 +586,14 @@ struct ConversationIndexTests {
         configuration.allowsUnsafeTransactions = true
         let gate = try DatabaseQueue(
             path: fixture.root.appendingPathComponent("state.sqlite").path, configuration: configuration)
+        defer { try? gate.close() }
         try await gate.writeWithoutTransaction { try $0.execute(sql: "BEGIN IMMEDIATE") }
         indexer.afterGathering = { try await gate.writeWithoutTransaction { try $0.execute(sql: "COMMIT") } }
-        let started = Date()
-        let outcome = try await indexer.migrateOnce()
-        try gate.close()
 
+        let outcome = try await indexer.migrateOnce()
+
+        #expect(try await gate.writeWithoutTransaction { $0.isInsideTransaction } == false)
         #expect(outcome == .init(written: 1))
-        #expect(Date().timeIntervalSince(started) < 4, "the gather waited on the write lock")
     }
 
     private func recordTile(_ tile: UUID, in localState: LocalStateStore) async throws {
