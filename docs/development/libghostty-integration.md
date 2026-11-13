@@ -410,6 +410,7 @@ cache is a purge via the named entrypoint:
    Anything else is unknown and stays unfreed. A command never found may be a stopped
    `login` whose foreground group has emptied; a pid now held by a later process, or
    under another parent, would have libghostty's teardown hang up a stranger's group.
+   A process-table query that fails, other than with ESRCH, establishes nothing.
    Each pass looks again and keeps signalling; `killGrace` (2 s) after the kill the
    surface is logged once with its reason and checked about once a second from then
    on. A command SIGKILL cannot end stays the same way. Leak beats freeze: a leaked
@@ -423,9 +424,10 @@ cache is a purge via the named entrypoint:
    `GhosttySurfaceFreeMainThreadTests` covers the order of events while a command is
    held stopped (hang-up first, the main thread ticking, the free only after the command
    exits), a hang-up-immune command that only SIGKILL ends, a stopped command whose
-   foreground group has emptied (never freed while it lives), and a foreground pipeline
-   whose first process has exited. `GhosttySurfaceChildProcessTests` covers the identity
-   check on synthetic process records.
+   foreground group has emptied (never freed while it lives), a foreground pipeline
+   whose first process has exited, and a command whose process queries fail (never freed
+   until they work). `GhosttySurfaceChildProcessTests` covers the identity check on
+   synthetic process records.
 
 ## CI Contract
 
