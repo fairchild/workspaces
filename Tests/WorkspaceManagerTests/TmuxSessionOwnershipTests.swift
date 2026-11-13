@@ -424,6 +424,44 @@ struct TmuxSessionOwnershipTests {
         #expect(await recorder.calls.isEmpty)
     }
 
+    @MainActor
+    @Test("A kill waiting on the socket ends only the session it was asked for")
+    func terminatorKeepsTheTargetItWasAskedFor() async {
+        let ledger = TmuxSessionOwnershipLedger()
+        let surface = UUID()
+        ledger.record(
+            hostSessionID: surface,
+            identity: live("$7", "wm-repo-abcd1234-p1", 1_788_328_041),
+            launchedAt: Date(timeIntervalSince1970: 1_788_328_040)
+        )
+        let socket = HeldListing()
+        let recorder = ArgumentRecorder()
+        let probe = TmuxSessionProbe(
+            run: { executable, arguments, _ in
+                await recorder.record(executable: executable, arguments: arguments)
+                return 0
+            },
+            runForOutput: { _, _, _ in await socket.read() },
+            environment: [:]
+        )
+
+        let kill = Task {
+            await TmuxOwnedSessionTerminator(ledger: ledger, probe: probe)
+                .terminate(hostSessionID: surface, requiringCreation: false)
+        }
+        await socket.waitUntilRead()
+        ledger.forget(hostSessionID: surface)
+        ledger.record(
+            hostSessionID: surface,
+            identity: live("$8", "wm-repo-abcd1234-p1", 1_788_328_100),
+            launchedAt: Date(timeIntervalSince1970: 1_788_328_099)
+        )
+        await socket.answer("$8\twm-repo-abcd1234-p1\t1788328100\t35533\n")
+
+        #expect(await kill.value == .notLive)
+        #expect(await recorder.calls.isEmpty)
+    }
+
     // MARK: - Helpers
 
     private func live(_ id: String, _ name: String, _ created: TimeInterval) -> TmuxLiveSession {
@@ -452,5 +490,32 @@ private actor ArgumentRecorder {
 
     func record(executable: String, arguments: [String]) {
         calls.append(Call(executable: executable, arguments: arguments))
+    }
+}
+
+/// Holds a socket listing until the test answers it. Waiting for the read is an event, not
+/// a deadline, so a loaded machine slows the test without failing it.
+private actor HeldListing {
+    private var waiting: CheckedContinuation<String?, Never>?
+    private var watchers: [CheckedContinuation<Void, Never>] = []
+
+    func read() async -> String? {
+        await withCheckedContinuation { listing in
+            waiting = listing
+            let woken = watchers
+            watchers = []
+            woken.forEach { $0.resume() }
+        }
+    }
+
+    func waitUntilRead() async {
+        while waiting == nil {
+            await withCheckedContinuation { watchers.append($0) }
+        }
+    }
+
+    func answer(_ listing: String) {
+        waiting?.resume(returning: listing)
+        waiting = nil
     }
 }

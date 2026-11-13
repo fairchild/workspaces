@@ -109,9 +109,9 @@ struct TileTreeStoreTests {
             launchedAt: Date(timeIntervalSince1970: 100)
         )
         let teardown = OutcomeLog()
-        store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] hostSessionID in
+        store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] _, ownership in
             let outcome = await TmuxOwnedSessionTerminator(ledger: ledger, probe: stub.probe)
-                .terminate(hostSessionID: hostSessionID, requiringCreation: false)
+                .terminate(ownership, requiringCreation: false)
             await teardown.append(outcome)
             return outcome
         }
@@ -161,9 +161,9 @@ struct TileTreeStoreTests {
             launchedAt: Date(timeIntervalSince1970: 100)
         )
         let teardown = OutcomeLog()
-        store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] hostSessionID in
+        store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] _, ownership in
             let outcome = await TmuxOwnedSessionTerminator(ledger: ledger, probe: stub.probe)
-                .terminate(hostSessionID: hostSessionID, requiringCreation: false)
+                .terminate(ownership, requiringCreation: false)
             await teardown.append(outcome)
             return outcome
         }
@@ -192,7 +192,7 @@ struct TileTreeStoreTests {
         let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
         let closedByUser = try #require(store.createTab(from: primary.id))
         let requests = OutcomeLog()
-        store.terminateOwnedTmuxSession = { hostSessionID in
+        store.terminateOwnedTmuxSession = { hostSessionID, _ in
             await requests.append(.killed(sessionID: hostSessionID.uuidString, name: ""))
             return .notLive
         }
@@ -218,7 +218,7 @@ struct TileTreeStoreTests {
         let cancelled = try #require(store.createTab(from: primary.id))
         let closedByUser = try #require(store.createTab(from: primary.id))
         let requests = OutcomeLog()
-        store.terminateOwnedTmuxSession = { hostSessionID in
+        store.terminateOwnedTmuxSession = { hostSessionID, _ in
             await requests.append(.killed(sessionID: hostSessionID.uuidString, name: ""))
             return .notLive
         }
@@ -356,7 +356,7 @@ struct TileTreeStoreTests {
         let store = TileTreeStore()
         store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
         var killRequests: [UUID] = []
-        store.terminateOwnedTmuxSession = { hostSessionID in
+        store.terminateOwnedTmuxSession = { hostSessionID, _ in
             killRequests.append(hostSessionID)
             return .notAttributable
         }
@@ -416,9 +416,9 @@ struct TileTreeStoreTests {
         // Deliberately no ledger entry: this is a session holding the pane's name that
         // the app has no record of launching.
         let outcomes = OutcomeLog()
-        store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] hostSessionID in
+        store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] _, ownership in
             let outcome = await TmuxOwnedSessionTerminator(ledger: ledger, probe: stub.probe)
-                .terminate(hostSessionID: hostSessionID, requiringCreation: false)
+                .terminate(ownership, requiringCreation: false)
             await outcomes.append(outcome)
             return outcome
         }

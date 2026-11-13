@@ -323,7 +323,7 @@ final class SurfaceStore: ObservableObject {
                 // once the first has succeeded.
                 let recorded =
                     await self?.recordTmuxOwnership(
-                        session: session, launchedAt: launchedAt, attempts: 2) ?? false
+                        of: terminal, session: session, launchedAt: launchedAt, attempts: 2) ?? false
                 await self?.repairLaunchContractIfNeeded(
                     terminal: terminal,
                     session: session,
@@ -331,7 +331,7 @@ final class SurfaceStore: ObservableObject {
                 )
                 if !recorded {
                     await self?.recordTmuxOwnership(
-                        session: session, launchedAt: launchedAt, attempts: 6)
+                        of: terminal, session: session, launchedAt: launchedAt, attempts: 6)
                 }
                 await self?.recordLaunchServer(of: terminal, session: session)
             }
@@ -385,8 +385,12 @@ final class SurfaceStore: ObservableObject {
     /// with no record here is one the app cannot attribute, and an unattributable session
     /// is never killed — so the failure mode of this routine is a session left running,
     /// which is the direction #1267 asks it to fail in.
+    ///
+    /// A surface replaced while the socket is read records nothing: its host session's next
+    /// launch records what that launch landed on.
     @discardableResult
     private func recordTmuxOwnership(
+        of terminal: TerminalSurface,
         session: HostTerminalSession,
         launchedAt: Date,
         attempts: Int
@@ -400,6 +404,7 @@ final class SurfaceStore: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(500))
             }
             guard let live = await probe.liveSessions() else { continue }
+            guard surfaces[terminal.tileID] === terminal else { return false }
             guard let match = live.first(where: { $0.name == sessionName }) else { continue }
             let ownership = ledger.record(
                 hostSessionID: session.id, identity: match, launchedAt: launchedAt)

@@ -65,7 +65,7 @@ struct TileExitClassificationTests {
         }
         store.tmuxServerKeepsRunningWhenEmpty = { _ in true }
         let reclaims = ProbeCalls()
-        store.terminateOwnedTmuxSession = { hostSessionID in
+        store.terminateOwnedTmuxSession = { hostSessionID, _ in
             await reclaims.append(hostSessionID.uuidString)
             return .notLive
         }
@@ -743,7 +743,7 @@ struct TileExitClassificationTests {
         let sheet = CloseSheet(store)
         sheet.raise(primary.id)
         #expect(store.handleProcessExit(for: primary.id))
-        let oldClassification = try #require(store.exitClassification(for: primary.id))
+        let oldClassification = try #require(store.exitClassifications(for: primary.id).first)
         #expect(await probe.waitForCall(1))
         sheet.close()
         #expect(oldClassification.isCancelled)
@@ -754,7 +754,8 @@ struct TileExitClassificationTests {
         let added = try #require(store.splitFocusedTile(inTabContaining: replacement.id))
         store.surfaceStore.noteLaunch(sessionID: replacement.id, throughTmux: true, tmuxServerPID: 4242)
         #expect(store.handleProcessExit(for: replacement.id))
-        let newClassification = try #require(store.exitClassification(for: replacement.id))
+        let newClassification = try #require(
+            store.exitClassifications(for: replacement.id).first { $0 != oldClassification })
         #expect(await probe.waitForCall(2))
 
         probe.answer(1, .sessionGone(serverPID: 4242))
@@ -771,6 +772,220 @@ struct TileExitClassificationTests {
         #expect(await harness.rowWrites(for: split.id) == [.ended(split.id)])
         #expect(await harness.rowWrites(for: added.id) == [.deselected(added.id)])
         #expect(await harness.reclaimed(awaiting: 2) == [split.id.uuidString, otherTab.id.uuidString])
+    }
+
+    /// The sheet covered the tab's primary and its first pane; a second pane joined after it
+    /// was raised. Close settles the two it covered and leaves the second pane in the exit,
+    /// waiting on tmux. A restore then brings the primary's session back in a new tile, which
+    /// exits in turn. The earlier exit still holds the second pane, and its answer settles it.
+    @Test(
+        "An exit still holding a pane settles it after its session returns and exits again",
+        arguments: [false, true])
+    func earlierExitKeepsItsPaneThroughTheSessionsReturn(shellExited: Bool) async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let probe = HeldProbe()
+        harness.store.tmuxHolderState = { _ in await probe.read() }
+        let (primary, split, _) = try openSplitTab(harness.store)
+        let store = harness.store
+        let sheet = CloseSheet(store)
+        sheet.raise(primary.id)
+        let laterPane = try #require(store.splitFocusedTile(inTabContaining: primary.id))
+        #expect(store.handleProcessExit(for: primary.id))
+        let oldClassification = try #require(store.exitClassifications(for: primary.id).first)
+        #expect(await probe.waitForCall(1))
+        sheet.close()
+        #expect(!oldClassification.isCancelled)
+
+        let replacement = store.createRestoredSession(
+            key: primary.key, directory: primary.directoryURL, recordedTerminalMode: primary.terminalMode,
+            tmuxSessionNameOverride: primary.tmuxSessionName, adoptedHostSessionID: primary.id)
+        let added = try #require(store.splitFocusedTile(inTabContaining: replacement.id))
+        store.surfaceStore.noteLaunch(sessionID: replacement.id, throughTmux: true, tmuxServerPID: 4242)
+        #expect(store.handleProcessExit(for: replacement.id))
+        let newClassification = try #require(
+            store.exitClassifications(for: replacement.id).first { $0 != oldClassification })
+        #expect(await probe.waitForCall(2))
+
+        probe.answer(1, shellExited ? .sessionGone(serverPID: 4242) : .serverGone)
+        await oldClassification.value
+        #expect(!newClassification.isCancelled)
+        probe.answer(2, .sessionPresent(serverPID: 4242))
+        await newClassification.value
+
+        #expect(await harness.rowWrites(for: split.id) == [.ended(split.id)])
+        #expect(
+            await harness.rowWrites(for: laterPane.id)
+                == (shellExited ? [.ended(laterPane.id)] : [.holderLost(laterPane.id)]))
+        #expect(await harness.rowWrites(for: added.id) == [.deselected(added.id)])
+    }
+
+    /// A tab's exit takes its pane with it and waits on tmux. Before tmux answers, a restore
+    /// brings the pane's session back as a tab of its own. The tab's answer is a shell exit,
+    /// which would end a pane and kill its tmux session; the pane is live again, so it does
+    /// neither.
+    @Test("A pane a restore brings back is no longer its old exit's to settle")
+    func returnedPaneLeavesItsEarlierExit() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let probe = HeldProbe()
+        harness.store.tmuxHolderState = { _ in await probe.read() }
+        let (primary, split, otherTab) = try openSplitTab(harness.store)
+        let store = harness.store
+        #expect(store.handleProcessExit(for: primary.id))
+        let classification = try #require(store.exitClassifications(for: primary.id).first)
+        #expect(await probe.waitForCall(1))
+
+        let returned = store.createRestoredSession(
+            key: split.key, directory: split.directoryURL, recordedTerminalMode: split.terminalMode,
+            tmuxSessionNameOverride: split.tmuxSessionName, adoptedHostSessionID: split.id)
+        probe.answer(1, .sessionGone(serverPID: 4242))
+        await classification.value
+
+        #expect(await harness.rowWrites(for: primary.id) == [.ended(primary.id)])
+        #expect(await harness.rowWrites(for: split.id).isEmpty)
+        #expect(store.allLiveSessions.contains { $0.id == returned.id })
+        #expect(store.handleProcessExit(for: otherTab.id, cause: .userClosed))
+        #expect(await harness.reclaimed(awaiting: 1) == [otherTab.id.uuidString])
+    }
+
+    /// The sheet covered a tab and its pane. The pane exited on its own and a restore brought
+    /// its session back as a tab, which exited too and waits on tmux. Close on the old sheet
+    /// closes the tab; the pane's session now belongs to the later tile's exit, which settles
+    /// it by its own answer.
+    @Test("A sheet's Close leaves a pane a restore has since given a tile of its own")
+    func confirmationLeavesAReturnedPane() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let probe = HeldProbe()
+        harness.store.tmuxHolderState = { _ in await probe.read() }
+        let (primary, split, otherTab) = try openSplitTab(harness.store)
+        let store = harness.store
+        let sheet = CloseSheet(store)
+        sheet.raise(primary.id)
+        #expect(store.handleProcessExit(for: split.id))
+        #expect(await probe.waitForCall(1))
+        probe.answer(1, .sessionPresent(serverPID: 4242))
+        #expect(await harness.rowWrites(for: split.id) == [.deselected(split.id)])
+
+        let returned = store.createRestoredSession(
+            key: split.key, directory: split.directoryURL, recordedTerminalMode: split.terminalMode,
+            tmuxSessionNameOverride: split.tmuxSessionName, adoptedHostSessionID: split.id)
+        store.surfaceStore.noteLaunch(sessionID: returned.id, throughTmux: true, tmuxServerPID: 4242)
+        #expect(store.handleProcessExit(for: returned.id))
+        let classification = try #require(store.exitClassifications(for: returned.id).first)
+        #expect(await probe.waitForCall(2))
+        sheet.close()
+        probe.answer(2, .sessionPresent(serverPID: 4242))
+        await classification.value
+
+        #expect(await harness.rowWrites(for: primary.id) == [.ended(primary.id)])
+        #expect(await harness.rowWrites(for: split.id) == [.deselected(split.id), .deselected(split.id)])
+        #expect(store.handleProcessExit(for: otherTab.id, cause: .userClosed))
+        #expect(await harness.reclaimed(awaiting: 1) == [otherTab.id.uuidString])
+    }
+
+    /// Holds a socket listing until the test answers it, and records the kills that follow.
+    /// Waits are events, not deadlines, so a loaded machine slows the test without failing it:
+    /// every kill the store decides reaches `finished`, read or not.
+    private actor HeldSocket {
+        private var listing: CheckedContinuation<String?, Never>?
+        private var watchers: [CheckedContinuation<Void, Never>] = []
+        private(set) var kills: [[String]] = []
+        private(set) var outcomes: [TmuxOwnedSessionTerminator.Outcome] = []
+
+        func read() async -> String? {
+            await withCheckedContinuation { reading in
+                listing = reading
+                wake()
+            }
+        }
+
+        /// Whether the kill is reading the socket, once it is or has finished without reading.
+        func waitUntilRead() async -> Bool {
+            while listing == nil, outcomes.isEmpty {
+                await withCheckedContinuation { watchers.append($0) }
+            }
+            return listing != nil
+        }
+
+        func answer(_ text: String) {
+            listing?.resume(returning: text)
+            listing = nil
+        }
+
+        func killed(_ arguments: [String]) { kills.append(arguments) }
+
+        func finished(_ outcome: TmuxOwnedSessionTerminator.Outcome) {
+            outcomes.append(outcome)
+            wake()
+        }
+
+        func waitUntilFinished() async -> [TmuxOwnedSessionTerminator.Outcome] {
+            while outcomes.isEmpty {
+                await withCheckedContinuation { watchers.append($0) }
+            }
+            return outcomes
+        }
+
+        private func wake() {
+            let woken = watchers
+            watchers = []
+            woken.forEach { $0.resume() }
+        }
+    }
+
+    enum PaneRecordReplaced: CaseIterable {
+        case beforeTheKillStarts
+        case whileTheSocketIsRead
+    }
+
+    /// A pane recorded on tmux session `$7` is closed, and its kill is decided. A restore then
+    /// brings the pane's host session back and its relaunch records `$8`, before the kill
+    /// starts or while it reads the socket. The kill was for `$7`, which the socket no longer
+    /// shows, so nothing dies.
+    @Test(
+        "A pane's kill ends only the tmux session it was decided for, though a restore re-records the pane",
+        arguments: PaneRecordReplaced.allCases)
+    func paneKillKeepsItsTarget(_ replaced: PaneRecordReplaced) async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let store = harness.store
+        let (primary, split, _) = try openSplitTab(store)
+        let ledger = store.tmuxOwnershipLedger
+        let closed = TmuxLiveSession(
+            sessionID: "$7", name: split.effectiveTmuxSessionName,
+            createdAt: Date(timeIntervalSince1970: 100), serverPID: 4242)
+        ledger.record(hostSessionID: split.id, identity: closed, launchedAt: closed.createdAt)
+        let socket = HeldSocket()
+        let probe = TmuxSessionProbe(
+            run: { _, arguments, _ in
+                await socket.killed(arguments)
+                return 0
+            },
+            runForOutput: { _, _, _ in await socket.read() },
+            environment: [:]
+        )
+        store.terminateOwnedTmuxSession = { _, ownership in
+            let outcome = await TmuxOwnedSessionTerminator(ledger: ledger, probe: probe)
+                .terminate(ownership, requiringCreation: false)
+            await socket.finished(outcome)
+            return outcome
+        }
+
+        #expect(store.handleProcessExit(for: split.id, cause: .userClosed))
+        if replaced == .whileTheSocketIsRead {
+            #expect(await socket.waitUntilRead())
+        }
+        let returned = store.createRestoredSession(
+            key: primary.key, directory: split.directoryURL, recordedTerminalMode: split.terminalMode,
+            tmuxSessionNameOverride: split.tmuxSessionName, adoptedHostSessionID: split.id)
+        ledger.forget(hostSessionID: returned.id)
+        let relaunched = TmuxLiveSession(
+            sessionID: "$8", name: returned.effectiveTmuxSessionName,
+            createdAt: Date(timeIntervalSince1970: 200), serverPID: 4242)
+        ledger.record(hostSessionID: returned.id, identity: relaunched, launchedAt: relaunched.createdAt)
+        #expect(await socket.waitUntilRead())
+        await socket.answer("$8\t\(relaunched.name)\t200\t4242\n")
+
+        #expect(await socket.waitUntilFinished() == [.notLive])
+        #expect(await socket.kills.isEmpty)
     }
 
     @Test("A retirement that lands as a process exit ends the row, asks tmux nothing and kills nothing")
