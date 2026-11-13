@@ -1124,3 +1124,27 @@ struct TileExitClassificationTests {
         #expect(await harness.rowWrites(for: tab.id) == [.holderLost(tab.id)])
     }
 }
+
+extension TileExitClassificationTests {
+    /// A restore asked for a tile's id while that tile was still live, so the coordinator
+    /// gave the new session an id of its own. The tile never left, and its sheet still
+    /// speaks for its row.
+    @Test("A restore that could not take a live tile's id leaves that tile's sheet in charge of its row")
+    func collidingRestoreLeavesTheSheetInCharge() async throws {
+        let harness = makeHarness(answer: .sessionPresent(serverPID: 4242))
+        let (_, tab) = try openTwoTmuxTiles(harness.store)
+        let store = harness.store
+        let sheet = CloseSheet(store)
+        sheet.raise(tab.id)
+
+        let duplicate = store.createRestoredSession(
+            key: tab.key, directory: tab.directoryURL, recordedTerminalMode: tab.terminalMode,
+            tmuxSessionNameOverride: tab.tmuxSessionName, adoptedHostSessionID: tab.id)
+        #expect(duplicate.id != tab.id)
+        #expect(store.handleProcessExit(for: tab.id))
+        #expect(await harness.rowWrites(for: tab.id) == [.deselected(tab.id)])
+        sheet.close()
+
+        #expect(await harness.rowWrites(for: tab.id) == [.deselected(tab.id), .ended(tab.id)])
+    }
+}

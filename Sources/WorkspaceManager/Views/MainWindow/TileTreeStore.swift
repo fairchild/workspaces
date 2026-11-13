@@ -300,9 +300,6 @@ final class TileTreeStore: ObservableObject {
         tmuxSessionNameOverride: String? = nil,
         adoptedHostSessionID: UUID? = nil
     ) -> HostTerminalSession {
-        if let adoptedHostSessionID {
-            sessionReturned(adoptedHostSessionID)
-        }
         let session = coordinator.createSession(
             key: key,
             directory: directory,
@@ -312,6 +309,11 @@ final class TileTreeStore: ObservableObject {
             tmuxSessionNameOverride: tmuxSessionNameOverride,
             adoptedID: adoptedHostSessionID
         )
+        // The coordinator gives a new id to a recorded one some live tile still holds; only
+        // an identity actually adopted has come back.
+        if let adoptedHostSessionID, session.id == adoptedHostSessionID {
+            sessionReturned(adoptedHostSessionID)
+        }
         publishSnapshot()
         return session
     }
