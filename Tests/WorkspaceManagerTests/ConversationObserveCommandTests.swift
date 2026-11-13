@@ -262,16 +262,20 @@ struct ConversationObserveCommandTests {
         #expect(text.contains("own=137"))
     }
 
-    /// Where Codex's probes put a TERM: a second one while cleanup asks `ps` about the client,
-    /// or one while the shell is stopped after starting the client and before recording it.
+    /// Where Codex's probes put a TERM: a second one while cleanup asks `ps` about the client;
+    /// one while the shell is stopped after starting the client and before recording it; and
+    /// one to the whole process group as soon as the lookup file exists.
     enum LookupInterruption: String, CaseIterable, Sendable {
         case duringCleanup = "during-cleanup"
         case beforeTheClientIsRecorded = "before-the-client-is-recorded"
+        case groupOnceTheFileExists = "group-once-the-file-exists"
     }
 
-    /// The stand-in `tmux` writes its pid and waits, as a client of a stopped server does,
-    /// and the stand-in `ps` marks that it was asked and pauses before answering truly, so a
-    /// signal can land inside cleanup.
+    /// The hook runs as its own process group. The stand-in `tmux` writes its pid and waits,
+    /// as a client of a stopped server does; the stand-in `ps` marks that it was asked and
+    /// pauses before answering truly, so a signal can land inside cleanup; and the stand-in
+    /// `mktemp` makes the real file and pauses before printing its path, so a hook that made
+    /// its file through a child would be signalled while only that child knew the path.
     @Test(
         "A signal at any point of the hook's lookup leaves no client and no lookup file",
         arguments: LookupInterruption.allCases)
@@ -302,34 +306,39 @@ struct ConversationObserveCommandTests {
         }
         _ = try install("tmux", #"echo $$ > "$EDGE_ROOT/client"; exec /bin/sleep 30"#, in: bin)
         _ = try install("ps", #"echo ready > "$EDGE_ROOT/in-ps"; /bin/sleep 0.3; exec /bin/ps "$@""#, in: bin)
+        _ = try install(
+            "mktemp", #"f=$(/usr/bin/mktemp "$@") || exit; /bin/sleep 0.3; echo "$f""#,
+            in: bin)
         let wrapper = try install(
             "wrapper.sh",
             #"""
             source "$1"
             if [[ "$2" == before-the-client-is-recorded ]]; then
                 set -T
-                trap 'if [[ "$BASH_COMMAND" == "lookup_client="* && "$BASH_SUBSHELL" == 0 && ! -e "$EDGE_ROOT/spawned" ]]; then echo ready > "$EDGE_ROOT/spawned"; builtin kill -STOP "$$"; fi' DEBUG
+                trap 'if [[ "$BASH_COMMAND" == "lookup_client="* && "$BASH_SUBSHELL" == 0 && ! -e "$EDGE_ROOT/stopped" ]]; then echo ready > "$EDGE_ROOT/stopped"; builtin kill -STOP "$$"; fi' DEBUG
             fi
             main
             """#,
             in: root)
 
-        let hook = Process()
-        hook.executableURL = URL(fileURLWithPath: "/bin/bash")
-        hook.arguments = [wrapper.path, source.path, interruption.rawValue]
-        hook.environment = [
-            "PATH": "\(bin.path):/usr/bin:/bin", "TMPDIR": temporary.path, "EDGE_ROOT": root.path,
-            "TMUX": "\(root.path)/absent.sock,123,0", "HOME": root.path,
-        ]
-        hook.standardInput = FileHandle.nullDevice
-        hook.standardOutput = FileHandle.nullDevice
-        hook.standardError = FileHandle.nullDevice
-        try hook.run()
+        let hook = try spawnInItsOwnGroup(
+            "/bin/bash", [wrapper.path, source.path, interruption.rawValue],
+            environment: [
+                "PATH": "\(bin.path):/usr/bin:/bin", "TMPDIR": temporary.path, "EDGE_ROOT": root.path,
+                "TMUX": "\(root.path)/absent.sock,123,0", "HOME": root.path,
+            ])
+        var status: Int32 = 0
+        var exited = false
+        func reap() -> Bool {
+            if !exited { exited = waitpid(hook, &status, WNOHANG) == hook }
+            return exited
+        }
         var client: pid_t = 0
         defer {
-            if hook.isRunning {
-                kill(hook.processIdentifier, SIGCONT)
-                kill(hook.processIdentifier, SIGKILL)
+            if !reap() {
+                killpg(hook, SIGCONT)
+                killpg(hook, SIGKILL)
+                _ = waitpid(hook, &status, 0)
             }
             if client > 0 { kill(client, SIGKILL) }
         }
@@ -337,27 +346,68 @@ struct ConversationObserveCommandTests {
         switch interruption {
         case .duringCleanup:
             try waitFor("client")
-            kill(hook.processIdentifier, SIGTERM)
+            kill(hook, SIGTERM)
             try waitFor("in-ps")
-            kill(hook.processIdentifier, SIGTERM)
+            kill(hook, SIGTERM)
         case .beforeTheClientIsRecorded:
-            try waitFor("spawned")
-            kill(hook.processIdentifier, SIGTERM)
-            kill(hook.processIdentifier, SIGCONT)
-            try waitFor("client")
+            try waitFor("stopped")
+            kill(hook, SIGTERM)
+            kill(hook, SIGCONT)
+        case .groupOnceTheFileExists:
+            let deadline = Date().addingTimeInterval(5)
+            while try FileManager.default.contentsOfDirectory(atPath: temporary.path).isEmpty {
+                try #require(Date() < deadline, "the lookup file never appeared")
+                Thread.sleep(forTimeInterval: 0.002)
+            }
+            killpg(hook, SIGTERM)
         }
         let deadline = Date().addingTimeInterval(5)
-        while hook.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
-        try #require(!hook.isRunning, "the hook outlived its cleanup")
-        client = try #require(
-            pid_t(
-                String(decoding: try Data(contentsOf: marker("client")), as: UTF8.self)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)))
+        while !reap(), Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+        try #require(exited, "the hook outlived its cleanup")
         Thread.sleep(forTimeInterval: 0.05)
+        if let pid = try? String(decoding: Data(contentsOf: marker("client")), as: UTF8.self) {
+            client = pid_t(pid.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        }
 
-        #expect(hook.terminationReason == .exit && hook.terminationStatus == 0)
-        #expect(kill(client, 0) != 0, "the lookup's tmux client outlived the hook")
+        #expect(status & 0x7f == 0 && (status >> 8) & 0xff == 0, "the hook ended with wait status \(status)")
+        #expect(client == 0 || kill(client, 0) != 0, "the lookup's tmux client outlived the hook")
         #expect(try FileManager.default.contentsOfDirectory(atPath: temporary.path) == [])
+    }
+
+    /// Starts `path` as the leader of a new process group, so a test can signal the group,
+    /// with every signal at its default and none blocked: the test runner's own dispositions
+    /// would otherwise reach the hook and its children.
+    private func spawnInItsOwnGroup(
+        _ path: String,
+        _ arguments: [String],
+        environment: [String: String]
+    ) throws -> pid_t {
+        var attributes: posix_spawnattr_t? = nil
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(
+            &attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
+        posix_spawnattr_setpgroup(&attributes, 0)
+        var everySignal = sigset_t()
+        var noSignal = sigset_t()
+        sigfillset(&everySignal)
+        sigemptyset(&noSignal)
+        posix_spawnattr_setsigdefault(&attributes, &everySignal)
+        posix_spawnattr_setsigmask(&attributes, &noSignal)
+        var actions: posix_spawn_file_actions_t? = nil
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        for descriptor: Int32 in 0...2 {
+            posix_spawn_file_actions_addopen(
+                &actions, descriptor, "/dev/null", descriptor == 0 ? O_RDONLY : O_WRONLY, 0)
+        }
+        let argv = ([path] + arguments).map { strdup($0) } + [nil]
+        let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer { (argv + envp).forEach { free($0) } }
+        var pid: pid_t = 0
+        let result = posix_spawn(&pid, path, &actions, &attributes, argv, envp)
+        try #require(result == 0, "posix_spawn failed with \(result)")
+        return pid
     }
 
     @Test("The installed hook script starts the CLI only inside WorkSpaces, and exits 0 either way")

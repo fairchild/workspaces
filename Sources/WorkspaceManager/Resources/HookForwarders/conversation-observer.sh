@@ -13,7 +13,9 @@
 # descriptor to the server, so a stopped server would hold a pipe open. One
 # owner cleans up the lookup's file, client and deadline, on return or on any
 # signal; a signal while they are being started waits until all three are
-# recorded, and cleanup ignores further signals once it begins. The deadline
+# recorded, and cleanup ignores further signals once it begins. The file is
+# named and created by this shell itself, with noclobber, so its path is known
+# before it exists and no child dies holding it. The deadline
 # kills only a process that is still this shell's child, and it is stopped
 # before this shell starts any other child. The app writes the bundled CLI's
 # path in place of the placeholder when it extracts this file. Exits 0 unless
@@ -73,13 +75,29 @@ ask_session() {
 
 start_lookup() {
     local socket=$1 session=$2
-    lookup_out="$(mktemp "${TMPDIR:-/tmp}/workspaces-observer.XXXXXX")" || return 1
+    create_lookup_file || return 1
     PATH="$PATH:/opt/homebrew/bin:/usr/local/bin" tmux -S "$socket" \
         display-message -p -t "$session" '#{pid}' \; show-environment -t "$session" "$KEY" \
         </dev/null >"$lookup_out" 2>/dev/null &
     lookup_client=$!
     end_at_deadline "$lookup_client" </dev/null >/dev/null 2>&1 &
     lookup_guard=$!
+}
+
+create_lookup_file() {
+    local attempt made
+    for attempt in 1 2 3 4 5 6 7 8; do
+        lookup_out="${TMPDIR:-/tmp}"
+        lookup_out="${lookup_out%/}/workspaces-observer.$$.$RANDOM"
+        [[ -e "$lookup_out" || -L "$lookup_out" ]] && continue
+        set -C
+        : 2>/dev/null >"$lookup_out"
+        made=$?
+        set +C
+        ((made == 0)) && return 0
+    done
+    lookup_out=""
+    return 1
 }
 
 end_on_signal() {
