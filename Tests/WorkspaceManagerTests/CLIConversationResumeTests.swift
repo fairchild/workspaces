@@ -420,6 +420,47 @@ struct CLIConversationResumeTests {
         #expect(result.holders.first?.foundBy == .recordedHarness)
     }
 
+    /// A harness whose parent never collects it, as an orchestrator that starts the verb and
+    /// never waits leaves it, keeps its pid and start time after it exits.
+    @Test("A recorded claude that exited and was never reaped holds nothing")
+    func unreapedHarnessHoldsNothing() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = try recordConversation(in: fixture)
+        let neverWaits = try fixture.start(
+            [
+                "-e", "my $child = fork; if (!$child) { exec @ARGV } sleep 300", fixture.binary.path, "conversation",
+                "resume", conversationID, "--here",
+            ],
+            executable: URL(fileURLWithPath: "/usr/bin/perl"),
+            output: fixture.root.appendingPathComponent("first.log"))
+        defer { Self.kill([neverWaits]) }
+        var harness: ProcessIdentity?
+        try await waitUntil(launches: 2) {
+            harness = fixture.records.load(conversationID: conversationID)?.lastSeenIn?.harness
+            return try harness.map { try Self.isZombie($0.pid) } ?? false
+        }
+        let dead = try #require(harness)
+        #expect(try Self.isZombie(dead.pid), "the first harness never exited")
+
+        let resume = try fixture.run(["conversation", "resume", conversationID, "--here"])
+        #expect(resume.status == 0, "\(resume.stdout)")
+        #expect(resume.stdout.contains("stub argv=--resume \(conversationID)"))
+    }
+
+    private static func isZombie(_ pid: Int32) throws -> Bool {
+        let ps = Process()
+        let out = Pipe()
+        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+        ps.arguments = ["-o", "stat=", "-p", "\(pid)"]
+        ps.standardOutput = out
+        ps.standardError = FileHandle.nullDevice
+        try ps.run()
+        let stat = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        ps.waitUntilExit()
+        return stat.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("Z")
+    }
+
     /// `/clear` keeps the process and starts a new conversation, and the hook sees it start.
     /// Which conversation the process is in now is only as current as its last hook, so it
     /// holds every one it ran until it exits.

@@ -37,7 +37,8 @@ public struct ProcessIdentity: Hashable, Sendable {
 }
 
 /// What the kernel said about a pid: a process and when it started, no process at all, or
-/// nothing, because it could not be asked. Only the first two are answers.
+/// nothing, because it could not be asked. Only the first two are answers. A process that has
+/// exited and waits for its parent to collect it is absent: its pid is taken, but nothing runs.
 public enum ProcessRead: Equatable, Sendable {
     case found(ProcessIdentity)
     case absent
@@ -47,7 +48,7 @@ public enum ProcessRead: Equatable, Sendable {
 /// Whether a recorded process lifetime is still running, from one kernel read.
 public enum ProcessLiveness: Equatable, Sendable {
     case running
-    /// It exited, and its pid is free or belongs to a later process.
+    /// It exited, and its pid is free, uncollected, or belongs to a later process.
     case ended
     /// The kernel could not be asked, so neither of the others can be ruled out.
     case unreadable
@@ -84,6 +85,7 @@ public struct ProcessInspector: Sendable {
             switch info(pid) {
             case .failure: return .unreadable
             case .success(nil): return .absent
+            case .success(let process?) where Int32(process.kp_proc.p_stat) == SZOMB: return .absent
             case .success(let process?):
                 let start = process.kp_proc.p_un.__p_starttime
                 return .found(
