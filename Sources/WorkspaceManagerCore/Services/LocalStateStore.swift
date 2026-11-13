@@ -1203,61 +1203,39 @@ public actor LocalStateStore {
         }
     }
 
-    /// The current run and the one before it: the runs whose tiles the one-time migration
-    /// carries into Conversation records.
-    public func recentRunIDs() async throws -> [String] {
-        let currentRunID = runID
-        let currentRunStartedAt = runStartedAt
-        let previous = try await dbPool.read { db in
-            try String.fetchOne(
-                db,
-                sql: """
-                    SELECT run_id FROM terminal_sessions
-                    WHERE run_started_at IS NOT NULL AND run_started_at < ?
-                    ORDER BY run_started_at DESC
-                    LIMIT 1
-                    """,
-                arguments: [currentRunStartedAt]
+    /// Each Claude conversation a recorded tile reported, newest sighting per tile, from every
+    /// run the database holds. It reads nothing but `db`, so any store on the database gathers
+    /// the same set from the same state.
+    static func conversationSightings(in db: Database) throws -> [ConversationSighting] {
+        try Row.fetchAll(
+            db,
+            sql: """
+                SELECT ae.host_session_id, ae.agent_session_id, ae.cwd, ae.event_at
+                FROM (
+                    SELECT
+                        host_session_id, agent_session_id, cwd, event_at,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY host_session_id, agent_session_id
+                            ORDER BY event_at DESC, id DESC
+                        ) AS sighting_rank
+                    FROM agent_status_events
+                    WHERE agent_session_id IS NOT NULL AND agent_kind = ?
+                ) ae
+                JOIN terminal_sessions ts ON ts.host_session_id = ae.host_session_id
+                WHERE ae.sighting_rank = 1
+                ORDER BY ae.event_at, ae.host_session_id, ae.agent_session_id
+                """,
+            arguments: [AgentKind.claudeCode.rawValue]
+        ).compactMap { row in
+            guard let hostSessionID = UUID(uuidString: row["host_session_id"]),
+                let observedAt = Self.date(fromISOString: row["event_at"])
+            else { return nil }
+            return ConversationSighting(
+                hostSessionID: hostSessionID,
+                conversationID: row["agent_session_id"],
+                cwd: row["cwd"],
+                observedAt: observedAt
             )
-        }
-        return [currentRunID] + (previous.map { [$0] } ?? [])
-    }
-
-    /// Each Claude conversation the tiles of `runIDs` reported, newest sighting per tile.
-    public func fetchConversationSightings(runIDs: [String]) async throws -> [ConversationSighting] {
-        guard !runIDs.isEmpty else { return [] }
-        let placeholders = Array(repeating: "?", count: runIDs.count).joined(separator: ", ")
-        return try await dbPool.read { db in
-            try Row.fetchAll(
-                db,
-                sql: """
-                    SELECT ae.host_session_id, ae.agent_session_id, ae.cwd, ae.event_at
-                    FROM (
-                        SELECT
-                            host_session_id, agent_session_id, cwd, event_at,
-                            ROW_NUMBER() OVER (
-                                PARTITION BY host_session_id, agent_session_id
-                                ORDER BY event_at DESC, id DESC
-                            ) AS sighting_rank
-                        FROM agent_status_events
-                        WHERE agent_session_id IS NOT NULL AND agent_kind = ?
-                    ) ae
-                    JOIN terminal_sessions ts ON ts.host_session_id = ae.host_session_id
-                    WHERE ae.sighting_rank = 1 AND ts.run_id IN (\(placeholders))
-                    ORDER BY ae.event_at
-                    """,
-                arguments: StatementArguments([AgentKind.claudeCode.rawValue] + runIDs)
-            ).compactMap { row in
-                guard let hostSessionID = UUID(uuidString: row["host_session_id"]),
-                    let observedAt = Self.date(fromISOString: row["event_at"])
-                else { return nil }
-                return ConversationSighting(
-                    hostSessionID: hostSessionID,
-                    conversationID: row["agent_session_id"],
-                    cwd: row["cwd"],
-                    observedAt: observedAt
-                )
-            }
         }
     }
 
@@ -1273,27 +1251,28 @@ public actor LocalStateStore {
         }
     }
 
-    /// Replaces `key`'s value with `transform(current)` inside one `BEGIN IMMEDIATE`
+    /// Replaces `key`'s value with `transform(db, current)` inside one `BEGIN IMMEDIATE`
     /// transaction, which takes the database's write lock before the read, so no other
-    /// connection, from this store or another on the same file, writes between them. A nil
-    /// result leaves the value as it is. Returns the value the transaction leaves.
-    public func updateMetadataValue(
+    /// connection, from this store or another on the same file, writes between them, and
+    /// whatever `transform` reads from `db` is the state its result is stored against. A nil
+    /// result leaves the value as it is. Returns the value found and the value left.
+    func updateMetadataValue(
         forKey key: String,
-        _ transform: @escaping @Sendable (String?) throws -> String?
-    ) async throws -> String? {
+        _ transform: @escaping @Sendable (Database, String?) throws -> String?
+    ) async throws -> (found: String?, left: String?) {
         try await dbPool.writeWithoutTransaction { db in
-            var result: String?
+            var values: (found: String?, left: String?) = (nil, nil)
             try db.inTransaction(.immediate) {
                 let current = try String.fetchOne(
                     db, sql: "SELECT value FROM local_state_metadata WHERE key = ?", arguments: [key])
-                result = current
-                if let next = try transform(current) {
+                values = (current, current)
+                if let next = try transform(db, current) {
                     try Self.writeMetadataValue(db, key: key, value: next)
-                    result = next
+                    values.left = next
                 }
                 return .commit
             }
-            return result
+            return values
         }
     }
 

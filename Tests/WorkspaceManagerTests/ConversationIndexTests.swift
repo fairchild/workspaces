@@ -134,7 +134,7 @@ struct ConversationIndexTests {
         #expect(try await localState.fetchConversationIndex().map(\.conversationID) == [id])
     }
 
-    @Test("The one-time migration writes records from Launch Records and previous-run ids, once")
+    @Test("The one-time migration writes records from Launch Records and tiles' ids, once")
     func migrationRunsOnce() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -252,78 +252,71 @@ struct ConversationIndexTests {
         try FileManager.default.removeItem(at: fixture.records.directory)
         #expect(try await indexer.migrateOnce() == .init(written: 1))
         #expect(fixture.records.load(conversationID: typed) != nil)
+        #expect(try await thisRun.metadataValue(forKey: indexer.migrationMetadataKey) == "{}")
         #expect(try await indexer.migrateOnce() == .init(alreadyDone: true))
     }
 
-    /// The failed launch records an unrelated tile, so by the next launch the run that held
-    /// the failed conversation is no longer the previous one.
-    @Test("A failed migration retries what its first attempt gathered, across launches")
-    func failedMigrationKeepsItsRunsAcrossLaunches() async throws {
+    /// Codex's empty-first case: the store that migrates first started after a run whose
+    /// only tile reported nothing, so the run before it, which holds the conversation, is
+    /// not among its own recent runs. What it gathers is the database's, not its runs'.
+    @Test("The first store to migrate carries every tile the database knows, not just its own runs'")
+    func firstStoreGathersTheWholeDatabase() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let typed = UUID().uuidString.lowercased()
         try await recordPreviousRunSighting(
             typed, tile: UUID(),
             in: try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_000_000)))
+        let holder = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_001_000))
+        try await recordTile(
+            UUID(), in: try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_002_000)))
+        let later = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_003_000))
 
-        let failedLaunch = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_001_000))
-        try Data().write(to: fixture.records.directory)
-        #expect(try await fixture.indexer(failedLaunch).migrateOnce() == .init(failed: 1))
-        try await failedLaunch.recordTerminalSession(
-            HostTerminalSession(
-                id: UUID(),
-                key: .repoPath("/tmp/other"),
-                directory: URL(fileURLWithPath: "/tmp/other"),
-                terminalMode: .tmuxPerSession
-            ),
-            isActive: true,
-            hooksSocketPath: nil
-        )
-
-        try FileManager.default.removeItem(at: fixture.records.directory)
-        let nextLaunch = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_002_000))
-        #expect(try await fixture.indexer(nextLaunch).migrateOnce() == .init(written: 1))
+        #expect(try await fixture.indexer(later).migrateOnce() == .init(written: 1))
+        #expect(try await fixture.indexer(holder).migrateOnce() == .init(alreadyDone: true))
         #expect(fixture.records.load(conversationID: typed) != nil)
     }
 
-    /// The tile that reported the conversation is restored in a later failed launch, which
-    /// moves its row to that launch's run, and a launch after that records another tile, so
-    /// neither the first attempt's runs nor the latest two still hold it.
-    @Test("A conversation whose tile moved to a later run is still carried once the destination works")
-    func restoredTileKeepsItsPendingConversation() async throws {
-        let fixture = try Fixture()
-        defer { fixture.cleanup() }
-        let typed = UUID().uuidString.lowercased()
-        let tile = UUID()
-        try await recordPreviousRunSighting(
-            typed, tile: tile,
-            in: try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_000_000)))
-        try Data().write(to: fixture.records.directory)
+    /// The same two stores, started together while another connection holds the write lock,
+    /// so either can be the one that gathers. Ten rounds, because a wrong winner shows up in
+    /// some rounds and not others.
+    @Test("Two stores migrating at once carry the conversation whichever gathers")
+    func concurrentStoresBothCarryTheConversation() async throws {
+        var missing = 0
+        for _ in 0..<10 {
+            let fixture = try Fixture()
+            defer { fixture.cleanup() }
+            let typed = UUID().uuidString.lowercased()
+            try await recordPreviousRunSighting(
+                typed, tile: UUID(),
+                in: try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_000_000)))
+            let holder = fixture.indexer(
+                try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_001_000)))
+            try await recordTile(
+                UUID(), in: try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_002_000)))
+            let later = fixture.indexer(
+                try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_003_000)))
 
-        let first = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_001_000))
-        #expect(try await fixture.indexer(first).migrateOnce() == .init(failed: 1))
-
-        let second = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_002_000))
-        #expect(try await fixture.indexer(second).migrateOnce() == .init(failed: 1))
-        try await recordTile(tile, in: second)
-
-        let third = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_003_000))
-        #expect(try await fixture.indexer(third).migrateOnce() == .init(failed: 1))
-        try await recordTile(UUID(), in: third)
-
-        try FileManager.default.removeItem(at: fixture.records.directory)
-        let repaired = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_004_000))
-        let indexer = fixture.indexer(repaired)
-        #expect(try await indexer.migrateOnce() == .init(written: 1))
-        #expect(fixture.records.load(conversationID: typed) != nil)
-        #expect(try await repaired.metadataValue(forKey: indexer.migrationMetadataKey) == "{}")
-        #expect(try await indexer.migrateOnce() == .init(alreadyDone: true))
+            var configuration = Configuration()
+            configuration.allowsUnsafeTransactions = true
+            let gate = try DatabaseQueue(
+                path: fixture.root.appendingPathComponent("state.sqlite").path, configuration: configuration)
+            try await gate.writeWithoutTransaction { try $0.execute(sql: "BEGIN IMMEDIATE") }
+            let first = Task.detached { try await later.migrateOnce() }
+            let second = Task.detached { try await holder.migrateOnce() }
+            try await Task.sleep(for: .milliseconds(200))
+            try await gate.writeWithoutTransaction { try $0.execute(sql: "COMMIT") }
+            _ = try await (first.value, second.value)
+            try gate.close()
+            if fixture.records.load(conversationID: typed) == nil { missing += 1 }
+        }
+        #expect(missing == 0)
     }
 
-    /// Codex's overlap: two stores on one database gather from different runs, and one
-    /// attempt runs whole between the other's staging and its writes. The conversation the
-    /// inner attempt could not write stays owed after the outer one finishes cleanly.
-    @Test("An attempt that wrote everything it staged leaves another attempt's failure owed")
+    /// Codex's overlap: one store's whole attempt runs between another's staging and its
+    /// writes. Both work the one stored set, so the failure stays owed after both, and the
+    /// retry writes only that.
+    @Test("An attempt nested inside another's leaves the failure owed and the rest settled")
     func overlappingAttemptsKeepAFailure() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -349,20 +342,19 @@ struct ConversationIndexTests {
             let inner = try await innerIndexer.migrateOnce()
             #expect(inner == .init(written: 1, failed: 1))
         }
-        #expect(try await outerIndexer.migrateOnce() == .init(written: 1))
+        #expect(try await outerIndexer.migrateOnce() == .init(written: 1, failed: 1))
         #expect(try await outer.metadataValue(forKey: outerIndexer.migrationMetadataKey) != "{}")
 
-        // The retry gathers its own run's conversation again; writing it twice is harmless.
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: unreadable.path)
-        #expect(try await fixture.indexer(outer).migrateOnce() == .init(written: 2))
+        #expect(try await fixture.indexer(outer).migrateOnce() == .init(written: 1))
         #expect(fixture.records.load(conversationID: failing) != nil)
         #expect(fixture.records.load(conversationID: landing) != nil)
         #expect(try await fixture.indexer(inner).migrateOnce() == .init(alreadyDone: true))
     }
 
-    /// Codex's moving key: an attempt stages, a writer creates the directory, and the
-    /// attempt ends before writing. The retry runs where neither recent run holds the tile,
-    /// so only what was staged can carry the conversation.
+    /// Codex's moving key: an attempt stages, a writer creates the directory, the launch
+    /// record that named the conversation goes away, and the attempt ends before writing.
+    /// Only what was staged can carry the conversation now, and only under the same key.
     @Test(
         "What was staged before the destination existed is found after it does",
         arguments: ["link", "tmp", "private-tmp"])
@@ -381,30 +373,64 @@ struct ConversationIndexTests {
         default: destination = real.appendingPathComponent("records")
         }
         let records = ConversationRecordStore(directory: destination)
+        let launchRecords = AgentLaunchRecordStore(directory: real.appendingPathComponent("launches"))
         let state = real.appendingPathComponent("state.sqlite")
-        func localState(_ seconds: TimeInterval) throws -> LocalStateStore {
-            try LocalStateStore(databaseURL: state, runStartedAt: Date(timeIntervalSince1970: seconds))
-        }
-        func indexer(_ localState: LocalStateStore) -> ConversationIndexer {
+        func indexer() throws -> ConversationIndexer {
             ConversationIndexer(
-                records: records, localState: localState,
-                launchRecords: AgentLaunchRecordStore(directory: real.appendingPathComponent("launches")))
+                records: records, localState: try LocalStateStore(databaseURL: state), launchRecords: launchRecords)
         }
         struct Interrupted: Error {}
 
-        let typed = UUID().uuidString.lowercased()
-        try await recordPreviousRunSighting(typed, tile: UUID(), in: try localState(1_800_000_000))
-        var first = indexer(try localState(1_800_001_000))
+        let launched = UUID().uuidString.lowercased()
+        try launchRecords.save(
+            AgentLaunchRecord(
+                handle: "wm-repo-1",
+                workspacePath: "/tmp/repo",
+                socketLabel: "workspaces",
+                launchedAt: Date(timeIntervalSince1970: 1_800_000_000),
+                identity: AgentLaunchIdentity(conversationID: launched, requestedModel: nil, requestedEffort: nil)
+            )
+        )
+        var first = try indexer()
         first.afterStaging = {
             try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+            try FileManager.default.removeItem(at: launchRecords.directory)
             throw Interrupted()
         }
         await #expect(throws: Interrupted.self) { try await first.migrateOnce() }
 
-        try await recordTile(UUID(), in: try localState(1_800_002_000))
-        let retry = indexer(try localState(1_800_003_000))
-        #expect(try await retry.migrateOnce() == .init(written: 1))
-        #expect(records.load(conversationID: typed) != nil)
+        #expect(try await indexer().migrateOnce() == .init(written: 1))
+        #expect(records.load(conversationID: launched) != nil)
+    }
+
+    /// Codex's LEXICAL case: `local/link/../records` is `outside/records` on disk, a
+    /// different directory from `local/records`, so each is migrated into.
+    @Test("A `..` after a link names its own destination")
+    func parentAfterALinkIsItsOwnDestination() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let local = fixture.root.appendingPathComponent("local")
+        let outside = fixture.root.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: outside.appendingPathComponent("child"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: local.appendingPathComponent("link"), withDestinationURL: outside.appendingPathComponent("child"))
+        let throughLink = ConversationRecordStore(directory: local.appendingPathComponent("link/../records"))
+        let beside = ConversationRecordStore(directory: local.appendingPathComponent("records"))
+        let typed = UUID().uuidString.lowercased()
+        try await recordPreviousRunSighting(
+            typed, tile: UUID(),
+            in: try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_000_000)))
+        let state = try fixture.localState(runStartedAt: Date(timeIntervalSince1970: 1_800_001_000))
+
+        for store in [throughLink, beside] {
+            let indexer = ConversationIndexer(records: store, localState: state, launchRecords: fixture.launchRecords)
+            #expect(try await indexer.migrateOnce() == .init(written: 1))
+        }
+        #expect(throughLink.load(conversationID: typed) != nil)
+        #expect(beside.load(conversationID: typed) != nil)
+        #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("records").path))
     }
 
     private func recordTile(_ tile: UUID, in localState: LocalStateStore) async throws {
