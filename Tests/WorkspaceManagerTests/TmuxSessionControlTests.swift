@@ -276,10 +276,13 @@ struct TmuxSessionControlTests {
             ("a;b", "a;b"),
             (";", #"\;"#),
             ("", ""),
+            ("/tmp/records\u{0600};", "/tmp/records\u{0600}\\;"),
+            ("/tmp/records\u{110BD};", "/tmp/records\u{110BD}\\;"),
+            ("/tmp/records;\u{0301}", "/tmp/records;\u{0301}"),
         ]
     )
     func literalArgumentEscapesOnlyATrailingSemicolon(_ value: String, _ written: String) {
-        #expect(TmuxSessionProbe.literalArgument(value) == written)
+        #expect(Array(TmuxSessionProbe.literalArgument(value).utf8) == Array(written.utf8))
     }
 
     @Test("Every data argument of a launch is written for tmux's parser, with -e and without")

@@ -335,11 +335,18 @@ public struct TmuxSessionProbe: Sendable {
     public static let sessionEnvironmentFlagVersion = (major: 3, minor: 2)
 
     /// `value` written so tmux hands it to the command unchanged. tmux reads a `;` that
-    /// ends any argument as a command separator, even inside one argv element, and a
-    /// `\;` that ends one as a literal `;`. So a trailing `;` is written `\;`; every
+    /// is the last byte of any argument as a command separator, even inside one argv
+    /// element, and a `\;` there as a literal `;`. So a final `;` is written `\;`; every
     /// other value, a trailing `\` included, already arrives as written.
+    ///
+    /// The test is on the last scalar, which ends on the last byte: a `;` can share a
+    /// `Character` with what precedes it (U+0600 does), so `hasSuffix` would miss it.
     public static func literalArgument(_ value: String) -> String {
-        value.hasSuffix(";") ? String(value.dropLast()) + "\\;" : value
+        guard value.unicodeScalars.last == ";" else { return value }
+        var scalars = value.unicodeScalars
+        scalars.removeLast()
+        scalars.append(contentsOf: "\\;".unicodeScalars)
+        return String(scalars)
     }
 
     /// The installed tmux's `major.minor`, or `nil` when tmux is absent, wedged, or

@@ -1371,8 +1371,9 @@ struct CLIDetachedSessionTests {
     }
 
     /// tmux ends a command at a `;` closing any argument, so each value here would split or
-    /// trim a launch handed to it raw. The command ends in `\;` for the same reason: the
-    /// pane's shell receives it as an argument only if the command reached tmux intact.
+    /// trim a launch handed to it raw; U+0600 makes the last `;` share a `Character` with
+    /// it. The command ends in `\;` for the same reason: the pane's shell receives it as an
+    /// argument only if the command reached tmux intact.
     @Test(
         "Values ending in ;, \\; or \\ reach the pane and the session intact, with new-session -e and without",
         .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
@@ -1381,7 +1382,7 @@ struct CLIDetachedSessionTests {
         let fixture = try makeFixture()
         defer { fixture.teardown() }
         let key = "WORKSPACES_PROBE_VALUE"
-        let values = ["/tmp/records;", #"/tmp/records\;"#, #"/tmp/records\"#]
+        let values = ["/tmp/records;", #"/tmp/records\;"#, #"/tmp/records\"#, "/tmp/records\u{0600};"]
 
         for (index, value) in values.enumerated() {
             for seeds in [true, false] {
@@ -1410,8 +1411,11 @@ struct CLIDetachedSessionTests {
 
                 #expect(try await contentsOnceWritten(out) == "\(value)|;|__done__", "\(withCommand)")
                 for handle in [withCommand, bare] {
-                    let lines = try fixture.sessionEnvironment(handle).split(separator: "\n").map(String.init)
-                    #expect(lines.contains("\(key)=\(value)"), "\(handle): \(lines.filter { $0.hasPrefix(key) })")
+                    let query = ["tmux", "-u", "-L", fixture.socketLabel, "show-environment", "-t", "=\(handle)", key]
+                    let shown = await TmuxSessionControl.defaultRunner(
+                        "/usr/bin/env", query,
+                        ProcessInfo.processInfo.environment.merging(fixture.environment) { _, new in new })
+                    #expect(shown?.stdout == "\(key)=\(value)\n", "\(handle): \(shown?.stdout ?? "no answer")")
                 }
             }
         }
