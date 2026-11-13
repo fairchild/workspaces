@@ -4,7 +4,8 @@
 //
 //  A retired surface is freed once its command is gone, and libghostty's teardown then signals
 //  whatever group the recorded pid leads. These cases pin down when a process that has the
-//  pid now is still the command found earlier, from synthetic process records.
+//  pid now is still the command found earlier, and that only a lookup that worked can say it
+//  is gone, from synthetic process records.
 //
 
 import Darwin
@@ -20,31 +21,41 @@ struct GhosttySurfaceChildProcessTests {
 
     @Test("No process with the pid means the command is gone")
     func gone() {
-        #expect(GhosttySurfaceChildProcess.fate(of: Self.command, given: nil, parent: Self.parent) == .gone)
+        #expect(GhosttySurfaceChildProcess.fate(of: Self.command, given: .absent, parent: Self.parent) == .gone)
+    }
+
+    @Test("A query that failed says nothing, so the command is not gone")
+    func unavailable() {
+        let failed = GhosttySurfaceChildProcess.Query<kinfo_proc>.failed(errno: ENOMEM)
+        #expect(GhosttySurfaceChildProcess.fate(of: Self.command, given: failed, parent: Self.parent) == .unavailable)
     }
 
     @Test("The same pid, start time and parent is the command, running or exited")
     func same() {
         let running = Self.process(started: timeval(tv_sec: 1_700_000_000, tv_usec: 250))
         let exited = Self.process(started: timeval(tv_sec: 1_700_000_000, tv_usec: 250), status: SZOMB)
-        #expect(GhosttySurfaceChildProcess.fate(of: Self.command, given: running, parent: Self.parent) == .running)
-        #expect(GhosttySurfaceChildProcess.fate(of: Self.command, given: exited, parent: Self.parent) == .exited)
+        #expect(
+            GhosttySurfaceChildProcess.fate(of: Self.command, given: .found(running), parent: Self.parent) == .running)
+        #expect(
+            GhosttySurfaceChildProcess.fate(of: Self.command, given: .found(exited), parent: Self.parent) == .exited)
     }
 
     @Test("The pid with another start time is a later process")
     func reusedLater() {
         let later = Self.process(started: timeval(tv_sec: 1_700_000_042, tv_usec: 250))
         let laterInTheSameSecond = Self.process(started: timeval(tv_sec: 1_700_000_000, tv_usec: 900))
-        #expect(GhosttySurfaceChildProcess.fate(of: Self.command, given: later, parent: Self.parent) == .replaced)
         #expect(
-            GhosttySurfaceChildProcess.fate(of: Self.command, given: laterInTheSameSecond, parent: Self.parent)
+            GhosttySurfaceChildProcess.fate(of: Self.command, given: .found(later), parent: Self.parent) == .replaced)
+        #expect(
+            GhosttySurfaceChildProcess.fate(of: Self.command, given: .found(laterInTheSameSecond), parent: Self.parent)
                 == .replaced)
     }
 
     @Test("The pid under another parent is not this process's command")
     func anotherParent() {
         let adopted = Self.process(started: timeval(tv_sec: 1_700_000_000, tv_usec: 250), parent: 1)
-        #expect(GhosttySurfaceChildProcess.fate(of: Self.command, given: adopted, parent: Self.parent) == .replaced)
+        #expect(
+            GhosttySurfaceChildProcess.fate(of: Self.command, given: .found(adopted), parent: Self.parent) == .replaced)
     }
 
     private static func process(started: timeval, parent: pid_t = parent, status: Int32 = SRUN) -> kinfo_proc {

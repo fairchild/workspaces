@@ -118,7 +118,7 @@ extension GhosttySurfaceMailboxDeadlockTests {
             await waitUntil(.seconds(30)) { getsid(pipeline) == -1 }
             try #require(getsid(pipeline) == -1 && foreground == pipeline, "the pipeline's first process never exited")
 
-            let found = try #require(GhosttySurfaceChildProcess.command(of: surface))
+            let found = try #require(GhosttySurfaceChildProcess.command(of: surface).value)
             try #require(found.pid == command, "the lookup did not lead back to the surface's command")
 
             // With no kill until the grace runs out, only the hang-up can end the command.
@@ -271,6 +271,62 @@ extension GhosttySurfaceMailboxDeadlockTests {
             #expect(ticksOutOfSight >= 10, "the main thread stopped ticking while the command was out of sight")
             #expect(!killedByWatchdog, "the main thread held on the command until the test's watchdog killed it")
             let held = try #require(freed.held, "the surface was never freed once its command was killed")
+            #expect(held < Self.freeHoldBound, "the free held the main thread \(held)")
+        }
+
+        @Test("A retired surface stays unfreed while its command's process cannot be looked up")
+        func aCommandThatCannotBeLookedUp() async throws {
+            let manager = GhosttyAppManager.shared
+            let script = try Self.script(
+                """
+                #!/bin/sh
+                printf '\\033]2;running\\007'
+                while :; do sleep 1; done
+                """)
+            defer { try? FileManager.default.removeItem(at: script) }
+            var view: GhosttySurfaceView? = GhosttySurfaceView(customCommand: script.path)
+            let surface = try #require(view?.surface, "the view needs a Ghostty surface to free")
+            await waitUntil(.seconds(30)) { view?.hasObservedPromptReadySignal == true }
+            try #require(view?.hasObservedPromptReadySignal == true, "the script never started")
+            let command = try #require(GhosttySurfaceChildProcess.pid(of: surface), "the surface's command has no pid")
+            defer { killpg(command, SIGKILL) }
+
+            // Stopped, `login` cannot exit, so a free that waits on it holds the main thread.
+            try #require(kill(command, SIGSTOP) == 0)
+            let watchdog = Self.watchdog(sending: SIGKILL, to: [-command], after: .seconds(10))
+            let grace = (hangUp: manager.hangUpGrace, kill: manager.killGrace)
+            manager.hangUpGrace = .milliseconds(300)
+            manager.killGrace = .milliseconds(300)
+            defer { (manager.hangUpGrace, manager.killGrace) = grace }
+            let freed = FreeRecord()
+            manager.onSurfaceFreed = { free in
+                if free.surfaceAddress == UInt(bitPattern: surface) {
+                    (freed.started, freed.held) = (free.started, free.held)
+                }
+            }
+            defer { manager.onSurfaceFreed = nil }
+            let released = WeakView(view)
+            autoreleasepool { view = nil }
+            try #require(released.view == nil, "the view outlived its last reference")
+
+            // Retirement found the command; from here on every question about a process fails.
+            let system = manager.processTable
+            manager.processTable.process = { _ in .failed(errno: ENOMEM) }
+            defer { manager.processTable = system }
+            let ticks = manager.tickCount
+            await waitUntil(.seconds(2)) { freed.started != nil }
+            let freedWhileUnreadable = freed.started != nil
+            let ticksWhileUnreadable = manager.tickCount - ticks
+
+            manager.processTable = system
+            await waitUntil(.seconds(30)) { freed.started != nil }
+            watchdog.cancel()
+            let killedByWatchdog = await watchdog.value
+
+            #expect(!freedWhileUnreadable, "the surface was freed while its command could not be looked up")
+            #expect(ticksWhileUnreadable >= 10, "the main thread stopped ticking while the lookup failed")
+            #expect(!killedByWatchdog, "the main thread held on the command until the test's watchdog killed it")
+            let held = try #require(freed.held, "the surface was never freed once lookups worked again")
             #expect(held < Self.freeHoldBound, "the free held the main thread \(held)")
         }
 
