@@ -348,9 +348,14 @@ private final class CLIApp {
 
     /// The tmux plane's control seam, on the socket this launch resolves to. One
     /// construction point so every verb agrees on which server it is talking to.
+    ///
+    /// Every session it starts carries this CLI's conversations directory, so the
+    /// SessionStart observer inside a detached pane writes where this launch did. The
+    /// caller's host-session id stays out: a detached session belongs to no tile.
     private func tmuxControl() -> TmuxSessionControl {
         TmuxSessionControl(
-            socketLabel: TmuxSessionControl.socketLabel(from: ProcessInfo.processInfo.environment)
+            socketLabel: TmuxSessionControl.socketLabel(from: ProcessInfo.processInfo.environment),
+            sessionEnvironment: [ConversationRecordStore.directoryEnvironmentKey: conversationRecords.directory.path]
         )
     }
 

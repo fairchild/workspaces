@@ -81,6 +81,7 @@ public struct TmuxSessionControl: Sendable {
     public let socketLabel: String
     private let run: CommandRunner
     private let environment: [String: String]
+    private let sessionEnvironment: [String: String]
     private let sendChunkBytes: Int
     private let sendChunkPause: Duration
 
@@ -88,12 +89,14 @@ public struct TmuxSessionControl: Sendable {
         socketLabel: String = TmuxSessionControl.defaultSocketLabel,
         run: @escaping CommandRunner = TmuxSessionControl.defaultRunner,
         environment: [String: String] = TmuxSessionProbe.defaultEnvironment,
+        sessionEnvironment: [String: String] = [:],
         sendChunkBytes: Int = TmuxSessionControl.defaultSendChunkBytes,
         sendChunkPause: Duration = TmuxSessionControl.defaultSendChunkPause
     ) {
         self.socketLabel = socketLabel
         self.run = run
         self.environment = environment
+        self.sessionEnvironment = sessionEnvironment
         self.sendChunkBytes = sendChunkBytes
         self.sendChunkPause = sendChunkPause
     }
@@ -141,11 +144,17 @@ public struct TmuxSessionControl: Sendable {
     ///
     /// The session's lifetime is its command's: no `remain-on-exit`, matching both
     /// the app's own launches and what a person typing tmux by hand would get.
+    ///
+    /// `sessionEnvironment` goes on this session alone through `-e`. The client's own
+    /// environment has tile-scoped keys stripped, and the server's global environment is
+    /// shared by every pane on the socket, so `-e` is the one place a value reaches this
+    /// session's panes and no other.
     public static func newSessionArguments(
         socketLabel: String,
         handle: String,
         directory: URL,
-        command: String?
+        command: String?,
+        sessionEnvironment: [String: String] = [:]
     ) -> [String] {
         var arguments = [
             "tmux", "-L", socketLabel, "new-session", "-d",
@@ -153,6 +162,9 @@ public struct TmuxSessionControl: Sendable {
             "-c", directory.path,
             "-x", String(detachedPaneWidth), "-y", String(detachedPaneHeight),
         ]
+        for key in sessionEnvironment.keys.sorted() {
+            arguments.append(contentsOf: ["-e", "\(key)=\(sessionEnvironment[key] ?? "")"])
+        }
         if let command, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             arguments.append(contentsOf: ["--", "/bin/zsh", "-lc", command])
         }
@@ -426,7 +438,8 @@ public struct TmuxSessionControl: Sendable {
                     socketLabel: socketLabel,
                     handle: handle,
                     directory: directory,
-                    command: command
+                    command: command,
+                    sessionEnvironment: sessionEnvironment
                 ),
                 environment
             )

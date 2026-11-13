@@ -327,6 +327,15 @@ struct CLIDetachedSessionTests {
         }
     }
 
+    /// A launched pane's tile-scoped keys: only the conversations directory, set by the launch
+    /// to the one it resolved rather than inherited, so the pane's SessionStart observer
+    /// writes where the launch did.
+    private static func expectOnlyTheLaunchConversationsDirectory(in paneEnvironment: String, fixture: Fixture) {
+        let key = ConversationRecordStore.directoryEnvironmentKey
+        #expect(callerKeys(in: paneEnvironment) == [key])
+        #expect(paneEnvironment.contains("\(key)=\(fixture.root.appendingPathComponent("conversations").path)\n"))
+    }
+
     /// Waits for a file a launched command writes, past the moment it starts existing.
     private func contentsOnceWritten(_ url: URL) async throws -> String {
         let deadline = Date().addingTimeInterval(
@@ -361,7 +370,7 @@ struct CLIDetachedSessionTests {
 
         let paneEnvironment = try await contentsOnceWritten(captured)
         #expect(paneEnvironment.contains("__done__"))
-        #expect(Self.callerKeys(in: paneEnvironment).isEmpty)
+        Self.expectOnlyTheLaunchConversationsDirectory(in: paneEnvironment, fixture: fixture)
 
         let serverEnvironment = try fixture.serverGlobalEnvironment()
         #expect(serverEnvironment.contains("WS_DETACHED_CONTROL=ordinary"))
@@ -400,7 +409,7 @@ struct CLIDetachedSessionTests {
 
         let paneEnvironment = try await contentsOnceWritten(captured)
         #expect(paneEnvironment.contains("__done__"))
-        #expect(Self.callerKeys(in: paneEnvironment).isEmpty)
+        Self.expectOnlyTheLaunchConversationsDirectory(in: paneEnvironment, fixture: fixture)
         #expect(Self.callerKeys(in: try fixture.serverGlobalEnvironment()).isEmpty)
     }
 
@@ -993,6 +1002,44 @@ struct CLIDetachedSessionTests {
         #expect(record.lastSeenIn?.hostSessionID == nil)
         #expect(record.lastSeenIn?.tmux?.name == launch.handle)
         #expect(record.lastSeenIn?.tmux?.sessionID.hasPrefix("$") == true)
+    }
+
+    /// The client that starts a detached session has tile-scoped keys stripped, so without
+    /// `-e` the pane would carry no conversations directory and the SessionStart observer
+    /// inside it would treat itself as outside WorkSpaces and write nothing.
+    @Test(
+        "An observer inside a detached session writes to the launch's conversations directory",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func detachedSessionCarriesTheConversationsDirectory() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let conversationID = UUID().uuidString.lowercased()
+        let payload = #"{"session_id":"\#(conversationID)","cwd":"\#(fixture.root.path)"}"#
+        let command = "printf '%s' '\(payload)' | '\(fixture.binary.path)' conversation observe; sleep 30"
+
+        try fixture.run(
+            ["ws", "launch", fixture.workspaceSelector, "--cmd", command, "--json"],
+            extraEnvironment: environment.merging([
+                "WORKSPACES_HOST_SESSION_ID": UUID().uuidString
+            ]) { _, new in new }
+        )
+
+        let records = ConversationRecordStore(directory: fixture.root.appendingPathComponent("conversations"))
+        let deadline = Date().addingTimeInterval(
+            await LaunchBudget.deadline(launches: 2, floor: 10, ceiling: 60)
+        )
+        var record = try records.load(conversationID: conversationID)
+        while record == nil, Date() < deadline {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            record = try records.load(conversationID: conversationID)
+        }
+        let written = try #require(record, "the observer in the detached pane wrote no record")
+        #expect(written.observedBy == .hook)
+        #expect(written.lastSeenIn?.hostSessionID == nil)
+        #expect(written.lastSeenIn?.tmux?.sessionID.hasPrefix("$") == true)
+        #expect(!(try fixture.serverGlobalEnvironment()).contains(ConversationRecordStore.directoryEnvironmentKey))
     }
 
     @Test("Resuming a handle nothing was launched under says so")
