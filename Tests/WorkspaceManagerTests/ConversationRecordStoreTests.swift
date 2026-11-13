@@ -138,6 +138,58 @@ struct ConversationRecordStoreTests {
         }
     }
 
+    /// The SessionStart observer dates its sighting before it asks tmux where it is, so the
+    /// app's tmux-less sighting of the same tile can land first with a later date.
+    @Test("An older sighting from the same tile fills a missing tmux session, and never replaces a known one")
+    func olderSameTileSightingFillsTmux() throws {
+        try withStore { store in
+            let tile = Self.tile.uuidString
+            let hooked = ConversationRecord.TmuxSession(
+                serverPID: 4242, sessionID: "$3", createdAt: Date(timeIntervalSince1970: 1_799_999_000),
+                name: "wm-repo-1")
+            try store.record(observation(at: 1_800_000_010, by: .app, lastSeenIn: .init(hostSessionID: tile)))
+            try store.record(observation(at: 1_800_000_000, lastSeenIn: .init(hostSessionID: tile, tmux: hooked)))
+            #expect(store.load(conversationID: Self.conversationID)?.lastSeenIn?.tmux == hooked)
+
+            let stale = ConversationRecord.TmuxSession(serverPID: 999, sessionID: "$1", name: "wm-old")
+            try store.record(observation(at: 1_799_999_500, lastSeenIn: .init(hostSessionID: tile, tmux: stale)))
+            #expect(store.load(conversationID: Self.conversationID)?.lastSeenIn?.tmux == hooked)
+            #expect(store.load(conversationID: Self.conversationID)?.observedBy == .app)
+        }
+    }
+
+    @Test("A new holder takes no tmux session or location keys from the old one")
+    func newHolderInheritsNoLocation() throws {
+        try withStore { store in
+            let tmux = ConversationRecord.TmuxSession(serverPID: 4242, sessionID: "$3", name: "wm-repo-1")
+            try store.record(
+                observation(at: 1_800_000_000, lastSeenIn: .init(hostSessionID: Self.tile.uuidString, tmux: tmux)))
+            let url = try #require(store.fileURL(conversationID: Self.conversationID))
+            var written = try object(at: url)
+            var place = try #require(written["lastSeenIn"] as? [String: Any])
+            var session = try #require(place["tmux"] as? [String: Any])
+            session["windowIndex"] = 1
+            place["tmux"] = session
+            place["paneIndex"] = 2
+            written["lastSeenIn"] = place
+            try JSONSerialization.data(withJSONObject: written).write(to: url)
+
+            let moved = ConversationRecord.TmuxSession(serverPID: 4242, sessionID: "$9")
+            try store.record(
+                observation(at: 1_800_000_010, lastSeenIn: .init(hostSessionID: Self.tile.uuidString, tmux: moved)))
+            let sameTile = try #require(try object(at: url)["lastSeenIn"] as? [String: Any])
+            #expect(sameTile["paneIndex"] as? Int == 2)
+            #expect((sameTile["tmux"] as? [String: Any])?["windowIndex"] == nil)
+            #expect((sameTile["tmux"] as? [String: Any])?["name"] == nil)
+
+            let elsewhere = UUID().uuidString
+            try store.record(observation(at: 1_800_000_020, by: .app, lastSeenIn: .init(hostSessionID: elsewhere)))
+            let otherTile = try #require(try object(at: url)["lastSeenIn"] as? [String: Any])
+            #expect(otherTile.keys.sorted() == ["hostSessionID"])
+            #expect(otherTile["hostSessionID"] as? String == elsewhere)
+        }
+    }
+
     @Test("A write that cannot take the record's lock is dropped within its budget")
     func lostLockDropsTheWrite() throws {
         try withStore { store in
