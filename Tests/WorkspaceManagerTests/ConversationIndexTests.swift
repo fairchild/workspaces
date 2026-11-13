@@ -305,9 +305,40 @@ struct ConversationIndexTests {
         try await fixture.indexer(localState).rebuild()
 
         #expect(try await localState.fetchCurrentConversation(hostSessionID: tile)?.conversationID == after)
-        #expect(fixture.records.load(conversationID: before)?.observedAt == Date(timeIntervalSince1970: 1_800_000_000))
+        #expect(fixture.records.load(conversationID: before)?.observedAt == Date(timeIntervalSince1970: 1_800_000_001))
         #expect(fixture.records.load(conversationID: after)?.observedBy == .app)
         #expect(fixture.records.load(conversationID: after)?.transcriptPath == "/tmp/a.jsonl")
+    }
+}
+
+extension ConversationIndexTests {
+    /// The listener misses B's events, the standalone observer records B, and A's next payload
+    /// must still make A the tile's current conversation again.
+    @Test("A sighting the app writer saw before still lands after another writer recorded a different id")
+    func appWriterDefersToTheFile() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let localState = try fixture.localState()
+        let clock = SteppingClock(start: 1_800_000_000)
+        let recorder = ConversationIdentityRecorder(store: fixture.records, clock: clock.next)
+        let tile = UUID()
+        let a = UUID().uuidString.lowercased()
+        let b = UUID().uuidString.lowercased()
+
+        await recorder.observe(.init(sessionID: a, cwd: "/tmp/repo", transcriptPath: nil), hostSessionID: tile)
+        try fixture.records.record(sighting(b, tile: tile, at: 1_800_000_000.5))
+        #expect(try await currentConversation(of: tile, fixture: fixture, localState: localState) == b)
+        await recorder.observe(.init(sessionID: a, cwd: "/tmp/repo", transcriptPath: nil), hostSessionID: tile)
+        #expect(try await currentConversation(of: tile, fixture: fixture, localState: localState) == a)
+    }
+
+    private func currentConversation(
+        of tile: UUID,
+        fixture: Fixture,
+        localState: LocalStateStore
+    ) async throws -> String? {
+        try await fixture.indexer(localState).sync()
+        return try await localState.fetchCurrentConversation(hostSessionID: tile)?.conversationID
     }
 }
 

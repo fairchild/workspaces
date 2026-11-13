@@ -3,8 +3,8 @@
 //  WorkspaceManagerCore
 //
 //  The running app's writer of Conversation records. Every hook payload names its
-//  conversation, so when the id a tile reports changes — `/resume`, `/clear`, or a
-//  start the SessionStart hook missed — the record is rewritten for the new one.
+//  conversation, so each one is written as a sighting in its tile. That is how `/resume`,
+//  `/clear`, or a start the SessionStart hook missed reach the record.
 //
 
 import Foundation
@@ -13,7 +13,6 @@ public actor ConversationIdentityRecorder {
     private let store: ConversationRecordStore
     private let socketLabel: String?
     private let clock: @Sendable () -> Date
-    private var current: [UUID: String] = [:]
 
     public init(
         store: ConversationRecordStore,
@@ -42,14 +41,12 @@ public actor ConversationIdentityRecorder {
         }
     }
 
-    /// Writes the record when `identity` names a conversation other than the one this tile
-    /// last reported. The first payload a tile sends in a run counts as a change, so each
-    /// run confirms where every conversation is. A dropped write is tried again on the next
-    /// payload.
+    /// Writes every payload's sighting. The file is the only place that knows whether this
+    /// conversation is still the tile's newest, since the SessionStart observer and `ws launch`
+    /// write it too, so no sighting is skipped on what this writer last saw. A dropped write
+    /// is covered by the tile's next payload.
     public func observe(_ identity: HookIdentity, hostSessionID: UUID) {
-        guard let conversationID = ConversationRecord.normalizedID(identity.sessionID),
-            current[hostSessionID] != conversationID
-        else { return }
+        guard let conversationID = ConversationRecord.normalizedID(identity.sessionID) else { return }
         let observation = ConversationObservation(
             conversationID: conversationID,
             cwd: identity.cwd,
@@ -59,7 +56,6 @@ public actor ConversationIdentityRecorder {
             observedBy: .app,
             lastSeenIn: .init(hostSessionID: hostSessionID.uuidString)
         )
-        guard (try? store.record(observation)) == .written else { return }
-        current[hostSessionID] = conversationID
+        _ = try? store.record(observation)
     }
 }
