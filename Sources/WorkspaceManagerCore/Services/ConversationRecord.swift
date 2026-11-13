@@ -357,6 +357,9 @@ public struct ConversationRecordStore: Sendable {
     public enum WriteError: Error, Equatable {
         /// The observation's id is not a UUID, so no record file can be named for it.
         case invalidConversationID
+        /// The record exists but could not be read. Writing would replace what it holds with
+        /// one observation's worth, so nothing is written.
+        case unreadableRecord
     }
 
     public func fileURL(conversationID: String) -> URL? {
@@ -394,6 +397,10 @@ public struct ConversationRecordStore: Sendable {
     /// `lockBudget` runs out, then the write is dropped: a hook writer must never hold up the
     /// agent it observes. The replace is a rename, so a reader sees the old record or the new
     /// one and never half of either.
+    ///
+    /// A record that exists but cannot be read is left alone and the write throws. One that
+    /// reads but is not a JSON object is moved aside to `<id>.json.corrupt-<epoch>`, where no
+    /// reader looks and a person still can, and the write starts a fresh record.
     @discardableResult
     public func record(
         _ observation: ConversationObservation,
@@ -413,7 +420,7 @@ public struct ConversationRecordStore: Sendable {
         defer { close(descriptor) }
         guard Self.lock(descriptor, within: lockBudget) else { return .lockBusy }
 
-        let merged = ConversationRecordJSON.merge(observation, into: Self.readObject(at: url))
+        let merged = ConversationRecordJSON.merge(observation, into: try Self.existingObject(at: url))
         let data = try JSONSerialization.data(withJSONObject: merged, options: [.prettyPrinted, .sortedKeys])
         let temporary = directory.appendingPathComponent(".\(conversationID).\(getpid()).\(UUID().uuidString).tmp")
         try data.write(to: temporary)
@@ -431,6 +438,24 @@ public struct ConversationRecordStore: Sendable {
             usleep(5_000)
         }
         return true
+    }
+
+    /// The record's object for a merge: nil when there is no record yet.
+    private static func existingObject(at url: URL) throws -> [String: Any]? {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return nil
+        } catch {
+            throw WriteError.unreadableRecord
+        }
+        if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            return object
+        }
+        let aside = "\(url.path).corrupt-\(Int(Date().timeIntervalSince1970))"
+        guard rename(url.path, aside) == 0 else { throw WriteError.unreadableRecord }
+        return nil
     }
 
     private static func readObject(at url: URL) -> [String: Any]? {

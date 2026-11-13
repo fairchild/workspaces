@@ -89,6 +89,44 @@ struct ConversationRecordStoreTests {
         }
     }
 
+    @Test("A record that exists but cannot be read is left as it was, and the write throws")
+    func unreadableRecordIsNotOverwritten() throws {
+        try withStore { store in
+            try store.record(observation(at: 1_800_000_000, transcriptPath: "/tmp/t.jsonl"))
+            let url = try #require(store.fileURL(conversationID: Self.conversationID))
+            let before = try Data(contentsOf: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path) }
+
+            #expect(throws: ConversationRecordStore.WriteError.unreadableRecord) {
+                try store.record(self.observation(at: 1_800_000_060))
+            }
+
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            #expect(try Data(contentsOf: url) == before)
+        }
+    }
+
+    @Test("A record that is not a JSON object is moved aside and the write starts a fresh one")
+    func malformedRecordIsKeptAside() throws {
+        try withStore { store in
+            try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
+            let url = try #require(store.fileURL(conversationID: Self.conversationID))
+            let garbage = Data("{ half a record".utf8)
+            try garbage.write(to: url)
+
+            try store.record(observation(at: 1_800_000_000))
+
+            let fresh = store.load(conversationID: Self.conversationID)
+            #expect(fresh?.observedAt == Date(timeIntervalSince1970: 1_800_000_000))
+            let aside = try FileManager.default.contentsOfDirectory(atPath: store.directory.path)
+                .filter { $0.hasPrefix("\(Self.conversationID).json.corrupt-") }
+            #expect(aside.count == 1)
+            #expect(try Data(contentsOf: store.directory.appendingPathComponent(aside[0])) == garbage)
+            #expect(store.files().count == 1)
+        }
+    }
+
     @Test("An older sighting fills only what the record lacks, and observedAt never moves back")
     func olderSightingOnlyFills() throws {
         try withStore { store in
