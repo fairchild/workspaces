@@ -265,4 +265,11 @@ struct TerminalSessionExitTests {
             #expect(exit.collateralExit.rowOutcome == exit.rowOutcome, "\(exit)")
         }
     }
+
+    /// A pane whose row ends while its pane-scoped session runs on has no way back, so a
+    /// pane closed because its tab's shell ended is reclaimed, as closing the tab would.
+    @Test("A pane's tmux session is reclaimed only when its tab was closed or its tab's shell ended")
+    func panesAreReclaimedOnlyWithAClosedTab() {
+        #expect(Self.everyExit.filter(\.collateralExit.reclaimsTmuxSession) == [.userClosed, .shellExited])
+    }
 }

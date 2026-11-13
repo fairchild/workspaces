@@ -224,8 +224,8 @@ struct TileTreeStoreTests {
         }
 
         store.noteCloseRequested(requested.id)
-        store.noteCloseRequested(cancelled.id)
-        store.forgetCloseRequest(cancelled.id)
+        let cancelledRequest = store.noteCloseRequested(cancelled.id)
+        store.withdrawCloseRequest(cancelled.id, token: cancelledRequest)
         #expect(store.handleProcessExit(for: requested.id))
         #expect(store.handleProcessExit(for: cancelled.id))
         #expect(store.handleProcessExit(for: closedByUser.id, cause: .userClosed))

@@ -1167,7 +1167,7 @@ struct ContentView: View {
                     forceCloseTerminalTab(sessionID: confirmation.sessionID)
                 }
                 Button("Cancel", role: .cancel) {
-                    tileTreeStore.forgetCloseRequests()
+                    tileTreeStore.withdrawUserCloseRequests()
                     viewState.terminalCloseConfirmation = nil
                 }
             } message: {

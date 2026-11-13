@@ -75,13 +75,16 @@ public enum TerminalSessionExit: Sendable, Equatable {
 
     /// The reason a split pane gets when it is torn down because its tab ended this way.
     ///
-    /// A pane goes with its tab and shares what happened to it: closed with it, lost with
-    /// the same server, left running beside it, or as unknown as the tab is. A tab whose
-    /// shell ended takes its panes with it, and their rows end as closing a tab always
-    /// has ended them.
+    /// A pane goes with its tab and shares what happened to it: closed with it, retired
+    /// with it, lost with the same server, left running beside it, or as unknown as the
+    /// tab is. A tab whose own shell ended closes its panes as closing the tab would: their
+    /// rows end, and their tmux sessions are reclaimed, since an ended row leaves a running
+    /// pane-scoped session no way back (#1232).
     public var collateralExit: TerminalSessionExit {
         switch self {
-        case .userClosed, .retired, .shellExited, .holderLost, .detached, .undetermined:
+        case .shellExited:
+            return .userClosed
+        case .userClosed, .retired, .holderLost, .detached, .undetermined:
             return self
         }
     }
