@@ -69,10 +69,10 @@ struct ConversationResumerTests {
                 homeDirectory: root.appendingPathComponent("home"),
                 readProcessTable: { processTable },
                 recordedSession: { _ in recordedSession },
-                inspector: .none,
+                inspector: .onlySelf,
                 describeTmux: { _ in nil },
                 exec: { invocation, handOff in
-                    handOff()
+                    try handOff()
                     execs.append(invocation)
                 }
             )
@@ -146,10 +146,10 @@ struct ConversationResumerTests {
             homeDirectory: world.root.appendingPathComponent("home"),
             readProcessTable: { Self.quietTable },
             recordedSession: { _ in .notRecorded },
-            inspector: .none,
+            inspector: .onlySelf,
             describeTmux: { _ in nil },
             exec: { _, handOff in
-                handOff()
+                try handOff()
                 let descriptor = open(lockPath, O_RDWR | O_CLOEXEC)
                 defer { close(descriptor) }
                 claimable.set(descriptor >= 0 && flock(descriptor, LOCK_EX | LOCK_NB) == 0)
@@ -304,4 +304,8 @@ struct ConversationResumerTests {
 extension ProcessInspector {
     /// Sees no process at all.
     static let none = ProcessInspector(identity: { _ in nil }, parent: { _ in nil }, arguments: { _ in nil })
+    /// Sees only the test process itself, which a `--here` resume records as the harness.
+    static let onlySelf = ProcessInspector(
+        identity: { $0 == getpid() ? ProcessIdentity(pid: $0, startedAtMicroseconds: 1) : nil },
+        parent: { _ in nil }, arguments: { _ in nil })
 }

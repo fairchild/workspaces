@@ -68,15 +68,16 @@ public enum HarnessExec {
     }
 
     /// Becomes the harness. `handOff` runs once the harness binary is found and the directory
-    /// entered, so what it records is only ever followed by the exec itself. Returns only by
-    /// throwing, when the process could not be replaced.
+    /// entered, so what it records is only ever followed by the exec itself, and its throw
+    /// leaves the process as it was. Returns only by throwing, when the process could not be
+    /// replaced or `handOff` refused.
     ///
     /// The exec is `posix_spawn` with `POSIX_SPAWN_SETEXEC`, which keeps this pid as `execve`
     /// does and also sets the new image's signal state. This code runs on a concurrency worker
     /// thread whose mask blocks most signals, and a mask survives an exec, as does a signal
     /// whatever started this process ignored. The harness starts with nothing blocked and
     /// every signal at its default, so a closed tile's HUP, a resize's WINCH and a TERM reach it.
-    public static func replaceProcess(with invocation: HarnessInvocation, handOff: () -> Void) throws -> Never {
+    public static func replaceProcess(with invocation: HarnessInvocation, handOff: () throws -> Void) throws -> Never {
         guard let name = invocation.arguments.first, let path = resolve(name, in: invocation.environment["PATH"])
         else { throw Failure.notOnPath(invocation.arguments.first ?? "") }
         guard chdir(invocation.directory) == 0 else { throw Failure.directory(invocation.directory, errno) }
@@ -93,7 +94,7 @@ public enum HarnessExec {
         posix_spawnattr_setflags(
             &attributes, Int16(POSIX_SPAWN_SETEXEC | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
 
-        handOff()
+        try handOff()
         fflush(stdout)
         fflush(stderr)
         var argv = invocation.arguments.map { strdup($0) } + [nil]
@@ -142,6 +143,7 @@ public struct ConversationResumer: Sendable {
         case tmux(String)
         case startFailed(handle: String, conversationID: String)
         case cannotStart(String)
+        case unrecorded(conversationID: String, reason: String)
 
         public var errorDescription: String? {
             switch self {
@@ -185,6 +187,9 @@ public struct ConversationResumer: Sendable {
                     + "\(id). To see why: workspaces ws read \(handle)"
             case .cannotStart(let reason):
                 return reason
+            case .unrecorded(let id, let reason):
+                return "Could not record that this terminal now holds conversation \(id): \(reason). "
+                    + "Nothing was started, since another resume would not have seen it."
             }
         }
     }
@@ -198,8 +203,8 @@ public struct ConversationResumer: Sendable {
     /// asked, which leaves the probe unable to rule a holder out.
     public typealias RecordedSessionLookup = @Sendable (ConversationRecord) async -> RecordedTmuxSession?
     /// Replaces the process with the invocation, running `handOff` once nothing but the exec
-    /// itself is left to fail.
-    public typealias Exec = @Sendable (HarnessInvocation, _ handOff: () -> Void) throws -> Void
+    /// itself is left to fail; a throw from `handOff` stops the exec.
+    public typealias Exec = @Sendable (HarnessInvocation, _ handOff: () throws -> Void) throws -> Void
 
     let records: ConversationRecordStore
     let launches: AgentLaunchRecordStore
@@ -365,7 +370,7 @@ public struct ConversationResumer: Sendable {
                 directory: record.cwd
             )
             do {
-                try exec(invocation) { recordSighting(of: record) }
+                try exec(invocation) { try recordSighting(of: record) }
             } catch let failure as HarnessExec.Failure {
                 throw Refusal.cannotStart(failure.localizedDescription)
             }
@@ -454,13 +459,18 @@ public struct ConversationResumer: Sendable {
     }
 
     /// Says the conversation is now in this terminal and this process, which the exec is about
-    /// to make the harness: a pid keeps its start time across an exec. The record is not what
-    /// guards the conversation, the lock is, so a write that fails warns.
-    private func recordSighting(of record: ConversationRecord) {
+    /// to make the harness: a pid keeps its start time across an exec. Once the lock's
+    /// descriptor closes in that exec, this sighting is all another resume has to find the
+    /// harness by, so it throws unless the record, read back, names this process.
+    private func recordSighting(of record: ConversationRecord) throws {
+        let id = record.conversationID
+        guard let harness = inspector.identity(getpid()) else {
+            throw Refusal.unrecorded(conversationID: id, reason: "the kernel would not describe this process")
+        }
         let tmux = TmuxEnvironment(environment["TMUX"])
         let observation = ConversationObservation(
             harness: record.harness,
-            conversationID: record.conversationID,
+            conversationID: id,
             host: host,
             cwd: record.cwd,
             workspacePath: record.workspacePath,
@@ -472,16 +482,21 @@ public struct ConversationResumer: Sendable {
                 hostSessionID: environment["WORKSPACES_HOST_SESSION_ID"].flatMap { UUID(uuidString: $0)?.uuidString },
                 tmux: tmux.flatMap(describeTmux),
                 outsideTmux: tmux == nil,
-                harness: inspector.identity(getpid()),
+                harness: harness,
                 harnessObservedAt: Date()
             )
         )
+        let outcome: ConversationRecordStore.WriteOutcome
         do {
-            if try records.record(observation, lockBudget: .seconds(2)) == .lockBusy {
-                warn("warning: the conversation record was busy, so it does not say where this resume ran yet.")
-            }
+            outcome = try records.record(observation, lockBudget: .seconds(2))
         } catch {
-            warn("warning: the conversation record was not updated: \(error.localizedDescription).")
+            throw Refusal.unrecorded(conversationID: id, reason: error.localizedDescription)
+        }
+        guard outcome == .written else {
+            throw Refusal.unrecorded(conversationID: id, reason: "its record stayed locked for two seconds")
+        }
+        guard records.load(conversationID: id)?.lastSeenIn?.harness == harness else {
+            throw Refusal.unrecorded(conversationID: id, reason: "its record, read back, names another process")
         }
     }
 

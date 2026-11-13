@@ -693,6 +693,26 @@ struct CLIConversationResumeTests {
         #expect(agent.terminationStatus == SIGTERM)
     }
 
+    /// Once the harness runs, its sighting is all another resume can find it by, so a resume
+    /// that cannot write one starts nothing.
+    @Test("A resume that cannot record itself as the holder refuses, and nothing starts")
+    func unrecordedResumeRefuses() throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = try recordConversation(in: fixture)
+        let locks = fixture.root.appendingPathComponent("conversations/.locks")
+        try FileManager.default.createDirectory(at: locks, withIntermediateDirectories: true)
+        let descriptor = open(locks.appendingPathComponent("\(conversationID).write").path, O_CREAT | O_RDWR, 0o600)
+        try #require(descriptor >= 0)
+        defer { close(descriptor) }
+        try #require(flock(descriptor, LOCK_EX) == 0)
+
+        let resume = try fixture.run(["conversation", "resume", conversationID, "--here"])
+        #expect(resume.status == 1)
+        #expect(resume.stderr.contains("Could not record that this terminal now holds conversation"))
+        #expect(!resume.stdout.contains("stub argv"))
+    }
+
     @Test("A config home recorded as the default is not exported, so claude finds its own settings")
     func explicitDefaultConfigHomeIsNotExported() throws {
         let fixture = try makeFixture()
