@@ -16,8 +16,8 @@ public enum HolderEvidence: String, Codable, Sendable {
     case arguments
     /// The conversation's own hook recorded this process, and no later sighting moved it on.
     case recordedHarness = "recorded-harness"
-    /// It runs in the tmux session the conversation was last seen in, and nothing recorded
-    /// which conversation it has now.
+    /// It runs in the tmux session the conversation was last seen in, no recorded process
+    /// holds the conversation, and no record places this one in another conversation.
     case sessionPaneTree = "session-pane-tree"
 }
 

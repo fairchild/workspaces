@@ -19,7 +19,9 @@ struct CLIConversationResumeTests {
 
     /// Stands in for claude: says what it was started with (also into `STUB_LOG`, for a run
     /// whose output lands in a pane), runs the SessionStart hook for each id in
-    /// `STUB_HOOK_IDS` the way claude does (a child of this process), then exits, or stays
+    /// `STUB_HOOK_IDS` the way claude does (a child of this process), and for each id in
+    /// `STUB_NESTED_HOOK_IDS` from beneath another program it started, as a tool claude runs
+    /// can, then exits, or stays
     /// alive when `STUB_STAY` is set, as an agent holding its conversation does. It stays at
     /// most five minutes, and no longer than its fixture: a killed test run leaves nothing
     /// behind that outlives either. With `STUB_VIA` set to `node` or `env`, it first execs
@@ -45,6 +47,10 @@ struct CLIConversationResumeTests {
         for id in $STUB_HOOK_IDS; do
           printf '{"session_id":"%s","cwd":"%s","transcript_path":"%s/%s.jsonl"}' \
             "$id" "$PWD" "$STUB_TRANSCRIPTS" "$id" | "$STUB_HOOK_CLI" conversation observe
+        done
+        for id in $STUB_NESTED_HOOK_IDS; do
+          printf '{"session_id":"%s","cwd":"%s","transcript_path":"%s/%s.jsonl"}' \
+            "$id" "$PWD" "$STUB_TRANSCRIPTS" "$id" | /usr/bin/time -p "$STUB_HOOK_CLI" conversation observe 2>/dev/null
         done
         if [ -n "$STUB_STAY" ]; then
           n=0
@@ -363,28 +369,36 @@ struct CLIConversationResumeTests {
         #expect(!resume.stdout.contains("stub argv"))
     }
 
-    /// Starts the stub the way a person runs claude in a plain terminal: no tmux, nothing in
-    /// its arguments, and its SessionStart hook run once for each of `conversations`.
-    private func startBareAgent(in fixture: Fixture, hooking conversations: [String]) async throws -> Process {
+    /// Starts the stub with `arguments` the way a person runs claude in a plain terminal, with
+    /// no tmux, and its SessionStart hook run once for each of `conversations`, then from
+    /// beneath another program for each of `nested`.
+    private func startBareAgent(
+        in fixture: Fixture,
+        arguments: [String] = [],
+        hooking conversations: [String],
+        nested: [String] = []
+    ) async throws -> Process {
         try FileManager.default.createDirectory(at: fixture.transcripts, withIntermediateDirectories: true)
-        for id in conversations {
+        for id in conversations + nested {
             FileManager.default.createFile(
                 atPath: fixture.transcripts.appendingPathComponent("\(id).jsonl").path, contents: Data())
         }
         let agent = try fixture.start(
-            [],
+            arguments,
             executable: fixture.stub,
             extraEnvironment: [
                 "STUB_STAY": "1",
                 "STUB_HOOK_IDS": conversations.joined(separator: " "),
+                "STUB_NESTED_HOOK_IDS": nested.joined(separator: " "),
                 "STUB_HOOK_CLI": fixture.binary.path,
                 "STUB_TRANSCRIPTS": fixture.transcripts.path,
             ],
             output: fixture.root.appendingPathComponent("agent.log")
         )
         let last = try #require(conversations.last)
-        try await waitUntil(launches: Double(1 + conversations.count)) {
+        try await waitUntil(launches: Double(1 + conversations.count + nested.count)) {
             fixture.records.load(conversationID: last)?.lastSeenIn?.harness != nil
+                && nested.allSatisfy { fixture.records.load(conversationID: $0) != nil }
         }
         return agent
     }
@@ -423,6 +437,59 @@ struct CLIConversationResumeTests {
         let resumed = try fixture.run(["conversation", "resume", before, "--here"])
         #expect(resumed.status == 0)
         #expect(resumed.stdout.contains("stub argv=--resume \(before)"))
+    }
+
+    /// A tool an agent runs can start a claude of its own whose SessionStart fires beneath the
+    /// agent, and a hook can be late or misplaced. Neither takes a conversation from the agent
+    /// whose arguments name it.
+    @Test("A claude whose arguments name the conversation keeps it whatever a later hook records")
+    func argumentsHolderKeepsItsConversation() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let held = UUID().uuidString.lowercased()
+        let beneath = UUID().uuidString.lowercased()
+        let misplaced = UUID().uuidString.lowercased()
+        let agent = try await startBareAgent(
+            in: fixture, arguments: ["--resume", held], hooking: [held, misplaced], nested: [beneath])
+        defer { Self.kill([agent]) }
+
+        let fromBeneath = try #require(fixture.records.load(conversationID: beneath))
+        #expect(fromBeneath.lastSeenIn?.harness == nil)
+        #expect(fixture.records.load(conversationID: misplaced)?.lastSeenIn?.harness?.pid == agent.processIdentifier)
+
+        let resume = try fixture.run(["conversation", "resume", held, "--here"])
+        #expect(resume.status == 3)
+        #expect(resume.stdout.contains("pid \(agent.processIdentifier)"))
+        #expect(!resume.stdout.contains("stub argv"))
+    }
+
+    /// The claude the hook recorded has exited, and a claude that never ran a hook here, such
+    /// as one started before the hook was installed, sits in the same session.
+    @Test(
+        "Once the recorded claude has exited, a claude in the session it ran in still holds the conversation",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the session probe asks it")
+    )
+    func endedHarnessFallsBackToTheSession() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let identity = try await startHeldTile(in: fixture)
+        let ended = Process()
+        ended.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        ended.arguments = ["0.2"]
+        try ended.run()
+        let endedIdentity = try #require(ProcessInspector.live.identity(ended.processIdentifier))
+        ended.waitUntilExit()
+        let conversationID = try recordConversation(
+            in: fixture,
+            lastSeenIn: .init(
+                hostSessionID: nil, tmux: try tmuxSession(identity, recordingSocket: true), harness: endedIdentity,
+                harnessObservedAt: Date()))
+
+        let resume = try fixture.run(["conversation", "resume", conversationID, "--here", "--json"])
+        #expect(resume.status == 3)
+        let result = try JSONDecoder().decode(ConversationResumeResult.self, from: Data(resume.stdout.utf8))
+        #expect(result.holders.map(\.foundBy) == [.sessionPaneTree])
+        #expect(!resume.stdout.contains("stub argv"))
     }
 
     private func waitForFile(_ url: URL, toContain text: String) async throws -> String {

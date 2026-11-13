@@ -120,22 +120,22 @@ struct ConversationHolderProbeTests {
         #expect(try await Self.argumentHolders("9 1 claude -r \(Self.id)") == [9])
     }
 
-    @Test("A process whose arguments name the conversation but whose newest sighting is another one holds the other")
-    func argumentsAfterAClear() async throws {
+    /// A sighting comes from a hook, which can be late, dropped, or fired by a child the
+    /// process started, so one never takes a conversation from the process whose arguments
+    /// name it. After `/clear`, that process holds the old conversation until it exits.
+    @Test("A process whose arguments name the conversation holds it whatever conversation its newest sighting is")
+    func argumentsOutlastSightings() async throws {
         let harness = ProcessIdentity(pid: 50, startedAtMicroseconds: 7)
         let table = try Self.table("50 1 claude --resume \(Self.id)")
         let inspector = Self.inspector([50: (7, ["claude", "--resume", Self.id])])
+        let held = HolderProbe.held(
+            [.init(pid: 50, foundBy: .arguments, startedAt: harness.startedAt)], recordedSessionGone: false)
 
-        let moved = await ClaudeHarnessAdapter().holders(
-            of: Self.record(), in: Self.context(table, inspector: inspector, current: [harness: Self.other]))
-        #expect(moved == .free)
-
-        let stayed = await ClaudeHarnessAdapter().holders(
-            of: Self.record(), in: Self.context(table, inspector: inspector, current: [harness: Self.id]))
-        #expect(
-            stayed
-                == .held(
-                    [.init(pid: 50, foundBy: .arguments, startedAt: harness.startedAt)], recordedSessionGone: false))
+        for current in [Self.other, Self.id] {
+            let probe = await ClaudeHarnessAdapter().holders(
+                of: Self.record(), in: Self.context(table, inspector: inspector, current: [harness: current]))
+            #expect(probe == held)
+        }
     }
 
     // MARK: - The recorded harness
@@ -203,25 +203,109 @@ struct ConversationHolderProbeTests {
                     recordedSessionGone: false))
     }
 
-    @Test("With a recorded harness, the session's other panes are not asked about, and a silent server does not refuse")
-    func recordedHarnessSkipsThePaneTree() async throws {
-        let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
-        let record = Self.record(
+    private static let paneTree = """
+          100   1 -zsh
+          101 100 /usr/local/bin/claude
+        """
+
+    private static func sessionRecord(harness: ProcessIdentity?) -> ConversationRecord {
+        record(
             lastSeenIn: .init(
-                hostSessionID: nil, tmux: .init(serverPID: 4242, sessionID: "$7"), harness: harness,
-                harnessObservedAt: Date()))
-        let table = try Self.table(
-            """
-              100   1 -zsh
-              101 100 /usr/local/bin/claude
-            """)
+                hostSessionID: "tile", tmux: .init(serverPID: 4242, sessionID: "$7", name: "recorded-name"),
+                harness: harness, harnessObservedAt: harness.map { _ in Date() }))
+    }
+
+    @Test(
+        "While the recorded harness holds, the session's other panes are not asked about, and a silent server does not refuse"
+    )
+    func liveRecordedHarnessSkipsThePaneTree() async throws {
+        let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
+        let table = try Self.table(Self.paneTree + "\n   60   1 /usr/local/bin/claude")
 
         let probe = await ClaudeHarnessAdapter().holders(
-            of: record, in: Self.context(table, inspector: Self.inspector([:]), recordedSession: nil))
+            of: Self.sessionRecord(harness: harness),
+            in: Self.context(
+                table, inspector: Self.inspector([60: (1_000, ["/usr/local/bin/claude"])]), recordedSession: nil))
+        guard case .held(let holders, _) = probe else {
+            Issue.record("expected held, got \(probe)")
+            return
+        }
+        #expect(holders.map(\.pid) == [60])
+    }
+
+    @Test(
+        "Once the recorded harness has ended or moved on, a claude in its session that no record places elsewhere holds it",
+        arguments: ["ended", "moved"]
+    )
+    func endedHarnessFallsBackToThePaneTree(change: String) async throws {
+        let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
+        let alive: [Int32: (Int64, [String])] = change == "moved" ? [60: (1_000, ["/usr/local/bin/claude"])] : [:]
+        let processes = alive.merging([101: (2_000, ["/usr/local/bin/claude"])]) { a, _ in a }
+        let session = RecordedTmuxSession.live(sessionID: "$7", name: "now-named", panePIDs: [100])
+
+        let probe = await ClaudeHarnessAdapter().holders(
+            of: Self.sessionRecord(harness: harness),
+            in: Self.context(
+                try Self.table(Self.paneTree), inspector: Self.inspector(processes), recordedSession: session,
+                current: [harness: Self.other]))
+        #expect(
+            probe
+                == .held(
+                    [
+                        .init(
+                            pid: 101, foundBy: .sessionPaneTree, startedAt: Date(timeIntervalSince1970: 0.002),
+                            tmuxSessionID: "$7", tmuxSessionName: "now-named", hostSessionID: "tile")
+                    ], recordedSessionGone: false))
+
+        let silent = await ClaudeHarnessAdapter().holders(
+            of: Self.sessionRecord(harness: harness),
+            in: Self.context(
+                try Self.table(Self.paneTree), inspector: Self.inspector(processes), recordedSession: nil,
+                current: [harness: Self.other]))
+        guard case .unknown = silent else {
+            Issue.record("expected unknown, got \(silent)")
+            return
+        }
+    }
+
+    @Test("A claude in the session whose own sighting is another conversation is that one's, not this one's")
+    func paneTreeSkipsClaudesPlacedElsewhere() async throws {
+        let elsewhere = ProcessIdentity(pid: 101, startedAtMicroseconds: 2_000)
+        let probe = await ClaudeHarnessAdapter().holders(
+            of: Self.sessionRecord(harness: nil),
+            in: Self.context(
+                try Self.table(Self.paneTree), inspector: Self.inspector([101: (2_000, ["/usr/local/bin/claude"])]),
+                recordedSession: .live(sessionID: "$7", name: "s", panePIDs: [100]), current: [elsewhere: Self.other]))
         #expect(probe == .free)
     }
 
-    // MARK: - The pane tree, for records from before hooks named their process
+    @Test(
+        "A recorded harness is placed in its session only while that session's server says it runs there",
+        arguments: ["in-session", "elsewhere", "gone"]
+    )
+    func recordedPlaceIsChecked(answer: String) async throws {
+        let harness = ProcessIdentity(pid: 101, startedAtMicroseconds: 1_000)
+        let session: RecordedTmuxSession =
+            switch answer {
+            case "in-session": .live(sessionID: "$7", name: "renamed", panePIDs: [100])
+            case "elsewhere": .live(sessionID: "$7", name: "renamed", panePIDs: [999])
+            default: .gone
+            }
+        let probe = await ClaudeHarnessAdapter().holders(
+            of: Self.sessionRecord(harness: harness),
+            in: Self.context(
+                try Self.table(Self.paneTree), inspector: Self.inspector([101: (1_000, ["/usr/local/bin/claude"])]),
+                recordedSession: session, current: [harness: Self.id]))
+        let placed = ConversationHolder(
+            pid: 101, foundBy: .recordedHarness, startedAt: harness.startedAt, tmuxSessionID: "$7",
+            tmuxSessionName: "renamed", hostSessionID: "tile")
+        let unplaced = ConversationHolder(pid: 101, foundBy: .recordedHarness, startedAt: harness.startedAt)
+        #expect(
+            probe
+                == .held([answer == "in-session" ? placed : unplaced], recordedSessionGone: answer == "gone"))
+    }
+
+    // MARK: - The pane tree
 
     @Test("A record from before hooks named their process refuses when its tmux server cannot be asked")
     func paneTreeUnknownRefuses() async throws {
@@ -354,6 +438,72 @@ struct ConversationHolderProbeTests {
         #expect(
             ConversationHolderProbe.currentConversation(
                 of: ProcessIdentity(pid: 60, startedAtMicroseconds: 2_000), in: [earlier, later]) == nil)
+    }
+
+    // MARK: - The harness a hook names
+
+    /// A process tree, each pid with its parent and arguments.
+    private static func tree(_ processes: [Int32: (Int32, [String])]) -> ProcessInspector {
+        ProcessInspector(
+            identity: { pid in processes[pid].map { _ in ProcessIdentity(pid: pid, startedAtMicroseconds: Int64(pid)) }
+            },
+            parent: { processes[$0]?.0 },
+            arguments: { processes[$0]?.1 }
+        )
+    }
+
+    @Test(
+        "The hook names the claude that ran it, through the hook's shell and the forwarder and nothing else",
+        arguments: ["claude itself", "the forwarder", "a -c shell and the forwarder"]
+    )
+    func hookNamesItsClaude(path: String) {
+        let forwarder = ["/bin/bash", "/hooks/conversation-observer.sh"]
+        let (processes, start): ([Int32: (Int32, [String])], Int32) =
+            switch path {
+            case "claude itself": ([10: (1, ["claude", "--resume", "x"])], 10)
+            case "the forwarder": ([10: (1, ["claude"]), 20: (10, forwarder)], 20)
+            default:
+                (
+                    [
+                        10: (1, ["node", "/opt/claude-code/cli.js"]),
+                        20: (10, ["/bin/sh", "-c", "'/hooks/conversation-observer.sh'"]),
+                        30: (20, forwarder),
+                    ], 30
+                )
+            }
+        #expect(
+            ConversationHookObserver.harnessRunningThisHook(from: start, inspector: Self.tree(processes))?.pid == 10)
+    }
+
+    /// Something a claude started can fire a SessionStart of its own, and a script run from
+    /// an agent's terminal can run the observer: the claude above either is not the one whose
+    /// conversation started.
+    @Test(
+        "The hook names nothing when anything else stands between it and a claude",
+        arguments: [
+            ["/usr/bin/time", "-p", "workspaces"],
+            ["/bin/sh", "/tmp/repro.sh"],
+            ["/bin/zsh", "-c", "sh /tmp/repro.sh"],
+            ["node", "/opt/other-agent/cli.js"],
+        ]
+    )
+    func hookNamesNoClaudeAboveAStranger(stranger: [String]) {
+        let processes: [Int32: (Int32, [String])] = [
+            10: (1, ["claude", "--resume", Self.id]),
+            20: (10, stranger),
+            30: (20, ["/bin/bash", "/hooks/conversation-observer.sh"]),
+        ]
+        #expect(ConversationHookObserver.harnessRunningThisHook(from: 30, inspector: Self.tree(processes)) == nil)
+    }
+
+    @Test("The hook stops looking after the shells a hook runs in")
+    func hookLooksOnlyAsFarAsAHookGoes() {
+        let forwarder = ["/bin/bash", "/hooks/conversation-observer.sh"]
+        let processes: [Int32: (Int32, [String])] = [
+            10: (1, ["claude"]), 20: (10, forwarder), 30: (20, forwarder), 40: (30, forwarder),
+        ]
+        #expect(ConversationHookObserver.harnessRunningThisHook(from: 40, inspector: Self.tree(processes)) == nil)
+        #expect(ConversationHookObserver.harnessRunningThisHook(from: 30, inspector: Self.tree(processes))?.pid == 10)
     }
 
     // MARK: - The adapter's other answers

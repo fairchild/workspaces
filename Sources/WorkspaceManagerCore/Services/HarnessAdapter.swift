@@ -164,78 +164,77 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
         return nil
     }
 
-    /// Claude's holders, by three rules. A process whose arguments name the conversation
-    /// holds it, unless a newer sighting moved that process to another one, as `/clear` does.
-    /// When the record names the process it was last run by, that process holds it for as long
-    /// as it lives and has not moved on: a pid with its start time is one process lifetime, and
-    /// an exec keeps both, so whatever wrapper or runtime the harness execs through stays the
-    /// recorded process whatever its arguments say. A record from before hooks named their
-    /// process falls back to the tmux session it was last seen in: any claude in that session
-    /// is counted, since it may be this conversation under an id its arguments do not carry.
+    /// Claude's holders, by three rules, each of which can only add a holder. A process whose
+    /// arguments name the conversation holds it for as long as it runs, even after `/clear`
+    /// moves it on, since the sighting that would say so comes from a hook that can be late,
+    /// dropped, or fired by something beneath it. When the record names the process it was
+    /// last run by, that process holds it while it lives and has not moved on to another
+    /// conversation: a pid with its start time is one process lifetime, and an exec keeps
+    /// both, so whatever wrapper or runtime the harness execs through stays the recorded
+    /// process whatever its arguments say. When no recorded process holds it, the tmux session
+    /// it was last seen in is asked: any claude there that no record places in another
+    /// conversation is counted, since it may be this one under an id its arguments do not carry.
+    /// A holder is placed in that session only while the session's server says it runs there.
     public func holders(of record: ConversationRecord, in context: HolderProbeContext) async -> HolderProbe {
         let id = record.conversationID
         let table = context.processTable
         let seen = record.lastSeenIn
-        func movedOn(_ pid: Int32) -> (ProcessIdentity?, Bool) {
-            let identity = context.inspector.identity(pid)
-            let current = identity.flatMap(context.currentConversation)
-            return (identity, current.map { $0 != id } ?? false)
+        let recorded = seen?.harness.flatMap { context.inspector.isRunning($0) ? $0 : nil }
+        func isHere(_ identity: ProcessIdentity?) -> Bool {
+            identity.flatMap(context.currentConversation).map { $0 == id } ?? true
         }
-        func recordedPlace(_ pid: Int32, _ evidence: HolderEvidence, _ identity: ProcessIdentity?) -> ConversationHolder
-        {
-            ConversationHolder(
+        func holder(_ pid: Int32, _ evidence: HolderEvidence, _ identity: ProcessIdentity?) -> ConversationHolder {
+            guard identity != nil, identity == recorded else {
+                return ConversationHolder(pid: pid, foundBy: evidence, startedAt: identity?.startedAt)
+            }
+            return ConversationHolder(
                 pid: pid, foundBy: evidence, startedAt: identity?.startedAt,
                 tmuxSessionID: seen?.tmux?.sessionID, tmuxSessionName: seen?.tmux?.name,
                 hostSessionID: seen?.hostSessionID)
         }
 
-        var holders: [ConversationHolder] = []
-        for row in table.rows
-        where AgentSessionInspection.isClaude(row.arguments) && AgentSessionInspection.names(id, row.arguments) {
-            let (identity, moved) = movedOn(row.pid)
-            guard !moved else { continue }
-            let isRecorded = identity != nil && identity == seen?.harness
-            holders.append(
-                isRecorded
-                    ? recordedPlace(row.pid, .arguments, identity)
-                    : ConversationHolder(pid: row.pid, foundBy: .arguments, startedAt: identity?.startedAt))
-        }
+        var holders = table.rows
+            .filter { AgentSessionInspection.isClaude($0.arguments) && AgentSessionInspection.names(id, $0.arguments) }
+            .map { holder($0.pid, .arguments, context.inspector.identity($0.pid)) }
         let counted = Set(holders.map(\.pid))
-
-        if let harness = seen?.harness {
-            if !counted.contains(harness.pid), context.inspector.isRunning(harness), !movedOn(harness.pid).1 {
-                holders.append(recordedPlace(harness.pid, .recordedHarness, harness))
-            }
-            guard !holders.isEmpty else { return .free }
-            return .held(holders, recordedSessionGone: await context.recordedSessionGone(record))
+        let recordedHolds = recorded.map { counted.contains($0.pid) || isHere($0) } ?? false
+        if let recorded, recordedHolds, !counted.contains(recorded.pid) {
+            holders.append(holder(recorded.pid, .recordedHarness, recorded))
         }
 
         guard seen?.tmux != nil else {
             return holders.isEmpty ? .free : .held(holders, recordedSessionGone: false)
         }
         guard let session = await context.recordedSession(record) else {
-            return .unknown("The tmux server holding its last session did not answer")
+            guard !holders.isEmpty else { return .unknown("The tmux server holding its last session did not answer") }
+            return .held(holders, recordedSessionGone: false)
         }
         guard case .live(let sessionID, let name, let panePIDs) = session else {
-            return holders.isEmpty ? .free : .held(holders, recordedSessionGone: session == .gone)
+            let gone = session == .gone
+            holders = holders.map {
+                gone ? ConversationHolder(pid: $0.pid, foundBy: $0.foundBy, startedAt: $0.startedAt) : $0
+            }
+            return holders.isEmpty ? .free : .held(holders, recordedSessionGone: gone)
         }
         let inSession = Set(table.descendants(of: panePIDs).map(\.pid))
-        holders = holders.map { holder in
-            guard inSession.contains(holder.pid) else { return holder }
-            return ConversationHolder(
-                pid: holder.pid, foundBy: holder.foundBy, startedAt: holder.startedAt,
+        func placed(_ pid: Int32, _ evidence: HolderEvidence, _ startedAt: Date?) -> ConversationHolder {
+            ConversationHolder(
+                pid: pid, foundBy: evidence, startedAt: startedAt,
                 tmuxSessionID: sessionID, tmuxSessionName: name, hostSessionID: seen?.hostSessionID)
         }
-        for row in table.rows
-        where inSession.contains(row.pid) && !counted.contains(row.pid)
-            && AgentSessionInspection.isClaude(row.arguments)
-        {
-            let (identity, moved) = movedOn(row.pid)
-            guard !moved else { continue }
-            holders.append(
-                ConversationHolder(
-                    pid: row.pid, foundBy: .sessionPaneTree, startedAt: identity?.startedAt,
-                    tmuxSessionID: sessionID, tmuxSessionName: name, hostSessionID: seen?.hostSessionID))
+        holders = holders.map {
+            inSession.contains($0.pid)
+                ? placed($0.pid, $0.foundBy, $0.startedAt)
+                : ConversationHolder(pid: $0.pid, foundBy: $0.foundBy, startedAt: $0.startedAt)
+        }
+        if !recordedHolds {
+            for row in table.rows
+            where inSession.contains(row.pid) && !counted.contains(row.pid)
+                && AgentSessionInspection.isClaude(row.arguments)
+            {
+                let identity = context.inspector.identity(row.pid)
+                if isHere(identity) { holders.append(placed(row.pid, .sessionPaneTree, identity?.startedAt)) }
+            }
         }
         return holders.isEmpty ? .free : .held(holders, recordedSessionGone: false)
     }

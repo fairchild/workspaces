@@ -75,17 +75,39 @@ public enum ConversationHookObserver {
     }
 }
 
-/// The tmux session a process runs in, as `$TMUX` gives it: `<socket path>,<server pid>,<session
-/// id number>`. The socket's file name is the `-L` label it was started under.
 extension ConversationHookObserver {
-    /// The Claude process this hook runs for: the nearest ancestor that is claude. Claude
-    /// runs a hook through a shell, and the observer script runs the CLI, so it is a few
-    /// generations up.
-    public static func harnessRunningThisHook(inspector: ProcessInspector = .live) -> ProcessIdentity? {
-        inspector.ancestor(of: getppid()) { AgentSessionInspection.isClaude($0) }
+    /// The file name the app installs the SessionStart forwarder under.
+    public static let forwarderName = "conversation-observer.sh"
+
+    /// The Claude process this hook runs for, reached only through what runs a hook: claude
+    /// starts the hook command in a shell, and the forwarder script starts this CLI. Any
+    /// other process between here and a claude means some other program fired the hook, and
+    /// the claude above it is not the one whose conversation started, so nothing is named.
+    public static func harnessRunningThisHook(
+        from pid: Int32 = getppid(),
+        inspector: ProcessInspector = .live
+    ) -> ProcessIdentity? {
+        var current = pid
+        for _ in 0..<3 {
+            guard current > 1, let words = inspector.arguments(current) else { return nil }
+            if AgentSessionInspection.isClaude(words) { return inspector.identity(current) }
+            guard isForwarderShell(words), let parent = inspector.parent(current) else { return nil }
+            current = parent
+        }
+        return nil
+    }
+
+    /// A shell running the forwarder, as its script or in a `-c` command claude gave it.
+    static func isForwarderShell(_ words: [String]) -> Bool {
+        guard let program = words.first else { return false }
+        let name = URL(fileURLWithPath: program).lastPathComponent.drop { $0 == "-" }
+        return ["sh", "bash", "zsh", "dash", "ksh"].contains(String(name))
+            && words.dropFirst().contains { $0.contains(forwarderName) }
     }
 }
 
+/// The tmux session a process runs in, as `$TMUX` gives it: `<socket path>,<server pid>,<session
+/// id number>`. The socket's file name is the `-L` label it was started under.
 public struct TmuxEnvironment: Equatable, Sendable {
     public let socketPath: String
     public let serverPID: Int

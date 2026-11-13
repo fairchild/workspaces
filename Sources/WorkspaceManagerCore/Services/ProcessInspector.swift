@@ -72,19 +72,6 @@ public struct ProcessInspector: Sendable {
         self.identity(identity.pid) == identity
     }
 
-    /// The nearest of `pid`'s ancestors, `pid` included, whose arguments `matches`, looking no
-    /// further than `depth` generations.
-    public func ancestor(of pid: Int32, depth: Int = 6, where matches: ([String]) -> Bool) -> ProcessIdentity? {
-        var current = pid
-        for _ in 0..<depth {
-            guard current > 1 else { return nil }
-            if let words = arguments(current), matches(words) { return identity(current) }
-            guard let next = parent(current) else { return nil }
-            current = next
-        }
-        return nil
-    }
-
     private static func info(_ pid: Int32) -> kinfo_proc? {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
         var process = kinfo_proc()
