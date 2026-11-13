@@ -145,6 +145,7 @@ struct CLIVerbCatalogTests {
               workspaces recent
               workspaces doctor
               workspaces conversation observe   (Claude SessionStart hook; payload on stdin)
+              workspaces conversation resume <id> (--here | --into <handle>) [--json]
 
             Automation commands (operator scope; require the app running with the
             Automation Operator experiment enabled — or WORKSPACES_AUTOMATION_OPERATOR=1
@@ -208,6 +209,10 @@ struct CLIVerbCatalogTests {
               takes no turn until sent something, so 'ws check --ready' answers whether
               it can take input. Text sent before then is lost.
               Any other command runs as written, and neither verb can speak for it.
+              'conversation resume <id>' continues any recorded conversation, however
+              it was started, and only when nothing holds it: '--here' becomes the
+              agent in this terminal, '--into <handle>' starts it detached. It exits
+              3 and says where when the conversation is already held.
 
             Launch behavior:
               - no args: open the WorkSpaces app
