@@ -390,6 +390,45 @@ cache is a purge via the named entrypoint:
    tick, on a main-actor turn of its own. A `ghostty_surface_free` call anywhere else
    can deadlock the same way.
 
+   The free has to stay on the main thread at this pin: `Surface.deinit` closes the
+   renderer's CVDisplayLink, which `renderer/DisplayLink.zig` allows only there, and
+   `App.deleteSurface` edits the app's surface list without a lock. The `io` thread it
+   joins sends the command SIGHUP and polls every 10 ms until the command has exited,
+   which held the main thread ~16 ms per surface, ~100 ms under background QoS, and
+   seconds for a batch, or for as long as a stopped command stayed stopped (#1897). So
+   `GhosttyAppManager` ends the command itself before the free. It hangs the command up
+   (`GhosttySurfaceChildProcess`) when the surface retires, and again every 10 ms,
+   since `login` misses one that lands while it is still starting. A command still
+   alive after `hangUpGrace` (5 s) is sent SIGCONT and SIGKILL. A surface is freed
+   once `ghostty_surface_process_exited` is true, one per main-actor turn, and the
+   waiting happens off the main thread. libghostty does not always report an exit: a
+   command hung up while still starting can be gone and reaped with the flag false for
+   good. So a surface is also freed once the command it found, recorded as pid and
+   start time (`kinfo_proc` `p_starttime`), has no process left: libghostty's teardown
+   then finds no group to wait on.
+
+   Anything else is unknown and stays unfreed. A command never found may be a stopped
+   `login` whose foreground group has emptied; a pid now held by a later process, or
+   under another parent, would have libghostty's teardown hang up a stranger's group.
+   A process-table query that fails, other than with ESRCH, establishes nothing.
+   Each pass looks again and keeps signalling; `killGrace` (2 s) after the kill the
+   surface is logged once with its reason and checked about once a second from then
+   on. A command SIGKILL cannot end stays the same way. Leak beats freeze: a leaked
+   surface costs less than a main thread held until the command exits.
+
+   The command is found through the pty's foreground process group: the session of any
+   live member is the command libghostty spawned, kept only while it is this process's
+   child. libghostty's own teardown signals `getpgid` of the pid it recorded, which is
+   the same group. Re-read `Surface.deinit`, `Exec.zig`'s `threadExit`, `killPid` and
+   `processExitCommon`, and `pty.zig`'s `setsid` when bumping the pin.
+   `GhosttySurfaceFreeMainThreadTests` covers the order of events while a command is
+   held stopped (hang-up first, the main thread ticking, the free only after the command
+   exits), a hang-up-immune command that only SIGKILL ends, a stopped command whose
+   foreground group has emptied (never freed while it lives), a foreground pipeline
+   whose first process has exited, and a command whose process queries fail (never freed
+   until they work). `GhosttySurfaceChildProcessTests` covers the identity check on
+   synthetic process records.
+
 ## CI Contract
 
 Both workflows build GhosttyKit before lint/build/test:

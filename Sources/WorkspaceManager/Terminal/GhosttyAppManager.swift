@@ -53,7 +53,7 @@ final class GhosttyAppManager: NSObject {
             if retiredSurfaces.isEmpty {
                 GhosttyThreadingBridge.enqueueOnMain { self.tick() }
             } else {
-                GhosttyThreadingBridge.enqueueOnMain { self.freeRetiredSurfaces() }
+                drainRetiredSurfacesIfNeeded()
             }
         }
     }
@@ -73,12 +73,72 @@ final class GhosttyAppManager: NSObject {
     /// mailbox never returns. So each free runs right after a tick, on a main-actor turn of its
     /// own rather than inside whatever released the view, where a tick's callbacks could
     /// re-enter that caller.
+    ///
+    /// The free must run on this thread, and the `io` thread it joins exits only once the
+    /// surface's command has: it sends SIGHUP and sleeps in 10 ms steps until the command is
+    /// gone, however long that takes. So retired surfaces' commands are ended here instead,
+    /// and a surface is freed only once libghostty reports its command exited: hung up first,
+    /// then, if it outlives `hangUpGrace`, resumed and killed.
+    ///
+    /// libghostty does not always report an exit: a command hung up while it is still
+    /// starting can be gone, reaped, with `ghostty_surface_process_exited` false for good.
+    /// The free waits only on the pid libghostty recorded, so once the command this thread
+    /// found, pid and start time, has no process left, the free has nothing to wait on and
+    /// runs.
+    ///
+    /// Anything else is unknown, and an unknown surface is not freed. A command never found
+    /// may be a stopped `login` whose foreground group is empty; a pid that now names another
+    /// process would have libghostty hang up a stranger's group; a process-table query that
+    /// failed says nothing about whether the command lives. Each pass looks again and
+    /// keeps signalling, and once `killGrace` after SIGKILL has passed the surface is logged
+    /// once and checked about once a second from then on. A command SIGKILL cannot end, stuck
+    /// in an uninterruptible wait, stays the same way. Leak beats freeze: one surface's memory
+    /// and threads cost less than holding this thread, and every window with it, for as long
+    /// as the command lives.
     private var retiredSurfaces: [RetiredSurface] = []
+    private var drainingRetiredSurfaces = false
     var retiredSurfaceCount: Int { retiredSurfaces.count }
 
+    /// How long a hung-up command gets to exit before it is resumed and killed.
+    var hangUpGrace: Duration = .seconds(5)
+    /// How long a killed command gets to exit before its surface is reported overdue.
+    var killGrace: Duration = .seconds(2)
+    /// Where retired surfaces' commands are looked up; tests stand in one that fails.
+    var processTable = GhosttySurfaceChildProcess.ProcessTable.system
+
+    /// One `ghostty_surface_free`: the surface by address only, since it is gone by the time
+    /// anyone hears of it, when the free began and how long it held this thread.
+    struct SurfaceFree {
+        let surfaceAddress: UInt
+        let started: ContinuousClock.Instant
+        let held: Duration
+    }
+
+    /// Told of each `ghostty_surface_free` once it returns.
+    var onSurfaceFreed: ((SurfaceFree) -> Void)?
+
     private struct RetiredSurface {
+        enum Shutdown { case hangingUp, killing, overdue }
+
         let surface: ghostty_surface_t
         let callbackTarget: Unmanaged<GhosttySurfaceCallbackTarget>
+        var shutdown = Shutdown.hangingUp
+        var nextStepAt: ContinuousClock.Instant?
+        /// The command, once a signal has gone to it.
+        var command: GhosttySurfaceChildProcess.Command?
+        /// Whether the latest lookup could not read the process table.
+        var lookupFailed = false
+
+        @MainActor func isReadyToFree(in table: GhosttySurfaceChildProcess.ProcessTable) -> Bool {
+            ghostty_surface_process_exited(surface)
+                || command.map { GhosttySurfaceChildProcess.fate(of: $0, in: table) == .gone } ?? false
+        }
+
+        @MainActor mutating func signal(_ signal: Int32, in table: GhosttySurfaceChildProcess.ProcessTable) {
+            let lookup = GhosttySurfaceChildProcess.send(signal, to: surface, in: table)
+            if case .failed = lookup { lookupFailed = true } else { lookupFailed = false }
+            command = lookup.value ?? command
+        }
     }
 
     private override init() {
@@ -170,21 +230,106 @@ final class GhosttyAppManager: NSObject {
     }
 
     func retireSurface(_ surface: ghostty_surface_t, callbackTarget: Unmanaged<GhosttySurfaceCallbackTarget>) {
-        retiredSurfaces.append(RetiredSurface(surface: surface, callbackTarget: callbackTarget))
-        guard retiredSurfaces.count == 1, !mailboxDrainSuspended else { return }
-        GhosttyThreadingBridge.enqueueOnMain { self.freeRetiredSurfaces() }
+        var retired = RetiredSurface(surface: surface, callbackTarget: callbackTarget)
+        retired.signal(SIGHUP, in: processTable)
+        retiredSurfaces.append(retired)
+        drainRetiredSurfacesIfNeeded()
     }
 
-    private func freeRetiredSurfaces() {
-        while !retiredSurfaces.isEmpty, !mailboxDrainSuspended {
-            let retired = retiredSurfaces.removeFirst()
+    private func drainRetiredSurfacesIfNeeded() {
+        guard !drainingRetiredSurfaces, !retiredSurfaces.isEmpty, !mailboxDrainSuspended else { return }
+        drainingRetiredSurfaces = true
+        Task { @MainActor in await drainRetiredSurfaces() }
+    }
+
+    /// One free per main-actor turn, each right after the tick that may have delivered its
+    /// command's exit, so retiring many surfaces never adds up to one long block. Until then
+    /// the hang-up repeats, as libghostty's own does: `login` misses one that lands while it
+    /// is still starting, and the command runs on. The graces start here rather than at
+    /// retirement, so time spent with the drain suspended doesn't count against them. Once
+    /// every surface left is overdue, passes slow to one each `overduePass`.
+    private func drainRetiredSurfaces() async {
+        defer { drainingRetiredSurfaces = false }
+        while !mailboxDrainSuspended {
             tick()
-            ghostty_surface_free(retired.surface)
-            // A callback may have queued main-actor work holding this userdata's address
-            // before the free; release only after that work has run.
-            let callbackTarget = retired.callbackTarget
-            GhosttyThreadingBridge.enqueueOnMain { callbackTarget.release() }
+            if let index = retiredSurfaces.firstIndex(where: { $0.isReadyToFree(in: processTable) }) {
+                let retired = retiredSurfaces.remove(at: index)
+                let started = ContinuousClock.now
+                ghostty_surface_free(retired.surface)
+                onSurfaceFreed?(
+                    SurfaceFree(
+                        surfaceAddress: UInt(bitPattern: retired.surface), started: started,
+                        held: ContinuousClock.now - started))
+                // A callback may have queued main-actor work holding this userdata's address
+                // before the free; release only after that work has run.
+                let callbackTarget = retired.callbackTarget
+                GhosttyThreadingBridge.enqueueOnMain { callbackTarget.release() }
+                await Task.yield()
+                continue
+            }
+            guard !retiredSurfaces.isEmpty else { return }
+            let now = ContinuousClock.now
+            let overduePassDue = now >= nextOverduePassAt
+            if overduePassDue { nextOverduePassAt = now + Self.overduePass }
+            for index in retiredSurfaces.indices
+            where overduePassDue || retiredSurfaces[index].shutdown != .overdue {
+                advanceShutdown(of: &retiredSurfaces[index], at: now)
+            }
+            let onlyOverdue = retiredSurfaces.allSatisfy { $0.shutdown == .overdue }
+            try? await Task.sleep(for: .milliseconds(onlyOverdue ? 100 : 10))
         }
+    }
+
+    private static let overduePass: Duration = .seconds(1)
+    private var nextOverduePassAt = ContinuousClock.now
+
+    private func advanceShutdown(of retired: inout RetiredSurface, at now: ContinuousClock.Instant) {
+        switch retired.shutdown {
+        case .hangingUp:
+            let deadline = retired.nextStepAt ?? now + hangUpGrace
+            retired.nextStepAt = deadline
+            guard now >= deadline else {
+                retired.signal(SIGHUP, in: processTable)
+                return
+            }
+            retired.shutdown = .killing
+            retired.nextStepAt = now + killGrace
+            fallthrough
+        case .killing:
+            retired.signal(SIGCONT, in: processTable)
+            retired.signal(SIGKILL, in: processTable)
+            guard let deadline = retired.nextStepAt, now >= deadline else { return }
+            retired.shutdown = .overdue
+            let address = UInt(bitPattern: retired.surface)
+            let reason = Self.overdueReason(
+                fate: retired.command.map { GhosttySurfaceChildProcess.fate(of: $0, in: processTable) },
+                lookupFailed: retired.lookupFailed)
+            log.error(
+                """
+                [GhosttyAppManager] leaving surface \(address, privacy: .public) unfreed for now: \
+                \(reason, privacy: .public), and freeing it could hold the main thread until the \
+                command exits
+                """
+            )
+        case .overdue:
+            retired.signal(SIGCONT, in: processTable)
+            retired.signal(SIGKILL, in: processTable)
+        }
+    }
+
+    /// Why an overdue surface stays unfreed, from what became of its command and whether the
+    /// latest lookup to signal it failed, in which case nothing was sent.
+    nonisolated static func overdueReason(fate: GhosttySurfaceChildProcess.Fate?, lookupFailed: Bool) -> String {
+        let state =
+            switch fate {
+            case nil: lookupFailed ? "its command could not be looked up" : "its command was never found"
+            case .unavailable: "its command's process could not be queried"
+            case .replaced: "its command's pid now names another process"
+            case .exited: "its command exited and was never reaped"
+            case .running: "its command is still running"
+            case .gone: "its command has only just gone"
+            }
+        return fate != nil && lookupFailed ? state + ", and the lookup to signal it failed" : state
     }
 
     // MARK: Terminal Theme
