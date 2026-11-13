@@ -379,7 +379,7 @@ public struct ConversationResumer: Sendable {
             keepFilledIn(record)
             lock.release()
             if let holders = try await start(
-                record: record, handle: handle, live: targetLive == true, harnessCommand: command)
+                record: record, handle: handle, live: targetLive == true)
             {
                 return .held(holders: holders, targetLive: targetLive)
             }
@@ -506,8 +506,7 @@ public struct ConversationResumer: Sendable {
     private func start(
         record: ConversationRecord,
         handle: String,
-        live: Bool,
-        harnessCommand: String
+        live: Bool
     ) async throws -> [ConversationHolder]? {
         let command = guardedCommand(conversationID: record.conversationID)
         let startedAt = Date()
@@ -518,7 +517,7 @@ public struct ConversationResumer: Sendable {
                     throw Refusal.paneBusy(handle: handle, paneCommand: paneCommand)
                 }
                 guard await control.attachedClients(handle: handle) == 0 else {
-                    throw Refusal.paneAttached(handle: handle, command: harnessCommand)
+                    throw Refusal.paneAttached(handle: handle, command: command)
                 }
                 try await control.adoptSessionEnvironment(handle: handle)
                 try await control.clearInputLine(handle: handle)

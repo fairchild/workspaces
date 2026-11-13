@@ -1139,7 +1139,8 @@ struct CLIDetachedSessionTests {
         let resume = try fixture.run(["ws", "resume", handle], extraEnvironment: environment)
         #expect(resume.status == 1)
         #expect(resume.stderr.contains("open in a terminal"))
-        #expect(resume.stderr.contains("claude --resume \(conversationID) --effort low"))
+        #expect(resume.stderr.contains("conversation resume \(conversationID) --here"))
+        #expect(!resume.stderr.contains("claude --resume"))
 
         let pane = try fixture.run(["ws", "read", handle], extraEnvironment: environment)
         #expect(pane.stdout.contains("half-a-command"))
