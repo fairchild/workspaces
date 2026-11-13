@@ -164,17 +164,17 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
         return nil
     }
 
-    /// Claude's holders, by three rules, each of which can only add a holder. A process whose
-    /// arguments name the conversation holds it for as long as it runs, even after `/clear`
-    /// moves it on, since the sighting that would say so comes from a hook that can be late,
-    /// dropped, or fired by something beneath it. When the record names the process it was
-    /// last run by, that process holds it while it lives and has not moved on to another
-    /// conversation: a pid with its start time is one process lifetime, and an exec keeps
+    /// Claude's holders, by three rules, each of which can only add a holder, and each of
+    /// which holds until the process exits. A process whose arguments name the conversation
+    /// holds it. When the record names the process it was last run by, that process holds it
+    /// while it lives: a pid with its start time is one process lifetime, and an exec keeps
     /// both, so whatever wrapper or runtime the harness execs through stays the recorded
-    /// process whatever its arguments say. When no recorded process holds it, the tmux session
-    /// it was last seen in is asked: any claude there that no record places in another
-    /// conversation is counted, since it may be this one under an id its arguments do not carry.
-    /// A holder is placed in that session only while the session's server says it runs there.
+    /// process whatever its arguments say. Neither lets go when the process starts another
+    /// conversation, as `/clear` does: only a hook could say so, and a hook can be late,
+    /// dropped, or fired by something beneath it. When no recorded process holds it, the tmux
+    /// session it was last seen in is asked, and any claude there is counted, since it may be
+    /// this conversation under an id its arguments do not carry. A holder is placed in that
+    /// session only while the session's server says it runs there.
     public func holders(of record: ConversationRecord, in context: HolderProbeContext) async -> HolderProbe {
         let id = record.conversationID
         let table = context.processTable
@@ -186,9 +186,6 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
             case .ended: recorded = nil
             case .unreadable: return .unknown("Could not ask the kernel about process \(harness.pid)")
             }
-        }
-        func isHere(_ identity: ProcessIdentity?) -> Bool {
-            identity.flatMap(context.currentConversation).map { $0 == id } ?? true
         }
         func holder(_ pid: Int32, _ evidence: HolderEvidence, _ identity: ProcessIdentity?) -> ConversationHolder {
             guard identity != nil, identity == recorded else {
@@ -204,8 +201,7 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
             .filter { AgentSessionInspection.isClaude($0.arguments) && AgentSessionInspection.names(id, $0.arguments) }
             .map { holder($0.pid, .arguments, context.inspector.identity($0.pid)) }
         let counted = Set(holders.map(\.pid))
-        let recordedHolds = recorded.map { counted.contains($0.pid) || isHere($0) } ?? false
-        if let recorded, recordedHolds, !counted.contains(recorded.pid) {
+        if let recorded, !counted.contains(recorded.pid) {
             holders.append(holder(recorded.pid, .recordedHarness, recorded))
         }
 
@@ -234,13 +230,12 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
                 ? placed($0.pid, $0.foundBy, $0.startedAt)
                 : ConversationHolder(pid: $0.pid, foundBy: $0.foundBy, startedAt: $0.startedAt)
         }
-        if !recordedHolds {
+        if recorded == nil {
             for row in table.rows
             where inSession.contains(row.pid) && !counted.contains(row.pid)
                 && AgentSessionInspection.isClaude(row.arguments)
             {
-                let identity = context.inspector.identity(row.pid)
-                if isHere(identity) { holders.append(placed(row.pid, .sessionPaneTree, identity?.startedAt)) }
+                holders.append(placed(row.pid, .sessionPaneTree, context.inspector.identity(row.pid)?.startedAt))
             }
         }
         return holders.isEmpty ? .free : .held(holders, recordedSessionGone: false)

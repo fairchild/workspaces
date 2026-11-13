@@ -421,8 +421,10 @@ struct CLIConversationResumeTests {
     }
 
     /// `/clear` keeps the process and starts a new conversation, and the hook sees it start.
-    @Test("A claude that moved on to another conversation holds the new one, and the old one resumes")
-    func movedHarnessReleasesTheOldConversation() async throws {
+    /// Which conversation the process is in now is only as current as its last hook, so it
+    /// holds every one it ran until it exits.
+    @Test("A claude that moved on to another conversation holds both until it exits")
+    func movedHarnessHoldsEveryConversationItRan() async throws {
         let fixture = try makeFixture()
         defer { fixture.teardown() }
         let before = UUID().uuidString.lowercased()
@@ -430,13 +432,13 @@ struct CLIConversationResumeTests {
         let agent = try await startBareAgent(in: fixture, hooking: [before, after])
         defer { Self.kill([agent]) }
 
-        let held = try fixture.run(["conversation", "resume", after, "--here"])
-        #expect(held.status == 3)
-        #expect(held.stdout.contains("pid \(agent.processIdentifier)"))
-
-        let resumed = try fixture.run(["conversation", "resume", before, "--here"])
-        #expect(resumed.status == 0)
-        #expect(resumed.stdout.contains("stub argv=--resume \(before)"))
+        for conversationID in [after, before] {
+            let held = try fixture.run(["conversation", "resume", conversationID, "--here"])
+            #expect(held.status == 3)
+            #expect(held.stdout.contains("pid \(agent.processIdentifier)"))
+            #expect(held.stdout.contains("may have moved to another one"))
+            #expect(!held.stdout.contains("stub argv"))
+        }
     }
 
     /// A tool an agent runs can start a claude of its own whose SessionStart fires beneath the

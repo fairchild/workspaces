@@ -14,10 +14,10 @@ import Foundation
 public enum HolderEvidence: String, Codable, Sendable {
     /// Its arguments name the conversation.
     case arguments
-    /// The conversation's own hook recorded this process, and no later sighting moved it on.
+    /// The conversation's record names this process as the one that last ran it.
     case recordedHarness = "recorded-harness"
-    /// It runs in the tmux session the conversation was last seen in, no recorded process
-    /// holds the conversation, and no record places this one in another conversation.
+    /// It runs in the tmux session the conversation was last seen in, and no recorded process
+    /// holds the conversation.
     case sessionPaneTree = "session-pane-tree"
 }
 
@@ -58,9 +58,15 @@ public struct ConversationHolder: Codable, Equatable, Sendable {
             parts.append("in tile \(hostSessionID)")
         }
         let place = parts.joined(separator: " ")
-        guard foundBy == .sessionPaneTree else { return place }
-        return "\(place) runs claude without naming this conversation. It may have switched to "
-            + "another one; this one resumes once that process exits."
+        switch foundBy {
+        case .arguments: return place
+        case .recordedHarness:
+            return "\(place) ran this conversation last and may have moved to another one since; "
+                + "exit it to resume this one here."
+        case .sessionPaneTree:
+            return "\(place) runs claude without naming this conversation. It may have switched to "
+                + "another one; this one resumes once that process exits."
+        }
     }
 }
 
@@ -90,20 +96,15 @@ public struct HolderProbeContext: Sendable {
     public let inspector: ProcessInspector
     /// The record's tmux session as its server answers now; nil when it could not be asked.
     public let recordedSession: @Sendable (ConversationRecord) async -> RecordedTmuxSession?
-    /// The conversation this process's newest sighting is for, across every record; nil
-    /// when no record saw it.
-    public let currentConversation: @Sendable (ProcessIdentity) -> String?
 
     public init(
         processTable: ProcessTable,
         inspector: ProcessInspector,
-        recordedSession: @escaping @Sendable (ConversationRecord) async -> RecordedTmuxSession?,
-        currentConversation: @escaping @Sendable (ProcessIdentity) -> String?
+        recordedSession: @escaping @Sendable (ConversationRecord) async -> RecordedTmuxSession?
     ) {
         self.processTable = processTable
         self.inspector = inspector
         self.recordedSession = recordedSession
-        self.currentConversation = currentConversation
     }
 
     /// Whether the tmux session the conversation was last seen in is positively gone, which
@@ -141,13 +142,7 @@ public struct ConversationHolderProbe: Sendable {
 
     public func probe(_ record: ConversationRecord) async -> HolderProbe {
         guard let table = await readProcessTable() else { return .unknown("Could not read the process table") }
-        let all = records?.all() ?? []
-        let context = HolderProbeContext(
-            processTable: table,
-            inspector: inspector,
-            recordedSession: recordedSession,
-            currentConversation: { identity in Self.currentConversation(of: identity, in: all) }
-        )
+        let context = HolderProbeContext(processTable: table, inspector: inspector, recordedSession: recordedSession)
         return await adapter.holders(of: record, in: context)
     }
 
@@ -162,16 +157,6 @@ public struct ConversationHolderProbe: Sendable {
                 workspaceCreatedAt: nil, socketLabel: nil, createdAt: Date(), observedAt: Date(), observedBy: .wsLaunch,
                 launch: nil, lastSeenIn: nil, endedByUserAt: nil)
         return await probe(record)
-    }
-
-    /// The conversation whose record saw `identity` most recently.
-    static func currentConversation(of identity: ProcessIdentity, in records: [ConversationRecord]) -> String? {
-        records
-            .compactMap { record -> (Date, String)? in
-                guard let seen = record.lastSeenIn, seen.harness == identity else { return nil }
-                return (seen.harnessObservedAt ?? record.observedAt, record.conversationID)
-            }
-            .max { $0 < $1 }?.1
     }
 
     // MARK: - The recorded tmux session
