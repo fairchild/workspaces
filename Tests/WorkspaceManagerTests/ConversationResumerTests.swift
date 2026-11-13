@@ -125,6 +125,41 @@ struct ConversationResumerTests {
         #expect(world.records.load(conversationID: world.conversationID)?.observedBy == .resume)
     }
 
+    @Test("The conversation is still claimed at the moment the harness takes over the terminal")
+    func lockHeldThroughTheHandOff() async throws {
+        let world = try World()
+        defer { world.teardown() }
+        try world.recordConversation()
+        let lockPath = world.root.appendingPathComponent("launches/.locks/\(world.conversationID).lock").path
+        let claimable = Claimable()
+
+        let resumer = ConversationResumer(
+            records: world.records,
+            launches: world.launches,
+            control: TmuxSessionControl(socketLabel: "resumer-tests-unused", run: { _, _, _ in nil }),
+            environment: ["PATH": "/usr/bin:/bin"],
+            homeDirectory: world.root.appendingPathComponent("home"),
+            readProcessTable: { Self.quietTable },
+            recordedSession: { _ in .notRecorded },
+            describeTmux: { _ in nil },
+            exec: { _ in
+                let descriptor = open(lockPath, O_RDWR | O_CLOEXEC)
+                defer { close(descriptor) }
+                claimable.set(descriptor >= 0 && flock(descriptor, LOCK_EX | LOCK_NB) == 0)
+            }
+        )
+        _ = try await resumer.resume(conversationID: world.conversationID, target: .here)
+
+        #expect(claimable.value == false)
+    }
+
+    private final class Claimable: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: Bool?
+        var value: Bool? { lock.withLock { stored } }
+        func set(_ value: Bool) { lock.withLock { stored = value } }
+    }
+
     @Test("Status is open, naming the tile, for a bare claude in the session the conversation was last seen in")
     func statusFindsAHarnessInTheRecordedSession() async throws {
         let world = try World()
