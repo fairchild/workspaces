@@ -76,7 +76,7 @@ struct TmuxLiveSocketGuardTests {
         let refusals = Refusals()
         await TmuxLiveSocketGuard.$onRefusal.withValue({ refusals.append($0) }) {
             let holder = TmuxHolderProbe(socketLabel: TmuxSessionProbe.defaultSocketLabel)
-            #expect(await holder.holderState(forSessionNamed: "wstest-never-named") == .unanswered)
+            #expect(await holder.holderState(for: .init(name: "wstest-never-named")) == .unanswered)
             #expect(await TmuxExitEmptyCapability.readFromServer(TmuxSessionProbe.defaultSocketLabel) == nil)
             #expect(await holder.serverPID(attachingClientInGroup: 1, toSessionNamed: "wstest-never-named") == nil)
         }

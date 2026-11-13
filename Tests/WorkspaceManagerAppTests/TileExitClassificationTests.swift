@@ -59,8 +59,8 @@ struct TileExitClassificationTests {
         store.terminalModeForNewSession = { _ in .tmuxPerSession }
         store.continuityRecorder = TerminalContinuityRecorder(sink: sink)
         store.attach(agentSessionRegistry: registry, localStateStore: nil, hooksSocketPath: nil)
-        store.tmuxHolderState = { name in
-            await probeCalls.append(name)
+        store.tmuxHolderState = { session in
+            await probeCalls.append(session.name)
             return answer
         }
         store.tmuxServerKeepsRunningWhenEmpty = { _ in true }
@@ -80,7 +80,20 @@ struct TileExitClassificationTests {
         for session in [primary, tab] {
             store.surfaceStore.noteLaunch(sessionID: session.id, throughTmux: true)
         }
+        recordOwnership(of: [primary, tab], in: store)
         return (primary, tab)
+    }
+
+    /// Records the tmux session each launch landed on, as the surface store does once the
+    /// socket lists it, so a close can attribute the session it reclaims.
+    private func recordOwnership(of sessions: [HostTerminalSession], in store: TileTreeStore) {
+        for (index, session) in sessions.enumerated() {
+            let identity = TmuxLiveSession(
+                sessionID: "$\(index + 1)", name: session.effectiveTmuxSessionName,
+                createdAt: Date(timeIntervalSince1970: 100), serverPID: 4242)
+            store.tmuxOwnershipLedger.record(
+                hostSessionID: session.id, identity: identity, launchedAt: identity.createdAt)
+        }
     }
 
     @Test("A tile whose tmux server died keeps its row open, marked holder lost")
@@ -148,7 +161,7 @@ struct TileExitClassificationTests {
     func requestedCloseArrivingAsExitIsTheUsers() async throws {
         let harness = makeHarness(answer: .serverGone)
         let (_, tab) = try openTwoTmuxTiles(harness.store)
-        harness.store.noteCloseRequested(tab.id)
+        harness.store.beginClose(of: tab.id)
 
         #expect(harness.store.handleProcessExit(for: tab.id))
 
@@ -231,6 +244,7 @@ struct TileExitClassificationTests {
         for session in [primary, split, otherTab] {
             store.surfaceStore.noteLaunch(sessionID: session.id, throughTmux: true, tmuxServerPID: 4242)
         }
+        recordOwnership(of: [primary, split, otherTab], in: store)
         return (primary, split, otherTab)
     }
 
@@ -439,7 +453,7 @@ struct TileExitClassificationTests {
         let harness = makeHarness(answer: .serverGone)
         let (_, tab) = try openTwoTmuxTiles(harness.store)
         let sheet = CloseSheet(harness.store)
-        harness.store.noteCloseRequested(tab.id)
+        harness.store.beginClose(of: tab.id)
         sheet.raise(tab.id)
 
         sheet.cancel()
@@ -457,9 +471,9 @@ struct TileExitClassificationTests {
         let (first, second) = try openTwoTmuxTiles(harness.store)
         let store = harness.store
         let sheet = CloseSheet(store)
-        store.noteCloseRequested(first.id)
+        store.beginClose(of: first.id)
         sheet.raise(first.id)
-        store.noteCloseRequested(second.id)
+        store.beginClose(of: second.id)
         sheet.raise(second.id)
 
         sheet.close()
@@ -477,7 +491,7 @@ struct TileExitClassificationTests {
         let harness = makeHarness(answer: .serverGone)
         let (primary, split, _) = try openSplitTab(harness.store)
         let sheet = CloseSheet(harness.store)
-        harness.store.noteCloseRequested(split.id)
+        harness.store.beginClose(of: split.id)
         sheet.raise(split.id)
 
         #expect(harness.store.handleProcessExit(for: primary.id))
@@ -493,7 +507,7 @@ struct TileExitClassificationTests {
         let harness = makeHarness(answer: .serverGone)
         let (primary, split, otherTab) = try openSplitTab(harness.store)
         let sheet = CloseSheet(harness.store)
-        harness.store.noteCloseRequested(split.id)
+        harness.store.beginClose(of: split.id)
         sheet.raise(split.id)
 
         #expect(harness.store.handleProcessExit(for: primary.id))
@@ -524,7 +538,7 @@ struct TileExitClassificationTests {
         let (primary, split, _) = try openSplitTab(harness.store)
         let store = harness.store
         let sheet = CloseSheet(store)
-        store.noteCloseRequested(primary.id)
+        store.beginClose(of: primary.id)
         sheet.raise(primary.id)
 
         switch moment {
@@ -574,7 +588,7 @@ struct TileExitClassificationTests {
         let (primary, split, otherTab) = try openSplitTab(harness.store)
         let store = harness.store
         let sheet = CloseSheet(store)
-        store.noteCloseRequested(primary.id)
+        store.beginClose(of: primary.id)
         sheet.raise(primary.id)
         let dismissed = try #require(sheet.shown).context
 
@@ -599,7 +613,7 @@ struct TileExitClassificationTests {
         let (primary, split, otherTab) = try openSplitTab(harness.store)
         let store = harness.store
         let sheet = CloseSheet(store)
-        store.noteCloseRequested(primary.id)
+        store.beginClose(of: primary.id)
         sheet.raise(primary.id)
         #expect(store.handleProcessExit(for: split.id))
         #expect(await harness.rowWrites(for: split.id) == [.deselected(split.id)])
@@ -625,7 +639,7 @@ struct TileExitClassificationTests {
         let (primary, oldSplit, _) = try openSplitTab(harness.store)
         let store = harness.store
         let sheet = CloseSheet(store)
-        store.noteCloseRequested(primary.id)
+        store.beginClose(of: primary.id)
         sheet.raise(primary.id)
         #expect(store.handleProcessExit(for: primary.id))
         #expect(await harness.rowWrites(for: primary.id) == [.deselected(primary.id)])
@@ -992,7 +1006,7 @@ struct TileExitClassificationTests {
     func retirementArrivingAsExitEndsTheRow() async throws {
         let harness = makeHarness(answer: .sessionPresent(serverPID: 4242))
         let (_, tab) = try openTwoTmuxTiles(harness.store)
-        harness.store.noteCloseRequested(tab.id, as: .retired)
+        harness.store.beginClose(of: tab.id, as: .retired)
 
         #expect(harness.store.handleProcessExit(for: tab.id))
 
@@ -1001,18 +1015,19 @@ struct TileExitClassificationTests {
         #expect(await harness.reclaims.sessionNames.isEmpty)
     }
 
-    /// A retirement that fails leaves the tile in place. Its request must not outlive it, or
+    /// A retirement that fails leaves the tile in place. Its intent must not outlive it, or
     /// the tile's next exit, whatever it was, would end its row as retired.
     @Test("A retirement that fails withdraws its reason, so the tile's later exit is read from tmux")
     func failedRetirementWithdrawsItsReason() async throws {
         let harness = makeHarness(answer: .serverGone)
         let (_, tab) = try openTwoTmuxTiles(harness.store)
-        harness.store.closeSurfaceForRetirement = { _ in
+        harness.store.closeSurfaceForRetirement = { sessionID in
+            guard sessionID == tab.id else { return }
             throw GhosttySurfaceRetirementCloseError.processStillRunning(title: "tab")
         }
 
         await #expect(throws: GhosttySurfaceRetirementCloseError.self) {
-            try await harness.store.closeForRetirement(sessionID: tab.id)
+            try await harness.store.closeAndRetireSessions(inScope: tab.key)
         }
         #expect(harness.store.sessions.contains { $0.id == tab.id })
         #expect(harness.store.handleProcessExit(for: tab.id))
@@ -1020,20 +1035,21 @@ struct TileExitClassificationTests {
         #expect(await harness.rowWrites(for: tab.id) == [.holderLost(tab.id)])
     }
 
-    /// A withdrawal names the request it made. A close the person asked for while the
-    /// retirement was failing is newer, and stays.
+    /// A withdrawal names the intent it set. A close the person asked for while the
+    /// retirement was failing is another owner's, and stays.
     @Test("A failed retirement leaves a newer close request in place")
     func failedRetirementLeavesANewerRequest() async throws {
         let harness = makeHarness(answer: .serverGone)
         let (_, tab) = try openTwoTmuxTiles(harness.store)
         let store = harness.store
         store.closeSurfaceForRetirement = { sessionID in
-            store.noteCloseRequested(sessionID)
+            guard sessionID == tab.id else { return }
+            store.beginClose(of: sessionID)
             throw GhosttySurfaceRetirementCloseError.processStillRunning(title: "tab")
         }
 
         await #expect(throws: GhosttySurfaceRetirementCloseError.self) {
-            try await store.closeForRetirement(sessionID: tab.id)
+            try await store.closeAndRetireSessions(inScope: tab.key)
         }
         #expect(store.handleProcessExit(for: tab.id))
 
@@ -1049,7 +1065,7 @@ struct TileExitClassificationTests {
         let harness = makeHarness(answer: .serverGone)
         let (primary, tab) = try openTwoTmuxTiles(harness.store)
         let sheet = CloseSheet(harness.store)
-        harness.store.noteCloseRequested(tab.id, as: .retired)
+        harness.store.beginClose(of: tab.id, as: .retired)
 
         sheet.raise(primary.id)
         sheet.cancel()
@@ -1071,9 +1087,9 @@ struct TileExitClassificationTests {
             closeForRetirement: { sessionID in
                 attempts += 1
                 beforeAttempt(attempts)
-                try await store.closeForRetirement(sessionID: sessionID, holdingRequestOnFailure: true)
+                try await store.closeForRetirement(sessionID: sessionID)
             },
-            abandonRetirement: { store.abandonRetirement($0) },
+            beginRetirement: { store.beginRetirement(of: $0) },
             retireSessions: { _ in [] }
         )
         controller.killedProcessExitBudget = .seconds(3600)
@@ -1125,7 +1141,37 @@ struct TileExitClassificationTests {
     }
 }
 
+/// Close intents: who sets the reason an exit takes, and who may take it back.
 extension TileExitClassificationTests {
+    /// A retirement close held open until the test fails it. Calls are numbered in arrival
+    /// order, and a test waits for a call by its number rather than by the clock.
+    private final class HeldRetirementClose {
+        private var calls = 0
+        private var arrived: Set<Int> = []
+        private var held: [Int: CheckedContinuation<Void, any Error>] = [:]
+        private var waiters: [Int: CheckedContinuation<Void, Never>] = [:]
+
+        func close() async throws {
+            calls += 1
+            let call = calls
+            try await withCheckedThrowingContinuation { continuation in
+                held[call] = continuation
+                arrived.insert(call)
+                waiters.removeValue(forKey: call)?.resume()
+            }
+        }
+
+        func waitForCall(_ call: Int) async {
+            guard !arrived.contains(call) else { return }
+            await withCheckedContinuation { waiters[call] = $0 }
+        }
+
+        func fail(_ call: Int) {
+            held.removeValue(forKey: call)?.resume(
+                throwing: GhosttySurfaceRetirementCloseError.processStillRunning(title: "tab"))
+        }
+    }
+
     /// A restore asked for a tile's id while that tile was still live, so the coordinator
     /// gave the new session an id of its own. The tile never left, and its sheet still
     /// speaks for its row.
@@ -1146,5 +1192,230 @@ extension TileExitClassificationTests {
         sheet.close()
 
         #expect(await harness.rowWrites(for: tab.id) == [.deselected(tab.id), .ended(tab.id)])
+    }
+
+    /// The first teardown's tile exited, and a restore brought the session back in a new
+    /// tile that a second teardown is retiring. The first teardown ending withdraws only
+    /// its own mark, so the new tile's exit is still the second teardown's retirement.
+    @Test("An earlier teardown's end leaves alone the retirement a later one set on the restored tile")
+    func earlierTeardownLeavesALaterRetirement() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let (_, tab) = try openTwoTmuxTiles(harness.store)
+        let store = harness.store
+        let held = HeldRetirementClose()
+        store.closeSurfaceForRetirement = { _ in try await held.close() }
+
+        let earlier = Task { await teardown(tab, in: store, tmuxKilled: false) { _ in }.teardown(scopeKey: tab.key) }
+        await held.waitForCall(1)
+        #expect(store.handleProcessExit(for: tab.id))
+        #expect(await harness.rowWrites(for: tab.id) == [.ended(tab.id)])
+        let returned = store.createRestoredSession(
+            key: tab.key, directory: tab.directoryURL, recordedTerminalMode: tab.terminalMode,
+            tmuxSessionNameOverride: tab.tmuxSessionName, adoptedHostSessionID: tab.id)
+        #expect(returned.id == tab.id)
+        store.surfaceStore.noteLaunch(sessionID: returned.id, throughTmux: true, tmuxServerPID: 4242)
+        let later = Task { await teardown(returned, in: store, tmuxKilled: false) { _ in }.teardown(scopeKey: tab.key) }
+        await held.waitForCall(2)
+
+        held.fail(1)
+        _ = await earlier.value
+        #expect(store.handleProcessExit(for: returned.id))
+        held.fail(2)
+        _ = await later.value
+
+        #expect(await harness.rowWrites(for: tab.id) == [.ended(tab.id), .ended(tab.id)])
+        #expect(await harness.probeCalls.sessionNames.isEmpty)
+    }
+
+    /// A retire pass and a teardown both retire one tile. Each sets an intent of its own, so
+    /// the pass failing first takes back only its own, and the tile's exit is still the
+    /// teardown's retirement.
+    @Test("Two retirements of one tile each withdraw only their own intent")
+    func concurrentRetirementsWithdrawOnlyTheirOwn() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let (_, tab) = try openTwoTmuxTiles(harness.store)
+        let store = harness.store
+        let held = HeldRetirementClose()
+        store.closeSurfaceForRetirement = { sessionID in
+            guard sessionID == tab.id else { return }
+            try await held.close()
+        }
+
+        let pass = Task { try await store.closeAndRetireSessions(inScope: tab.key) }
+        await held.waitForCall(1)
+        let teardown = Task { await teardown(tab, in: store, tmuxKilled: false) { _ in }.teardown(scopeKey: tab.key) }
+        await held.waitForCall(2)
+
+        held.fail(1)
+        await #expect(throws: GhosttySurfaceRetirementCloseError.self) { try await pass.value }
+        #expect(store.handleProcessExit(for: tab.id))
+        held.fail(2)
+        _ = await teardown.value
+
+        #expect(await harness.rowWrites(for: tab.id) == [.ended(tab.id)])
+        #expect(await harness.probeCalls.sessionNames.isEmpty)
+    }
+
+    /// The pass closed the first tile without its exit arriving, then stopped at the second.
+    /// Both stay, and the first's later exit is read from tmux, not taken as the retirement.
+    @Test("A retire pass stopped at a later tile leaves no retirement on an earlier one")
+    func stoppedRetirePassLeavesNoMarkOnAnEarlierTile() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let (primary, tab) = try openTwoTmuxTiles(harness.store)
+        let store = harness.store
+        #expect(store.terminalSessionIDs(inScope: primary.key) == [primary.id, tab.id])
+        store.closeSurfaceForRetirement = { sessionID in
+            guard sessionID == tab.id else { return }
+            throw GhosttySurfaceRetirementCloseError.processStillRunning(title: "tab")
+        }
+
+        await #expect(throws: GhosttySurfaceRetirementCloseError.self) {
+            try await store.closeAndRetireSessions(inScope: primary.key)
+        }
+        #expect(store.sessions.contains { $0.id == primary.id })
+        #expect(store.handleProcessExit(for: primary.id))
+
+        #expect(await harness.rowWrites(for: primary.id) == [.holderLost(primary.id)])
+    }
+
+    /// A retire pass has marked every tile in its scope and is waiting on the first one's
+    /// close. The person confirms closing another of them: that close is the person's, so
+    /// the row ends and the tile's tmux session is reclaimed.
+    @Test("A person's confirmed close of a tile a retire pass has marked is the person's")
+    func confirmedCloseOutranksARetirementMark() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let (primary, tab) = try openTwoTmuxTiles(harness.store)
+        let store = harness.store
+        let held = HeldRetirementClose()
+        store.closeSurfaceForRetirement = { sessionID in
+            guard sessionID == primary.id else { return }
+            try await held.close()
+        }
+        let pass = Task { try await store.closeAndRetireSessions(inScope: primary.key) }
+        await held.waitForCall(1)
+
+        let sheet = CloseSheet(store)
+        sheet.raise(tab.id)
+        sheet.close()
+        held.fail(1)
+        await #expect(throws: GhosttySurfaceRetirementCloseError.self) { try await pass.value }
+
+        #expect(await harness.rowWrites(for: tab.id) == [.ended(tab.id)])
+        #expect(await harness.reclaimed(awaiting: 1) == [tab.id.uuidString])
+    }
+
+    /// Teardown kills a tile's tmux session before it closes the tile, and the client's exit
+    /// can land while the kill is still being awaited. Teardown marked the tile first, so
+    /// that exit is the retirement, whatever tmux would say about it.
+    @Test("An exit that teardown's own tmux kill causes is the retirement")
+    func exitFromTeardownsOwnKillIsTheRetirement() async throws {
+        let harness = makeHarness(answer: .sessionGone(serverPID: 9999))
+        let (_, tab) = try openTwoTmuxTiles(harness.store)
+        let store = harness.store
+        let controller = WorkspaceTerminalTeardownController(
+            sessionsInScope: { _ in [tab] },
+            killTmuxSession: { session in
+                store.handleProcessExit(for: session.id)
+                return true
+            },
+            closeForRetirement: { try await store.closeForRetirement(sessionID: $0) },
+            beginRetirement: { store.beginRetirement(of: $0) },
+            retireSessions: { store.retireSessions(inScope: $0) }
+        )
+
+        _ = await controller.teardown(scopeKey: tab.key)
+
+        #expect(await harness.rowWrites(for: tab.id) == [.ended(tab.id)])
+        #expect(await harness.probeCalls.sessionNames.isEmpty)
+    }
+
+    /// The sheet was raised before the tab's tmux session was recorded, so it said closing
+    /// leaves the session running. The record lands before Close; Close keeps the sheet's
+    /// word. The later close of another pane is the first kill to arrive.
+    @Test("A sheet that said the tab keeps running in tmux closes it without killing that session")
+    func sheetPromisingTmuxKeepsRunningKillsNothing() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let (_, split, otherTab) = try openSplitTab(harness.store)
+        let store = harness.store
+        let ledger = store.tmuxOwnershipLedger
+        let recorded = try #require(ledger.ownership(forHostSessionID: otherTab.id))
+        ledger.forget(hostSessionID: otherTab.id)
+        let sheet = CloseSheet(store)
+        sheet.raise(otherTab.id)
+        #expect(sheet.shown?.keepsRunningInTmux == true)
+
+        ledger.record(hostSessionID: otherTab.id, identity: recorded.identity, launchedAt: recorded.identity.createdAt)
+        sheet.close()
+        #expect(store.handleProcessExit(for: split.id, cause: .userClosed))
+
+        #expect(await harness.rowWrites(for: otherTab.id) == [.ended(otherTab.id)])
+        #expect(await harness.reclaimed(awaiting: 1) == [split.id.uuidString])
+    }
+
+    /// A reattached tile's terminal is vended before its render wires it to the tile, so
+    /// nothing would hear Ghostty's answer to a close. The close either ends the tile now,
+    /// as the person's, or leaves it with no intent: its later exit is read from tmux.
+    @Test("A close asked of a terminal not yet rendered closes the tile or leaves no intent behind")
+    func closingAnUnrenderedTerminalLeavesNoIntent() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        // A tmux-mode surface would start tmux for real; the close path does not depend on it.
+        harness.store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
+        let (_, tab) = try openTwoTmuxTiles(harness.store)
+        let store = harness.store
+        let terminal = store.terminalSurfaceView(for: tab)
+        #expect(!terminal.isWiredToTile)
+        store.surfaceStore.noteLaunch(sessionID: tab.id, throughTmux: true)
+
+        _ = MainWindowTerminalSessionController().closeTabs(
+            [tab.id], tileTreeStore: store, defaultHomeDirectory: URL(fileURLWithPath: "/private/tmp"),
+            repos: [], normalizePath: { $0 }, requestClose: store.requestTerminalClose)
+
+        if store.allLiveSessions.contains(where: { $0.id == tab.id }) {
+            #expect(store.handleProcessExit(for: tab.id))
+            #expect(await harness.rowWrites(for: tab.id) == [.holderLost(tab.id)])
+        } else {
+            #expect(await harness.rowWrites(for: tab.id) == [.ended(tab.id)])
+        }
+    }
+
+    /// The person's close was asked of the tab, and before its answer came a retire pass
+    /// took the whole scope out of the tree. The intent left with that tile: a restore brings
+    /// the session back in a new tile, whose exit is read for what it is.
+    @Test("A close intent leaves with its tile, and a restored tile's exit is read for what it is")
+    func closeIntentLeavesWithItsTile() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let (primary, tab) = try openTwoTmuxTiles(harness.store)
+        let store = harness.store
+        store.closeSurfaceForRetirement = { _ in }
+        #expect(store.beginClose(of: tab.id) != nil)
+
+        #expect(try await store.closeAndRetireSessions(inScope: primary.key).contains(tab.id))
+        let returned = store.createRestoredSession(
+            key: tab.key, directory: tab.directoryURL, recordedTerminalMode: tab.terminalMode,
+            tmuxSessionNameOverride: tab.tmuxSessionName, adoptedHostSessionID: tab.id)
+        #expect(returned.id == tab.id)
+        store.surfaceStore.noteLaunch(sessionID: returned.id, throughTmux: true)
+        #expect(store.handleProcessExit(for: returned.id))
+
+        #expect(await harness.rowWrites(for: tab.id) == [.ended(tab.id), .holderLost(tab.id)])
+    }
+
+    /// The pane's tmux session was renamed while the tile ran. Its exit asks after the id
+    /// the launch recorded, which the rename left alone, so the session is found still
+    /// running and the exit is a detach.
+    @Test("A tile's exit asks tmux after the session id its launch recorded")
+    func exitAsksAfterTheRecordedSessionID() async throws {
+        let harness = makeHarness(answer: .serverGone)
+        let (_, _, otherTab) = try openSplitTab(harness.store)
+        let store = harness.store
+        let recorded = try #require(store.tmuxOwnershipLedger.ownership(forHostSessionID: otherTab.id))
+        let recordedID = recorded.identity.sessionID
+        store.tmuxHolderState = { session in
+            session.id == recordedID ? .sessionPresent(serverPID: 4242) : .sessionGone(serverPID: 4242)
+        }
+
+        #expect(store.handleProcessExit(for: otherTab.id))
+
+        #expect(await harness.rowWrites(for: otherTab.id) == [.deselected(otherTab.id)])
     }
 }

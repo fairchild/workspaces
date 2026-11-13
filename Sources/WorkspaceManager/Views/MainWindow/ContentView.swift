@@ -1766,12 +1766,7 @@ struct ContentView: View {
 
     @MainActor
     private func retireTerminalSessions(inScope scopeKey: HostTerminalSessionKey) async throws {
-        let sessionIDs = tileTreeStore.terminalSessionIDs(inScope: scopeKey)
-        for sessionID in sessionIDs {
-            try await tileTreeStore.closeForRetirement(sessionID: sessionID)
-        }
-
-        let retiredSessionIDs = tileTreeStore.retireSessions(inScope: scopeKey)
+        let retiredSessionIDs = try await tileTreeStore.closeAndRetireSessions(inScope: scopeKey)
         guard !retiredSessionIDs.isEmpty else { return }
 
         terminalFocusCoordinator.cancelPendingFocusRequest(reason: "workspace_lifecycle_retired_sessions")
@@ -1794,10 +1789,10 @@ struct ContentView: View {
                     .didKill
             },
             closeForRetirement: { sessionID in
-                try await tileTreeStore.closeForRetirement(sessionID: sessionID, holdingRequestOnFailure: true)
+                try await tileTreeStore.closeForRetirement(sessionID: sessionID)
             },
-            abandonRetirement: { sessionID in
-                tileTreeStore.abandonRetirement(sessionID)
+            beginRetirement: { sessionIDs in
+                tileTreeStore.beginRetirement(of: sessionIDs)
             },
             retireSessions: { key in
                 tileTreeStore.retireSessions(inScope: key)
@@ -1956,12 +1951,7 @@ struct ContentView: View {
 
     @MainActor
     private func requestTerminalClose(sessionID: UUID) -> Bool {
-        guard let terminal = tileTreeStore.surfaceStore.terminal(for: sessionID) else {
-            return false
-        }
-        tileTreeStore.noteCloseRequested(sessionID)
-        terminal.requestClose()
-        return true
+        tileTreeStore.requestTerminalClose(sessionID)
     }
 
     @MainActor

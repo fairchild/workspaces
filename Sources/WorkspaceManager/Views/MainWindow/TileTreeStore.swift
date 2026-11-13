@@ -562,41 +562,46 @@ final class TileTreeStore: ObservableObject {
             retiredSessionIDs.append(primarySessionID)
         }
 
-        for sessionID in retiredSessionIDs {
-            closeRequests.removeValue(forKey: sessionID)
-        }
         if !retiredSessionIDs.isEmpty {
             publishSnapshot()
         }
         return retiredSessionIDs
     }
 
-    /// Closes a session's surface on its way out with its retiring scope. Ghostty may report
-    /// the surface as exited rather than closed; the request is marked first so that exit
-    /// still reads as the retirement. A session already gone has nothing to close.
-    ///
-    /// A close that fails or is cancelled leaves the tile in place, so it withdraws its
-    /// request: a later exit of that tile is not a retirement. A caller that retries keeps
-    /// the request across its attempts (`holdingRequestOnFailure`), since the tile's exit can
-    /// land between them, and withdraws it with `abandonRetirement` if it gives up.
-    func closeForRetirement(sessionID: UUID, holdingRequestOnFailure: Bool = false) async throws {
-        guard allLiveSessions.contains(where: { $0.id == sessionID }) else { return }
-        let held = closeRequests[sessionID].flatMap { $0.exit == .retired ? $0.token : nil }
-        let token = held ?? noteCloseRequested(sessionID, as: .retired)
-        do {
-            try await closeSurfaceForRetirement(sessionID)
-        } catch {
-            if !holdingRequestOnFailure {
-                withdrawCloseRequest(sessionID, token: token)
-            }
-            throw error
+    /// Retires a scope's terminals: closes each one's surface, then takes the scope's rows out
+    /// of the tree, returning the retired session ids. Every exit the pass causes reads as the
+    /// retirement. A close that fails stops the pass with every tile not yet exited left in
+    /// place, and a later exit of any of them is read for what it is.
+    @discardableResult
+    func closeAndRetireSessions(inScope scopeKey: HostTerminalSessionKey) async throws -> [UUID] {
+        let sessionIDs = terminalSessionIDs(inScope: scopeKey)
+        let withdrawRetirement = beginRetirement(of: sessionIDs)
+        defer { withdrawRetirement() }
+        for sessionID in sessionIDs {
+            try await closeForRetirement(sessionID: sessionID)
         }
+        return retireSessions(inScope: scopeKey)
     }
 
-    /// Withdraws a retirement close held across attempts, once its caller is done with it.
-    func abandonRetirement(_ sessionID: UUID) {
-        guard closeRequests[sessionID]?.exit == .retired else { return }
-        closeRequests.removeValue(forKey: sessionID)
+    /// Drives the retirement close of a session's surface. A session already gone has nothing
+    /// to close. Ghostty may report the surface as exited rather than closed, so the pass
+    /// that retires the session marks that exit as the retirement first (`beginRetirement`).
+    func closeForRetirement(sessionID: UUID) async throws {
+        guard allLiveSessions.contains(where: { $0.id == sessionID }) else { return }
+        try await closeSurfaceForRetirement(sessionID)
+    }
+
+    /// Marks the coming exit of each live session in `sessionIDs` as its retirement, before
+    /// the pass that retires them does anything that can cause one. Returns what withdraws
+    /// exactly these marks, for the pass to call when it ends: a tile the pass leaves in
+    /// place has its later exit read for what it is.
+    func beginRetirement(of sessionIDs: [UUID]) -> @MainActor () -> Void {
+        let intents = sessionIDs.compactMap { beginClose(of: $0, as: .retired) }
+        return { [weak self] in
+            for intent in intents {
+                self?.withdraw(intent)
+            }
+        }
     }
 
     /// Drives a surface's retirement close. Production asks the surface store; tests make it
@@ -605,28 +610,58 @@ final class TileTreeStore: ObservableObject {
         _ = try await surfaceStore.closeForSessionRetirement(sessionID: sessionID)
     }
 
-    /// A close asked for and not yet seen through: the reason its exit takes, and the token
-    /// that lets only its own requester withdraw it.
-    private struct CloseRequest {
-        let token = UUID()
+    /// A close asked of one tile and not yet seen through: the reason the exit it causes
+    /// takes.
+    ///
+    /// Whoever starts the close owns its intent, and sets it before the act that can cause
+    /// the exit. The tile's exit consumes every intent it holds, the newest giving the
+    /// reason; a tile that leaves the tree any other way takes its intents with it. Only
+    /// the owner withdraws an intent, by identity, so a pass that ends without its tile
+    /// exiting leaves alone every intent another caller set since.
+    final class CloseIntent {
+        let sessionID: UUID
         let exit: TerminalSessionExit
+
+        fileprivate init(sessionID: UUID, exit: TerminalSessionExit) {
+            self.sessionID = sessionID
+            self.exit = exit
+        }
     }
 
-    private var closeRequests: [UUID: CloseRequest] = [:]
+    /// Each live tile's close intents by its session id, oldest first.
+    private var closeIntents: [UUID: [CloseIntent]] = [:]
 
-    /// Marks a close as asked for, so the exit it causes reads as `exit`. Returns the token
-    /// that withdraws this request and no later one.
+    /// Starts a close of `sessionID`'s tile: the exit it causes reads as `exit`. `nil` when
+    /// no tile holds the session, so there is no exit to mark.
     @discardableResult
-    func noteCloseRequested(_ sessionID: UUID, as exit: TerminalSessionExit = .userClosed) -> UUID {
-        let request = CloseRequest(exit: exit)
-        closeRequests[sessionID] = request
-        return request.token
+    func beginClose(of sessionID: UUID, as exit: TerminalSessionExit = .userClosed) -> CloseIntent? {
+        guard allLiveSessions.contains(where: { $0.id == sessionID }) else { return nil }
+        let intent = CloseIntent(sessionID: sessionID, exit: exit)
+        closeIntents[sessionID, default: []].append(intent)
+        return intent
     }
 
-    /// Withdraws the request `token` made, unless a newer request has replaced it.
-    func withdrawCloseRequest(_ sessionID: UUID, token: UUID) {
-        guard closeRequests[sessionID]?.token == token else { return }
-        closeRequests.removeValue(forKey: sessionID)
+    /// Asks `sessionID`'s terminal to close, as the person's close: Ghostty either exits it,
+    /// which consumes the intent, or asks to confirm, which hands the close to the sheet
+    /// (`raiseCloseConfirmation`). Returns `false` when the caller closes the tile directly:
+    /// it has no terminal, or one vended ahead of its render that Ghostty would close
+    /// without asking. A terminal not yet rendered hears neither answer, so it gets no
+    /// intent; one with a running process waits for its render, since only the sheet
+    /// closes a running process.
+    func requestTerminalClose(_ sessionID: UUID) -> Bool {
+        guard let terminal = surfaceStore.terminal(for: sessionID) else { return false }
+        guard terminal.isWiredToTile else { return terminal.closeNeedsConfirmation }
+        beginClose(of: sessionID)
+        terminal.requestClose()
+        return true
+    }
+
+    /// Withdraws `intent`, once its owner is done with a close that did not end the tile. An
+    /// intent the tile's exit already consumed is gone, and every other intent stays.
+    func withdraw(_ intent: CloseIntent) {
+        guard var intents = closeIntents[intent.sessionID] else { return }
+        intents.removeAll { $0 === intent }
+        closeIntents[intent.sessionID] = intents.isEmpty ? nil : intents
     }
 
     /// A close the confirmation sheet is asking the person about, and the only owner of that
@@ -646,14 +681,17 @@ final class TileTreeStore: ObservableObject {
 
         let sessionID: UUID
         let targets: [Target]
+        /// The sheet says closing leaves the tab's tmux sessions running, so Close kills none.
+        let keepsTmuxRunning: Bool
         /// Rows among the targets that a reason has already ended.
         fileprivate var ended: Set<UUID> = []
         /// Rows among the targets that a restore has since given a tile of its own.
         fileprivate var returned: Set<UUID> = []
 
-        fileprivate init(sessionID: UUID, targets: [Target]) {
+        fileprivate init(sessionID: UUID, targets: [Target], keepsTmuxRunning: Bool) {
             self.sessionID = sessionID
             self.targets = targets
+            self.keepsTmuxRunning = keepsTmuxRunning
         }
 
         func covers(_ sessionID: UUID) -> Bool {
@@ -665,16 +703,26 @@ final class TileTreeStore: ObservableObject {
 
     private var closeConfirmations: [UUID: CloseConfirmation] = [:]
 
-    /// Raises the confirmation for `sessionID`'s close. It takes over the request that raised
-    /// it, so no other exit of that tile reads as the person's close: the sheet may be
-    /// replaced by another tile's, or dismissed unanswered.
+    /// Raises the confirmation for `sessionID`'s close. It takes over the person's close that
+    /// raised it, so no other exit of that tile reads as the person's close: the sheet may be
+    /// replaced by another tile's, or dismissed unanswered. A retirement's intent stays with
+    /// the pass that set it.
+    ///
+    /// Whether the close leaves the tab's tmux sessions running is decided here, for the
+    /// sheet to say and for Close to honour.
     func raiseCloseConfirmation(for sessionID: UUID) -> CloseConfirmation {
-        closeRequests.removeValue(forKey: sessionID)
-        let rows = allLiveSessions.first(where: { $0.id == sessionID }).map {
-            [$0] + splitSessions(forPrimarySessionID: sessionID)
+        if var intents = closeIntents[sessionID] {
+            intents.removeAll { $0.exit == .userClosed }
+            closeIntents[sessionID] = intents.isEmpty ? nil : intents
         }
+        let session = allLiveSessions.first(where: { $0.id == sessionID })
+        let rows = session.map { [$0] + splitSessions(forPrimarySessionID: sessionID) }
         let targets = (rows ?? []).map { CloseConfirmation.Target(session: $0, tileID: renderTileID(for: $0.id)) }
-        let confirmation = CloseConfirmation(sessionID: sessionID, targets: targets)
+        let confirmation = CloseConfirmation(
+            sessionID: sessionID,
+            targets: targets,
+            keepsTmuxRunning: session.map(closeLeavesTmuxSessionRunning) ?? false
+        )
         closeConfirmations[sessionID] = confirmation
         return confirmation
     }
@@ -688,7 +736,8 @@ final class TileTreeStore: ObservableObject {
 
     /// The person answered the sheet with Close. Returns whether a tile left the tree.
     ///
-    /// Each target's row is settled once, as a user close. A target still in its original
+    /// Each target's row is settled once, as a user close, reclaiming its tmux session unless
+    /// the sheet said the close leaves it running. A target still in its original
     /// tile leaves the tree through the same exit a user close takes; one waiting in an exit
     /// is settled alone in it, leaving that exit's other rows to their own reason; one whose
     /// tile is gone has its row written directly. A target another reason ended, or whose
@@ -714,6 +763,7 @@ final class TileTreeStore: ObservableObject {
             }
         }
         let now = Date()
+        let reclaimingTmux = !confirmation.keepsTmuxRunning
         for target in confirmation.targets where !inOriginalTile(target) {
             let id = target.session.id
             guard !confirmation.ended.contains(id), !confirmation.returned.contains(id),
@@ -723,13 +773,13 @@ final class TileTreeStore: ObservableObject {
                 "[TileTreeStore] session \(id.uuidString, privacy: .public) closed from its confirmation after its tile left"
             )
             if let exitID = tileExitIDBySessionID[id] {
-                settle(id, inExit: exitID, as: .userClosed, alone: true)
+                settle(id, inExit: exitID, as: .userClosed, alone: true, reclaimingTmux: reclaimingTmux)
             } else {
-                record(target.session, .userClosed, at: now)
+                record(target.session, .userClosed, at: now, reclaimingTmux: reclaimingTmux)
             }
         }
         guard let liveTile else { return false }
-        return handleProcessExit(for: liveTile.id, cause: .userClosed)
+        return exitTile(liveTile.id, cause: .userClosed, reclaimingTmux: reclaimingTmux)
     }
 
     /// A restore brought `sessionID` back in a tile of its own. Its row belongs to that tile
@@ -760,8 +810,8 @@ final class TileTreeStore: ObservableObject {
 
     /// Asks the tile's tmux socket what remains once its client is gone. Production reads
     /// this run's socket; tests point it at an isolated server or answer directly.
-    var tmuxHolderState: @Sendable (String) async -> TmuxHolderState = { sessionName in
-        await TmuxHolderProbe().holderState(forSessionNamed: sessionName)
+    var tmuxHolderState: @Sendable (TmuxHolderProbe.Session) async -> TmuxHolderState = { session in
+        await TmuxHolderProbe().holderState(for: session)
     }
 
     /// Whether the tmux server with the given pid keeps running once its last session ends,
@@ -808,26 +858,31 @@ final class TileTreeStore: ObservableObject {
     /// `cause` is the reason when the caller already knows it: a user close, or a teardown
     /// that is the user's. `nil` is a process exit, which reads its reason from what is left.
     ///
-    /// A close the user asked for can still arrive as a process exit: Ghostty skips the
-    /// confirmation when it believes the terminal is at a prompt and reports the surface as
-    /// exited. `noteCloseRequested` marks the request so that exit still counts as the
-    /// user's. A close that reaches a tile already gone with an exit still waiting on its
+    /// A close asked for can still arrive as a process exit: Ghostty skips the confirmation
+    /// when it believes the terminal is at a prompt and reports the surface as exited, and a
+    /// retirement's close or tmux kill ends the client. The close's intent (`beginClose`)
+    /// gives that exit its reason; a `cause` the caller passes is the act ending the tile
+    /// now, and outranks it. A close that reaches a tile already gone with an exit still waiting on its
     /// reason settles that tile's row (`TileExit`). A close the person confirmed in the sheet
     /// completes through its confirmation instead (`completeCloseConfirmation`).
     ///
     /// A process exit of a tile that launched through tmux asks the tmux socket, off the
-    /// main actor, which reason it was (see `TerminalSessionExit.classifyProcessExit`). A
-    /// quit while the question is out leaves the rows open, so the next launch can still
-    /// offer them.
+    /// main actor, which reason it was (see `TerminalSessionExit.classifyProcessExit`), by
+    /// the tmux session's own id when the app recorded it. A quit while the question is out
+    /// leaves the rows open, so the next launch can still offer them.
     @discardableResult
     func handleProcessExit(for sessionID: UUID, cause: TerminalSessionExit? = nil) -> Bool {
-        let knownExit = closeRequests.removeValue(forKey: sessionID)?.exit ?? cause
+        exitTile(sessionID, cause: cause, reclaimingTmux: true)
+    }
+
+    private func exitTile(_ sessionID: UUID, cause: TerminalSessionExit?, reclaimingTmux: Bool) -> Bool {
+        let knownExit = cause ?? closeIntents.removeValue(forKey: sessionID)?.last?.exit
         if let exitID = tileExitIDBySessionID[sessionID] {
             if let knownExit {
                 log.info(
                     "[TileTreeStore] session \(sessionID.uuidString, privacy: .public) closed while its exit was being read: reason \(String(describing: knownExit), privacy: .public)"
                 )
-                settle(sessionID, inExit: exitID, as: knownExit)
+                settle(sessionID, inExit: exitID, as: knownExit, reclaimingTmux: reclaimingTmux)
             }
             return false
         }
@@ -840,16 +895,16 @@ final class TileTreeStore: ObservableObject {
         for row in rows {
             tileExitIDBySessionID[row.id] = tileExit.id
         }
+        let tmuxSession = TmuxHolderProbe.Session(
+            name: exitingSession.effectiveTmuxSessionName,
+            id: tmuxOwnershipLedger.ownership(forHostSessionID: sessionID)?.identity.sessionID
+        )
         removeExitedTile(sessionID)
 
         if let knownExit {
-            settle(sessionID, inExit: tileExit.id, as: knownExit)
+            settle(sessionID, inExit: tileExit.id, as: knownExit, reclaimingTmux: reclaimingTmux)
         } else if let launch, launch.throughTmux {
-            classifyExit(
-                tileExit.id,
-                tmuxSessionName: exitingSession.effectiveTmuxSessionName,
-                launchServerPID: launch.tmuxServerPID
-            )
+            classifyExit(tileExit.id, tmuxSession: tmuxSession, launchServerPID: launch.tmuxServerPID)
         } else {
             settle(sessionID, inExit: tileExit.id, as: .shellExited)
         }
@@ -871,12 +926,12 @@ final class TileTreeStore: ObservableObject {
         publishSnapshot()
     }
 
-    private func classifyExit(_ exitID: UUID, tmuxSessionName: String, launchServerPID: Int?) {
+    private func classifyExit(_ exitID: UUID, tmuxSession: TmuxHolderProbe.Session, launchServerPID: Int?) {
         let holderState = tmuxHolderState
         let keepsServerWhenEmpty = tmuxServerKeepsRunningWhenEmpty
         guard let sessionID = tileExits[exitID]?.sessionID else { return }
         tileExits[exitID]?.classification = Task { @MainActor [weak self] in
-            let state = await holderState(tmuxSessionName)
+            let state = await holderState(tmuxSession)
             let serverKeepsRunningWhenEmpty = await keepsServerWhenEmpty(launchServerPID)
             guard let self, !Task.isCancelled, self.tileExits[exitID] != nil else { return }
             let exit = TerminalSessionExit.classifyProcessExit(
@@ -885,7 +940,7 @@ final class TileTreeStore: ObservableObject {
                 serverKeepsRunningWhenEmpty: serverKeepsRunningWhenEmpty
             )
             log.info(
-                "[TileTreeStore] session \(sessionID.uuidString, privacy: .public) exited: tmux \(tmuxSessionName, privacy: .public) \(String(describing: state), privacy: .public), keeps running when empty \(String(describing: serverKeepsRunningWhenEmpty), privacy: .public), reason \(String(describing: exit), privacy: .public)"
+                "[TileTreeStore] session \(sessionID.uuidString, privacy: .public) exited: tmux \(tmuxSession.name, privacy: .public) \(String(describing: state), privacy: .public), keeps running when empty \(String(describing: serverKeepsRunningWhenEmpty), privacy: .public), reason \(String(describing: exit), privacy: .public)"
             )
             self.settle(sessionID, inExit: exitID, as: exit)
         }
@@ -896,7 +951,8 @@ final class TileTreeStore: ObservableObject {
     /// row still waiting, each pane taking `collateralExit`, unless it settles that row
     /// `alone`; any other row's settles it alone. An exit with no row left waiting is done.
     private func settle(
-        _ sessionID: UUID, inExit exitID: UUID, as exit: TerminalSessionExit, alone: Bool = false
+        _ sessionID: UUID, inExit exitID: UUID, as exit: TerminalSessionExit, alone: Bool = false,
+        reclaimingTmux: Bool = true
     ) {
         guard var tileExit = tileExits.removeValue(forKey: exitID) else { return }
         let settled: [(HostTerminalSession, TerminalSessionExit)]
@@ -914,18 +970,20 @@ final class TileTreeStore: ObservableObject {
         }
         for (session, rowExit) in settled {
             tileExitIDBySessionID.removeValue(forKey: session.id)
-            record(session, rowExit, at: tileExit.exitedAt)
+            record(session, rowExit, at: tileExit.exitedAt, reclaimingTmux: reclaimingTmux)
         }
     }
 
     /// Writes what `exit` leaves on the session's row, and kills its tmux session when the
-    /// reason reclaims one.
-    private func record(_ session: HostTerminalSession, _ exit: TerminalSessionExit, at exitedAt: Date) {
+    /// reason reclaims one and the close has not said it keeps running.
+    private func record(
+        _ session: HostTerminalSession, _ exit: TerminalSessionExit, at exitedAt: Date, reclaimingTmux: Bool = true
+    ) {
         continuityRecorder?.recordExit(session.id, exit, at: exitedAt)
         if exit.rowOutcome == .end {
             noteRowEnded(session.id)
         }
-        if exit.reclaimsTmuxSession {
+        if exit.reclaimsTmuxSession, reclaimingTmux {
             killPaneScopedTmuxSession(for: session)
         }
     }
@@ -1399,6 +1457,7 @@ final class TileTreeStore: ObservableObject {
     /// are removed by the tree-collapse paths (`dropSplitTree` / `closeSplitPane`); this guards the
     /// unsplit case so a retired single-pane session leaves no stale tile identity behind.
     private func forgetTileBinding(for sessionID: UUID) {
+        closeIntents.removeValue(forKey: sessionID)
         guard let tileID = tileIDBySessionID.removeValue(forKey: sessionID) else { return }
         if sessionByTileID[tileID]?.id == sessionID {
             sessionByTileID.removeValue(forKey: tileID)

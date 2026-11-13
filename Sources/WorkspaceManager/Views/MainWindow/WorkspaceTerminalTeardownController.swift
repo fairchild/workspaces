@@ -32,12 +32,13 @@ struct WorkspaceTerminalTeardownController {
     /// question answerable — a name on the shared socket proves nothing about ownership.
     let killTmuxSession: @MainActor (HostTerminalSession) async -> Bool
     /// The graceful retirement close for one session (`GhosttySurfaceRetirementCloser` semantics).
-    /// A failed attempt keeps the session's exit marked as its retirement, since the client's
-    /// exit can land between attempts or before the scope retires.
     let closeForRetirement: @MainActor (UUID) async throws -> Void
-    /// Withdraws a session's retirement mark when teardown returns, so a tile left in place by
-    /// a blocked teardown has its later exit read for what it is.
-    var abandonRetirement: @MainActor (UUID) -> Void = { _ in }
+    /// Marks the coming exit of each session as its retirement, before the tmux kill or the
+    /// close that can cause it, and returns what withdraws exactly those marks. Teardown holds
+    /// them across every attempt, since a client's exit can land at any point, and withdraws
+    /// them when it returns, so a tile a blocked teardown leaves in place has its later exit
+    /// read for what it is.
+    var beginRetirement: @MainActor ([UUID]) -> @MainActor () -> Void = { _ in {} }
     /// Remove the scope's rows from the tile tree, returning the retired session ids.
     let retireSessions: @MainActor (HostTerminalSessionKey) -> [UUID]
     /// How long a close whose tmux session was just killed may keep reporting a live process
@@ -49,11 +50,8 @@ struct WorkspaceTerminalTeardownController {
 
     func teardown(scopeKey: HostTerminalSessionKey) async -> Outcome {
         let sessions = sessionsInScope(scopeKey)
-        defer {
-            for session in sessions {
-                abandonRetirement(session.id)
-            }
-        }
+        let withdrawRetirement = beginRetirement(sessions.map(\.id))
+        defer { withdrawRetirement() }
 
         // tmux dies first: killing the session ends the client process inside each surface, which
         // is what lets the close below complete without the runtime's process-alive confirmation.

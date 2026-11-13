@@ -198,7 +198,7 @@ struct MainWindowTerminalSessionController {
         return TerminalCloseConfirmation(
             context: context,
             title: title,
-            keepsRunningInTmux: session.map(tileTreeStore.closeLeavesTmuxSessionRunning) ?? false
+            keepsRunningInTmux: context.keepsTmuxRunning
         )
     }
 

@@ -162,13 +162,27 @@ public struct TmuxHolderProbe: Sendable {
         self.environment = environment
     }
 
-    /// One tmux call: the server's pid, then every session name. A server with no
+    /// The tmux session a probe asks after: its name, and tmux's own id for it (`$7`) when
+    /// the app recorded one. The id still finds the session after a rename. The name still
+    /// counts too, since a record outlives a relaunch that landed on a newer session of
+    /// that name, and missing a held session would read a detach as the shell ending.
+    public struct Session: Sendable, Equatable {
+        public let name: String
+        public let id: String?
+
+        public init(name: String, id: String? = nil) {
+            self.name = name
+            self.id = id
+        }
+    }
+
+    /// One tmux call: the server's pid, then every session's id and name. A server with no
     /// sessions still answers the pid, which `exit-empty off` makes an ordinary state.
-    public func holderState(forSessionNamed sessionName: String) async -> TmuxHolderState {
+    public func holderState(for session: Session) async -> TmuxHolderState {
         let arguments = [
             "tmux", "-L", socketLabel,
             "display-message", "-p", "#{pid}", ";",
-            "list-sessions", "-F", "#{session_name}",
+            "list-sessions", "-F", "#{session_id}\t#{session_name}",
         ]
         guard TmuxLiveSocketGuard.permits(tmuxArguments: arguments) else { return .unanswered }
         do {
@@ -182,7 +196,7 @@ public struct TmuxHolderProbe: Sendable {
                 exitCode: result.exitCode,
                 stdout: result.stdout,
                 stderr: result.stderr,
-                sessionName: sessionName
+                session: session
             )
         } catch {
             return .unanswered
@@ -255,13 +269,14 @@ public struct TmuxHolderProbe: Sendable {
         "lost server",
     ]
 
-    /// Reads `display-message -p '#{pid}' ; list-sessions -F '#{session_name}'`: the
-    /// first line is the server's pid, the rest are session names.
+    /// Reads `display-message -p '#{pid}' ; list-sessions -F '#{session_id}<tab>#{session_name}'`:
+    /// the first line is the server's pid, the rest are sessions. The session asked after
+    /// is held when a line carries its id or its name.
     static func holderState(
         exitCode: Int32,
         stdout: String,
         stderr: String,
-        sessionName: String
+        session: Session
     ) -> TmuxHolderState {
         guard exitCode == 0 else {
             let serverGone = serverGoneMessages.contains { stderr.contains($0) }
@@ -269,7 +284,12 @@ public struct TmuxHolderProbe: Sendable {
         }
         var lines = stdout.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         let serverPID = lines.isEmpty ? nil : Int(lines.removeFirst().trimmingCharacters(in: .whitespaces))
-        return lines.contains(sessionName)
+        let held = lines.contains { line in
+            let fields = line.split(separator: "\t", maxSplits: 1).map(String.init)
+            guard fields.count == 2 else { return false }
+            return fields[0] == session.id || fields[1] == session.name
+        }
+        return held
             ? .sessionPresent(serverPID: serverPID)
             : .sessionGone(serverPID: serverPID)
     }

@@ -101,7 +101,7 @@ struct TerminalSessionExitTests {
     ) async
         -> (TmuxHolderState, TerminalSessionExit)
     {
-        let state = await TmuxHolderProbe(socketLabel: label).holderState(forSessionNamed: session)
+        let state = await TmuxHolderProbe(socketLabel: label).holderState(for: .init(name: session))
         let exit = TerminalSessionExit.classifyProcessExit(
             tmuxHolder: state, launchServerPID: launchServerPID, serverKeepsRunningWhenEmpty: keepsRunningWhenEmpty)
         return (state, exit)
@@ -261,19 +261,59 @@ struct TerminalSessionExitTests {
             "no server running on /private/tmp/tmux-501/x",
             "error connecting to /private/tmp/tmux-501/x (No such file or directory)",
         ] {
-            let state = TmuxHolderProbe.holderState(exitCode: 1, stdout: "", stderr: stderr, sessionName: "tile")
+            let state = TmuxHolderProbe.holderState(
+                exitCode: 1, stdout: "", stderr: stderr, session: .init(name: "tile"))
             #expect(state == .serverGone, "\(stderr)")
         }
     }
 
-    @Test("The probe reads the server's pid first and the session names after it")
+    @Test("The probe reads the server's pid first and each session's id and name after it")
     func probeOutputParses() {
         #expect(
-            TmuxHolderProbe.holderState(exitCode: 0, stdout: "4242\nkeeper\ntile\n", stderr: "", sessionName: "tile")
+            TmuxHolderProbe.holderState(
+                exitCode: 0, stdout: "4242\n$0\tkeeper\n$1\ttile\n", stderr: "", session: .init(name: "tile"))
                 == .sessionPresent(serverPID: 4242))
         #expect(
-            TmuxHolderProbe.holderState(exitCode: 0, stdout: "4242\n", stderr: "", sessionName: "tile")
+            TmuxHolderProbe.holderState(exitCode: 0, stdout: "4242\n", stderr: "", session: .init(name: "tile"))
                 == .sessionGone(serverPID: 4242))
+    }
+
+    /// The app recorded tmux's id for the session the tile launched into. A rename keeps
+    /// the id, so the session is still held; the name still counts, since the record can
+    /// be older than the session this launch attached to.
+    @Test("The probe finds a session by its recorded id after a rename, and by its name")
+    func probeFindsTheSessionByIDOrName() {
+        func state(_ listing: String, id: String?) -> TmuxHolderState {
+            TmuxHolderProbe.holderState(
+                exitCode: 0, stdout: listing, stderr: "", session: .init(name: "tile", id: id))
+        }
+        #expect(state("4242\n$7\trenamed\n", id: "$7") == .sessionPresent(serverPID: 4242))
+        #expect(state("4242\n$7\trenamed\n", id: nil) == .sessionGone(serverPID: 4242))
+        #expect(state("4242\n$9\ttile\n", id: "$7") == .sessionPresent(serverPID: 4242))
+        #expect(state("4242\n$9\tother\n$1\ttiles\n", id: "$7") == .sessionGone(serverPID: 4242))
+    }
+
+    @Test(
+        "A session renamed after its tile launched is still the tile's, and a detach reads as one",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed")
+    )
+    func renamedSessionIsStillHeld() async throws {
+        let server = try IsolatedTmuxServer.start(session: "tile")
+        defer { server.killServer() }
+        let listing = try server.tmux(["list-sessions", "-F", "#{session_id}\t#{session_name}"]).output
+        let rows: [[String]] = listing.split(separator: "\n").map { line in
+            line.split(separator: "\t").map(String.init)
+        }
+        let id = try #require(rows.first { $0.count == 2 && $0[1] == "tile" }?[0])
+        try server.tmux(["rename-session", "-t", "=tile", "renamed"])
+
+        let state = await TmuxHolderProbe(socketLabel: server.label).holderState(for: .init(name: "tile", id: id))
+        let exit = TerminalSessionExit.classifyProcessExit(
+            tmuxHolder: state, launchServerPID: server.serverPID, serverKeepsRunningWhenEmpty: true)
+
+        #expect(id.hasPrefix("$"))
+        #expect(state == .sessionPresent(serverPID: server.serverPID))
+        #expect(exit == .detached)
     }
 
     @Test("A tile that did not launch through tmux ends as a shell exit")
@@ -535,7 +575,7 @@ struct TerminalSessionExitTests {
     @Test("An unanswered probe keeps the row open, as its own reason")
     func unansweredProbeKeepsTheRow() {
         let state = TmuxHolderProbe.holderState(
-            exitCode: 1, stdout: "", stderr: "unknown option -- Z", sessionName: "tile")
+            exitCode: 1, stdout: "", stderr: "unknown option -- Z", session: .init(name: "tile"))
         let exit = TerminalSessionExit.classifyProcessExit(
             tmuxHolder: state, launchServerPID: 4242, serverKeepsRunningWhenEmpty: true)
         #expect(state == .unanswered)
