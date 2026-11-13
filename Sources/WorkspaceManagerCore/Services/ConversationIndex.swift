@@ -117,15 +117,26 @@ public struct ConversationIndexer: Sendable {
     /// The marker is per destination: the same database pointed at a new records directory
     /// has carried nothing there yet.
     public var migrationMetadataKey: String {
-        "\(Self.migrationMetadataKeyPrefix):\(records.directory.resolvingSymlinksInPath().path)"
+        "\(Self.migrationMetadataKeyPrefix):\(destination)"
+    }
+
+    /// The runs the first attempt for this destination selected. A retry reads the same runs,
+    /// so a launch that fails and the launches after it agree on what was eligible.
+    public var migrationRunsMetadataKey: String {
+        "conversation_records_migration_runs:\(destination)"
+    }
+
+    private var destination: String {
+        records.directory.resolvingSymlinksInPath().path
     }
 
     /// Writes a record for every conversation the app already knew before records existed:
-    /// each Launch Record that names one, and each id the current and previous runs' tiles
-    /// reported. It is marked done for this database and destination only once every
-    /// observation was written or rejected, so a failed pass runs again at the next launch.
-    /// After that it never runs again: a rerun would bring back a record a later cleanup
-    /// removed on purpose.
+    /// each Launch Record that names one, and each id reported by the tiles of the current
+    /// and previous runs as of the first attempt. It is marked done for this database and
+    /// destination only once every observation was written or rejected, so a failed pass
+    /// runs again at the next launch over the runs it first chose, rather than over a window
+    /// that has since moved on. After that it never runs again: a rerun would bring back a
+    /// record a later cleanup removed on purpose.
     ///
     /// Each sighting carries the time it was made, so against a record a hook has written
     /// since, it only fills what that record lacks.
@@ -133,8 +144,9 @@ public struct ConversationIndexer: Sendable {
     public func migrateOnce(now: Date = Date()) async throws -> MigrationOutcome {
         let key = migrationMetadataKey
         guard try await localState.metadataValue(forKey: key) == nil else { return .init(alreadyDone: true) }
+        let runIDs = try await selectedRuns()
         var observations = launchRecordObservations()
-        observations += try await localState.fetchRecentConversationSightings().map { sighting in
+        observations += try await localState.fetchConversationSightings(runIDs: runIDs).map { sighting in
             ConversationObservation(
                 conversationID: sighting.conversationID,
                 cwd: sighting.cwd,
@@ -160,6 +172,19 @@ public struct ConversationIndexer: Sendable {
             try await localState.setMetadataValue(ConversationRecordJSON.string(now), forKey: key)
         }
         return outcome
+    }
+
+    private func selectedRuns() async throws -> [String] {
+        let key = migrationRunsMetadataKey
+        if let stored = try await localState.metadataValue(forKey: key),
+            let runIDs = try? JSONDecoder().decode([String].self, from: Data(stored.utf8))
+        {
+            return runIDs
+        }
+        let runIDs = try await localState.recentRunIDs()
+        let encoded = String(decoding: try JSONEncoder().encode(runIDs), as: UTF8.self)
+        try await localState.setMetadataValue(encoded, forKey: key)
+        return runIDs
     }
 
     private func launchRecordObservations() -> [ConversationObservation] {

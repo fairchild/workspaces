@@ -1203,11 +1203,30 @@ public actor LocalStateStore {
         }
     }
 
-    /// Each Claude conversation the current and previous runs' tiles reported, newest sighting
-    /// per tile, for the one-time migration into Conversation records.
-    public func fetchRecentConversationSightings() async throws -> [ConversationSighting] {
+    /// The current run and the one before it: the runs whose tiles the one-time migration
+    /// carries into Conversation records.
+    public func recentRunIDs() async throws -> [String] {
         let currentRunID = runID
         let currentRunStartedAt = runStartedAt
+        let previous = try await dbPool.read { db in
+            try String.fetchOne(
+                db,
+                sql: """
+                    SELECT run_id FROM terminal_sessions
+                    WHERE run_started_at IS NOT NULL AND run_started_at < ?
+                    ORDER BY run_started_at DESC
+                    LIMIT 1
+                    """,
+                arguments: [currentRunStartedAt]
+            )
+        }
+        return [currentRunID] + (previous.map { [$0] } ?? [])
+    }
+
+    /// Each Claude conversation the tiles of `runIDs` reported, newest sighting per tile.
+    public func fetchConversationSightings(runIDs: [String]) async throws -> [ConversationSighting] {
+        guard !runIDs.isEmpty else { return [] }
+        let placeholders = Array(repeating: "?", count: runIDs.count).joined(separator: ", ")
         return try await dbPool.read { db in
             try Row.fetchAll(
                 db,
@@ -1224,19 +1243,10 @@ public actor LocalStateStore {
                         WHERE agent_session_id IS NOT NULL AND agent_kind = ?
                     ) ae
                     JOIN terminal_sessions ts ON ts.host_session_id = ae.host_session_id
-                    WHERE ae.sighting_rank = 1
-                    AND (
-                        ts.run_id = ?
-                        OR ts.run_id = (
-                            SELECT run_id FROM terminal_sessions
-                            WHERE run_started_at IS NOT NULL AND run_started_at < ?
-                            ORDER BY run_started_at DESC
-                            LIMIT 1
-                        )
-                    )
+                    WHERE ae.sighting_rank = 1 AND ts.run_id IN (\(placeholders))
                     ORDER BY ae.event_at
                     """,
-                arguments: [AgentKind.claudeCode.rawValue, currentRunID, currentRunStartedAt]
+                arguments: StatementArguments([AgentKind.claudeCode.rawValue] + runIDs)
             ).compactMap { row in
                 guard let hostSessionID = UUID(uuidString: row["host_session_id"]),
                     let observedAt = Self.date(fromISOString: row["event_at"])
