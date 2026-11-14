@@ -16,6 +16,10 @@ public enum ConversationHookObserver {
     /// Writes a note; the flag says whether it carries the observation's ownership.
     public typealias NoteWrite = (ConversationRecordStore, ConversationObservation, HookAncestry, Bool) throws -> URL
 
+    /// How long a hook waits for the record's write lock. The hook runs async, so Claude
+    /// never waits on it, and another writer holds the lock for milliseconds.
+    public static let recordLockBudget: Duration = .seconds(5)
+
     /// A process is inside WorkSpaces when it carries either key a tile sets.
     public static func isInsideWorkSpaces(_ environment: [String: String]) -> Bool {
         [ConversationRecordStore.directoryEnvironmentKey, "WORKSPACES_HOST_SESSION_ID"].contains {
@@ -40,7 +44,7 @@ public enum ConversationHookObserver {
         },
         inspector: ProcessInspector = .live,
         recordUnresolved: NoteWrite = { try $0.recordUnresolved($1, ancestry: $2, carryingOwnership: $3) },
-        lockBudget: Duration = .seconds(5),
+        lockBudget: Duration = recordLockBudget,
         record: RecordWrite = { try $0.record($1, lockBudget: $2) },
         warn: (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
     ) -> Int32 {

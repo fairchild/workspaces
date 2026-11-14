@@ -859,11 +859,11 @@ struct ConversationHolderProbeTests {
         #expect(warnings.count == 1)
     }
 
-    /// Two hooks for one conversation at once, while another writer holds the record from
-    /// before they reach its lock until well past a short budget: each waits its turn and
-    /// writes, and neither leaves a note.
+    /// Two hooks for one conversation at once, while another writer holds the record until
+    /// both wait on its lock: each waits its turn and writes, and neither leaves a note. The
+    /// test sets the hooks' budget, far past anything a stall in this test could use up.
     @Test("Hooks that contend for one record each write it in turn, and leave no note")
-    func contendingHooksLeaveNoNote() throws {
+    func contendingHooksLeaveNoNote() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("hook-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let payload = directory.appendingPathComponent("payload.json")
@@ -876,6 +876,7 @@ struct ConversationHolderProbeTests {
         defer { close(descriptor) }
         #expect(flock(descriptor, LOCK_EX) == 0)
         let claude = try #require(ProcessInspector.live.identity(getpid()))
+        let budget = await LaunchBudget.deadline(launches: 4, floor: 30, ceiling: 120)
 
         let statuses = Statuses()
         let finished = DispatchGroup()
@@ -889,25 +890,33 @@ struct ConversationHolderProbeTests {
                     ConversationHookObserver.run(
                         environment: [ConversationRecordStore.directoryEnvironmentKey: store.directory.path],
                         input: input, tmuxSession: { _ in nil },
-                        ancestry: { _ in HookAncestry(claude: claude, passed: [], complete: true) }))
+                        ancestry: { _ in HookAncestry(claude: claude, passed: [], complete: true) },
+                        lockBudget: .seconds(budget)))
             }.start()
         }
         // Both hooks hold the lock file open only while they wait on it; this one's own
         // descriptor is the third.
         let writeLock = "/.locks/\(Self.id).write"
-        let waiting = Date().addingTimeInterval(30)
-        while OpenFiles.paths(of: getpid()).filter({ $0.hasSuffix(writeLock) }).count < 3, Date() < waiting {
-            usleep(5_000)
+        let deadline = Date().addingTimeInterval(budget)
+        while OpenFiles.paths(of: getpid()).filter({ $0.hasSuffix(writeLock) }).count < 3, Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
         }
-        usleep(300_000)
+        #expect(OpenFiles.paths(of: getpid()).filter { $0.hasSuffix(writeLock) }.count >= 3, "the hooks never waited")
         #expect(flock(descriptor, LOCK_UN) == 0)
-        finished.wait()
+        await withCheckedContinuation { continuation in
+            finished.notify(queue: .global()) { continuation.resume() }
+        }
         #expect(statuses.values == [0, 0])
         guard case .found(let record) = store.read(conversationID: Self.id) else {
             Issue.record("expected the record and no note: \(store.read(conversationID: Self.id))")
             return
         }
         #expect(record.harnessProcesses.entries.map(\.process) == [claude])
+    }
+
+    @Test("A hook waits seconds, not milliseconds, for a record another writer holds")
+    func hookLockBudget() {
+        #expect(ConversationHookObserver.recordLockBudget >= .seconds(5))
     }
 
     private final class Statuses: @unchecked Sendable {
