@@ -791,6 +791,119 @@ struct ConversationHolderProbeTests {
         #expect(holders.map(\.pid) == [holder.pid])
     }
 
+    /// A hook that named a live claude and could not write the record saying so, busy past
+    /// its budget or failing, leaves a note instead, so the conversation does not read free
+    /// while that claude runs it; and a resume refuses on the note.
+    @Test(
+        "A hook whose record cannot be written, busy or failing, leaves a note, and a resume refuses",
+        arguments: ["failing", "busy"])
+    func unwrittenRecordLeavesANote(failure: String) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("hook-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let payload = directory.appendingPathComponent("payload.json")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(#"{"session_id":"\#(Self.id)","cwd":"/"}"#.utf8).write(to: payload)
+        let store = ConversationRecordStore(directory: directory.appendingPathComponent("records"))
+        let locks = store.directory.appendingPathComponent(".locks")
+        try FileManager.default.createDirectory(at: locks, withIntermediateDirectories: true)
+        let descriptor = open(locks.appendingPathComponent("\(Self.id).write").path, O_CREAT | O_RDWR, 0o600)
+        defer { close(descriptor) }
+        if failure == "busy" { #expect(flock(descriptor, LOCK_EX) == 0) }
+        let claude = try #require(ProcessInspector.live.identity(getpid()))
+
+        let input = try FileHandle(forReadingFrom: payload)
+        defer { try? input.close() }
+        let status = ConversationHookObserver.run(
+            environment: [ConversationRecordStore.directoryEnvironmentKey: store.directory.path],
+            input: input, tmuxSession: { _ in nil },
+            ancestry: { _ in HookAncestry(claude: claude, passed: [], complete: true) },
+            lockBudget: .milliseconds(200),
+            record: failure == "failing" ? { _, _, _ in throw POSIXError(.EIO) } : { try $0.record($1, lockBudget: $2) }
+        )
+
+        #expect(status == 0)
+        guard case .unresolved(let note) = store.read(conversationID: Self.id) else {
+            Issue.record("expected a note: \(store.read(conversationID: Self.id))")
+            return
+        }
+        let resumer = ConversationResumer(
+            records: store,
+            launches: AgentLaunchRecordStore(directory: directory.appendingPathComponent("launches")),
+            control: TmuxSessionControl(socketLabel: "hook-tests-unused", run: { _, _, _ in nil }),
+            environment: ["PATH": "/usr/bin:/bin"],
+            exec: { _, _ in Issue.record("a harness started beside the hook's claude") })
+        await #expect(throws: ConversationResumer.Refusal.unresolvedOwner(conversationID: Self.id, path: note.path)) {
+            try await resumer.resume(conversationID: Self.id, target: .here)
+        }
+    }
+
+    @Test("A hook that can write neither its record nor a note fails, saying so")
+    func unwrittenRecordAndNoteFail() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("hook-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let payload = directory.appendingPathComponent("payload.json")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(#"{"session_id":"\#(Self.id)","cwd":"/"}"#.utf8).write(to: payload)
+        let claude = try #require(ProcessInspector.live.identity(getpid()))
+        let input = try FileHandle(forReadingFrom: payload)
+        defer { try? input.close() }
+        var warnings: [String] = []
+        let status = ConversationHookObserver.run(
+            environment: [
+                ConversationRecordStore.directoryEnvironmentKey: directory.appendingPathComponent("records").path
+            ],
+            input: input, tmuxSession: { _ in nil },
+            ancestry: { _ in HookAncestry(claude: claude, passed: [], complete: true) },
+            recordUnresolved: { _, _, _ in throw POSIXError(.EACCES) },
+            record: { _, _, _ in throw POSIXError(.EIO) },
+            warn: { warnings.append($0) })
+        #expect(status == 1)
+        #expect(warnings.count == 1)
+    }
+
+    /// Two hooks for one conversation at once, while another writer holds the record longer
+    /// than a short budget would wait: each waits its turn and writes, and neither leaves a note.
+    @Test("Hooks that contend for one record each write it in turn, and leave no note")
+    func contendingHooksLeaveNoNote() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("hook-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let payload = directory.appendingPathComponent("payload.json")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(#"{"session_id":"\#(Self.id)","cwd":"/"}"#.utf8).write(to: payload)
+        let store = ConversationRecordStore(directory: directory.appendingPathComponent("records"))
+        let locks = store.directory.appendingPathComponent(".locks")
+        try FileManager.default.createDirectory(at: locks, withIntermediateDirectories: true)
+        let descriptor = open(locks.appendingPathComponent("\(Self.id).write").path, O_CREAT | O_RDWR, 0o600)
+        defer { close(descriptor) }
+        #expect(flock(descriptor, LOCK_EX) == 0)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { _ = flock(descriptor, LOCK_UN) }
+        let claude = try #require(ProcessInspector.live.identity(getpid()))
+
+        let statuses = Statuses()
+        DispatchQueue.concurrentPerform(iterations: 2) { _ in
+            guard let input = try? FileHandle(forReadingFrom: payload) else { return }
+            defer { try? input.close() }
+            statuses.append(
+                ConversationHookObserver.run(
+                    environment: [ConversationRecordStore.directoryEnvironmentKey: store.directory.path],
+                    input: input, tmuxSession: { _ in nil },
+                    ancestry: { _ in HookAncestry(claude: claude, passed: [], complete: true) }))
+        }
+        #expect(statuses.values == [0, 0])
+        guard case .found(let record) = store.read(conversationID: Self.id) else {
+            Issue.record("expected the record and no note: \(store.read(conversationID: Self.id))")
+            return
+        }
+        #expect(record.harnessProcesses.entries.map(\.process) == [claude])
+    }
+
+    private final class Statuses: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: [Int32] = []
+        var values: [Int32] { lock.withLock { stored } }
+        func append(_ status: Int32) { lock.withLock { stored.append(status) } }
+    }
+
     /// Processes that have all exited by the write cannot hold anything, so a hook that found
     /// only those leaves a note rather than a chain that would read as free.
     @Test("A hook whose every process has exited by the write leaves a note; one whose processes run does not")

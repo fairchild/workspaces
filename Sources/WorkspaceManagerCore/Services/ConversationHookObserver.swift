@@ -11,6 +11,9 @@
 import Foundation
 
 public enum ConversationHookObserver {
+    public typealias RecordWrite = (ConversationRecordStore, ConversationObservation, Duration) throws
+        -> ConversationRecordStore.WriteOutcome
+
     /// A process is inside WorkSpaces when it carries either key a tile sets.
     public static func isInsideWorkSpaces(_ environment: [String: String]) -> Bool {
         [ConversationRecordStore.directoryEnvironmentKey, "WORKSPACES_HOST_SESSION_ID"].contains {
@@ -19,10 +22,12 @@ public enum ConversationHookObserver {
     }
 
     /// Returns 0, since a hook's exit status is something Claude reports to the person, except
-    /// when the walk could not say what runs the conversation, or found only processes that
-    /// have exited, and the note saying so could not be written: then the record is left as it
-    /// was, so the uncertainty is written first or nothing is, and it returns 1 with a line on
-    /// standard error.
+    /// when a note was owed and could not be written: then it returns 1 with a line on standard
+    /// error. A note is owed when the walk could not say what runs the conversation, or found
+    /// only processes that have exited, and then it is written before the record, which is
+    /// left as it was when the note fails, so the uncertainty is written first or nothing is.
+    /// A note is owed too when the record naming what runs it cannot be written, busy past
+    /// `lockBudget` or failing, since a reader would otherwise find the conversation free.
     public static func run(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         input: FileHandle = .standardInput,
@@ -35,6 +40,8 @@ public enum ConversationHookObserver {
         recordUnresolved: (ConversationRecordStore, ConversationObservation, HookAncestry) throws -> URL = {
             try $0.recordUnresolved($1, ancestry: $2)
         },
+        lockBudget: Duration = .seconds(5),
+        record: RecordWrite = { try $0.record($1, lockBudget: $2) },
         warn: (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
     ) -> Int32 {
         guard isInsideWorkSpaces(environment) else { return 0 }
@@ -50,22 +57,28 @@ public enum ConversationHookObserver {
         else { return 0 }
         let store = ConversationRecordStore(
             directory: ConversationRecordStore.resolvedDirectory(environment: environment))
-        // A walk that cannot say what runs the conversation, or whose every process has
-        // exited before the write, leaves a note beside the record, before the record so no
-        // reader sees the one without the other. Processes that exit during the write leave a
-        // record that names only processes that have ended, which is what free means.
-        if !walked.complete || !walked.mayStillRun(inspector) {
+        func leaveNote() -> Bool {
             do {
                 _ = try recordUnresolved(store, observation, walked)
+                return true
             } catch {
                 warn(
                     "workspaces: could not record that this hook cannot tell what runs conversation "
                         + "\(observation.conversationID): \(error.localizedDescription)")
-                return 1
+                return false
             }
         }
-        _ = try? store.record(observation)
-        return 0
+        // A walk that cannot say what runs the conversation, or whose every process has
+        // exited before the write, leaves a note beside the record, before the record so no
+        // reader sees the one without the other. Processes that exit during the write leave a
+        // record that names only processes that have ended, which is what free means.
+        let noted = !walked.complete || !walked.mayStillRun(inspector)
+        if noted, !leaveNote() { return 1 }
+        // A record this hook could not write leaves the conversation reading free while what
+        // it found runs it, so that is uncertainty too, and it is written as a note.
+        let written = (try? record(store, observation, lockBudget)) == .written
+        if written || noted { return 0 }
+        return leaveNote() ? 0 : 1
     }
 
     public static func observation(
