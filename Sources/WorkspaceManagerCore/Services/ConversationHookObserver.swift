@@ -85,11 +85,13 @@ extension ConversationHookObserver {
 }
 
 /// What a hook finds above it: the nearest claude, as far up as it looks and short of
-/// launchd or a tmux server, and the processes it passed on the way. A claude above a
-/// program that fired the hook beneath it is named too, and holds that conversation until
-/// it exits: a wrong name costs a wait. The passed processes are recorded either way, since
-/// any of them may be what runs the conversation, a harness the adapter does not recognize
-/// among them; the hook's own shell and the forwarder exit with it.
+/// launchd or a tmux server, and the processes it passed on the way, up to the one leading
+/// the terminal's session; nothing above that leader, `login` or the terminal application,
+/// can be what runs the conversation. A claude above a program that fired the hook beneath
+/// it is named too, and holds that conversation until it exits: a wrong name costs a wait.
+/// The passed processes are recorded either way, since any of them may be what runs the
+/// conversation, a harness the adapter does not recognize among them; the hook's own shell
+/// and the forwarder exit with it.
 public struct HookAncestry: Equatable, Sendable {
     public var claude: ProcessIdentity?
     public var passed: [ProcessIdentity]
@@ -105,6 +107,7 @@ public struct HookAncestry: Equatable, Sendable {
 
     public static func above(_ pid: Int32 = getppid(), inspector: ProcessInspector = .live) -> HookAncestry {
         var passed: [ProcessIdentity] = []
+        var passing = true
         var current = pid
         for _ in 0..<ConversationHookObserver.ancestorLimit {
             guard current > 1 else { break }
@@ -113,7 +116,8 @@ public struct HookAncestry: Equatable, Sendable {
                 return HookAncestry(claude: inspector.identity(current), passed: passed)
             }
             if let program = words?.first, URL(fileURLWithPath: program).lastPathComponent.hasPrefix("tmux") { break }
-            if let identity = inspector.identity(current) { passed.append(identity) }
+            if passing, let identity = inspector.identity(current) { passed.append(identity) }
+            if inspector.leadsTerminalSession(current) { passing = false }
             guard let parent = inspector.parent(current) else { break }
             current = parent
         }

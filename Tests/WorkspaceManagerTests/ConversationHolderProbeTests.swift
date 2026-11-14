@@ -486,6 +486,89 @@ struct ConversationHolderProbeTests {
         #expect(probe == .unknown("Could not ask the kernel about process 60"))
     }
 
+    /// Claude runs a hook's shell as the leader of a session with no terminal, so the chain
+    /// passes it; it stops at the shell leading the terminal's session, and the claude above
+    /// that is still looked for.
+    @Test("The chain a hook records stops at the leader of the terminal's session, not at a hook's own session")
+    func hookChainStopsAtTheTerminalSessionLeader() {
+        let processes: [Int32: (Int32, [String])] = [
+            10: (1, ["/Applications/Terminal.app/Contents/MacOS/Terminal"]), 20: (10, ["login", "-pf", "me"]),
+            30: (20, ["-zsh"]), 40: (30, ["harness-a"]), 50: (40, ["/bin/bash", "/hooks/conversation-observer.sh"]),
+        ]
+        let leaders: Set<Int32> = [30]
+        let inspector = ProcessInspector(
+            identity: { pid in processes[pid].map { _ in ProcessIdentity(pid: pid, startedAtMicroseconds: Int64(pid)) }
+            },
+            parent: { processes[$0]?.0 }, arguments: { processes[$0]?.1 },
+            leadsTerminalSession: { leaders.contains($0) })
+        #expect(HookAncestry.above(50, inspector: inspector).passed.map(\.pid) == [50, 40, 30])
+
+        var underAgent = processes
+        underAgent[10] = (1, ["claude"])
+        let named = HookAncestry.above(
+            50,
+            inspector: ProcessInspector(
+                identity: { pid in
+                    underAgent[pid].map { _ in ProcessIdentity(pid: pid, startedAtMicroseconds: Int64(pid)) }
+                },
+                parent: { underAgent[$0]?.0 }, arguments: { underAgent[$0]?.1 },
+                leadsTerminalSession: { leaders.contains($0) }))
+        #expect(named.claude?.pid == 10)
+        #expect(named.passed.map(\.pid) == [50, 40, 30])
+    }
+
+    @Test(
+        "The live kernel says a process leading a terminal's session does, and one leading a session without one does not"
+    )
+    func liveTerminalSessionLeader() async throws {
+        func start(_ path: String, _ arguments: [String]) throws -> Process {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: path)
+            process.arguments = arguments
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            return process
+        }
+        let withTerminal = try start("/usr/bin/script", ["-q", "/dev/null", "/bin/sleep", "30"])
+        let withoutTerminal = try start(
+            "/usr/bin/perl", ["-e", "use POSIX; if (my $c = fork) { waitpid($c, 0); exit } POSIX::setsid(); sleep 30"])
+        var underTerminal: Int32?
+        var detached: Int32?
+        defer {
+            for pid in [withTerminal.processIdentifier, withoutTerminal.processIdentifier]
+                + [underTerminal, detached].compactMap({ $0 })
+            {
+                kill(pid, SIGKILL)
+            }
+        }
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            let rows = (try? Self.table(Self.psListing()))?.rows ?? []
+            underTerminal = rows.first { $0.parentPID == withTerminal.processIdentifier }?.pid
+            detached = rows.first { $0.parentPID == withoutTerminal.processIdentifier }?.pid
+            if underTerminal != nil, let detached, getsid(detached) == detached { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let leader = try #require(underTerminal)
+        let leaderWithoutTerminal = try #require(detached)
+        #expect(getsid(leaderWithoutTerminal) == leaderWithoutTerminal, "the detached process did not lead a session")
+        #expect(ProcessInspector.live.leadsTerminalSession(leader))
+        #expect(!ProcessInspector.live.leadsTerminalSession(leaderWithoutTerminal))
+        #expect(!ProcessInspector.live.leadsTerminalSession(1))
+    }
+
+    private static func psListing() throws -> String {
+        let ps = Process()
+        let out = Pipe()
+        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+        ps.arguments = ["-A", "-ww", "-o", "pid=,ppid=,command="]
+        ps.standardOutput = out
+        try ps.run()
+        return String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    }
+
     @Test("The chain a hook records runs from its parent up, short of launchd and the tmux server")
     func hookChainStopsAtLaunchdAndTmux() {
         let processes: [Int32: (Int32, [String])] = [

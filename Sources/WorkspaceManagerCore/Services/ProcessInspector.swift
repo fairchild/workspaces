@@ -60,24 +60,33 @@ public struct ProcessInspector: Sendable {
     public var read: @Sendable (Int32) -> ProcessRead
     public var parent: @Sendable (Int32) -> Int32?
     public var arguments: @Sendable (Int32) -> [String]?
+    /// Whether the process leads a session that has a controlling terminal, as a terminal's
+    /// shell, or `login` above it, does. A process that leads a session of its own without
+    /// one, as the shell claude runs a hook in does, is not.
+    public var leadsTerminalSession: @Sendable (Int32) -> Bool
 
     public init(
         read: @escaping @Sendable (Int32) -> ProcessRead,
         parent: @escaping @Sendable (Int32) -> Int32?,
-        arguments: @escaping @Sendable (Int32) -> [String]?
+        arguments: @escaping @Sendable (Int32) -> [String]?,
+        leadsTerminalSession: @escaping @Sendable (Int32) -> Bool = { _ in false }
     ) {
         self.read = read
         self.parent = parent
         self.arguments = arguments
+        self.leadsTerminalSession = leadsTerminalSession
     }
 
     /// An inspector whose kernel always answers: a pid `identity` does not know is absent.
     public init(
         identity: @escaping @Sendable (Int32) -> ProcessIdentity?,
         parent: @escaping @Sendable (Int32) -> Int32?,
-        arguments: @escaping @Sendable (Int32) -> [String]?
+        arguments: @escaping @Sendable (Int32) -> [String]?,
+        leadsTerminalSession: @escaping @Sendable (Int32) -> Bool = { _ in false }
     ) {
-        self.init(read: { identity($0).map(ProcessRead.found) ?? .absent }, parent: parent, arguments: arguments)
+        self.init(
+            read: { identity($0).map(ProcessRead.found) ?? .absent }, parent: parent, arguments: arguments,
+            leadsTerminalSession: leadsTerminalSession)
     }
 
     public static let live = ProcessInspector(
@@ -96,7 +105,11 @@ public struct ProcessInspector: Sendable {
             }
         },
         parent: { pid in (try? info(pid).get())?.kp_eproc.e_ppid },
-        arguments: { pid in processArguments(pid) }
+        arguments: { pid in processArguments(pid) },
+        leadsTerminalSession: { pid in
+            guard getsid(pid) == pid, case .success(let process?) = info(pid) else { return false }
+            return process.kp_eproc.e_tdev != -1
+        }
     )
 
     /// The process at `pid` now, or nil when there is none or the kernel could not say.
