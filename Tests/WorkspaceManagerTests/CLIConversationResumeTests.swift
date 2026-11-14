@@ -494,12 +494,16 @@ struct CLIConversationResumeTests {
     }
 
     /// A harness whose parent never collects it, as an orchestrator that starts the verb and
-    /// never waits leaves it, keeps its pid and start time after it exits.
-    @Test("A recorded claude that exited and was never reaped holds nothing")
-    func unreapedHarnessHoldsNothing() async throws {
+    /// never waits leaves it, keeps its pid and start time after it exits. A `--here` whose
+    /// exec failed has recorded itself and exited the same way.
+    @Test(
+        "A recorded claude that exited and was never reaped holds nothing, nor does a resume whose exec failed",
+        arguments: [false, true])
+    func unreapedHarnessHoldsNothing(execFails: Bool) async throws {
         let fixture = try makeFixture()
         defer { fixture.teardown() }
         let conversationID = try recordConversation(in: fixture)
+        if execFails { try "#!/no/such/interpreter\n".write(to: fixture.stub, atomically: true, encoding: .utf8) }
         let neverWaits = try fixture.start(
             [
                 "-e", "my $child = fork; if (!$child) { exec @ARGV } sleep 300", fixture.binary.path, "conversation",
@@ -515,6 +519,11 @@ struct CLIConversationResumeTests {
         }
         let dead = try #require(harness)
         #expect(try Self.isZombie(dead.pid), "the first harness never exited")
+        if execFails {
+            let first = try String(contentsOf: fixture.root.appendingPathComponent("first.log"), encoding: .utf8)
+            #expect(first.contains("Could not start"), "\(first)")
+            try Self.stubClaude.write(to: fixture.stub, atomically: true, encoding: .utf8)
+        }
 
         let resume = try fixture.run(["conversation", "resume", conversationID, "--here"])
         #expect(resume.status == 0, "\(resume.stdout)")
