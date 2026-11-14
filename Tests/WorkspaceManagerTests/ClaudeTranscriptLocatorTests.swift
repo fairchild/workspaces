@@ -104,6 +104,26 @@ struct ClaudeTranscriptLocatorTests {
         #expect(checker.isResumable(agentSessionID: "sess-1", cwd: "/repo"))
         #expect(recorder.path == "/custom/cfg/projects/-repo/sess-1.jsonl")
     }
+
+    @Test("A session's transcript under several project directories is the one written last")
+    func transcriptByIDIsTheNewest() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("transcripts-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        func transcript(_ project: String, modified: Date) throws -> URL {
+            let url = home.appendingPathComponent(".claude/projects/\(project)/sess-1.jsonl")
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: url.path, contents: Data())
+            try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+            return url
+        }
+        _ = try transcript("-a-first", modified: Date(timeIntervalSince1970: 1_000))
+        let newest = try transcript("-b-second", modified: Date(timeIntervalSince1970: 3_000))
+        _ = try transcript("-c-third", modified: Date(timeIntervalSince1970: 2_000))
+
+        let resolver = ClaudeTranscriptResumability(environment: [:], homeDirectory: home)
+        #expect(resolver.existingTranscriptURL(agentSessionID: "sess-1")?.path == newest.path)
+    }
 }
 
 /// Reference recorder so a `@Sendable` `fileExists` stub can report the path it
