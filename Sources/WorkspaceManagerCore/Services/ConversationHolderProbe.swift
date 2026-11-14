@@ -290,10 +290,6 @@ public struct ProcessTable: Sendable, Equatable {
         self.rows = rows
     }
 
-    public func row(_ pid: Int32) -> Row? {
-        rows.first { $0.pid == pid }
-    }
-
     /// `roots` and every process under them.
     public func descendants(of roots: Set<Int32>) -> [Row] {
         let children = Dictionary(grouping: rows, by: \.parentPID)
