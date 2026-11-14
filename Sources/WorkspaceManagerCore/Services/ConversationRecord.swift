@@ -411,6 +411,8 @@ public struct ConversationRecordStore: Sendable {
         case absent
         case damaged(URL)
         case movedAside(URL)
+        /// The records directory could not be listed, so a moved-aside copy cannot be ruled out.
+        case unlistable(URL)
     }
 
     public func read(conversationID: String) -> Read {
@@ -423,7 +425,7 @@ public struct ConversationRecordStore: Sendable {
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
             return record
         } catch {
-            return .damaged(directory)
+            return .unlistable(directory)
         }
         let prefix = url.lastPathComponent + ".corrupt-"
         guard let aside = names.filter({ $0.hasPrefix(prefix) }).sorted().first else { return record }

@@ -167,6 +167,11 @@ public struct ConversationHolderProbe: Sendable {
                 "A damaged record of conversation \(conversationID) was moved aside to \(url.path), and it may name "
                     + "a process that still runs the conversation\nIf no claude runs this conversation, delete that "
                     + "file to resume.")
+        case .unlistable(let url):
+            return .unknown(
+                "The records directory \(url.path) cannot be listed, so a copy of conversation \(conversationID)'s "
+                    + "record moved aside as damaged cannot be ruled out\nGive your user read permission on that "
+                    + "directory and try again.")
         }
         let record =
             stored

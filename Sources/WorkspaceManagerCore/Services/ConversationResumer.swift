@@ -146,6 +146,7 @@ public struct ConversationResumer: Sendable {
         case unrecorded(conversationID: String, reason: String)
         case damagedRecord(conversationID: String, path: String)
         case movedAside(conversationID: String, path: String)
+        case unlistableRecords(conversationID: String, path: String)
 
         public var errorDescription: String? {
             switch self {
@@ -201,6 +202,10 @@ public struct ConversationResumer: Sendable {
                 return "A damaged record of conversation \(id) was moved aside to \(path), and it may name a process "
                     + "that still runs the conversation, so a second agent cannot be ruled out. Nothing was started. "
                     + "If no claude runs this conversation, delete that file to resume."
+            case .unlistableRecords(let id, let path):
+                return "The records directory \(path) cannot be listed, so a copy of conversation \(id)'s record "
+                    + "moved aside as damaged, and a process it names, cannot be ruled out. Nothing was started. "
+                    + "Give your user read permission on that directory and resume again."
             }
         }
     }
@@ -284,6 +289,7 @@ public struct ConversationResumer: Sendable {
         case .found(let record): return record
         case .damaged(let url): throw Refusal.damagedRecord(conversationID: id, path: url.path)
         case .movedAside(let url): throw Refusal.movedAside(conversationID: id, path: url.path)
+        case .unlistable(let url): throw Refusal.unlistableRecords(conversationID: id, path: url.path)
         case .absent: break
         }
         return launches.all(socketLabel: control.socketLabel)
@@ -349,6 +355,7 @@ public struct ConversationResumer: Sendable {
         case .absent: record = subject
         case .damaged(let url): throw Refusal.damagedRecord(conversationID: id, path: url.path)
         case .movedAside(let url): throw Refusal.movedAside(conversationID: id, path: url.path)
+        case .unlistable(let url): throw Refusal.unlistableRecords(conversationID: id, path: url.path)
         }
         record.launch = record.launch ?? subject.launch
         try require(record)

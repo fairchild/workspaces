@@ -338,6 +338,29 @@ struct ConversationResumerTests {
         #expect(world.execs.invocations.isEmpty)
     }
 
+    @Test("A records directory that cannot be listed refuses, naming the directory, and nothing starts")
+    func unlistableRecordsRefuse() async throws {
+        let world = try World()
+        defer {
+            chmod(world.records.directory.path, 0o700)
+            world.teardown()
+        }
+        try world.recordConversation()
+        #expect(chmod(world.records.directory.path, 0o300) == 0)
+
+        await #expect(
+            throws: ConversationResumer.Refusal.unlistableRecords(
+                conversationID: world.conversationID, path: world.records.directory.path)
+        ) {
+            try await world.resumer(processTable: Self.quietTable).resume(
+                conversationID: world.conversationID, target: .here)
+        }
+        #expect(world.execs.invocations.isEmpty)
+        #expect(
+            ConversationResumer.Refusal.unlistableRecords(conversationID: "x", path: "/r").localizedDescription
+                .contains("Give your user read permission on that directory"))
+    }
+
     @Test("A record that cannot be read refuses before a launch record naming the conversation is used")
     func damagedRecordIsNotReplacedByTheLaunch() throws {
         let world = try World()

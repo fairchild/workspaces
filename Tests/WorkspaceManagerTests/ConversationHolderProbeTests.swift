@@ -630,6 +630,27 @@ struct ConversationHolderProbeTests {
         #expect(detail.contains("was moved aside to \(url.path).corrupt-1-abcdef12"))
     }
 
+    @Test("A conversation named by id in a records directory that cannot be listed is unknown, naming the directory")
+    func unlistableRecordsByIDIsUnknown() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("probe-\(UUID().uuidString)")
+        defer {
+            chmod(directory.path, 0o700)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let store = ConversationRecordStore(directory: directory)
+        try store.record(ConversationObservation(conversationID: Self.id, cwd: "/", observedBy: .hook))
+        #expect(chmod(directory.path, 0o300) == 0)
+        let probe = ConversationHolderProbe(
+            records: store, readProcessTable: { try? Self.table("1 0 /sbin/launchd") }, inspector: .none,
+            recordedSession: { _ in nil })
+        guard case .unknown(let detail) = await probe.probe(conversationID: Self.id) else {
+            Issue.record("expected unknown")
+            return
+        }
+        #expect(detail.contains("The records directory \(directory.path) cannot be listed"))
+        #expect(detail.contains("read permission"))
+    }
+
     @Test("A conversation named by id whose record cannot be read is unknown, not one with no record")
     func damagedRecordByIDIsUnknown() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("probe-\(UUID().uuidString)")
