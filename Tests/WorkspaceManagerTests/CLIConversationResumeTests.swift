@@ -598,6 +598,37 @@ struct CLIConversationResumeTests {
         #expect(resumed.stdout.contains("stub argv=--resume \(conversationID)"))
     }
 
+    /// The decision before a resume's sighting and the one after it are one function, so
+    /// a note a hook publishes while the resume waits for the record's write lock refuses it
+    /// as surely as a note already there.
+    @Test("A hook's note published while a resume waits to record itself refuses that resume, and nothing starts")
+    func noteDuringTheSightingRefuses() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = try recordConversation(in: fixture)
+        let locks = fixture.records.directory.appendingPathComponent(".locks")
+        let descriptor = open(locks.appendingPathComponent("\(conversationID).write").path, O_CREAT | O_RDWR, 0o600)
+        #expect(descriptor >= 0)
+        defer { close(descriptor) }
+        #expect(flock(descriptor, LOCK_EX) == 0)
+        let output = fixture.root.appendingPathComponent("resume.log")
+        let resume = try fixture.start(["conversation", "resume", conversationID, "--here"], output: output)
+        defer { Self.kill([resume]) }
+        try await Task.sleep(for: .seconds(1))
+        let note = try fixture.records.recordUnresolved(
+            ConversationObservation(conversationID: conversationID, cwd: fixture.work.path, observedBy: .hook),
+            ancestry: HookAncestry(claude: nil, passed: [], complete: false))
+        #expect(flock(descriptor, LOCK_UN) == 0)
+        try await waitUntil(launches: 1) { !resume.isRunning }
+        let log = try String(contentsOf: output, encoding: .utf8)
+        #expect(resume.terminationStatus == 1, "\(log)")
+        #expect(log.contains("so it left \(note.path)"), "\(log)")
+        #expect(!log.contains("stub argv"), "a harness started beside the hook's agent")
+        #expect(
+            fixture.records.load(conversationID: conversationID)?.harnessProcesses.entries.map(\.process.pid)
+                == [resume.processIdentifier], "the resume did not get as far as recording itself")
+    }
+
     /// A native claude installed under a name that starts with `tmux` is neither recognized
     /// nor mistaken for the tmux server: the hook passes it on the way to its terminal.
     @Test("A harness whose name starts with tmux is in its hook's chain, and holds the conversation until it exits")

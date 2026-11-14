@@ -77,7 +77,9 @@ public enum HarnessExec {
     /// thread whose mask blocks most signals, and a mask survives an exec, as does a signal
     /// whatever started this process ignored. The harness starts with nothing blocked and
     /// every signal at its default, so a closed tile's HUP, a resize's WINCH and a TERM reach it.
-    public static func replaceProcess(with invocation: HarnessInvocation, handOff: () throws -> Void) throws -> Never {
+    public static func replaceProcess(
+        with invocation: HarnessInvocation, handOff: () async throws -> Void
+    ) async throws -> Never {
         guard let name = invocation.arguments.first, let path = resolve(name, in: invocation.environment["PATH"])
         else { throw Failure.notOnPath(invocation.arguments.first ?? "") }
         guard chdir(invocation.directory) == 0 else { throw Failure.directory(invocation.directory, errno) }
@@ -94,7 +96,7 @@ public enum HarnessExec {
         posix_spawnattr_setflags(
             &attributes, Int16(POSIX_SPAWN_SETEXEC | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
 
-        try handOff()
+        try await handOff()
         fflush(stdout)
         fflush(stderr)
         var argv = invocation.arguments.map { strdup($0) } + [nil]
@@ -226,7 +228,7 @@ public struct ConversationResumer: Sendable {
     public typealias RecordedSessionLookup = @Sendable (ConversationRecord) async -> RecordedTmuxSession?
     /// Replaces the process with the invocation, running `handOff` once nothing but the exec
     /// itself is left to fail; a throw from `handOff` stops the exec.
-    public typealias Exec = @Sendable (HarnessInvocation, _ handOff: () throws -> Void) throws -> Void
+    public typealias Exec = @Sendable (HarnessInvocation, _ handOff: () async throws -> Void) async throws -> Void
 
     let records: ConversationRecordStore
     let launches: AgentLaunchRecordStore
@@ -256,7 +258,7 @@ public struct ConversationResumer: Sendable {
         describeTmux: @escaping @Sendable (TmuxEnvironment) -> ConversationRecord.TmuxSession? = {
             TmuxEnvironment.describe($0)
         },
-        exec: @escaping Exec = { try HarnessExec.replaceProcess(with: $0, handOff: $1) },
+        exec: @escaping Exec = { try await HarnessExec.replaceProcess(with: $0, handOff: $1) },
         warn: @escaping @Sendable (String) -> Void = { _ in },
         cliPath: String? = nil
     ) {
@@ -356,37 +358,18 @@ public struct ConversationResumer: Sendable {
         defer { handOff?.release() }
         let lock = try await claim(id)
         defer { lock.release() }
-        var record: ConversationRecord
-        switch records.read(conversationID: id) {
-        case .found(let stored): record = stored
-        case .absent: record = subject
-        case .damaged(let url): throw Refusal.damagedRecord(conversationID: id, path: url.path)
-        case .movedAside(let url): throw Refusal.movedAside(conversationID: id, path: url.path)
-        case .unresolved(let url): throw Refusal.unresolvedOwner(conversationID: id, path: url.path)
-        case .unlistable(let url): throw Refusal.unlistableRecords(conversationID: id, path: url.path)
-        }
-        record.launch = record.launch ?? subject.launch
-        try require(record)
-
         var targetLive: Bool?
         if case .into(let handle) = target {
             targetLive = await control.isLive(handle: handle)
         }
 
+        let record: ConversationRecord
         let transcript: HarnessTranscript
-        switch await status(of: record, exitWindow: { $0 ? Self.holderExitWindow : 0 }) {
-        case .open(let holders):
+        switch try await decide(subject, exitWindow: { $0 ? Self.holderExitWindow : 0 }) {
+        case .held(let holders):
             return .held(holders: holders, targetLive: targetLive)
-        case .unknown(.otherHost(let recordedHost)):
-            throw Refusal.otherHost(
-                conversationID: id, host: recordedHost, advice: adapter.forkAdvice(conversationID: id))
-        case .unknown(.probeFailed(let detail)):
-            throw Refusal.probeFailed(detail)
-        case .unknown(.transcriptGone):
-            throw Refusal.transcriptGone(id)
-        case .unknown(.noRecord):
-            throw Refusal.noRecord(id)
-        case .saved(let found):
+        case .free(let stored, let found):
+            record = stored
             transcript = found
         }
         guard let arguments = adapter.resumeArguments(for: record, transcript: transcript),
@@ -401,9 +384,16 @@ public struct ConversationResumer: Sendable {
                 directory: record.cwd
             )
             do {
-                try exec(invocation) { try recordSighting(of: record) }
+                try await exec(invocation) {
+                    let own = try recordSighting(of: record)
+                    if case .held(let holders) = try await decide(record, excluding: own, exitWindow: { _ in 0 }) {
+                        throw HeldMeanwhile(holders: holders)
+                    }
+                }
             } catch let failure as HarnessExec.Failure {
                 throw Refusal.cannotStart(failure.localizedDescription)
+            } catch let meanwhile as HeldMeanwhile {
+                return .held(holders: meanwhile.holders, targetLive: targetLive)
             }
         case .into(let handle):
             // The `--here` started there takes this same lock, so it is released first.
@@ -416,6 +406,63 @@ public struct ConversationResumer: Sendable {
             }
         }
         return .resumed(command: command)
+    }
+
+    private enum Decision {
+        case held([ConversationHolder])
+        case free(ConversationRecord, HarnessTranscript)
+    }
+
+    /// Something took the conversation between the decision and this resume's sighting.
+    private struct HeldMeanwhile: Error {
+        let holders: [ConversationHolder]
+    }
+
+    /// Whether the conversation is free, from its record as every reader reads it, a copy
+    /// moved aside as damaged and a hook's unresolved note included, and then the probe;
+    /// what the caller filled in on `subject` is kept, and what was checked on it is checked
+    /// again on what was read. The decision before the sighting and the one after it are this
+    /// same function: the one after passes `own`, the process that sighting named, which must
+    /// be in the record and holds nothing against itself.
+    private func decide(
+        _ subject: ConversationRecord,
+        excluding own: ProcessIdentity? = nil,
+        exitWindow: (_ recordedSessionGone: Bool) -> TimeInterval
+    ) async throws -> Decision {
+        let id = subject.conversationID
+        var record: ConversationRecord
+        switch records.read(conversationID: id) {
+        case .found(let stored): record = stored
+        case .absent: record = subject
+        case .damaged(let url): throw Refusal.damagedRecord(conversationID: id, path: url.path)
+        case .movedAside(let url): throw Refusal.movedAside(conversationID: id, path: url.path)
+        case .unresolved(let url): throw Refusal.unresolvedOwner(conversationID: id, path: url.path)
+        case .unlistable(let url): throw Refusal.unlistableRecords(conversationID: id, path: url.path)
+        }
+        record.launch = record.launch ?? subject.launch
+        if let own {
+            guard record.harnessProcesses.entries.contains(where: { $0.process == own }) else {
+                throw Refusal.unrecorded(
+                    conversationID: id, reason: "its record, read back, does not name this process")
+            }
+            record.harnessProcesses.entries.removeAll { $0.process == own }
+        }
+        try require(record)
+        switch await status(of: record, exitWindow: exitWindow) {
+        case .open(let holders):
+            return .held(holders)
+        case .unknown(.otherHost(let recordedHost)):
+            throw Refusal.otherHost(
+                conversationID: id, host: recordedHost, advice: adapter.forkAdvice(conversationID: id))
+        case .unknown(.probeFailed(let detail)):
+            throw Refusal.probeFailed(detail)
+        case .unknown(.transcriptGone):
+            throw Refusal.transcriptGone(id)
+        case .unknown(.noRecord):
+            throw Refusal.noRecord(id)
+        case .saved(let found):
+            return .free(record, found)
+        }
     }
 
     /// The command that resumes the conversation in whatever terminal runs it: this verb with
@@ -492,8 +539,8 @@ public struct ConversationResumer: Sendable {
     /// Says the conversation is now in this terminal and this process, which the exec is about
     /// to make the harness: a pid keeps its start time across an exec. Once the lock's
     /// descriptor closes in that exec, this sighting is all another resume has to find the
-    /// harness by, so it throws unless the record, read back, names this process.
-    private func recordSighting(of record: ConversationRecord) throws {
+    /// harness by; the decision that follows reads it back. Returns the process it named.
+    private func recordSighting(of record: ConversationRecord) throws -> ProcessIdentity {
         let id = record.conversationID
         guard let harness = inspector.identity(getpid()) else {
             throw Refusal.unrecorded(conversationID: id, reason: "the kernel would not describe this process")
@@ -527,12 +574,7 @@ public struct ConversationResumer: Sendable {
         guard outcome == .written else {
             throw Refusal.unrecorded(conversationID: id, reason: "its record stayed locked for two seconds")
         }
-        guard
-            records.load(conversationID: id)?.harnessProcesses.entries.contains(where: { $0.process == harness })
-                == true
-        else {
-            throw Refusal.unrecorded(conversationID: id, reason: "its record, read back, does not name this process")
-        }
+        return harness
     }
 
     /// Starts the guarded command under `handle`: a new session when there is none, or typed

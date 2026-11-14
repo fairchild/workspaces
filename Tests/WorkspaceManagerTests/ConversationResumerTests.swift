@@ -73,7 +73,7 @@ struct ConversationResumerTests {
                 inspector: inspector,
                 describeTmux: { _ in nil },
                 exec: { invocation, handOff in
-                    try handOff()
+                    try await handOff()
                     execs.append(invocation)
                 }
             )
@@ -150,7 +150,7 @@ struct ConversationResumerTests {
             inspector: .onlySelf,
             describeTmux: { _ in nil },
             exec: { _, handOff in
-                try handOff()
+                try await handOff()
                 let descriptor = open(lockPath, O_RDWR | O_CLOEXEC)
                 defer { close(descriptor) }
                 claimable.set(descriptor >= 0 && flock(descriptor, LOCK_EX | LOCK_NB) == 0)
