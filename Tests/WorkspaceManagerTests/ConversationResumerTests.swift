@@ -201,6 +201,93 @@ struct ConversationResumerTests {
         #expect(world.execs.invocations.isEmpty)
     }
 
+    /// Codex round 9's schedule: a hook's record write is busy past its budget, so it leaves a
+    /// note recording the claude it found, and the hook whose write held the lock may record
+    /// that claude too. The conversation is held while that claude runs and resumes once it
+    /// has exited and been collected, with the note still on disk.
+    @Test(
+        "A note left because a record write was busy holds while its claude runs, and clears once it exits",
+        arguments: [true, false])
+    func busyWriteNoteClearsWhenItsClaudeExits(otherHookRecords: Bool) async throws {
+        let world = try World()
+        defer { world.teardown() }
+        try world.recordConversation()
+        let id = world.conversationID
+        let claude = Process()
+        claude.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        claude.arguments = ["60"]
+        try claude.run()
+        defer { if claude.isRunning { kill(claude.processIdentifier, SIGKILL) } }
+        let identity = try #require(ProcessInspector.live.identity(claude.processIdentifier))
+        let locks = world.records.directory.appendingPathComponent(".locks")
+        try FileManager.default.createDirectory(at: locks, withIntermediateDirectories: true)
+        let descriptor = open(locks.appendingPathComponent("\(id).write").path, O_CREAT | O_RDWR, 0o600)
+        defer { close(descriptor) }
+        #expect(flock(descriptor, LOCK_EX) == 0)
+        let payload = world.root.appendingPathComponent("payload.json")
+        try Data(#"{"session_id":"\#(id)","cwd":"\#(world.cwd)"}"#.utf8).write(to: payload)
+        let input = try FileHandle(forReadingFrom: payload)
+        defer { try? input.close() }
+
+        let status = ConversationHookObserver.run(
+            environment: [ConversationRecordStore.directoryEnvironmentKey: world.records.directory.path],
+            input: input, tmuxSession: { _ in nil },
+            ancestry: { _ in HookAncestry(claude: identity, passed: [], complete: true) },
+            lockBudget: .milliseconds(200))
+        #expect(status == 0)
+        #expect(flock(descriptor, LOCK_UN) == 0)
+        if otherHookRecords {
+            try world.records.record(
+                ConversationObservation(
+                    conversationID: id, cwd: world.cwd, observedBy: .hook, harnessProcess: .named(identity)),
+                ended: { _ in false })
+        }
+        let note = { () throws -> Bool in
+            try FileManager.default.contentsOfDirectory(atPath: world.records.directory.path)
+                .contains { $0.hasPrefix("\(id).json.unresolved-") }
+        }
+        #expect(try note())
+
+        let resumer = world.resumer(processTable: Self.quietTable, inspector: .live)
+        let whileRunning = try await resumer.resume(conversationID: id, target: .here)
+        guard case .held(let holders, _) = whileRunning else {
+            Issue.record("resumed beside the claude the note records: \(whileRunning)")
+            return
+        }
+        #expect(holders.map(\.pid) == [claude.processIdentifier])
+
+        kill(claude.processIdentifier, SIGKILL)
+        claude.waitUntilExit()
+        #expect(
+            try await resumer.resume(conversationID: id, target: .here) == .resumed(command: "claude --resume \(id)"))
+        #expect(world.execs.invocations.count == 1)
+        #expect(try note())
+    }
+
+    @Test("A note whose recorded chain still runs leaves the conversation unknown, and nothing starts")
+    func noteChainRunningIsUnknown() async throws {
+        let world = try World()
+        defer { world.teardown() }
+        try world.recordConversation()
+        let id = world.conversationID
+        let chained = ProcessIdentity(pid: 4242, startedAtMicroseconds: 7)
+        try world.records.recordUnresolved(
+            ConversationObservation(
+                conversationID: id, cwd: world.cwd, observedBy: .hook, harnessProcess: .unnamed(chain: [chained])),
+            ancestry: HookAncestry(claude: nil, passed: [chained], complete: true), carryingOwnership: true)
+        let inspector = ProcessInspector(
+            identity: {
+                $0 == chained.pid ? chained : $0 == getpid() ? ProcessIdentity(pid: $0, startedAtMicroseconds: 1) : nil
+            },
+            parent: { _ in nil }, arguments: { _ in nil })
+
+        await #expect(throws: ConversationResumer.Refusal.self) {
+            try await world.resumer(processTable: Self.quietTable, inspector: inspector)
+                .resume(conversationID: id, target: .here)
+        }
+        #expect(world.execs.invocations.isEmpty)
+    }
+
     @Test("The conversation is still claimed at the moment the harness takes over the terminal")
     func lockHeldThroughTheHandOff() async throws {
         let world = try World()

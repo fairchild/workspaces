@@ -310,6 +310,55 @@ struct ConversationRecordStoreTests {
         }
     }
 
+    /// Only a note that records a complete observation, read as strictly as a record's
+    /// ownership, is evidence that can end; every other note stands until a person deletes it,
+    /// and so does any note beside no record.
+    @Test("A note joins the record's ownership only when it records a complete observation of this conversation")
+    func noteOwnership() throws {
+        try withStore { store in
+            let id = Self.conversationID
+            let url = try #require(store.fileURL(conversationID: id))
+            try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
+            let entry: [String: Any] = ["process": "4242@7", "observedAt": ConversationRecordJSON.string(Date())]
+            func note(_ name: String, _ object: Any?) throws -> URL {
+                let target = URL(fileURLWithPath: "\(url.path).unresolved-1-\(name)")
+                let data = try object.map { try JSONSerialization.data(withJSONObject: $0) } ?? Data("not json".utf8)
+                try data.write(to: target)
+                return target
+            }
+            let carried = try note(
+                "aaaaaaaa", ["conversationID": id, "complete": true, "harnessProcesses": ["entries": [entry]]])
+            #expect(store.read(conversationID: id) == .unresolved(carried), "beside no record")
+
+            try store.record(observation(at: 1_800_000_000))
+            guard case .found(let record) = store.read(conversationID: id) else {
+                Issue.record("a note recording a complete observation stood: \(store.read(conversationID: id))")
+                return
+            }
+            #expect(
+                record.harnessProcesses.entries.map(\.process) == [ProcessIdentity(pid: 4242, startedAtMicroseconds: 7)]
+            )
+
+            let standing: [(String, Any?)] = [
+                ("bbbbbbbb", nil),
+                ("cccccccc", [String: Any]()),
+                ("dddddddd", ["conversationID": id, "complete": false, "harnessProcesses": ["entries": [entry]]]),
+                ("eeeeeeee", ["conversationID": "other", "complete": true, "harnessProcesses": ["entries": [entry]]]),
+                ("ffffffff", ["conversationID": id, "complete": true, "harnessProcesses": [String: Any]()]),
+                (
+                    "gggggggg",
+                    ["conversationID": id, "complete": true, "harnessProcesses": ["entries": [["process": "x"]]]]
+                ),
+                ("hhhhhhhh", ["conversationID": id, "complete": true]),
+            ]
+            for (name, object) in standing {
+                let stray = try note(name, object)
+                #expect(store.read(conversationID: id) == .unresolved(stray), "\(name)")
+                try FileManager.default.removeItem(at: stray)
+            }
+        }
+    }
+
     @Test("A write from another host removes none of the record's harness processes")
     func otherHostRemovesNoHarnessProcess() throws {
         try withStore { store in

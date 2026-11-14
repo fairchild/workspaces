@@ -765,14 +765,12 @@ struct ConversationHolderProbeTests {
         let input = try FileHandle(forReadingFrom: payload)
         defer { try? input.close() }
         var warnings: [String] = []
-        let failing: (ConversationRecordStore, ConversationObservation, HookAncestry) throws -> URL = {
-            _, _, _ in throw POSIXError(.EACCES)
-        }
+        let failing: ConversationHookObserver.NoteWrite = { _, _, _, _ in throw POSIXError(.EACCES) }
         let status = ConversationHookObserver.run(
             environment: [ConversationRecordStore.directoryEnvironmentKey: store.directory.path],
             input: input, tmuxSession: { _ in nil },
             ancestry: { _ in HookAncestry(claude: nil, passed: [], complete: false) },
-            recordUnresolved: injected ? failing : { try $0.recordUnresolved($1, ancestry: $2) },
+            recordUnresolved: injected ? failing : { try $0.recordUnresolved($1, ancestry: $2, carryingOwnership: $3) },
             warn: { warnings.append($0) })
 
         #expect(status == 1)
@@ -793,7 +791,7 @@ struct ConversationHolderProbeTests {
 
     /// A hook that named a live claude and could not write the record saying so, busy past
     /// its budget or failing, leaves a note instead, so the conversation does not read free
-    /// while that claude runs it; and a resume refuses on the note.
+    /// while that claude runs it; with no record beside it, a resume refuses on the note.
     @Test(
         "A hook whose record cannot be written, busy or failing, leaves a note, and a resume refuses",
         arguments: ["failing", "busy"])
@@ -854,7 +852,7 @@ struct ConversationHolderProbeTests {
             ],
             input: input, tmuxSession: { _ in nil },
             ancestry: { _ in HookAncestry(claude: claude, passed: [], complete: true) },
-            recordUnresolved: { _, _, _ in throw POSIXError(.EACCES) },
+            recordUnresolved: { _, _, _, _ in throw POSIXError(.EACCES) },
             record: { _, _, _ in throw POSIXError(.EIO) },
             warn: { warnings.append($0) })
         #expect(status == 1)

@@ -436,20 +436,53 @@ public struct ConversationRecordStore: Sendable {
                 .map(directory.appendingPathComponent)
         }
         if let aside = first(".corrupt-") { return .movedAside(aside) }
-        if let note = first(Self.unresolvedSuffix) { return .unresolved(note) }
-        return record
+        let notes = names.filter { $0.hasPrefix(url.lastPathComponent + Self.unresolvedSuffix) }.sorted()
+            .map(directory.appendingPathComponent)
+        guard let firstNote = notes.first else { return record }
+        // A note that records what ran the conversation is evidence like the record's own
+        // ownership, and reads as free once all of it has ended; any other note, or one beside
+        // no record, stands until a person deletes it.
+        guard case .found(var found) = record else { return .unresolved(firstNote) }
+        for note in notes {
+            guard let ownership = Self.ownership(inNote: note, conversationID: conversationID) else {
+                return .unresolved(note)
+            }
+            found.harnessProcesses.entries += ownership.entries
+            found.harnessProcesses.unattributed += ownership.unattributed
+        }
+        return .found(found)
+    }
+
+    /// The ownership a note records: only a note from a hook whose walk was complete, which
+    /// named what runs the conversation and could not write the record, carries one, and it
+    /// must read as strictly as a record's. Nil for every other note.
+    static func ownership(inNote url: URL, conversationID: String) -> ConversationRecord.HarnessProcesses? {
+        guard let data = try? Data(contentsOf: url),
+            let note = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            note["conversationID"] as? String == conversationID,
+            note["complete"] as? Bool == true,
+            let value = note[ConversationRecordJSON.harnessProcessesKey],
+            let ownership = ConversationRecordJSON.harnessProcesses(from: value),
+            !(ownership.entries.isEmpty && ownership.unattributed.isEmpty)
+        else { return nil }
+        return ownership
     }
 
     static let unresolvedSuffix = ".unresolved-"
 
     /// Leaves `<id>.json.unresolved-<epoch>-<random>` beside the record: a hook saw the
-    /// conversation start and could not tell which process runs it. Nothing removes the note
-    /// but a person, since no process it could name is left to say when it is over. Readers
-    /// find a note by its name alone, so it is created in place under a random name, only if
-    /// nothing holds that name yet, the way a record's private file is: whatever stops a note
-    /// stops a record, and no note replaces another.
+    /// conversation start and could not tell which process runs it, or could tell and could
+    /// not write the record saying so. In the first case nothing removes the note but a
+    /// person, since no process it could name is left to say when it is over. In the second,
+    /// `carryingOwnership`, the note records the observation's processes the way the record
+    /// would have, and reads as free once they have all ended. Readers find a note by its
+    /// name, so it is created in place under a random name, only if nothing holds that name
+    /// yet, the way a record's private file is: whatever stops a note stops a record, and no
+    /// note replaces another.
     @discardableResult
-    public func recordUnresolved(_ observation: ConversationObservation, ancestry: HookAncestry) throws -> URL {
+    public func recordUnresolved(
+        _ observation: ConversationObservation, ancestry: HookAncestry, carryingOwnership: Bool = false
+    ) throws -> URL {
         guard let url = fileURL(conversationID: observation.conversationID) else {
             throw WriteError.invalidConversationID
         }
@@ -463,6 +496,9 @@ public struct ConversationRecordStore: Sendable {
             "complete": ancestry.complete,
         ]
         note["claude"] = ancestry.claude?.recorded
+        if carryingOwnership, ancestry.complete {
+            note[ConversationRecordJSON.harnessProcessesKey] = ConversationRecordJSON.harnessObject(of: observation)
+        }
         let data = try JSONSerialization.data(withJSONObject: note, options: [.sortedKeys])
         let stamp = Int(observation.observedAt.timeIntervalSince1970)
         for _ in 0..<4 {

@@ -106,6 +106,16 @@ extension ConversationRecordJSON {
         return object
     }
 
+    /// The ownership one observation states, in the shape a record keeps it under
+    /// `harnessProcesses`; nil when it names no process.
+    static func harnessObject(of observation: ConversationObservation) -> Any? {
+        var object: [String: Any] = [:]
+        let at = date(string(observation.observedAt)) ?? observation.observedAt
+        mergeHarness(
+            observation.harnessProcess, seenIn: observation.lastSeenIn, at: at, into: &object, ended: { _ in false })
+        return object[harnessProcessesKey]
+    }
+
     private static func mergeHarness(
         _ answer: ConversationRecord.HarnessAnswer?,
         seenIn: ConversationRecord.LastSeenIn?,

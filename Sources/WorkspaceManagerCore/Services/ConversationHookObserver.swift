@@ -13,6 +13,8 @@ import Foundation
 public enum ConversationHookObserver {
     public typealias RecordWrite = (ConversationRecordStore, ConversationObservation, Duration) throws
         -> ConversationRecordStore.WriteOutcome
+    /// Writes a note; the flag says whether it carries the observation's ownership.
+    public typealias NoteWrite = (ConversationRecordStore, ConversationObservation, HookAncestry, Bool) throws -> URL
 
     /// A process is inside WorkSpaces when it carries either key a tile sets.
     public static func isInsideWorkSpaces(_ environment: [String: String]) -> Bool {
@@ -37,9 +39,7 @@ public enum ConversationHookObserver {
             HookAncestry.above(tmuxServer: TmuxEnvironment($0["TMUX"]).map { Int32($0.serverPID) })
         },
         inspector: ProcessInspector = .live,
-        recordUnresolved: (ConversationRecordStore, ConversationObservation, HookAncestry) throws -> URL = {
-            try $0.recordUnresolved($1, ancestry: $2)
-        },
+        recordUnresolved: NoteWrite = { try $0.recordUnresolved($1, ancestry: $2, carryingOwnership: $3) },
         lockBudget: Duration = .seconds(5),
         record: RecordWrite = { try $0.record($1, lockBudget: $2) },
         warn: (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
@@ -57,9 +57,9 @@ public enum ConversationHookObserver {
         else { return 0 }
         let store = ConversationRecordStore(
             directory: ConversationRecordStore.resolvedDirectory(environment: environment))
-        func leaveNote() -> Bool {
+        func leaveNote(carryingOwnership: Bool) -> Bool {
             do {
-                _ = try recordUnresolved(store, observation, walked)
+                _ = try recordUnresolved(store, observation, walked, carryingOwnership)
                 return true
             } catch {
                 warn(
@@ -73,12 +73,13 @@ public enum ConversationHookObserver {
         // reader sees the one without the other. Processes that exit during the write leave a
         // record that names only processes that have ended, which is what free means.
         let noted = !walked.complete || !walked.mayStillRun(inspector)
-        if noted, !leaveNote() { return 1 }
+        if noted, !leaveNote(carryingOwnership: false) { return 1 }
         // A record this hook could not write leaves the conversation reading free while what
-        // it found runs it, so that is uncertainty too, and it is written as a note.
+        // it found runs it, so it writes a note that records what it found instead, which
+        // reads as free once all of that has ended.
         let written = (try? record(store, observation, lockBudget)) == .written
         if written || noted { return 0 }
-        return leaveNote() ? 0 : 1
+        return leaveNote(carryingOwnership: true) ? 0 : 1
     }
 
     public static func observation(
