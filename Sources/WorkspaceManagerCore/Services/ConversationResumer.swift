@@ -433,8 +433,8 @@ public struct ConversationResumer: Sendable {
     /// be in the record and holds nothing against itself, and it judges the session the
     /// conversation was last seen in by `subject`, from before the sighting. The records
     /// directory is read again after the probe, so the last thing a `--here` does before its
-    /// exec is that synchronous read: a note or moved-aside copy that lands while the probe
-    /// runs refuses it.
+    /// exec is that synchronous read, and it must see what the probe saw: a note, a
+    /// moved-aside copy, or a process recorded while the probe ran refuses it.
     private func decide(
         _ subject: ConversationRecord,
         excluding own: ProcessIdentity? = nil,
@@ -468,9 +468,47 @@ public struct ConversationResumer: Sendable {
         case .unknown(.noRecord):
             throw Refusal.noRecord(id)
         case .saved(let found):
-            _ = try stored(id)
+            if let late = try recordedSince(record, excluding: own) { return .held([late]) }
             return .free(record, found)
         }
+    }
+
+    /// The record as it reads now against `judged`, the one the probe answered for, with the
+    /// kernel asked synchronously about anything recorded since: a named process that runs
+    /// holds the conversation, and one in a hook's chain that runs, or that the kernel will
+    /// not describe, leaves it unknown.
+    private func recordedSince(
+        _ judged: ConversationRecord, excluding own: ProcessIdentity?
+    ) throws -> ConversationHolder? {
+        let id = judged.conversationID
+        guard let now = try stored(id)?.harnessProcesses else { return nil }
+        let before = judged.harnessProcesses
+        func kernelSilent(_ process: ProcessIdentity) -> Refusal {
+            .probeFailed("Could not ask the kernel about process \(process.pid)")
+        }
+        for entry in now.entries
+        where entry.process != own && !before.entries.contains(where: { $0.process == entry.process }) {
+            switch inspector.liveness(entry.process) {
+            case .running:
+                return ConversationHolder(
+                    pid: entry.process.pid, foundBy: .recordedHarness, startedAt: entry.process.startedAt)
+            case .ended: continue
+            case .unreadable: throw kernelSilent(entry.process)
+            }
+        }
+        let chained = Set(before.unattributed.flatMap(\.chain))
+        for process in now.unattributed.flatMap(\.chain) where !chained.contains(process) {
+            switch inspector.liveness(process) {
+            case .running:
+                throw Refusal.probeFailed(
+                    "A hook saw conversation \(id) start while this resume decided, with no claude above it, "
+                        + "and process \(process.pid) it ran under still runs, "
+                        + "so whether it runs the conversation is unknown")
+            case .ended: continue
+            case .unreadable: throw kernelSilent(process)
+            }
+        }
+        return nil
     }
 
     /// The command that resumes the conversation in whatever terminal runs it: this verb with

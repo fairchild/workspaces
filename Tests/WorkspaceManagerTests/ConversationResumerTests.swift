@@ -155,6 +155,52 @@ struct ConversationResumerTests {
         #expect(world.execs.invocations.isEmpty)
     }
 
+    /// A hook that names its claude while the decision after the sighting probes: the final
+    /// read sees a process the probe did not, and asks the kernel about it before the exec.
+    @Test(
+        "A process a hook names while the decision after the sighting probes holds it, or leaves it unknown",
+        arguments: [true, false])
+    func namedDuringTheFinalProbe(kernelAnswers: Bool) async throws {
+        let world = try World()
+        defer { world.teardown() }
+        try world.recordConversation()
+        let records = world.records
+        let id = world.conversationID
+        let late = ProcessIdentity(pid: 4242, startedAtMicroseconds: 7)
+        let inspector = ProcessInspector(
+            read: { pid in
+                if pid == getpid() { return .found(ProcessIdentity(pid: pid, startedAtMicroseconds: 1)) }
+                if pid == late.pid { return kernelAnswers ? .found(late) : .unreadable }
+                return .absent
+            },
+            parent: { _ in nil }, arguments: { _ in nil })
+
+        let resumer = world.resumer(processTable: nil, inspector: inspector) {
+            let entries = records.load(conversationID: id)?.harnessProcesses.entries ?? []
+            if !entries.isEmpty, !entries.contains(where: { $0.process == late }) {
+                _ = try? records.record(
+                    ConversationObservation(
+                        conversationID: id, cwd: "/", observedBy: .hook, harnessProcess: .named(late)),
+                    ended: { _ in false })
+            }
+            return Self.quietTable
+        }
+        if kernelAnswers {
+            let outcome = try await resumer.resume(conversationID: id, target: .here)
+            guard case .held(let holders, _) = outcome else {
+                Issue.record("resumed past a process named while it decided: \(outcome)")
+                return
+            }
+            #expect(holders.map(\.pid) == [late.pid])
+        } else {
+            let silent = ConversationResumer.Refusal.probeFailed("Could not ask the kernel about process 4242")
+            await #expect(throws: silent) {
+                try await resumer.resume(conversationID: id, target: .here)
+            }
+        }
+        #expect(world.execs.invocations.isEmpty)
+    }
+
     @Test("The conversation is still claimed at the moment the harness takes over the terminal")
     func lockHeldThroughTheHandOff() async throws {
         let world = try World()
