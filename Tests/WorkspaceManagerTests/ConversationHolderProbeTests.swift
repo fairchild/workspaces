@@ -522,42 +522,79 @@ struct ConversationHolderProbeTests {
         "The live kernel says a process leading a terminal's session does, and one leading a session without one does not"
     )
     func liveTerminalSessionLeader() async throws {
-        func start(_ path: String, _ arguments: [String]) throws -> Process {
+        // The budget is sized before anything starts: its first call measures this machine,
+        // which on a loaded runner outlasts a child that lives for a fixed time.
+        let budget = await LaunchBudget.deadline(launches: 2, floor: 10, ceiling: 60)
+        let logs = FileManager.default.temporaryDirectory.appendingPathComponent("session-leader-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: logs) }
+        func start(_ name: String, _ path: String, _ arguments: [String]) throws -> (process: Process, log: URL) {
+            let log = logs.appendingPathComponent(name)
+            FileManager.default.createFile(atPath: log.path, contents: nil)
             let process = Process()
             process.executableURL = URL(fileURLWithPath: path)
             process.arguments = arguments
             process.standardInput = FileHandle.nullDevice
             process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
+            process.standardError = try FileHandle(forWritingTo: log)
             try process.run()
-            return process
+            return (process, log)
         }
-        let withTerminal = try start("/usr/bin/script", ["-q", "/dev/null", "/bin/sleep", "30"])
+        func missingChild(of parent: (process: Process, log: URL)) -> Comment {
+            let name = parent.log.lastPathComponent
+            guard !parent.process.isRunning else { return "\(name) is running, but ps listed no child of it" }
+            let said = (try? String(contentsOf: parent.log, encoding: .utf8)) ?? ""
+            return "\(name) exited with status \(parent.process.terminationStatus) before its child was seen: \(said)"
+        }
+        // Both children outlive any budget; only the kills below end them.
+        let withTerminal = try start("script", "/usr/bin/script", ["-q", "/dev/null", "/bin/sleep", "600"])
         let withoutTerminal = try start(
-            "/usr/bin/perl", ["-e", "use POSIX; if (my $c = fork) { waitpid($c, 0); exit } POSIX::setsid(); sleep 30"])
+            "perl", "/usr/bin/perl",
+            ["-e", "use POSIX; if (my $c = fork) { waitpid($c, 0); exit } POSIX::setsid(); sleep 600"])
         var underTerminal: Int32?
         var detached: Int32?
         defer {
-            for pid in [withTerminal.processIdentifier, withoutTerminal.processIdentifier]
+            for pid in [withTerminal.process.processIdentifier, withoutTerminal.process.processIdentifier]
                 + [underTerminal, detached].compactMap({ $0 })
             {
                 kill(pid, SIGKILL)
             }
         }
-        let deadline = Date().addingTimeInterval(await LaunchBudget.deadline(launches: 2, floor: 10, ceiling: 60))
+        let deadline = Date().addingTimeInterval(budget)
         while Date() < deadline {
             let rows = (try? Self.table(Self.psListing()))?.rows ?? []
-            underTerminal = rows.first { $0.parentPID == withTerminal.processIdentifier }?.pid
-            detached = rows.first { $0.parentPID == withoutTerminal.processIdentifier }?.pid
-            if underTerminal != nil, let detached, getsid(detached) == detached { break }
+            underTerminal = rows.first { $0.parentPID == withTerminal.process.processIdentifier }?.pid
+            detached = rows.first { $0.parentPID == withoutTerminal.process.processIdentifier }?.pid
+            if let underTerminal, getsid(underTerminal) == underTerminal, let detached, getsid(detached) == detached {
+                break
+            }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
-        let leader = try #require(underTerminal)
-        let leaderWithoutTerminal = try #require(detached)
-        #expect(getsid(leaderWithoutTerminal) == leaderWithoutTerminal, "the detached process did not lead a session")
+        let leader = try #require(underTerminal, missingChild(of: withTerminal))
+        let leaderWithoutTerminal = try #require(detached, missingChild(of: withoutTerminal))
+        try #require(getsid(leader) == leader, "script's child does not lead a session")
+        try #require(try Self.terminal(of: leader) != nil, "script's child has no controlling terminal")
+        try #require(
+            getsid(leaderWithoutTerminal) == leaderWithoutTerminal, "the detached process does not lead a session")
+        try #require(
+            try Self.terminal(of: leaderWithoutTerminal) == nil, "the detached process has a controlling terminal")
         #expect(ProcessInspector.live.leadsTerminalSession(leader))
         #expect(!ProcessInspector.live.leadsTerminalSession(leaderWithoutTerminal))
         #expect(!ProcessInspector.live.leadsTerminalSession(1))
+    }
+
+    /// The controlling terminal `ps` names for `pid`, or nil when it names none.
+    private static func terminal(of pid: Int32) throws -> String? {
+        let ps = Process()
+        let out = Pipe()
+        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+        ps.arguments = ["-o", "tty=", "-p", String(pid)]
+        ps.standardOutput = out
+        try ps.run()
+        let tty = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        ps.waitUntilExit()
+        return tty.isEmpty || tty == "??" ? nil : tty
     }
 
     private static func psListing() throws -> String {
