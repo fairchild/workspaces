@@ -699,6 +699,40 @@ struct ConversationHolderProbeTests {
         #expect(detail.contains("delete that file to resume"))
     }
 
+    /// Processes that have all exited by the write cannot hold anything, so a hook that found
+    /// only those leaves a note rather than a chain that would read as free.
+    @Test("A hook whose every process has exited by the write leaves a note; one whose processes run does not")
+    func hookOfEndedProcessesLeavesANote() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("hook-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let payload = directory.appendingPathComponent("payload.json")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(#"{"session_id":"\#(Self.id)","cwd":"/"}"#.utf8).write(to: payload)
+        let store = ConversationRecordStore(directory: directory.appendingPathComponent("records"))
+        let shell = ProcessIdentity(pid: 40, startedAtMicroseconds: 40)
+        for alive in [true, false] {
+            let input = try FileHandle(forReadingFrom: payload)
+            defer { try? input.close() }
+            _ = ConversationHookObserver.run(
+                environment: [ConversationRecordStore.directoryEnvironmentKey: store.directory.path],
+                input: input, tmuxSession: { _ in nil },
+                ancestry: { _ in HookAncestry(claude: nil, passed: [shell], complete: true) },
+                inspector: Self.tree(alive ? [40: (1, ["-zsh"])] : [:]))
+            let read = store.read(conversationID: Self.id)
+            if alive {
+                guard case .found = read else {
+                    Issue.record("a running chain left a note: \(read)")
+                    return
+                }
+            } else {
+                guard case .unresolved = read else {
+                    Issue.record("an ended chain left no note: \(read)")
+                    return
+                }
+            }
+        }
+    }
+
     @Test("A conversation named by id whose record cannot be read is unknown, not one with no record")
     func damagedRecordByIDIsUnknown() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("probe-\(UUID().uuidString)")
