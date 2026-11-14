@@ -282,6 +282,11 @@ struct CLIConversationResumeTests {
         #expect(refusal.contains("already held"))
         #expect(refusal.contains("pid \(agent.processIdentifier)"))
         #expect(!refusal.contains("may have switched"))
+        // The loser refuses once the winner's sighting lands, which is before the winner's
+        // exec, so the stub's first line can come after the loser has exited.
+        try await waitUntil(launches: 2) {
+            (try? String(contentsOf: outputs[1 - refused], encoding: .utf8))?.contains("stub config=") == true
+        }
         let started = try String(contentsOf: outputs[1 - refused], encoding: .utf8)
         #expect(started.contains("--resume \(conversationID)"))
         #expect(started.contains("stub config=unset"))
