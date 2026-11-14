@@ -243,6 +243,8 @@ public struct ConversationResumer: Sendable {
     let exec: Exec
     let warn: @Sendable (String) -> Void
     let cliPath: String
+    /// How long a `--here` waits for the record's write lock to record itself.
+    let sightingLockBudget: Duration
 
     public init(
         records: ConversationRecordStore,
@@ -260,7 +262,8 @@ public struct ConversationResumer: Sendable {
         },
         exec: @escaping Exec = { try await HarnessExec.replaceProcess(with: $0, handOff: $1) },
         warn: @escaping @Sendable (String) -> Void = { _ in },
-        cliPath: String? = nil
+        cliPath: String? = nil,
+        sightingLockBudget: Duration = .seconds(2)
     ) {
         self.records = records
         self.launches = launches
@@ -284,6 +287,7 @@ public struct ConversationResumer: Sendable {
         self.exec = exec
         self.warn = warn
         self.cliPath = cliPath ?? Bundle.main.executablePath ?? "workspaces"
+        self.sightingLockBudget = sightingLockBudget
     }
 
     // MARK: - Reading
@@ -612,13 +616,15 @@ public struct ConversationResumer: Sendable {
         let outcome: ConversationRecordStore.WriteOutcome
         do {
             outcome = try records.record(
-                observation, lockBudget: .seconds(2), movingDamagedAside: false,
+                observation, lockBudget: sightingLockBudget, movingDamagedAside: false,
                 ended: { inspector.liveness($0) == .ended })
         } catch {
             throw Refusal.unrecorded(conversationID: id, reason: error.localizedDescription)
         }
         guard outcome == .written else {
-            throw Refusal.unrecorded(conversationID: id, reason: "its record stayed locked for two seconds")
+            throw Refusal.unrecorded(
+                conversationID: id,
+                reason: "its record stayed locked for the \(sightingLockBudget.components.seconds) s it waited")
         }
         return harness
     }

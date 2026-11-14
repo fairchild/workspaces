@@ -60,7 +60,8 @@ struct ConversationResumerTests {
             processTable: ProcessTable?,
             recordedSession: RecordedTmuxSession? = nil,
             inspector: ProcessInspector = .onlySelf,
-            readProcessTable: (@Sendable () async -> ProcessTable?)? = nil
+            readProcessTable: (@Sendable () async -> ProcessTable?)? = nil,
+            sightingLockBudget: Duration = .seconds(2)
         ) -> ConversationResumer {
             let execs = execs
             return ConversationResumer(
@@ -76,7 +77,8 @@ struct ConversationResumerTests {
                 exec: { invocation, handOff in
                     try await handOff()
                     execs.append(invocation)
-                }
+                },
+                sightingLockBudget: sightingLockBudget
             )
         }
 
@@ -286,6 +288,45 @@ struct ConversationResumerTests {
                 .resume(conversationID: id, target: .here)
         }
         #expect(world.execs.invocations.isEmpty)
+    }
+
+    /// The decision before a resume's sighting and the one after it are one function, so a
+    /// note a hook publishes while the resume waits for the record's write lock refuses it as
+    /// surely as a note already there. The test sets the budget the resume waits within, far
+    /// past anything a stall in this test could use up, and publishes once the kernel shows
+    /// the resume holding the lock file open.
+    @Test("A hook's note published while a resume waits to record itself refuses that resume, and nothing starts")
+    func noteWhileWaitingToRecordRefuses() async throws {
+        let world = try World()
+        defer { world.teardown() }
+        try world.recordConversation()
+        let id = world.conversationID
+        let locks = world.records.directory.appendingPathComponent(".locks")
+        try FileManager.default.createDirectory(at: locks, withIntermediateDirectories: true)
+        let descriptor = open(locks.appendingPathComponent("\(id).write").path, O_CREAT | O_RDWR, 0o600)
+        defer { close(descriptor) }
+        #expect(flock(descriptor, LOCK_EX) == 0)
+        let budget = await LaunchBudget.deadline(launches: 4, floor: 30, ceiling: 120)
+        let resumer = world.resumer(processTable: Self.quietTable, sightingLockBudget: .seconds(budget))
+
+        let resume = Task { try await resumer.resume(conversationID: id, target: .here) }
+        let writeLock = "/.locks/\(id).write"
+        let waiting = { OpenFiles.paths(of: getpid()).filter { $0.hasSuffix(writeLock) }.count >= 2 }
+        let deadline = Date().addingTimeInterval(budget)
+        while !waiting(), Date() < deadline { try await Task.sleep(nanoseconds: 20_000_000) }
+        try #require(waiting(), "the resume never reached the record's write lock")
+        let note = try world.records.recordUnresolved(
+            ConversationObservation(conversationID: id, cwd: world.cwd, observedBy: .hook),
+            ancestry: HookAncestry(claude: nil, passed: [], complete: false))
+        #expect(flock(descriptor, LOCK_UN) == 0)
+
+        await #expect(throws: ConversationResumer.Refusal.unresolvedOwner(conversationID: id, path: note.path)) {
+            _ = try await resume.value
+        }
+        #expect(world.execs.invocations.isEmpty)
+        #expect(
+            world.records.load(conversationID: id)?.harnessProcesses.entries.map(\.process.pid) == [getpid()],
+            "the resume did not get as far as recording itself")
     }
 
     @Test("The conversation is still claimed at the moment the harness takes over the terminal")

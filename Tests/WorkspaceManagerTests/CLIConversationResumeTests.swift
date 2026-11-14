@@ -661,43 +661,22 @@ struct CLIConversationResumeTests {
         #expect(output.contains("exit=0"), "\(output)")
     }
 
-    /// The decision before a resume's sighting and the one after it are one function, so
-    /// a note a hook publishes while the resume waits for the record's write lock refuses it
-    /// as surely as a note already there.
-    @Test("A hook's note published while a resume waits to record itself refuses that resume, and nothing starts")
-    func noteDuringTheSightingRefuses() async throws {
+    /// The real binary reads a hook's note the way the decision does and names it; the note
+    /// landing while a resume waits to record itself is pinned at the resumer, where the test
+    /// sets the write-lock budget it waits within.
+    @Test("A resume with a hook's note beside the record exits 1 naming it, and nothing starts")
+    func noteBesideTheRecordRefuses() throws {
         let fixture = try makeFixture()
         defer { fixture.teardown() }
         let conversationID = try recordConversation(in: fixture)
-        let locks = fixture.records.directory.appendingPathComponent(".locks")
-        let descriptor = open(locks.appendingPathComponent("\(conversationID).write").path, O_CREAT | O_RDWR, 0o600)
-        #expect(descriptor >= 0)
-        defer { close(descriptor) }
-        #expect(flock(descriptor, LOCK_EX) == 0)
-        let output = fixture.root.appendingPathComponent("resume.log")
-        let resume = try fixture.start(["conversation", "resume", conversationID, "--here"], output: output)
-        defer { Self.kill([resume]) }
-        // The resume opens the write lock only to record its sighting, so once the kernel
-        // shows it holding that file open it is waiting on the lock this test holds.
-        let writeLock = "/.locks/\(conversationID).write"
-        try await waitUntil(launches: 1) {
-            OpenFiles.paths(of: resume.processIdentifier).contains { $0.hasSuffix(writeLock) } || !resume.isRunning
-        }
-        try #require(
-            OpenFiles.paths(of: resume.processIdentifier).contains { $0.hasSuffix(writeLock) },
-            "the resume never reached the record's write lock")
         let note = try fixture.records.recordUnresolved(
             ConversationObservation(conversationID: conversationID, cwd: fixture.work.path, observedBy: .hook),
             ancestry: HookAncestry(claude: nil, passed: [], complete: false))
-        #expect(flock(descriptor, LOCK_UN) == 0)
-        try await waitUntil(launches: 1) { !resume.isRunning }
-        let log = try String(contentsOf: output, encoding: .utf8)
-        #expect(resume.terminationStatus == 1, "\(log)")
-        #expect(log.contains("so it left \(note.path)"), "\(log)")
-        #expect(!log.contains("stub argv"), "a harness started beside the hook's agent")
-        #expect(
-            fixture.records.load(conversationID: conversationID)?.harnessProcesses.entries.map(\.process.pid)
-                == [resume.processIdentifier], "the resume did not get as far as recording itself")
+
+        let resumed = try fixture.run(["conversation", "resume", conversationID, "--here"])
+        #expect(resumed.status == 1, "\(resumed.stderr)")
+        #expect(resumed.stderr.contains("so it left \(note.path)"), "\(resumed.stderr)")
+        #expect(!resumed.stdout.contains("stub argv"), "a harness started beside the hook's agent")
     }
 
     /// A native claude installed under a name that starts with `tmux` is neither recognized
@@ -1314,7 +1293,7 @@ struct CLIConversationResumeTests {
         let resume = try fixture.run(["conversation", "resume", conversationID, "--here"])
         #expect(resume.status == 1)
         #expect(resume.stderr.contains("Could not record that this terminal now holds conversation"))
-        #expect(resume.stderr.contains("its record stayed locked for two seconds"))
+        #expect(resume.stderr.contains("its record stayed locked for the 2 s it waited"))
         #expect(!resume.stdout.contains("stub argv"))
     }
 
