@@ -282,6 +282,30 @@ struct ConversationRecordStoreTests {
         #expect((kept as AnyObject?)?.isEqual(damaged) == true)
     }
 
+    @Test("A hook's unresolved note keeps a name of its own beside the record, and a moved-aside copy reads first")
+    func unresolvedNotes() throws {
+        try withStore { store in
+            let first = observation(at: 1_800_000_000)
+            let incomplete = HookAncestry(claude: nil, passed: [try Self.thisProcess], complete: false)
+            let one = try store.recordUnresolved(first, ancestry: incomplete)
+            let two = try store.recordUnresolved(first, ancestry: incomplete)
+            #expect(one != two)
+            let url = try #require(store.fileURL(conversationID: Self.conversationID))
+            #expect(one.lastPathComponent.hasPrefix(url.lastPathComponent + ".unresolved-1800000000-"))
+            #expect(
+                store.read(conversationID: Self.conversationID) == .unresolved(one.path < two.path ? one : two)
+            )
+            let note = try object(at: one)
+            #expect(note["chain"] as? [String] == [try Self.thisProcess.recorded])
+            #expect(note["complete"] as? Bool == false)
+
+            try store.record(first)
+            let aside = URL(fileURLWithPath: url.path + ".corrupt-1-abcdef12")
+            try Data("[]".utf8).write(to: aside)
+            #expect(store.read(conversationID: Self.conversationID) == .movedAside(aside))
+        }
+    }
+
     @Test("A write from another host removes none of the record's harness processes")
     func otherHostRemovesNoHarnessProcess() throws {
         try withStore { store in

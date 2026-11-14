@@ -679,6 +679,26 @@ struct ConversationHolderProbeTests {
         #expect(detail.contains("read permission"))
     }
 
+    @Test("A conversation named by id with a hook's unresolved note beside it is unknown, whatever its record says")
+    func unresolvedNoteByIDIsUnknown() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("probe-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ConversationRecordStore(directory: directory)
+        let observation = ConversationObservation(conversationID: Self.id, cwd: "/", observedBy: .hook)
+        let note = try store.recordUnresolved(
+            observation, ancestry: HookAncestry(claude: nil, passed: [], complete: false))
+        try store.record(observation)
+        let probe = ConversationHolderProbe(
+            records: store, readProcessTable: { try? Self.table("1 0 /sbin/launchd") }, inspector: .none,
+            recordedSession: { _ in nil })
+        guard case .unknown(let detail) = await probe.probe(conversationID: Self.id) else {
+            Issue.record("expected unknown")
+            return
+        }
+        #expect(detail.contains("so it left \(note.path)"))
+        #expect(detail.contains("delete that file to resume"))
+    }
+
     @Test("A conversation named by id whose record cannot be read is unknown, not one with no record")
     func damagedRecordByIDIsUnknown() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("probe-\(UUID().uuidString)")
