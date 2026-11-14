@@ -544,7 +544,7 @@ struct ConversationHolderProbeTests {
                 kill(pid, SIGKILL)
             }
         }
-        let deadline = Date().addingTimeInterval(10)
+        let deadline = Date().addingTimeInterval(await LaunchBudget.deadline(launches: 2, floor: 10, ceiling: 60))
         while Date() < deadline {
             let rows = (try? Self.table(Self.psListing()))?.rows ?? []
             underTerminal = rows.first { $0.parentPID == withTerminal.processIdentifier }?.pid
