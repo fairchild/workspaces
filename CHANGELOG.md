@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.30.0] - 2026-11-13
+
+A relaunch now brings back every tile that was open at quit, background tabs and split panes included, and tiles whose tmux session is still running rejoin without a prompt. Closing a terminal no longer freezes the app while its command exits. In tmux mode each cmd+T tab is its own shell instead of a second view of the first. WorkSpaces also starts recording each Claude conversation and the tile it last ran in, the groundwork for resuming a conversation without starting a second agent on it.
+
+### Added
+- Restore brings back every tile open at quit, not only each workspace's selected tab. Tiles whose tmux session survived rejoin at launch with no prompt, and a tile whose tmux server died is still offered instead of being treated as closed. [#1909](https://github.com/fairchild/workspaces/pull/1909)
+- Each Claude conversation is recorded with the tile it last ran in, whether or not the app is open. [#1910](https://github.com/fairchild/workspaces/pull/1910)
+- A repo's overview folds archived workspaces under a collapsed Archived section, and its header counts both. [#1887](https://github.com/fairchild/workspaces/pull/1887)
+
+### Fixed
+- Closing a terminal no longer freezes the app while its command exits. [#1907](https://github.com/fairchild/workspaces/pull/1907)
+- In tmux mode, cmd+T opens a new shell in its own tmux session, so typing in one tab no longer types in both. [#1888](https://github.com/fairchild/workspaces/pull/1888)
+- A terminal that exits before anyone has opened it closes its tile and ends its row, so the next launch does not offer to restore it. [#1911](https://github.com/fairchild/workspaces/pull/1911)
+- Changing the terminal multiplexing setting no longer relabels tiles that are already open; each tile keeps the mode it started in. [#1892](https://github.com/fairchild/workspaces/pull/1892)
+- The repo path pill in the toolbar no longer crowds its icon and name. [#1886](https://github.com/fairchild/workspaces/pull/1886)
+
 ## [0.29.2] - 2026-11-08
 
 WorkSpaces moves its terminal to Ghostty 1.0. Closing a terminal can no longer hang the app behind a full Ghostty mailbox, and text that automation writes or drops onto a terminal goes through Ghostty's own paste path, so bracketed paste and paste protection apply to it. Sessions launched from the ws CLI now appear in the sidebar and can be picked back up there. This release also carries everything prepared for 0.28.0, 0.29.0 and 0.29.1, none of which shipped: Docker Compose workspace sandboxes, an Agents status row for the Claude integration, and safer handling of Claude settings.
