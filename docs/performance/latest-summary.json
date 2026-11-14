@@ -1,7 +1,7 @@
 {
   "artifacts": {
-    "line_count": 44,
-    "log_file": "installed_clean_shell.log",
+    "line_count": 41,
+    "log_file": "perf-artifacts/run10/installed_clean_shell.log",
     "perf_event_count": 10
   },
   "budget_results": {
@@ -12,10 +12,10 @@
       "gate_budget": 675,
       "gate_budget_ms": 675,
       "gate_stat": "median",
-      "observed_diagnostic": 81.8,
-      "observed_gate": 81.8,
-      "observed_median_ms": 81.8,
-      "observed_p95_ms": 81.8,
+      "observed_diagnostic": 59.97,
+      "observed_gate": 59.97,
+      "observed_median_ms": 59.97,
+      "observed_p95_ms": 59.97,
       "reference_baseline": {
         "median_ms": 540,
         "p95_ms": 650
@@ -30,10 +30,10 @@
       "gate_budget": 800,
       "gate_budget_ms": 800,
       "gate_stat": "median",
-      "observed_diagnostic": 96.22,
-      "observed_gate": 96.22,
-      "observed_median_ms": 96.22,
-      "observed_p95_ms": 96.22,
+      "observed_diagnostic": 74.69,
+      "observed_gate": 74.69,
+      "observed_median_ms": 74.69,
+      "observed_p95_ms": 74.69,
       "reference_baseline": {
         "median_ms": 640,
         "p95_ms": 760
@@ -48,10 +48,10 @@
       "gate_budget": 675,
       "gate_budget_ms": 675,
       "gate_stat": "median",
-      "observed_diagnostic": 81.8,
-      "observed_gate": 81.8,
-      "observed_median_ms": 81.8,
-      "observed_p95_ms": 81.8,
+      "observed_diagnostic": 59.97,
+      "observed_gate": 59.97,
+      "observed_median_ms": 59.97,
+      "observed_p95_ms": 59.97,
       "reference_baseline": {
         "median_ms": 540,
         "p95_ms": 650
@@ -80,8 +80,8 @@
     "arch": "arm64",
     "build_kind": "installed",
     "machine_model": "Mac16,13",
-    "os_build": "25G83",
-    "os_version": "26.6.2"
+    "os_build": "26B123",
+    "os_version": "27.2"
   },
   "findings": [
     "Terminal surface events were captured for shell modes: clean.",
@@ -92,20 +92,20 @@
   ],
   "first_prompt_ready": {
     "count": 1,
-    "max": 81.8,
-    "mean": 81.8,
-    "median": 81.8,
-    "min": 81.8,
-    "p95": 81.8,
+    "max": 59.97,
+    "mean": 59.97,
+    "median": 59.97,
+    "min": 59.97,
+    "p95": 59.97,
     "unit": "ms"
   },
   "launch_to_first_prompt": {
     "count": 1,
-    "max": 96.22,
-    "mean": 96.22,
-    "median": 96.22,
-    "min": 96.22,
-    "p95": 96.22,
+    "max": 74.69,
+    "mean": 74.69,
+    "median": 74.69,
+    "min": 74.69,
+    "p95": 74.69,
     "unit": "ms"
   },
   "legacy_metric_summaries": {
@@ -150,8 +150,8 @@
       ]
     }
   },
-  "line_count": 44,
-  "log_file": "installed_clean_shell.log",
+  "line_count": 41,
+  "log_file": "perf-artifacts/run10/installed_clean_shell.log",
   "metadata": {
     "build_kind": "installed",
     "launch_trigger": "terminal_set_title",
@@ -163,47 +163,47 @@
   "metrics": {
     "first_prompt_ready": {
       "count": 1,
-      "max": 81.8,
-      "mean": 81.8,
-      "median": 81.8,
-      "min": 81.8,
-      "p95": 81.8,
+      "max": 59.97,
+      "mean": 59.97,
+      "median": 59.97,
+      "min": 59.97,
+      "p95": 59.97,
       "unit": "ms"
     },
     "launch_to_first_prompt": {
       "count": 1,
-      "max": 96.22,
-      "mean": 96.22,
-      "median": 96.22,
-      "min": 96.22,
-      "p95": 96.22,
+      "max": 74.69,
+      "mean": 74.69,
+      "median": 74.69,
+      "min": 74.69,
+      "p95": 74.69,
       "unit": "ms"
     },
     "terminal_first_output": {
       "count": 1,
-      "max": 81.8,
-      "mean": 81.8,
-      "median": 81.8,
-      "min": 81.8,
-      "p95": 81.8,
+      "max": 59.97,
+      "mean": 59.97,
+      "median": 59.97,
+      "min": 59.97,
+      "p95": 59.97,
       "unit": "ms"
     },
     "terminal_investigation": {
       "count": 3,
-      "max": 81.8,
-      "mean": 58.733333333333334,
-      "median": 81.8,
-      "min": 12.6,
-      "p95": 81.8,
+      "max": 59.97,
+      "mean": 40.873333333333335,
+      "median": 59.97,
+      "min": 2.68,
+      "p95": 59.97,
       "unit": "ms"
     },
     "workspace_orphan_scan": {
       "count": 1,
-      "max": 38.22,
-      "mean": 38.22,
-      "median": 38.22,
-      "min": 38.22,
-      "p95": 38.22,
+      "max": 24.9,
+      "mean": 24.9,
+      "median": 24.9,
+      "min": 24.9,
+      "p95": 24.9,
       "unit": "ms"
     }
   },
@@ -225,10 +225,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 81.8,
-          "mean": 81.8,
-          "median": 81.8,
-          "min": 81.8
+          "max": 59.97,
+          "mean": 59.97,
+          "median": 59.97,
+          "min": 59.97
         }
       },
       "phase": "none"
@@ -275,10 +275,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 96.22,
-          "mean": 96.22,
-          "median": 96.22,
-          "min": 96.22
+          "max": 74.69,
+          "mean": 74.69,
+          "median": 74.69,
+          "min": 74.69
         }
       },
       "phase": "none"
@@ -300,10 +300,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 81.8,
-          "mean": 81.8,
-          "median": 81.8,
-          "min": 81.8
+          "max": 59.97,
+          "mean": 59.97,
+          "median": 59.97,
+          "min": 59.97
         }
       },
       "phase": "none"
@@ -325,10 +325,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 81.8,
-          "mean": 81.8,
-          "median": 81.8,
-          "min": 81.8
+          "max": 59.97,
+          "mean": 59.97,
+          "median": 59.97,
+          "min": 59.97
         }
       },
       "phase": "first_output_observed"
@@ -350,10 +350,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 81.8,
-          "mean": 81.8,
-          "median": 81.8,
-          "min": 81.8
+          "max": 59.97,
+          "mean": 59.97,
+          "median": 59.97,
+          "min": 59.97
         }
       },
       "phase": "prompt_ready_observed"
@@ -386,10 +386,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 12.6,
-          "mean": 12.6,
-          "median": 12.6,
-          "min": 12.6
+          "max": 2.68,
+          "mean": 2.68,
+          "median": 2.68,
+          "min": 2.68
         }
       },
       "phase": "surface_create_succeeded"
@@ -405,10 +405,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 38.22,
-          "mean": 38.22,
-          "median": 38.22,
-          "min": 38.22
+          "max": 24.9,
+          "mean": 24.9,
+          "median": 24.9,
+          "min": 24.9
         },
         "failed_scope_count": {
           "count": 1,
@@ -496,10 +496,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 81.8,
-          "mean": 81.8,
-          "median": 81.8,
-          "min": 81.8
+          "max": 59.97,
+          "mean": 59.97,
+          "median": 59.97,
+          "min": 59.97
         }
       },
       "phase": "none"
@@ -546,10 +546,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 96.22,
-          "mean": 96.22,
-          "median": 96.22,
-          "min": 96.22
+          "max": 74.69,
+          "mean": 74.69,
+          "median": 74.69,
+          "min": 74.69
         }
       },
       "phase": "none"
@@ -571,10 +571,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 81.8,
-          "mean": 81.8,
-          "median": 81.8,
-          "min": 81.8
+          "max": 59.97,
+          "mean": 59.97,
+          "median": 59.97,
+          "min": 59.97
         }
       },
       "phase": "none"
@@ -596,10 +596,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 81.8,
-          "mean": 81.8,
-          "median": 81.8,
-          "min": 81.8
+          "max": 59.97,
+          "mean": 59.97,
+          "median": 59.97,
+          "min": 59.97
         }
       },
       "phase": "first_output_observed"
@@ -621,10 +621,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 81.8,
-          "mean": 81.8,
-          "median": 81.8,
-          "min": 81.8
+          "max": 59.97,
+          "mean": 59.97,
+          "median": 59.97,
+          "min": 59.97
         }
       },
       "phase": "prompt_ready_observed"
@@ -657,10 +657,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 12.6,
-          "mean": 12.6,
-          "median": 12.6,
-          "min": 12.6
+          "max": 2.68,
+          "mean": 2.68,
+          "median": 2.68,
+          "min": 2.68
         }
       },
       "phase": "surface_create_succeeded"
@@ -676,10 +676,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 38.22,
-          "mean": 38.22,
-          "median": 38.22,
-          "min": 38.22
+          "max": 24.9,
+          "mean": 24.9,
+          "median": 24.9,
+          "min": 24.9
         },
         "failed_scope_count": {
           "count": 1,
@@ -710,29 +710,29 @@
   "schema_version": 1,
   "terminal_first_output": {
     "count": 1,
-    "max": 81.8,
-    "mean": 81.8,
-    "median": 81.8,
-    "min": 81.8,
-    "p95": 81.8,
+    "max": 59.97,
+    "mean": 59.97,
+    "median": 59.97,
+    "min": 59.97,
+    "p95": 59.97,
     "unit": "ms"
   },
   "terminal_investigation": {
     "count": 3,
-    "max": 81.8,
-    "mean": 58.733333333333334,
-    "median": 81.8,
-    "min": 12.6,
-    "p95": 81.8,
+    "max": 59.97,
+    "mean": 40.873333333333335,
+    "median": 59.97,
+    "min": 2.68,
+    "p95": 59.97,
     "unit": "ms"
   },
   "workspace_orphan_scan": {
     "count": 1,
-    "max": 38.22,
-    "mean": 38.22,
-    "median": 38.22,
-    "min": 38.22,
-    "p95": 38.22,
+    "max": 24.9,
+    "mean": 24.9,
+    "median": 24.9,
+    "min": 24.9,
+    "p95": 24.9,
     "unit": "ms"
   }
 }
