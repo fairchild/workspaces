@@ -38,9 +38,10 @@ extension ConversationRecordJSON {
     ///   current place. `lastSeenIn` is that run read as one place, with each tmux attribute
     ///   from the newest sighting that had it.
     /// - A process named as running the conversation joins `harnessProcesses` and stays, with
-    ///   the newest time and place it was named, until `ended` says it has exited. Which
-    ///   answer about the harness is newest, a process or a hook that could not name one, is
-    ///   kept as the two newest times. A writer on another host than the record's removes none.
+    ///   the newest time and place it was named, until `ended` says it has exited. The
+    ///   chain of processes a hook that found no claude above it ran under joins `unattributed`
+    ///   and stays until every one of them has exited. A writer on another host than the
+    ///   record's removes none.
     ///
     /// Keys this build does not know survive at the top level, under `launch`, and in each
     /// kept sighting. `lastSeenIn` is rewritten from the sightings on every merge, so a build
@@ -114,34 +115,51 @@ extension ConversationRecordJSON {
     ) {
         var processes = object[harnessProcessesKey] as? [String: Any] ?? [:]
         var entries = processes["entries"] as? [[String: Any]] ?? []
-        func later(_ stamp: Any?) -> String {
-            string([date(stamp), at].compactMap { $0 }.max() ?? at)
-        }
+        var unattributed = processes["unattributed"] as? [[String: Any]] ?? []
         switch answer {
         case .named(let process)?:
             var entry: [String: Any] = ["process": process.recorded, "observedAt": string(at)]
             entry["seenIn"] = seenIn.map(object(from:))
-            if let index = entries.firstIndex(where: { $0["process"] as? String == process.recorded }) {
-                if (at, canonical(entry)) > (
-                    date(entries[index]["observedAt"]) ?? .distantPast, canonical(entries[index])
-                ) {
-                    entries[index] = entry
-                }
-            } else {
-                entries.append(entry)
-            }
-            processes["namedAt"] = later(processes["namedAt"])
-        case .unnamed?:
-            processes["unnamedAt"] = later(processes["unnamedAt"])
-        case nil:
+            upsert(entry, at: at, key: namedKey, into: &entries)
+        case .unnamed(let chain)? where !chain.isEmpty:
+            var entry: [String: Any] = ["chain": chain.map(\.recorded), "observedAt": string(at)]
+            entry["seenIn"] = seenIn.map(object(from:))
+            upsert(entry, at: at, key: chainKey, into: &unattributed)
+        case .unnamed?, nil:
             break
         }
         entries.removeAll { entry in
             (entry["process"] as? String).flatMap(ProcessIdentity.init(recorded:)).map(ended) ?? false
         }
-        entries.sort { ($0["process"] as? String ?? "") < ($1["process"] as? String ?? "") }
+        unattributed.removeAll { entry in
+            guard let chain = entry["chain"] as? [String] else { return false }
+            let processes = chain.compactMap(ProcessIdentity.init(recorded:))
+            return processes.count == chain.count && processes.allSatisfy(ended)
+        }
+        entries.sort { (namedKey($0) ?? "") < (namedKey($1) ?? "") }
+        unattributed.sort { (chainKey($0) ?? "") < (chainKey($1) ?? "") }
         processes["entries"] = entries.isEmpty ? nil : entries
+        processes["unattributed"] = unattributed.isEmpty ? nil : unattributed
         object[harnessProcessesKey] = processes.isEmpty ? nil : processes
+    }
+
+    private static func namedKey(_ entry: [String: Any]) -> String? { entry["process"] as? String }
+
+    private static func chainKey(_ entry: [String: Any]) -> String? {
+        (entry["chain"] as? [String])?.joined(separator: " ")
+    }
+
+    /// One entry per key, keeping the newest time and place it was seen at.
+    private static func upsert(
+        _ entry: [String: Any], at: Date, key: ([String: Any]) -> String?, into list: inout [[String: Any]]
+    ) {
+        guard let index = list.firstIndex(where: { key($0) != nil && key($0) == key(entry) }) else {
+            list.append(entry)
+            return
+        }
+        if (at, canonical(entry)) > (date(list[index]["observedAt"]) ?? .distantPast, canonical(list[index])) {
+            list[index] = entry
+        }
     }
 
     /// One spelling of an object, so a tie on time goes the same way whatever order the

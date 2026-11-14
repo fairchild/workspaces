@@ -411,7 +411,7 @@ struct CLIConversationResumeTests {
         let last = try #require(conversations.last)
         try await waitUntil(launches: Double(1 + conversations.count + nested.count)) {
             fixture.records.load(conversationID: last).map {
-                !$0.harnessProcesses.entries.isEmpty || $0.harnessProcesses.newestIsUnnamed
+                !$0.harnessProcesses.entries.isEmpty || !$0.harnessProcesses.unattributed.isEmpty
             } == true
                 && nested.allSatisfy { fixture.records.load(conversationID: $0) != nil }
         }
@@ -488,6 +488,58 @@ struct CLIConversationResumeTests {
         #expect(resume.stdout.contains("pid \(agent.processIdentifier)"))
     }
 
+    /// A harness this build does not recognize runs the conversation, and its hook finds no
+    /// claude above it. A claude named later, and gone, says nothing about it.
+    @Test(
+        "A conversation a hook saw start under no claude refuses until what it ran under exits, whatever is named later"
+    )
+    func unattributedHarnessRefusesUntilItExits() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = UUID().uuidString.lowercased()
+        try FileManager.default.createDirectory(at: fixture.transcripts, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: fixture.transcripts.appendingPathComponent("\(conversationID).jsonl").path, contents: Data())
+        let unrecognized = fixture.bin.appendingPathComponent("harness-a")
+        try FileManager.default.copyItem(at: fixture.stub, to: unrecognized)
+        try detach(
+            [unrecognized.path], in: fixture,
+            extraEnvironment: [
+                "STUB_STAY": "1", "STUB_HOOK_IDS": conversationID, "STUB_HOOK_CLI": fixture.binary.path,
+                "STUB_TRANSCRIPTS": fixture.transcripts.path,
+            ])
+        var chain: [ProcessIdentity] = []
+        try await waitUntil(launches: 2) {
+            chain =
+                fixture.records.load(conversationID: conversationID)?.harnessProcesses.unattributed.first?.chain ?? []
+            return !chain.isEmpty
+        }
+        let a = try #require(chain.first)
+        defer { if ProcessInspector.live.liveness(a) == .running { Darwin.kill(a.pid, SIGKILL) } }
+        #expect(chain.count == 1)
+        #expect(ProcessInspector.live.arguments(a.pid)?.contains(unrecognized.path) == true)
+        #expect(try fixture.run(["conversation", "resume", conversationID, "--here"]).status == 1)
+
+        let b = try await startBareAgent(in: fixture, hooking: [conversationID])
+        try await waitUntil(launches: 1) {
+            fixture.records.load(conversationID: conversationID)?.harnessProcesses.entries.map(\.process.pid)
+                == [b.processIdentifier]
+        }
+        #expect(try fixture.run(["conversation", "resume", conversationID, "--here"]).status == 3)
+        Self.kill([b])
+        try await waitUntil(launches: 1) { !b.isRunning }
+        let afterB = try fixture.run(["conversation", "resume", conversationID, "--here"])
+        #expect(afterB.status == 1, "\(afterB.stdout)")
+        #expect(afterB.stderr.contains("with no claude above it, and process \(a.pid) it ran under still runs"))
+        #expect(!afterB.stdout.contains("stub argv"), "a second agent started beside the unrecognized one")
+
+        Darwin.kill(a.pid, SIGKILL)
+        try await waitUntil(launches: 1) { ProcessInspector.live.liveness(a) == .ended }
+        let afterA = try fixture.run(["conversation", "resume", conversationID, "--here"])
+        #expect(afterA.status == 0, "\(afterA.stderr)")
+        #expect(afterA.stdout.contains("stub argv=--resume \(conversationID)"))
+    }
+
     /// A harness whose parent never collects it, as an orchestrator that starts the verb and
     /// never waits leaves it, keeps its pid and start time after it exits. A `--here` whose
     /// exec failed has recorded itself and exited the same way.
@@ -538,23 +590,35 @@ struct CLIConversationResumeTests {
         return stat.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("Z")
     }
 
+    /// Runs `command` with launchd as its parent, so no process of the test run is above it:
+    /// what a hook beneath it records cannot depend on what runs the tests. Returns once the
+    /// detaching process has exited; `command` runs on.
+    private func detach(_ command: [String], in fixture: Fixture, extraEnvironment: [String: String] = [:]) throws {
+        let detacher = try fixture.start(
+            [
+                "-e",
+                "if (my $c = fork) { waitpid($c, 0); exit } exit if fork; "
+                    + "select(undef, undef, undef, 0.01) while getppid() != 1; exec @ARGV",
+            ] + command,
+            executable: URL(fileURLWithPath: "/usr/bin/perl"), extraEnvironment: extraEnvironment,
+            output: fixture.root.appendingPathComponent("detached-\(UUID().uuidString.prefix(8)).log"))
+        detacher.waitUntilExit()
+    }
+
     /// A SessionStart hook for `conversationID` from `tile`, run by nothing that is claude, as
-    /// a hook delayed past a later one lands.
-    private func deliverHook(_ conversationID: String, from tile: String, in fixture: Fixture) throws {
-        let observe = Process()
-        let input = Pipe()
-        observe.executableURL = fixture.binary
-        observe.arguments = ["conversation", "observe"]
-        observe.currentDirectoryURL = fixture.root
-        observe.environment = fixture.environment.merging(["WORKSPACES_HOST_SESSION_ID": tile]) { _, new in new }
-        observe.standardInput = input
-        observe.standardOutput = FileHandle.nullDevice
-        observe.standardError = FileHandle.nullDevice
-        try observe.run()
-        input.fileHandleForWriting.write(
-            Data(#"{"session_id":"\#(conversationID)","cwd":"\#(fixture.work.path)"}"#.utf8))
-        try input.fileHandleForWriting.close()
-        observe.waitUntilExit()
+    /// a hook delayed past a later one lands. The shell it runs under exits once it has.
+    private func deliverHook(_ conversationID: String, from tile: String, in fixture: Fixture) async throws {
+        let payload = fixture.root.appendingPathComponent("hook-\(UUID().uuidString).json")
+        let done = payload.appendingPathExtension("done")
+        try Data(#"{"session_id":"\#(conversationID)","cwd":"\#(fixture.work.path)"}"#.utf8).write(to: payload)
+        try detach(
+            [
+                "/bin/sh", "-c", "\"$0\" conversation observe < \"$1\"; : > \"$2\"", fixture.binary.path, payload.path,
+                done.path,
+            ],
+            in: fixture, extraEnvironment: ["WORKSPACES_HOST_SESSION_ID": tile])
+        try await waitUntil(launches: 1) { FileManager.default.fileExists(atPath: done.path) }
+        #expect(FileManager.default.fileExists(atPath: done.path), "the hook never finished")
     }
 
     /// The previous build's write: its own sightings, a `lastSeenIn` with nothing this build
@@ -588,7 +652,7 @@ struct CLIConversationResumeTests {
             #expect(!resume.stdout.contains("stub argv"), "\(moment): a second agent started")
         }
         try expectHeld("after its own hook")
-        try deliverHook(conversationID, from: UUID().uuidString, in: fixture)
+        try await deliverHook(conversationID, from: UUID().uuidString, in: fixture)
         #expect(fixture.records.load(conversationID: conversationID)?.lastSeenIn?.hostSessionID != tileB)
         try expectHeld("after a delayed hook from another tile")
         try rewriteAsThePreviousBuild(conversationID, at: UUID().uuidString, in: fixture)

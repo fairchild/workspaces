@@ -143,25 +143,30 @@ struct ConversationRecordStoreTests {
         }
     }
 
-    /// A hook that could not name its claude is an answer, not a silence. Which answer is
-    /// newest is kept apart from the processes named, which stay until they exit.
-    @Test("A hook that could not name its claude is the newest answer until a process is named again, and removes none")
-    func unnamedAnswerKeepsNamedProcesses() throws {
+    /// A hook that found no claude above it records the processes it ran under, apart from
+    /// the processes named; neither removes the other, and a chain leaves only once every
+    /// process in it has exited.
+    @Test("An unattributed chain and a named process stay side by side, and a chain leaves only when all of it has")
+    func unattributedChainKeepsNamedProcesses() throws {
         let harness = try Self.thisProcess
+        let gone = ProcessIdentity(pid: harness.pid, startedAtMicroseconds: harness.startedAtMicroseconds - 1)
         try withStore { store in
-            var named = observation(at: 1_800_000_000, lastSeenIn: .init(hostSessionID: nil, outsideTmux: true))
+            var unnamed = observation(at: 1_800_000_000, lastSeenIn: .init(hostSessionID: nil, outsideTmux: true))
+            unnamed.harnessProcess = .unnamed(chain: [gone, harness])
+            var named = observation(at: 1_800_000_060, lastSeenIn: .init(hostSessionID: nil, outsideTmux: true))
             named.harnessProcess = .named(harness)
-            var unnamed = observation(at: 1_800_000_060, lastSeenIn: .init(hostSessionID: nil, outsideTmux: true))
-            unnamed.harnessProcess = .unnamed
-            try store.record(named)
             try store.record(unnamed)
-            let afterUnnamed = try #require(store.load(conversationID: Self.conversationID)?.harnessProcesses)
-            #expect(afterUnnamed.newestIsUnnamed)
-            #expect(afterUnnamed.entries.map(\.process) == [harness])
-
-            named.observedAt = Date(timeIntervalSince1970: 1_800_000_120)
             try store.record(named)
-            #expect(store.load(conversationID: Self.conversationID)?.harnessProcesses.newestIsUnnamed == false)
+            let both = try #require(store.load(conversationID: Self.conversationID)?.harnessProcesses)
+            #expect(both.entries.map(\.process) == [harness])
+            #expect(both.unattributed.map(\.chain) == [[gone, harness]])
+
+            try store.record(observation(at: 1_800_000_120), ended: { $0 == gone })
+            #expect(
+                try #require(store.load(conversationID: Self.conversationID)).harnessProcesses.unattributed.count == 1)
+            try store.record(observation(at: 1_800_000_180), ended: { _ in true })
+            let after = try #require(store.load(conversationID: Self.conversationID)).harnessProcesses
+            #expect(after.unattributed.isEmpty && after.entries.isEmpty)
         }
     }
 
@@ -184,7 +189,6 @@ struct ConversationRecordStoreTests {
             try store.record(observation(at: 1_800_000_060))
             let record = try #require(store.load(conversationID: Self.conversationID))
             #expect(record.harnessProcesses.entries.map(\.process) == [running])
-            #expect(record.harnessProcesses.namedAt == Date(timeIntervalSince1970: 1_800_000_001))
         }
     }
 

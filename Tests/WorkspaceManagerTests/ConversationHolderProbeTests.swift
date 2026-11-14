@@ -16,12 +16,12 @@ import Testing
 struct ConversationHolderProbeTests {
     private static let id = "fa08c461-2979-41db-85fb-b5c90c0d2d8b"
 
-    /// A record last seen at `lastSeenIn`, whose hook named `harness` there, then, when
-    /// `unnamed`, ran again and could not name its claude.
+    /// A record last seen at `lastSeenIn`, whose hook named `harness` there, and whose hook
+    /// that found no claude above it ran under `unattributed`.
     private static func record(
         lastSeenIn: ConversationRecord.LastSeenIn? = nil,
         harness: ProcessIdentity? = nil,
-        unnamed: Bool = false,
+        unattributed: [ProcessIdentity] = [],
         socketLabel: String? = nil
     ) -> ConversationRecord {
         let named = Date(timeIntervalSince1970: 100)
@@ -32,7 +32,9 @@ struct ConversationHolderProbeTests {
             endedByUserAt: nil,
             harnessProcesses: .init(
                 entries: harness.map { [.init(process: $0, observedAt: named, seenIn: lastSeenIn)] } ?? [],
-                namedAt: harness.map { _ in named }, unnamedAt: unnamed ? Date(timeIntervalSince1970: 200) : nil))
+                unattributed: unattributed.isEmpty
+                    ? []
+                    : [.init(chain: unattributed, observedAt: Date(timeIntervalSince1970: 200), seenIn: lastSeenIn)]))
     }
 
     /// Processes that exist with the given start times and arguments, and nothing else.
@@ -202,8 +204,7 @@ struct ConversationHolderProbeTests {
                 .init(
                     process: ended, observedAt: Date(timeIntervalSince1970: 200),
                     seenIn: .init(hostSessionID: "tile-b", outsideTmux: true)),
-            ],
-            namedAt: Date(timeIntervalSince1970: 200), unnamedAt: Date(timeIntervalSince1970: 300))
+            ])
 
         let probe = await ClaudeHarnessAdapter().holders(
             of: record,
@@ -425,26 +426,79 @@ struct ConversationHolderProbeTests {
     }
 
     @Test(
-        "A conversation whose hook could not name its claude is unknown until something holds it",
-        arguments: ["unnamed", "unnamed-held", "never-asked"]
+        "A conversation a hook saw start with no claude above it is unknown while a process it ran under runs",
+        arguments: ["running", "held", "ended", "never-asked"]
     )
-    func unnamedHarnessIsUnknown(sighting: String) async throws {
+    func unattributedChainIsUnknown(chain: String) async throws {
+        let running = ProcessIdentity(pid: 80, startedAtMicroseconds: 1_000)
+        let ended = ProcessIdentity(pid: 81, startedAtMicroseconds: 1_000)
         let record = Self.record(
-            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true), unnamed: sighting != "never-asked")
-        let listing = sighting == "unnamed-held" ? "70 1 claude --resume \(Self.id)" : "1 0 /sbin/launchd"
-        let probe = await ClaudeHarnessAdapter().holders(of: record, in: Self.context(try Self.table(listing)))
-        switch sighting {
-        case "unnamed":
+            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true),
+            unattributed: chain == "never-asked" ? [] : chain == "ended" ? [ended] : [ended, running])
+        let listing = chain == "held" ? "70 1 claude --resume \(Self.id)" : "1 0 /sbin/launchd"
+        let probe = await ClaudeHarnessAdapter().holders(
+            of: record, in: Self.context(try Self.table(listing), inspector: Self.inspector([80: (1_000, ["-zsh"])])))
+        switch chain {
+        case "running":
             guard case .unknown(let detail) = probe else {
                 Issue.record("expected unknown, got \(probe)")
                 return
             }
-            #expect(detail.contains("found no claude above it"))
-        case "unnamed-held":
+            #expect(detail.contains("with no claude above it, and process 80 it ran under still runs"))
+        case "held":
             #expect(probe == .held([.init(pid: 70, foundBy: .arguments, startedAt: nil)], recordedSessionGone: false))
         default:
             #expect(probe == .free)
         }
+    }
+
+    /// A process named later proves nothing about one a hook could not name: the conversation
+    /// stays unknown after the named one exits, while the unnamed one's chain still runs.
+    @Test("A named process exiting leaves the conversation unknown while an earlier unattributed chain runs")
+    func namedProcessDoesNotClearAnUnattributedChain() async throws {
+        let unnamed = ProcessIdentity(pid: 80, startedAtMicroseconds: 1_000)
+        let named = ProcessIdentity(pid: 90, startedAtMicroseconds: 1_000)
+        var record = Self.record(lastSeenIn: .init(hostSessionID: nil, outsideTmux: true), unattributed: [unnamed])
+        record.harnessProcesses.entries = [.init(process: named, observedAt: Date(timeIntervalSince1970: 300))]
+        let table = try Self.table("1 0 /sbin/launchd")
+        let both = Self.inspector([80: (1_000, ["harness-a"]), 90: (1_000, ["claude"])])
+        let held = await ClaudeHarnessAdapter().holders(of: record, in: Self.context(table, inspector: both))
+        #expect(
+            held
+                == .held(
+                    [.init(pid: 90, foundBy: .recordedHarness, startedAt: named.startedAt)], recordedSessionGone: false)
+        )
+        let afterNamedExits = await ClaudeHarnessAdapter().holders(
+            of: record, in: Self.context(table, inspector: Self.inspector([80: (1_000, ["harness-a"])])))
+        guard case .unknown = afterNamedExits else {
+            Issue.record("expected unknown, got \(afterNamedExits)")
+            return
+        }
+    }
+
+    @Test("An unattributed chain the kernel cannot be asked about is unknown")
+    func unreadableChainIsUnknown() async throws {
+        let record = Self.record(
+            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true),
+            unattributed: [ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)])
+        let probe = await ClaudeHarnessAdapter().holders(
+            of: record, in: Self.context(try Self.table("1 0 /sbin/launchd"), inspector: Self.failingInspector(60)))
+        #expect(probe == .unknown("Could not ask the kernel about process 60"))
+    }
+
+    @Test("The chain a hook records runs from its parent up, short of launchd and the tmux server")
+    func hookChainStopsAtLaunchdAndTmux() {
+        let processes: [Int32: (Int32, [String])] = [
+            10: (1, ["tmux", "-L", "workspaces", "new-session"]), 20: (10, ["-zsh"]), 30: (20, ["harness-a"]),
+            40: (30, ["/bin/bash", "/hooks/conversation-observer.sh"]),
+        ]
+        #expect(
+            ConversationHookObserver.processesRunningThisHook(from: 40, inspector: Self.tree(processes)).map(\.pid)
+                == [40, 30, 20])
+        let outside: [Int32: (Int32, [String])] = [20: (1, ["-zsh"]), 30: (20, ["harness-a"])]
+        #expect(
+            ConversationHookObserver.processesRunningThisHook(from: 30, inspector: Self.tree(outside)).map(\.pid)
+                == [30, 20])
     }
 
     @Test("A recorded harness the kernel cannot be asked about is unknown, never free")

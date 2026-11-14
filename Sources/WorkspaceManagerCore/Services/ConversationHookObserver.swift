@@ -25,7 +25,8 @@ public enum ConversationHookObserver {
         input: FileHandle = .standardInput,
         now: Date = Date(),
         tmuxSession: (TmuxEnvironment) -> ConversationRecord.TmuxSession? = TmuxEnvironment.describe,
-        harness: () -> ProcessIdentity? = { harnessRunningThisHook() }
+        harness: () -> ProcessIdentity? = { harnessRunningThisHook() },
+        chain: () -> [ProcessIdentity] = { processesRunningThisHook() }
     ) -> Int32 {
         guard isInsideWorkSpaces(environment) else { return 0 }
         guard let payload = try? input.readToEnd(),
@@ -34,7 +35,8 @@ public enum ConversationHookObserver {
                 environment: environment,
                 now: now,
                 tmuxSession: tmuxSession,
-                harness: harness
+                harness: harness,
+                chain: chain
             )
         else { return 0 }
         let store = ConversationRecordStore(
@@ -48,7 +50,8 @@ public enum ConversationHookObserver {
         environment: [String: String],
         now: Date,
         tmuxSession: (TmuxEnvironment) -> ConversationRecord.TmuxSession? = { _ in nil },
-        harness: () -> ProcessIdentity? = { nil }
+        harness: () -> ProcessIdentity? = { nil },
+        chain: () -> [ProcessIdentity] = { [] }
     ) -> ConversationObservation? {
         guard let object = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
             let sessionID = object["session_id"] as? String,
@@ -70,7 +73,7 @@ public enum ConversationHookObserver {
             observedAt: now,
             observedBy: .hook,
             lastSeenIn: place,
-            harnessProcess: harness().map(ConversationRecord.HarnessAnswer.named) ?? .unnamed
+            harnessProcess: harness().map(ConversationRecord.HarnessAnswer.named) ?? .unnamed(chain: chain())
         )
     }
 }
@@ -101,6 +104,29 @@ extension ConversationHookObserver {
             current = parent
         }
         return nil
+    }
+
+    /// The processes this hook runs under, nearest first, as far up as it looks for a claude
+    /// and short of launchd or a tmux server. When none of them is a claude, any of them may
+    /// be what runs the conversation.
+    public static func processesRunningThisHook(
+        from pid: Int32 = getppid(),
+        inspector: ProcessInspector = .live
+    ) -> [ProcessIdentity] {
+        var chain: [ProcessIdentity] = []
+        var current = pid
+        for _ in 0..<ancestorLimit {
+            guard current > 1 else { break }
+            if let program = inspector.arguments(current)?.first,
+                URL(fileURLWithPath: program).lastPathComponent.hasPrefix("tmux")
+            {
+                break
+            }
+            if let identity = inspector.identity(current) { chain.append(identity) }
+            guard let parent = inspector.parent(current) else { break }
+            current = parent
+        }
+        return chain
     }
 }
 

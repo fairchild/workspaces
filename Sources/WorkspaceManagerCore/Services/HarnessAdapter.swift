@@ -157,16 +157,27 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
     /// only when its server answers that they run there, and, outside tmux, a named process
     /// in the tile it was named in.
     ///
-    /// A conversation that nothing holds, and whose newest hook could not name its claude, is
-    /// unknown: that claude may still run, and nothing says when it exits.
+    /// A conversation that nothing holds is unknown while any process runs that a hook which
+    /// found no claude above it ran under: one of them may be running the conversation.
     public func holders(of record: ConversationRecord, in context: HolderProbeContext) async -> HolderProbe {
         let found = await namedHolders(of: record, in: context)
-        guard found == .free, record.harnessProcesses.newestIsUnnamed else { return found }
+        guard found == .free else { return found }
+        var running: [Int32] = []
+        for process in record.harnessProcesses.unattributed.flatMap(\.chain) {
+            switch context.inspector.liveness(process) {
+            case .running: running.append(process.pid)
+            case .ended: continue
+            case .unreadable: return .unknown("Could not ask the kernel about process \(process.pid)")
+            }
+        }
+        guard !running.isEmpty else { return found }
         let id = record.conversationID
+        let pids = running.map(String.init).joined(separator: ", ")
         return .unknown(
-            "The hook that last saw conversation \(id) start found no claude above it, so whether a claude still "
-                + "runs it is unknown\nIf you are certain no claude runs this conversation, start it once by hand "
-                + "with 'claude --resume \(id)', and its hook names it.")
+            "A hook saw conversation \(id) start with no claude above it, and \(running.count == 1 ? "process" : "processes") "
+                + "\(pids) it ran under \(running.count == 1 ? "still runs" : "still run"), so whether one of them runs the "
+                + "conversation is unknown\nIt resumes once \(running.count == 1 ? "that process exits" : "those processes exit"). "
+                + "If one of them is an agent running this conversation, exit that agent.")
     }
 
     private func namedHolders(of record: ConversationRecord, in context: HolderProbeContext) async -> HolderProbe {

@@ -85,16 +85,16 @@ public struct ConversationRecord: Equatable, Sendable {
     }
 
     /// What a hook or a resume said about the process running the conversation: that one,
-    /// or, from a hook, that it ran and could not name the claude it ran under.
+    /// or, from a hook that found no claude above it, the processes it ran under.
     public enum HarnessAnswer: Equatable, Sendable {
         case named(ProcessIdentity)
-        case unnamed
+        case unnamed(chain: [ProcessIdentity])
     }
 
     /// Every process a hook or a resume named as running the conversation, apart from where
     /// it was seen: a place a later sighting contradicts becomes history, while a process that
     /// ran the conversation holds it until it exits, whatever was seen since. Writers only add
-    /// to it, and an entry leaves only once its process has exited.
+    /// to it, and an entry leaves only once its processes have exited.
     public struct HarnessProcesses: Equatable, Sendable {
         public struct Entry: Equatable, Sendable {
             public var process: ProcessIdentity
@@ -109,22 +109,26 @@ public struct ConversationRecord: Equatable, Sendable {
             }
         }
 
-        public var entries: [Entry]
-        /// The newest answer that named a process, kept after that process's entry has left.
-        public var namedAt: Date?
-        /// The newest hook that ran and could not name its claude.
-        public var unnamedAt: Date?
+        /// A hook that found no claude above it: any process in its chain may be running the
+        /// conversation, so the entry leaves only once every one of them has exited.
+        public struct Unattributed: Equatable, Sendable {
+            public var chain: [ProcessIdentity]
+            public var observedAt: Date
+            public var seenIn: LastSeenIn?
 
-        public init(entries: [Entry] = [], namedAt: Date? = nil, unnamedAt: Date? = nil) {
-            self.entries = entries
-            self.namedAt = namedAt
-            self.unnamedAt = unnamedAt
+            public init(chain: [ProcessIdentity], observedAt: Date, seenIn: LastSeenIn? = nil) {
+                self.chain = chain
+                self.observedAt = observedAt
+                self.seenIn = seenIn
+            }
         }
 
-        /// Whether the newest answer is a hook that could not name the claude it ran under.
-        public var newestIsUnnamed: Bool {
-            guard let unnamedAt else { return false }
-            return namedAt.map { unnamedAt > $0 } ?? true
+        public var entries: [Entry]
+        public var unattributed: [Unattributed]
+
+        public init(entries: [Entry] = [], unattributed: [Unattributed] = []) {
+            self.entries = entries
+            self.unattributed = unattributed
         }
     }
 
@@ -310,7 +314,16 @@ enum ConversationRecordJSON {
                 process: process, observedAt: observedAt,
                 seenIn: (entry["seenIn"] as? [String: Any]).map(lastSeenIn(from:)))
         }
-        return .init(entries: entries, namedAt: date(object["namedAt"]), unnamedAt: date(object["unnamedAt"]))
+        let unattributed = (object["unattributed"] as? [[String: Any]] ?? []).compactMap {
+            entry -> ConversationRecord.HarnessProcesses.Unattributed? in
+            guard let chain = (entry["chain"] as? [String])?.compactMap(ProcessIdentity.init(recorded:)),
+                let observedAt = date(entry["observedAt"])
+            else { return nil }
+            return .init(
+                chain: chain, observedAt: observedAt,
+                seenIn: (entry["seenIn"] as? [String: Any]).map(lastSeenIn(from:)))
+        }
+        return .init(entries: entries, unattributed: unattributed)
     }
 }
 
