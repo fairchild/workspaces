@@ -160,21 +160,26 @@ public enum AgentSessionInspection {
         }
         guard let program = words.first else { return false }
         if isClaudeEntry(program) { return true }
-        var arguments = words.dropFirst()
+        let arguments = words.dropFirst()
         guard Self.scriptRuntimes.contains(programName(program)) else {
             return arguments.first.map(isClaudeEntry) ?? false
         }
-        while let word = arguments.first, word.hasPrefix("-") {
-            arguments = arguments.dropFirst(Self.runtimeOptionsWithValue.contains(word) ? 2 : 1)
+        // Any runtime option may take the next word as its value, so the script is the first
+        // word that neither is an option nor follows one written without `=`.
+        var mayBeValue = false
+        for word in arguments {
+            if isClaudeEntry(word) { return true }
+            if word.hasPrefix("-") {
+                mayBeValue = !word.contains("=")
+                continue
+            }
+            guard mayBeValue else { return false }
+            mayBeValue = false
         }
-        return arguments.first.map(isClaudeEntry) ?? false
+        return false
     }
 
     private static let scriptRuntimes: Set<String> = ["node", "nodejs", "bun"]
-    private static let runtimeOptionsWithValue: Set<String> = [
-        "-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "-C", "--conditions",
-        "--title",
-    ]
     private static let envOptionsWithValue: Set<String> = ["-u", "--unset", "-C", "--chdir", "-P", "-S"]
 
     private static func programName(_ word: String) -> String {

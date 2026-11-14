@@ -542,27 +542,34 @@ struct CLIConversationResumeTests {
 
     /// A claude starts a runtime the adapter does not recognize, and that runtime runs the
     /// conversation. The hook names the claude above it, and the processes it passed on the
-    /// way still hold the conversation once that claude has gone.
-    @Test("A runtime between the hook and the claude it names holds the conversation after that claude exits")
-    func passedRuntimeHoldsAfterTheNamedClaude() async throws {
+    /// way still hold the conversation once that claude has gone. The second case gives the
+    /// runtime claude's own options and script, run as a shell script, so the argument rule
+    /// cannot see it either way.
+    @Test(
+        "A runtime between the hook and the claude it names holds the conversation after that claude exits",
+        arguments: ["agent-rt", "node-inspect"])
+    func passedRuntimeHoldsAfterTheNamedClaude(shape: String) async throws {
         let fixture = try makeFixture()
         defer { fixture.teardown() }
         let conversationID = UUID().uuidString.lowercased()
         try FileManager.default.createDirectory(at: fixture.transcripts, withIntermediateDirectories: true)
         FileManager.default.createFile(
             atPath: fixture.transcripts.appendingPathComponent("\(conversationID).jsonl").path, contents: Data())
-        let runtime = fixture.bin.appendingPathComponent("agent-rt")
-        try FileManager.default.copyItem(at: fixture.stub, to: runtime)
+        let runtime = fixture.bin.appendingPathComponent(shape == "agent-rt" ? "agent-rt" : "node")
+        if shape == "agent-rt" { try FileManager.default.copyItem(at: fixture.stub, to: runtime) }
+        let runtimeArguments =
+            shape == "agent-rt" ? "" : "--inspect-port 0 \(fixture.root.path)/lib/claude-code/cli.js"
         let outerDirectory = fixture.root.appendingPathComponent("outer")
         try FileManager.default.createDirectory(at: outerDirectory, withIntermediateDirectories: true)
         let outerScript = outerDirectory.appendingPathComponent("claude")
-        try "#!/bin/sh\n\"$STUB_RUNTIME\" &\nwhile [ -e \"$0\" ]; do sleep 1; done\n".write(
+        try "#!/bin/sh\n\"$STUB_RUNTIME\" $STUB_RUNTIME_ARGS &\nwhile [ -e \"$0\" ]; do sleep 1; done\n".write(
             to: outerScript, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: outerScript.path)
         let outer = try fixture.start(
             [], executable: outerScript,
             extraEnvironment: [
-                "STUB_RUNTIME": runtime.path, "STUB_STAY": "1", "STUB_HOOK_IDS": conversationID,
+                "STUB_RUNTIME": runtime.path, "STUB_RUNTIME_ARGS": runtimeArguments, "STUB_STAY": "1",
+                "STUB_HOOK_IDS": conversationID,
                 "STUB_HOOK_CLI": fixture.binary.path, "STUB_TRANSCRIPTS": fixture.transcripts.path,
             ],
             output: fixture.root.appendingPathComponent("outer.log"))

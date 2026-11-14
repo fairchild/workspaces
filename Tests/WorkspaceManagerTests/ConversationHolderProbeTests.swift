@@ -104,8 +104,10 @@ struct ConversationHolderProbeTests {
                 8   1 /usr/bin/env node --no-warnings /opt/lib/claude-code/cli.js --resume \(Self.id)
                 9   1 env -u CLAUDECODE NODE_OPTIONS=x node --require /opt/hook.js /opt/claude-code/cli.js -r \(Self.id)
                10   1 bun /opt/bin/claude --resume \(Self.id)
+               11   1 node --inspect-port 0 /opt/lib/claude-code/cli.js --resume \(Self.id)
+               12   1 node --stack-size 4000 --no-warnings --max-old-space-size=8192 /opt/claude-code/cli.js -r \(Self.id)
             """
-        #expect(try await Self.argumentHolders(listing) == [5, 6, 7, 8, 9, 10])
+        #expect(try await Self.argumentHolders(listing) == [5, 6, 7, 8, 9, 10, 11, 12])
     }
 
     @Test("A conversation id past `--` is a prompt, and a program merely naming claude holds nothing")
@@ -711,7 +713,17 @@ struct ConversationHolderProbeTests {
         #expect(ancestry.passed.map(\.pid) == Array(stride(from: pid, to: 10, by: -10)))
     }
 
-    @Test("The hook looks only so far up, and never past launchd")
+    @Test("A claude started by another, with runtime options that take a value, is the one the hook names")
+    func hookNamesAClaudeRunWithRuntimeOptions() {
+        let processes: [Int32: (Int32, [String])] = [
+            10: (1, ["claude"]), 20: (10, ["node", "--inspect-port", "0", "/opt/lib/claude-code/cli.js"]),
+            30: (20, ["/bin/bash", "/hooks/conversation-observer.sh"]),
+        ]
+        let ancestry = HookAncestry.above(30, inspector: Self.tree(processes))
+        #expect(ancestry.claude?.pid == 20)
+        #expect(ancestry.passed.map(\.pid) == [30])
+    }
+
     func hookLooksOnlySoFarUp() {
         var processes: [Int32: (Int32, [String])] = [10: (1, ["claude"])]
         for pid in stride(from: Int32(20), through: 100, by: 10) { processes[pid] = (pid - 10, ["/bin/sh", "x"]) }
