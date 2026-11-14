@@ -139,11 +139,25 @@ extension ConversationRecordJSON {
         entries.removeAll { entry in
             (entry["process"] as? String).flatMap(ProcessIdentity.init(recorded:)).map(ended) ?? false
         }
-        unattributed.removeAll { entry in
-            guard let chain = entry["chain"] as? [String] else { return false }
-            let identities = chain.compactMap(ProcessIdentity.init(recorded:))
-            return identities.count == chain.count && identities.allSatisfy(ended)
+        // A chain keeps only its members that may still run, so repeated hooks from one shell
+        // come down to one entry; one it cannot read is kept whole.
+        var living: [[String: Any]] = []
+        for var entry in unattributed {
+            if let chain = entry["chain"] as? [String] {
+                let identities = chain.compactMap(ProcessIdentity.init(recorded:))
+                if identities.count == chain.count {
+                    let remaining = identities.filter { !ended($0) }
+                    guard !remaining.isEmpty else { continue }
+                    entry["chain"] = remaining.map(\.recorded)
+                }
+            }
+            guard let observedAt = date(entry["observedAt"]) else {
+                living.append(entry)
+                continue
+            }
+            upsert(entry, at: observedAt, key: chainKey, into: &living)
         }
+        unattributed = living
         entries.sort { (namedKey($0) ?? "") < (namedKey($1) ?? "") }
         unattributed.sort { (chainKey($0) ?? "") < (chainKey($1) ?? "") }
         processes["entries"] = entries.isEmpty ? nil : entries

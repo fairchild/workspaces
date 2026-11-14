@@ -155,18 +155,40 @@ struct ConversationRecordStoreTests {
             unnamed.harnessProcess = .unnamed(chain: [gone, harness])
             var named = observation(at: 1_800_000_060, lastSeenIn: .init(hostSessionID: nil, outsideTmux: true))
             named.harnessProcess = .named(harness)
-            try store.record(unnamed)
-            try store.record(named)
+            try store.record(unnamed, ended: { _ in false })
+            try store.record(named, ended: { _ in false })
             let both = try #require(store.load(conversationID: Self.conversationID)?.harnessProcesses)
             #expect(both.entries.map(\.process) == [harness])
             #expect(both.unattributed.map(\.chain) == [[gone, harness]])
 
             try store.record(observation(at: 1_800_000_120), ended: { $0 == gone })
             #expect(
-                try #require(store.load(conversationID: Self.conversationID)).harnessProcesses.unattributed.count == 1)
+                try #require(store.load(conversationID: Self.conversationID)).harnessProcesses.unattributed.map(\.chain)
+                    == [[harness]])
             try store.record(observation(at: 1_800_000_180), ended: { _ in true })
             let after = try #require(store.load(conversationID: Self.conversationID)).harnessProcesses
             #expect(after.unattributed.isEmpty && after.entries.isEmpty)
+        }
+    }
+
+    @Test("Chains from repeated hooks under one shell come down to one entry once their own shells exit")
+    func repeatedChainsCollapse() throws {
+        let shell = try Self.thisProcess
+        let first = ProcessIdentity(pid: 101, startedAtMicroseconds: 1)
+        let second = ProcessIdentity(pid: 102, startedAtMicroseconds: 1)
+        try withStore { store in
+            for (offset, hook) in [first, second].enumerated() {
+                var unnamed = observation(at: 1_800_000_000 + Double(offset))
+                unnamed.harnessProcess = .unnamed(chain: [hook, shell])
+                try store.record(unnamed, ended: { _ in false })
+            }
+            #expect(
+                try #require(store.load(conversationID: Self.conversationID)).harnessProcesses.unattributed.count == 2)
+
+            try store.record(observation(at: 1_800_000_060), ended: { $0 != shell })
+            let collapsed = try #require(store.load(conversationID: Self.conversationID)).harnessProcesses.unattributed
+            #expect(collapsed.map(\.chain) == [[shell]])
+            #expect(collapsed.first?.observedAt == Date(timeIntervalSince1970: 1_800_000_001))
         }
     }
 
