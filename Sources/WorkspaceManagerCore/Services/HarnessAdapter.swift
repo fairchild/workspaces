@@ -106,8 +106,10 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
     }
 
     /// The path the hook reported first, then the recorded config home, then the default
-    /// home and the caller's own. The config home handed back is the one the transcript was
-    /// found under, so the harness looks where the transcript is.
+    /// home and the caller's own; under each home, the project directory of the recorded
+    /// working directory first, then any project directory holding the conversation, as a
+    /// conversation resumed from another directory has. The config home handed back is the
+    /// one the transcript was found under, so the harness looks where the transcript is.
     public func transcript(
         for record: ConversationRecord,
         environment: [String: String],
@@ -120,8 +122,9 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
             return HarnessTranscript(url: url, configHome: isDefault ? nil : home?.path)
         }
         func search(_ environment: [String: String]) -> URL? {
-            ClaudeTranscriptResumability(environment: environment, homeDirectory: homeDirectory)
-                .existingTranscriptURL(agentSessionID: record.conversationID, launchDirectory: record.cwd)
+            let transcripts = ClaudeTranscriptResumability(environment: environment, homeDirectory: homeDirectory)
+            return transcripts.existingTranscriptURL(agentSessionID: record.conversationID, launchDirectory: record.cwd)
+                ?? transcripts.existingTranscriptURL(agentSessionID: record.conversationID)
         }
 
         if let path = record.transcriptPath, FileManager.default.fileExists(atPath: path) {

@@ -598,6 +598,35 @@ struct CLIConversationResumeTests {
         #expect(resumed.stdout.contains("stub argv=--resume \(conversationID)"))
     }
 
+    /// A conversation begun in one directory and resumed in another, as `ws launch` into a
+    /// second workspace does, keeps its transcript under the first directory's project, where
+    /// `claude --resume` finds it by id from anywhere.
+    @Test("A conversation last run in another directory resumes there from the transcript it began in")
+    func transcriptUnderAnotherProjectResumes() throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = UUID().uuidString.lowercased()
+        let first = fixture.home.appendingPathComponent(".claude/projects/-first-workspace/\(conversationID).jsonl")
+        try FileManager.default.createDirectory(
+            at: first.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: first.path, contents: Data())
+        let second = fixture.root.appendingPathComponent("second")
+        try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+        try fixture.records.record(
+            ConversationObservation(
+                conversationID: conversationID, cwd: second.path,
+                transcriptPath: fixture.home.appendingPathComponent(
+                    ".claude/projects/-second/\(conversationID).jsonl"
+                ).path,
+                observedBy: .hook, lastSeenIn: .init(hostSessionID: nil, outsideTmux: true)),
+            ended: { _ in false })
+
+        let resumed = try fixture.run(["conversation", "resume", conversationID, "--here"])
+        #expect(resumed.status == 0, "\(resumed.stderr)")
+        #expect(resumed.stdout.contains("stub argv=--resume \(conversationID)"))
+        #expect(resumed.stdout.contains("stub pwd=/private\(second.path)\n"))
+    }
+
     /// The decision before a resume's sighting and the one after it are one function, so
     /// a note a hook publishes while the resume waits for the record's write lock refuses it
     /// as surely as a note already there.
