@@ -79,30 +79,28 @@ extension ConversationHookObserver {
     /// The file name the app installs the SessionStart forwarder under.
     public static let forwarderName = "conversation-observer.sh"
 
-    /// The Claude process this hook runs for, reached only through what runs a hook: claude
-    /// starts the hook command in a shell, and the forwarder script starts this CLI. Any
-    /// other process between here and a claude means some other program fired the hook, and
-    /// the claude above it is not the one whose conversation started, so nothing is named.
+    /// How far up the hook looks for its claude: past the hook's shell, the forwarder, and
+    /// any wrapper, link or shim between them.
+    public static let ancestorLimit = 8
+
+    /// The Claude process this hook runs for: the nearest ancestor that is a claude, short of
+    /// launchd. A claude above a program that fired the hook beneath it is named too, and
+    /// then holds that conversation until it exits: a wrong name costs a wait, where no name
+    /// would leave the conversation unattributed.
     public static func harnessRunningThisHook(
         from pid: Int32 = getppid(),
         inspector: ProcessInspector = .live
     ) -> ProcessIdentity? {
         var current = pid
-        for _ in 0..<3 {
-            guard current > 1, let words = inspector.arguments(current) else { return nil }
-            if AgentSessionInspection.isClaude(words) { return inspector.identity(current) }
-            guard isForwarderShell(words), let parent = inspector.parent(current) else { return nil }
+        for _ in 0..<ancestorLimit {
+            guard current > 1 else { return nil }
+            if let words = inspector.arguments(current), AgentSessionInspection.isClaude(words) {
+                return inspector.identity(current)
+            }
+            guard let parent = inspector.parent(current) else { return nil }
             current = parent
         }
         return nil
-    }
-
-    /// A shell running the forwarder, as its script or in a `-c` command claude gave it.
-    static func isForwarderShell(_ words: [String]) -> Bool {
-        guard let program = words.first else { return false }
-        let name = URL(fileURLWithPath: program).lastPathComponent.drop { $0 == "-" }
-        return ["sh", "bash", "zsh", "dash", "ksh"].contains(String(name))
-            && words.dropFirst().contains { $0.contains(forwarderName) }
     }
 }
 

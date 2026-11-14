@@ -456,43 +456,36 @@ struct CLIConversationResumeTests {
         return (installed, link)
     }
 
-    /// Outside tmux, a hook that names its claude is all that guards a bare one. A hook that
-    /// cannot name it, run through a link or more shells than a hook runs in, says so, and that
-    /// conversation refuses rather than reading as free.
+    /// Outside tmux, a hook that names its claude is all that guards a bare one, so the hook
+    /// names the nearest claude above it however its command reaches the forwarder.
     @Test(
-        "A hook run through the installed forwarder names its claude; one run through a link or a deeper chain says it could not",
-        arguments: ["installed", "link", "deeper"]
+        "A hook names its claude through the installed forwarder, a link to it, a script of its own or a deeper chain",
+        arguments: ["installed", "link", "script", "deeper"]
     )
-    func hookThatCannotNameItsClaudeRefuses(path: String) async throws {
+    func hookNamesItsClaudeHoweverItIsReached(path: String) async throws {
         let fixture = try makeFixture()
         defer { fixture.teardown() }
         let forwarder = try installForwarder(in: fixture)
+        let script = fixture.bin.appendingPathComponent("my-session-start")
+        try "#!/bin/sh\n\(forwarder.link.path)\n".write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         let conversationID = UUID().uuidString.lowercased()
         let hookCommand =
             switch path {
             case "installed": forwarder.installed.path
             case "link": forwarder.link.path
+            case "script": script.path
             default: "/bin/sh -c '/bin/bash -c \"\(forwarder.installed.path); true\"; true'"
             }
         let agent = try await startBareAgent(in: fixture, hooking: [conversationID], hookCommand: hookCommand)
         defer { Self.kill([agent]) }
         let named = try #require(fixture.records.load(conversationID: conversationID)?.harnessProcesses)
+        #expect(named.entries.map(\.process.pid) == [agent.processIdentifier])
 
         let resume = try fixture.run(["conversation", "resume", conversationID, "--here"])
         #expect(!resume.stdout.contains("stub argv"))
-        if path == "installed" {
-            #expect(named.entries.map(\.process.pid) == [agent.processIdentifier])
-            #expect(resume.status == 3)
-            #expect(resume.stdout.contains("pid \(agent.processIdentifier)"))
-        } else {
-            #expect(named.entries.isEmpty && named.newestIsUnnamed)
-            #expect(resume.status == 1)
-            #expect(resume.stderr.contains("could not name the claude it ran under"))
-            #expect(resume.stderr.contains("a second agent cannot be ruled out. If the SessionStart hook reaches"))
-            #expect(
-                resume.stderr.contains("itself first; until then no hook can name a claude. Then, if you are certain"))
-            #expect(resume.stderr.contains("start it once by hand with 'claude --resume \(conversationID)'"))
-        }
+        #expect(resume.status == 3)
+        #expect(resume.stdout.contains("pid \(agent.processIdentifier)"))
     }
 
     /// A harness whose parent never collects it, as an orchestrator that starts the verb and
@@ -657,7 +650,7 @@ struct CLIConversationResumeTests {
 
     /// A tool an agent runs can start a claude of its own whose SessionStart fires beneath the
     /// agent, and a hook can be late or misplaced. Neither takes a conversation from the agent
-    /// whose arguments name it.
+    /// whose arguments name it; the one beneath is held by the agent too, until it exits.
     @Test("A claude whose arguments name the conversation keeps it whatever a later hook records")
     func argumentsHolderKeepsItsConversation() async throws {
         let fixture = try makeFixture()
@@ -670,7 +663,7 @@ struct CLIConversationResumeTests {
         defer { Self.kill([agent]) }
 
         let fromBeneath = try #require(fixture.records.load(conversationID: beneath))
-        #expect(fromBeneath.harnessProcesses.entries.isEmpty)
+        #expect(fromBeneath.harnessProcesses.entries.map(\.process.pid) == [agent.processIdentifier])
         #expect(
             fixture.records.load(conversationID: misplaced)?.harnessProcesses.entries.map(\.process.pid)
                 == [agent.processIdentifier])

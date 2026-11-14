@@ -439,7 +439,7 @@ struct ConversationHolderProbeTests {
                 Issue.record("expected unknown, got \(probe)")
                 return
             }
-            #expect(detail.contains("could not name the claude it ran under"))
+            #expect(detail.contains("found no claude above it"))
         case "unnamed-held":
             #expect(probe == .held([.init(pid: 70, foundBy: .arguments, startedAt: nil)], recordedSessionGone: false))
         default:
@@ -512,57 +512,40 @@ struct ConversationHolderProbeTests {
     }
 
     @Test(
-        "The hook names the claude that ran it, through the hook's shell and the forwarder and nothing else",
-        arguments: ["claude itself", "the forwarder", "a -c shell and the forwarder"]
-    )
-    func hookNamesItsClaude(path: String) {
-        let forwarder = ["/bin/bash", "/hooks/conversation-observer.sh"]
-        let (processes, start): ([Int32: (Int32, [String])], Int32) =
-            switch path {
-            case "claude itself": ([10: (1, ["claude", "--resume", "x"])], 10)
-            case "the forwarder": ([10: (1, ["claude"]), 20: (10, forwarder)], 20)
-            default:
-                (
-                    [
-                        10: (1, ["node", "/opt/claude-code/cli.js"]),
-                        20: (10, ["/bin/sh", "-c", "'/hooks/conversation-observer.sh'"]),
-                        30: (20, forwarder),
-                    ], 30
-                )
-            }
-        #expect(
-            ConversationHookObserver.harnessRunningThisHook(from: start, inspector: Self.tree(processes))?.pid == 10)
-    }
-
-    /// Something a claude started can fire a SessionStart of its own, and a script run from
-    /// an agent's terminal can run the observer: the claude above either is not the one whose
-    /// conversation started.
-    @Test(
-        "The hook names nothing when anything else stands between it and a claude",
+        "The hook names the nearest claude above it, through its shell, a wrapper, a link or a shim",
         arguments: [
-            ["/usr/bin/time", "-p", "workspaces"],
-            ["/bin/sh", "/tmp/repro.sh"],
-            ["/bin/zsh", "-c", "sh /tmp/repro.sh"],
-            ["node", "/opt/other-agent/cli.js"],
+            [["claude", "--resume", "x"]],
+            [["/bin/bash", "/hooks/conversation-observer.sh"]],
+            [["/bin/sh", "-c", "'/hooks/conversation-observer.sh'"], ["/bin/bash", "/hooks/observer.sh"]],
+            [["/usr/bin/time", "-p", "workspaces"]],
+            [["/bin/zsh", "-c", "sh /tmp/hook.sh"], ["/bin/sh", "/tmp/hook.sh"], ["/opt/shims/workspaces"]],
+            [["node", "/opt/other-agent/cli.js"]],
         ]
     )
-    func hookNamesNoClaudeAboveAStranger(stranger: [String]) {
-        let processes: [Int32: (Int32, [String])] = [
-            10: (1, ["claude", "--resume", Self.id]),
-            20: (10, stranger),
-            30: (20, ["/bin/bash", "/hooks/conversation-observer.sh"]),
-        ]
-        #expect(ConversationHookObserver.harnessRunningThisHook(from: 30, inspector: Self.tree(processes)) == nil)
+    func hookNamesTheNearestClaude(between: [[String]]) {
+        var processes: [Int32: (Int32, [String])] = [10: (1, ["node", "/opt/claude-code/cli.js"])]
+        var pid: Int32 = 10
+        for words in between where words.first != "claude" {
+            processes[pid + 10] = (pid, words)
+            pid += 10
+        }
+        if between.first?.first == "claude" { processes[10] = (1, between[0]) }
+        #expect(ConversationHookObserver.harnessRunningThisHook(from: pid, inspector: Self.tree(processes))?.pid == 10)
     }
 
-    @Test("The hook stops looking after the shells a hook runs in")
-    func hookLooksOnlyAsFarAsAHookGoes() {
-        let forwarder = ["/bin/bash", "/hooks/conversation-observer.sh"]
-        let processes: [Int32: (Int32, [String])] = [
-            10: (1, ["claude"]), 20: (10, forwarder), 30: (20, forwarder), 40: (30, forwarder),
-        ]
-        #expect(ConversationHookObserver.harnessRunningThisHook(from: 40, inspector: Self.tree(processes)) == nil)
-        #expect(ConversationHookObserver.harnessRunningThisHook(from: 30, inspector: Self.tree(processes))?.pid == 10)
+    @Test("The hook looks only so far up, and never past launchd")
+    func hookLooksOnlySoFarUp() {
+        var processes: [Int32: (Int32, [String])] = [10: (1, ["claude"])]
+        for pid in stride(from: Int32(20), through: 100, by: 10) { processes[pid] = (pid - 10, ["/bin/sh", "x"]) }
+        let limit = Int32(ConversationHookObserver.ancestorLimit)
+        #expect(
+            ConversationHookObserver.harnessRunningThisHook(
+                from: 10 + 10 * (limit - 1), inspector: Self.tree(processes))?.pid == 10)
+        #expect(
+            ConversationHookObserver.harnessRunningThisHook(from: 10 + 10 * limit, inspector: Self.tree(processes))
+                == nil)
+        let underLaunchd: [Int32: (Int32, [String])] = [1: (0, ["claude"]), 20: (1, ["/bin/sh", "x"])]
+        #expect(ConversationHookObserver.harnessRunningThisHook(from: 20, inspector: Self.tree(underLaunchd)) == nil)
     }
 
     // MARK: - The adapter's other answers

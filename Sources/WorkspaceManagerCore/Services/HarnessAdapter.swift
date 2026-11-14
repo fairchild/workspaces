@@ -163,14 +163,10 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
         let found = await namedHolders(of: record, in: context)
         guard found == .free, record.harnessProcesses.newestIsUnnamed else { return found }
         let id = record.conversationID
-        let forwarder = ConversationHookObserver.forwarderName
         return .unknown(
-            "The hook that last saw conversation \(id) start could not name the claude it ran under, as happens when "
-                + "the hook command reaches \(forwarder) through a link, a script or a shim, so whether that claude "
-                + "still runs is unknown\n"
-                + "If the SessionStart hook reaches \(forwarder) through anything else, point it at the installed "
-                + "\(forwarder) itself first; until then no hook can name a claude. Then, if you are certain no claude "
-                + "runs this conversation, start it once by hand with 'claude --resume \(id)', and its hook names it.")
+            "The hook that last saw conversation \(id) start found no claude above it, so whether a claude still "
+                + "runs it is unknown\nIf you are certain no claude runs this conversation, start it once by hand "
+                + "with 'claude --resume \(id)', and its hook names it.")
     }
 
     private func namedHolders(of record: ConversationRecord, in context: HolderProbeContext) async -> HolderProbe {
