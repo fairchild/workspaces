@@ -244,7 +244,8 @@ enum ConversationRecordJSON {
             let conversationID = ConversationRecord.normalizedID(rawID),
             let harness = object["harness"] as? String,
             let cwd = object["cwd"] as? String,
-            let observedAt = date(object["observedAt"])
+            let observedAt = date(object["observedAt"]),
+            let harnessProcesses = harnessProcesses(from: object[harnessProcessesKey])
         else { return nil }
         return ConversationRecord(
             schema: object["schema"] as? Int ?? ConversationRecord.schemaVersion,
@@ -263,7 +264,7 @@ enum ConversationRecordJSON {
             launch: (object["launch"] as? [String: Any]).flatMap(launch(from:)),
             lastSeenIn: (object["lastSeenIn"] as? [String: Any]).map(lastSeenIn(from:)),
             endedByUserAt: date(object["endedByUserAt"]),
-            harnessProcesses: harnessProcesses(from: object[harnessProcessesKey] as? [String: Any] ?? [:])
+            harnessProcesses: harnessProcesses
         )
     }
 
@@ -304,26 +305,45 @@ enum ConversationRecordJSON {
         return object
     }
 
-    static func harnessProcesses(from object: [String: Any]) -> ConversationRecord.HarnessProcesses {
-        let entries = (object["entries"] as? [[String: Any]] ?? []).compactMap {
-            entry -> ConversationRecord.HarnessProcesses.Entry? in
-            guard let process = (entry["process"] as? String).flatMap(ProcessIdentity.init(recorded:)),
-                let observedAt = date(entry["observedAt"])
-            else { return nil }
-            return .init(
-                process: process, observedAt: observedAt,
-                seenIn: (entry["seenIn"] as? [String: Any]).map(lastSeenIn(from:)))
-        }
-        let unattributed = (object["unattributed"] as? [[String: Any]] ?? []).compactMap {
-            entry -> ConversationRecord.HarnessProcesses.Unattributed? in
-            guard let chain = (entry["chain"] as? [String])?.compactMap(ProcessIdentity.init(recorded:)),
-                let observedAt = date(entry["observedAt"])
-            else { return nil }
-            return .init(
-                chain: chain, observedAt: observedAt,
-                seenIn: (entry["seenIn"] as? [String: Any]).map(lastSeenIn(from:)))
-        }
+    /// Ownership, read strictly: nil when anything in it is present but malformed, and the
+    /// record then reads as damaged rather than as owned by nothing.
+    static func harnessProcesses(from value: Any?) -> ConversationRecord.HarnessProcesses? {
+        guard let value else { return .init() }
+        guard let object = value as? [String: Any],
+            let entries = list(
+                object["entries"],
+                { entry -> ConversationRecord.HarnessProcesses.Entry? in
+                    guard let process = (entry["process"] as? String).flatMap(ProcessIdentity.init(recorded:)),
+                        let observedAt = date(entry["observedAt"]), let seenIn = place(entry["seenIn"])
+                    else { return nil }
+                    return .init(process: process, observedAt: observedAt, seenIn: seenIn)
+                }),
+            let unattributed = list(
+                object["unattributed"],
+                { entry -> ConversationRecord.HarnessProcesses.Unattributed? in
+                    guard let words = entry["chain"] as? [String], !words.isEmpty,
+                        case let chain = words.compactMap(ProcessIdentity.init(recorded:)), chain.count == words.count,
+                        let observedAt = date(entry["observedAt"]), let seenIn = place(entry["seenIn"])
+                    else { return nil }
+                    return .init(chain: chain, observedAt: observedAt, seenIn: seenIn)
+                })
+        else { return nil }
         return .init(entries: entries, unattributed: unattributed)
+    }
+
+    /// Every element of an optional list, or nil when the list or any element is malformed.
+    private static func list<T>(_ value: Any?, _ element: ([String: Any]) -> T?) -> [T]? {
+        guard let value else { return [] }
+        guard let objects = value as? [[String: Any]] else { return nil }
+        let elements = objects.compactMap(element)
+        return elements.count == objects.count ? elements : nil
+    }
+
+    /// An entry's place: `.some(nil)` when it has none, nil when it has one that is not an object.
+    private static func place(_ value: Any?) -> ConversationRecord.LastSeenIn?? {
+        guard let value else { return .some(nil) }
+        guard let object = value as? [String: Any] else { return nil }
+        return .some(lastSeenIn(from: object))
     }
 }
 

@@ -192,6 +192,40 @@ struct ConversationRecordStoreTests {
         }
     }
 
+    /// Ownership that is present but malformed may name a process that still runs the
+    /// conversation, so it is never read as no ownership, and a write leaves it as it is.
+    @Test(
+        "Ownership present but malformed reads as damaged, and a later write keeps it",
+        arguments: ["observedAt", "process", "entries", "chain", "harnessProcesses"]
+    )
+    func malformedOwnershipIsDamage(field: String) throws {
+        try withStore { store in
+            var named = observation(at: 1_800_000_000)
+            named.harnessProcess = .named(try Self.thisProcess)
+            try store.record(named, ended: { _ in false })
+            let url = try #require(store.fileURL(conversationID: Self.conversationID))
+            var object = try object(at: url)
+            var processes = try #require(object["harnessProcesses"] as? [String: Any])
+            var entries = try #require(processes["entries"] as? [[String: Any]])
+            switch field {
+            case "observedAt": entries[0]["observedAt"] = "invalid"
+            case "process": entries[0]["process"] = "not-a-process"
+            case "entries": processes["entries"] = "invalid"
+            case "chain": processes["unattributed"] = [["chain": ["invalid"], "observedAt": entries[0]["observedAt"]!]]
+            default: break
+            }
+            if field == "observedAt" || field == "process" { processes["entries"] = entries }
+            object["harnessProcesses"] = field == "harnessProcesses" ? "invalid" : processes
+            try JSONSerialization.data(withJSONObject: object).write(to: url)
+            #expect(store.read(conversationID: Self.conversationID) == .damaged(url))
+
+            try store.record(observation(at: 1_800_000_060), ended: { _ in false })
+            #expect(store.read(conversationID: Self.conversationID) == .damaged(url))
+            let kept = try self.object(at: url)["harnessProcesses"]
+            #expect((kept as AnyObject?)?.isEqual(object["harnessProcesses"]) == true)
+        }
+    }
+
     @Test("A write from another host removes none of the record's harness processes")
     func otherHostRemovesNoHarnessProcess() throws {
         try withStore { store in

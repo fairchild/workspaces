@@ -659,6 +659,29 @@ struct CLIConversationResumeTests {
         try expectHeld("after the previous build wrote another tile")
     }
 
+    /// Ownership that does not decode is damage, not the absence of an owner.
+    @Test("A record whose owner's entry is malformed refuses while that owner runs")
+    func malformedOwnerRefuses() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = UUID().uuidString.lowercased()
+        let agent = try await startBareAgent(in: fixture, hooking: [conversationID])
+        defer { Self.kill([agent]) }
+        let url = try #require(fixture.records.fileURL(conversationID: conversationID))
+        var object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var processes = try #require(object["harnessProcesses"] as? [String: Any])
+        var entries = try #require(processes["entries"] as? [[String: Any]])
+        entries[0]["observedAt"] = "invalid"
+        processes["entries"] = entries
+        object["harnessProcesses"] = processes
+        try JSONSerialization.data(withJSONObject: object).write(to: url)
+
+        let resume = try fixture.run(["conversation", "resume", conversationID, "--here"])
+        #expect(resume.status == 1)
+        #expect(resume.stderr.contains("\(url.path) cannot be read"), "\(resume.stderr)")
+        #expect(!resume.stdout.contains("stub argv"), "a second agent started")
+    }
+
     /// A record that will not parse may still name the agent running the conversation, so it
     /// is never read as absent: not through a launch record, and not by moving it aside.
     @Test("A damaged record refuses, naming its file, even with a launch record to fall back on")

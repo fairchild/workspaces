@@ -113,9 +113,12 @@ extension ConversationRecordJSON {
         into object: inout [String: Any],
         ended: (ProcessIdentity) -> Bool
     ) {
-        var processes = object[harnessProcessesKey] as? [String: Any] ?? [:]
-        var entries = processes["entries"] as? [[String: Any]] ?? []
-        var unattributed = processes["unattributed"] as? [[String: Any]] ?? []
+        // Ownership in a shape this build cannot read is left exactly as it is: rewriting it
+        // would forget whoever it names.
+        guard var processes = object[harnessProcessesKey].map({ $0 as? [String: Any] }) ?? [:],
+            var entries = processes["entries"].map({ $0 as? [[String: Any]] }) ?? [],
+            var unattributed = processes["unattributed"].map({ $0 as? [[String: Any]] }) ?? []
+        else { return }
         switch answer {
         case .named(let process)?:
             var entry: [String: Any] = ["process": process.recorded, "observedAt": string(at)]
@@ -133,8 +136,8 @@ extension ConversationRecordJSON {
         }
         unattributed.removeAll { entry in
             guard let chain = entry["chain"] as? [String] else { return false }
-            let processes = chain.compactMap(ProcessIdentity.init(recorded:))
-            return processes.count == chain.count && processes.allSatisfy(ended)
+            let identities = chain.compactMap(ProcessIdentity.init(recorded:))
+            return identities.count == chain.count && identities.allSatisfy(ended)
         }
         entries.sort { (namedKey($0) ?? "") < (namedKey($1) ?? "") }
         unattributed.sort { (chainKey($0) ?? "") < (chainKey($1) ?? "") }
