@@ -475,6 +475,23 @@ struct ConversationHolderProbeTests {
 
     // MARK: - The probe entrypoint
 
+    @Test("A conversation named by id whose record cannot be read is unknown, not one with no record")
+    func damagedRecordByIDIsUnknown() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("probe-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ConversationRecordStore(directory: directory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("{ not json".utf8).write(to: try #require(store.fileURL(conversationID: Self.id)))
+        let probe = ConversationHolderProbe(
+            records: store, readProcessTable: { try? Self.table("1 0 /sbin/launchd") }, inspector: .none,
+            recordedSession: { _ in nil })
+        guard case .unknown(let detail) = await probe.probe(conversationID: Self.id) else {
+            Issue.record("expected unknown")
+            return
+        }
+        #expect(detail.contains("cannot be read"))
+    }
+
     @Test("An unreadable process table is unknown, whatever the record says")
     func unreadableTableIsUnknown() async {
         let probe = ConversationHolderProbe(

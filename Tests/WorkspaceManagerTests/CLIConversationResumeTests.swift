@@ -591,6 +591,38 @@ struct CLIConversationResumeTests {
         try expectHeld("after the previous build wrote another tile")
     }
 
+    /// A record that will not parse may still name the agent running the conversation, so it
+    /// is never read as absent: not through a launch record, and not by moving it aside.
+    @Test("A damaged record refuses, naming its file, even with a launch record to fall back on")
+    func damagedRecordRefuses() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = UUID().uuidString.lowercased()
+        let agent = try await startBareAgent(in: fixture, hooking: [conversationID])
+        defer { Self.kill([agent]) }
+        let handle = "wm-damaged-\(fixture.socketLabel)"
+        try AgentLaunchRecordStore(directory: fixture.root.appendingPathComponent("config/workspaces-cli/launches"))
+            .save(
+                AgentLaunchRecord(
+                    handle: handle, workspacePath: fixture.work.path,
+                    socketLabel: fixture.socketLabel, launchedAt: Date(),
+                    identity: .init(conversationID: conversationID, requestedModel: nil, requestedEffort: nil)))
+        #expect(try fixture.run(["conversation", "resume", conversationID, "--here"]).status == 3)
+        let url = try #require(fixture.records.fileURL(conversationID: conversationID))
+        let damaged = Data("{ not json".utf8)
+        try damaged.write(to: url)
+
+        for arguments in [["conversation", "resume", conversationID, "--here"], ["ws", "resume", handle]] {
+            let resume = try fixture.run(arguments)
+            #expect(resume.status == 1, "\(arguments)")
+            #expect(resume.stderr.contains("\(url.path) cannot be read"), "\(resume.stderr)")
+            #expect(!resume.stdout.contains("stub argv"), "a second agent started")
+        }
+        #expect(try Data(contentsOf: url) == damaged)
+        let siblings = try FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path)
+        #expect(!siblings.contains { $0.contains("corrupt") })
+    }
+
     /// `/clear` keeps the process and starts a new conversation, and the hook sees it start.
     /// Which conversation the process is in now is only as current as its last hook, so it
     /// holds every one it ran until it exits.

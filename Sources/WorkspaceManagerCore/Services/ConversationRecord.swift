@@ -362,8 +362,33 @@ public struct ConversationRecordStore: Sendable {
     }
 
     public func load(conversationID: String) -> ConversationRecord? {
-        guard let url = fileURL(conversationID: conversationID) else { return nil }
-        return Self.readObject(at: url).flatMap(ConversationRecordJSON.record(from:))
+        guard case .found(let record) = read(conversationID: conversationID) else { return nil }
+        return record
+    }
+
+    /// What the store holds for a conversation: a record, none, or a file it cannot read as
+    /// one. A caller deciding who holds the conversation refuses on `damaged`, since the
+    /// record it cannot read may name a process that still runs it.
+    public enum Read: Equatable, Sendable {
+        case found(ConversationRecord)
+        case absent
+        case damaged(URL)
+    }
+
+    public func read(conversationID: String) -> Read {
+        guard let url = fileURL(conversationID: conversationID) else { return .absent }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return .absent
+        } catch {
+            return .damaged(url)
+        }
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            let record = ConversationRecordJSON.record(from: object)
+        else { return .damaged(url) }
+        return .found(record)
     }
 
     /// Every readable record. An unreadable one is skipped: nothing can act on a record whose
@@ -392,6 +417,9 @@ public struct ConversationRecordStore: Sendable {
     /// reads but is not a JSON object is moved aside to `<id>.json.corrupt-<epoch>-<random>`,
     /// where no reader looks and a person still can, and the write starts a fresh record.
     ///
+    /// A writer that decides who holds the conversation passes `movingDamagedAside: false`:
+    /// a record it cannot read may name a process that still runs it, so the write throws.
+    ///
     /// A harness process leaves the record once `ended` says it has exited, so the record
     /// keeps only processes that might still hold the conversation. One the kernel cannot
     /// be asked about stays.
@@ -399,6 +427,7 @@ public struct ConversationRecordStore: Sendable {
     public func record(
         _ observation: ConversationObservation,
         lockBudget: Duration = .milliseconds(100),
+        movingDamagedAside: Bool = true,
         ended: (ProcessIdentity) -> Bool = { ProcessInspector.live.liveness($0) == .ended }
     ) throws -> WriteOutcome {
         guard let conversationID = ConversationRecord.normalizedID(observation.conversationID),
@@ -416,7 +445,8 @@ public struct ConversationRecordStore: Sendable {
         defer { close(descriptor) }
         guard Self.lock(descriptor, within: lockBudget) else { return .lockBusy }
 
-        let merged = ConversationRecordJSON.merge(observation, into: try Self.existingObject(at: url), ended: ended)
+        let existing = try Self.existingObject(at: url, movingDamagedAside: movingDamagedAside)
+        let merged = ConversationRecordJSON.merge(observation, into: existing, ended: ended)
         let data = try JSONSerialization.data(withJSONObject: merged, options: [.prettyPrinted, .sortedKeys])
         let temporary = directory.appendingPathComponent(".\(conversationID).\(getpid()).\(UUID().uuidString).tmp")
         try Self.writePrivately(data, to: temporary)
@@ -501,7 +531,7 @@ public struct ConversationRecordStore: Sendable {
     }
 
     /// The record's object for a merge: nil when there is no record yet.
-    private static func existingObject(at url: URL) throws -> [String: Any]? {
+    private static func existingObject(at url: URL, movingDamagedAside: Bool) throws -> [String: Any]? {
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -513,7 +543,7 @@ public struct ConversationRecordStore: Sendable {
         if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             return object
         }
-        guard moveAside(url) else { throw WriteError.unreadableRecord }
+        guard movingDamagedAside, moveAside(url) else { throw WriteError.unreadableRecord }
         return nil
     }
 

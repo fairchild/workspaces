@@ -188,6 +188,33 @@ struct ConversationRecordStoreTests {
         }
     }
 
+    @Test("A record that does not parse reads as damaged, not absent, and a writer that must not lose it leaves it")
+    func damagedRecordIsNotAbsent() throws {
+        try withStore { store in
+            #expect(store.read(conversationID: Self.conversationID) == .absent)
+            try store.record(observation(at: 1_800_000_000))
+            let url = try #require(store.fileURL(conversationID: Self.conversationID))
+            guard case .found = store.read(conversationID: Self.conversationID) else {
+                Issue.record("expected the record")
+                return
+            }
+            try Data("{ not json".utf8).write(to: url)
+            #expect(store.read(conversationID: Self.conversationID) == .damaged(url))
+            try Data(#"{"conversationID":"\#(Self.conversationID)"}"#.utf8).write(to: url)
+            #expect(store.read(conversationID: Self.conversationID) == .damaged(url))
+
+            try Data("{ not json".utf8).write(to: url)
+            #expect(throws: ConversationRecordStore.WriteError.unreadableRecord) {
+                try store.record(self.observation(at: 1_800_000_060), movingDamagedAside: false)
+            }
+            #expect(try Data(contentsOf: url) == Data("{ not json".utf8))
+            #expect(
+                try FileManager.default.contentsOfDirectory(atPath: store.directory.path).filter {
+                    $0.contains("corrupt")
+                }.isEmpty)
+        }
+    }
+
     @Test("An unreadable record is skipped")
     func unreadableRecordIsSkipped() throws {
         try withStore { store in

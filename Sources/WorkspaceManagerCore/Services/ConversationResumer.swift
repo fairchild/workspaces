@@ -144,6 +144,7 @@ public struct ConversationResumer: Sendable {
         case startFailed(handle: String, conversationID: String)
         case cannotStart(String)
         case unrecorded(conversationID: String, reason: String)
+        case damagedRecord(conversationID: String, path: String)
 
         public var errorDescription: String? {
             switch self {
@@ -190,6 +191,11 @@ public struct ConversationResumer: Sendable {
             case .unrecorded(let id, let reason):
                 return "Could not record that this terminal now holds conversation \(id): \(reason). "
                     + "Nothing was started, since another resume would not have seen it."
+            case .damagedRecord(let id, let path):
+                return "The record of conversation \(id) at \(path) cannot be read, and it may name a process "
+                    + "that still runs the conversation, so a second agent cannot be ruled out. Nothing was started "
+                    + "and the file was left as it is. Once no agent runs this conversation, move the file aside "
+                    + "and resume again."
             }
         }
     }
@@ -265,10 +271,15 @@ public struct ConversationResumer: Sendable {
     // MARK: - Reading
 
     /// The conversation's record, or one made from a launch record on this socket that names
-    /// it, for a launch from before records existed.
-    public func subject(conversationID: String) -> ConversationRecord? {
+    /// it, for a launch from before records existed. A record the store cannot read refuses:
+    /// it may name a process that still runs the conversation, which a launch record would not.
+    public func subject(conversationID: String) throws -> ConversationRecord? {
         guard let id = ConversationRecord.normalizedID(conversationID) else { return nil }
-        if let record = records.load(conversationID: id) { return record }
+        switch records.read(conversationID: id) {
+        case .found(let record): return record
+        case .damaged(let url): throw Refusal.damagedRecord(conversationID: id, path: url.path)
+        case .absent: break
+        }
         return launches.all(socketLabel: control.socketLabel)
             .first { $0.identity.flatMap { ConversationRecord.normalizedID($0.conversationID) } == id }
             .map { ConversationRecord(launch: $0, host: host, harness: adapter.harness) }
@@ -307,7 +318,7 @@ public struct ConversationResumer: Sendable {
 
     public func resume(conversationID: String, target: Target) async throws -> Outcome {
         guard let id = ConversationRecord.normalizedID(conversationID) else { throw Refusal.invalidID(conversationID) }
-        guard let record = subject(conversationID: id) else { throw Refusal.noRecord(id) }
+        guard let record = try subject(conversationID: id) else { throw Refusal.noRecord(id) }
         return try await resume(record, target: target)
     }
 
@@ -326,7 +337,12 @@ public struct ConversationResumer: Sendable {
         defer { handOff?.release() }
         let lock = try await claim(id)
         defer { lock.release() }
-        var record = records.load(conversationID: id) ?? subject
+        var record: ConversationRecord
+        switch records.read(conversationID: id) {
+        case .found(let stored): record = stored
+        case .absent: record = subject
+        case .damaged(let url): throw Refusal.damagedRecord(conversationID: id, path: url.path)
+        }
         record.launch = record.launch ?? subject.launch
         try require(record)
 
@@ -407,7 +423,7 @@ public struct ConversationResumer: Sendable {
             launch: record.launch
         )
         do {
-            if try records.record(observation, lockBudget: .seconds(2)) == .lockBusy {
+            if try records.record(observation, lockBudget: .seconds(2), movingDamagedAside: false) == .lockBusy {
                 warn("warning: the conversation record was busy, so the resume may not keep the launch's effort.")
             }
         } catch {
@@ -481,7 +497,8 @@ public struct ConversationResumer: Sendable {
         let outcome: ConversationRecordStore.WriteOutcome
         do {
             outcome = try records.record(
-                observation, lockBudget: .seconds(2), ended: { inspector.liveness($0) == .ended })
+                observation, lockBudget: .seconds(2), movingDamagedAside: false,
+                ended: { inspector.liveness($0) == .ended })
         } catch {
             throw Refusal.unrecorded(conversationID: id, reason: error.localizedDescription)
         }

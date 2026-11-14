@@ -153,10 +153,18 @@ public struct ConversationHolderProbe: Sendable {
     }
 
     /// The holders of a conversation named by id: its record's, or for an id with no record,
-    /// those the harness finds from the id alone.
+    /// those the harness finds from the id alone. A record that cannot be read is unknown: it
+    /// may name a process that still runs the conversation.
     public func probe(conversationID: String) async -> HolderProbe {
+        var stored: ConversationRecord?
+        switch records?.read(conversationID: conversationID) ?? .absent {
+        case .found(let record): stored = record
+        case .absent: stored = nil
+        case .damaged(let url):
+            return .unknown("The record of conversation \(conversationID) at \(url.path) cannot be read")
+        }
         let record =
-            records?.load(conversationID: conversationID)
+            stored
             ?? ConversationRecord(
                 schema: ConversationRecord.schemaVersion, harness: adapter.harness, conversationID: conversationID,
                 host: ConversationHost.current, cwd: "/", configHome: nil, transcriptPath: nil, workspacePath: nil,

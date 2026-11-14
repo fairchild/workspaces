@@ -184,7 +184,7 @@ struct ConversationResumerTests {
             processTable: table,
             recordedSession: .live(sessionID: "$7", name: "tile-session", panePIDs: [100])
         )
-        let subject = try #require(resumer.subject(conversationID: world.conversationID))
+        let subject = try #require(try resumer.subject(conversationID: world.conversationID))
         let status = await resumer.status(of: subject, exitWindow: { _ in 0 })
 
         #expect(
