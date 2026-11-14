@@ -40,7 +40,7 @@ extension ConversationRecordJSON {
     /// - A process named as running the conversation joins `harnessProcesses` and stays, with
     ///   the newest time and place it was named, until `ended` says it has exited. Which
     ///   answer about the harness is newest, a process or a hook that could not name one, is
-    ///   kept as the two newest times.
+    ///   kept as the two newest times. A writer on another host than the record's removes none.
     ///
     /// Keys this build does not know survive at the top level, under `launch`, and in each
     /// kept sighting. `lastSeenIn` is rewritten from the sightings on every merge, so a build
@@ -70,6 +70,7 @@ extension ConversationRecordJSON {
         }
 
         let recordedAt = date(object["observedAt"])
+        let recordedHost = object["host"] as? String
         object["schema"] = max(object["schema"] as? Int ?? 0, ConversationRecord.schemaVersion)
         object["conversationID"] = observation.conversationID
         register("harness", observation.harness, in: &object)
@@ -96,7 +97,11 @@ extension ConversationRecordJSON {
             location.insert(sighting)
         }
         location.write(into: &object)
-        mergeHarness(observation.harnessProcess, seenIn: observation.lastSeenIn, at: at, into: &object, ended: ended)
+        // The writer's kernel knows nothing of processes on the machine the record came from.
+        let local = recordedHost == nil || recordedHost == observation.host
+        mergeHarness(
+            observation.harnessProcess, seenIn: observation.lastSeenIn, at: at, into: &object,
+            ended: local ? ended : { _ in false })
         return object
     }
 

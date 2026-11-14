@@ -188,6 +188,22 @@ struct ConversationRecordStoreTests {
         }
     }
 
+    @Test("A write from another host removes none of the record's harness processes")
+    func otherHostRemovesNoHarnessProcess() throws {
+        try withStore { store in
+            var named = observation(at: 1_800_000_000)
+            named.harnessProcess = .named(try Self.thisProcess)
+            try store.record(named, ended: { _ in false })
+
+            var elsewhere = observation(at: 1_800_000_060)
+            elsewhere.host = "other-host"
+            try store.record(elsewhere, ended: { _ in true })
+            #expect(
+                try #require(store.load(conversationID: Self.conversationID)).harnessProcesses.entries.map(\.process)
+                    == [try Self.thisProcess])
+        }
+    }
+
     @Test("A record that does not parse reads as damaged, not absent, and a writer that must not lose it leaves it")
     func damagedRecordIsNotAbsent() throws {
         try withStore { store in
