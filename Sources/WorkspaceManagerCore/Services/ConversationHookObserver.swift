@@ -19,9 +19,10 @@ public enum ConversationHookObserver {
     }
 
     /// Returns 0, since a hook's exit status is something Claude reports to the person, except
-    /// when the walk could not say what runs the conversation and the note saying so could
-    /// not be written: then the record is left as it was, so the uncertainty is written first
-    /// or nothing is, and it returns 1 with a line on standard error.
+    /// when the walk could not say what runs the conversation, or found only processes that
+    /// have exited, and the note saying so could not be written: then the record is left as it
+    /// was, so the uncertainty is written first or nothing is, and it returns 1 with a line on
+    /// standard error.
     public static func run(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         input: FileHandle = .standardInput,
@@ -50,27 +51,20 @@ public enum ConversationHookObserver {
         let store = ConversationRecordStore(
             directory: ConversationRecordStore.resolvedDirectory(environment: environment))
         // A walk that cannot say what runs the conversation, or whose every process has
-        // exited by the time it is written, leaves a note beside the record, before the record
-        // so no reader sees the one without the other; one that dies during the write, after.
-        func note() -> Bool {
+        // exited before the write, leaves a note beside the record, before the record so no
+        // reader sees the one without the other. Processes that exit during the write leave a
+        // record that names only processes that have ended, which is what free means.
+        if !walked.complete || !walked.mayStillRun(inspector) {
             do {
                 _ = try recordUnresolved(store, observation, walked)
-                return true
             } catch {
                 warn(
                     "workspaces: could not record that this hook cannot tell what runs conversation "
                         + "\(observation.conversationID): \(error.localizedDescription)")
-                return false
+                return 1
             }
         }
-        let uncertain = !walked.complete || !walked.mayStillRun(inspector)
-        if uncertain {
-            guard note() else { return 1 }
-        }
         _ = try? store.record(observation)
-        if !uncertain, !walked.mayStillRun(inspector) {
-            guard note() else { return 1 }
-        }
         return 0
     }
 

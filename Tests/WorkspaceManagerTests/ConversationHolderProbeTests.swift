@@ -699,6 +699,42 @@ struct ConversationHolderProbeTests {
         #expect(detail.contains("delete that file to resume"))
     }
 
+    private final class Reads: @unchecked Sendable {
+        var count = 0
+    }
+
+    /// A walk whose processes ran until the write leaves a record naming them; once they have
+    /// all exited that record reads as free, which is true, so no note follows it.
+    @Test("A hook whose processes exit during the write leaves the record and no note")
+    func processesEndingDuringTheWriteLeaveNoNote() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("hook-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let payload = directory.appendingPathComponent("payload.json")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(#"{"session_id":"\#(Self.id)","cwd":"/"}"#.utf8).write(to: payload)
+        let store = ConversationRecordStore(directory: directory.appendingPathComponent("records"))
+        let shell = ProcessIdentity(pid: 40, startedAtMicroseconds: 40)
+        let reads = Reads()
+        let endsAfterFirstLook = ProcessInspector(
+            read: { _ in
+                reads.count += 1
+                return reads.count == 1 ? .found(shell) : .absent
+            },
+            parent: { _ in nil }, arguments: { _ in nil })
+        let input = try FileHandle(forReadingFrom: payload)
+        defer { try? input.close() }
+        let status = ConversationHookObserver.run(
+            environment: [ConversationRecordStore.directoryEnvironmentKey: store.directory.path],
+            input: input, tmuxSession: { _ in nil },
+            ancestry: { _ in HookAncestry(claude: nil, passed: [shell], complete: true) },
+            inspector: endsAfterFirstLook)
+        #expect(status == 0)
+        guard case .found = store.read(conversationID: Self.id) else {
+            Issue.record("expected the record and no note: \(store.read(conversationID: Self.id))")
+            return
+        }
+    }
+
     /// Uncertainty is written first or nothing is: a hook whose note cannot be written leaves
     /// the record as it was, so what the record already says still holds.
     @Test("A hook whose note cannot be written leaves the record untouched, fails, and the prior holder still holds")
