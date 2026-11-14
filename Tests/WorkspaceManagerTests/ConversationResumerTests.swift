@@ -58,7 +58,8 @@ struct ConversationResumerTests {
 
         func resumer(
             processTable: ProcessTable?,
-            recordedSession: RecordedTmuxSession? = nil
+            recordedSession: RecordedTmuxSession? = nil,
+            inspector: ProcessInspector = .onlySelf
         ) -> ConversationResumer {
             let execs = execs
             return ConversationResumer(
@@ -69,7 +70,7 @@ struct ConversationResumerTests {
                 homeDirectory: root.appendingPathComponent("home"),
                 readProcessTable: { processTable },
                 recordedSession: { _ in recordedSession },
-                inspector: .onlySelf,
+                inspector: inspector,
                 describeTmux: { _ in nil },
                 exec: { invocation, handOff in
                     try handOff()
@@ -307,6 +308,54 @@ struct ConversationResumerTests {
         let record = try #require(world.records.load(conversationID: world.conversationID))
         #expect(record.lastSeenIn?.tmux?.serverPID == 1)
         #expect(record.harnessProcesses.entries.map(\.process.pid) == [getpid()])
+    }
+
+    /// The kernel's answer about this process changes between reading its identity and the
+    /// write, as a pid given away in between would: the write drops it as exited, and the
+    /// read-back is what notices.
+    @Test("A resume whose record, read back, does not name its process refuses, and nothing starts")
+    func readBackWithoutTheProcessRefuses() async throws {
+        let world = try World()
+        defer { world.teardown() }
+        try world.recordConversation()
+        let reads = Claimable()
+        let shifting = ProcessInspector(
+            identity: { pid in
+                guard pid == getpid() else { return nil }
+                let first = reads.value == nil
+                reads.set(true)
+                return ProcessIdentity(pid: pid, startedAtMicroseconds: first ? 1 : 2)
+            },
+            parent: { _ in nil }, arguments: { _ in nil })
+
+        await #expect(
+            throws: ConversationResumer.Refusal.unrecorded(
+                conversationID: world.conversationID, reason: "its record, read back, does not name this process")
+        ) {
+            try await world.resumer(processTable: Self.quietTable, recordedSession: .gone, inspector: shifting)
+                .resume(conversationID: world.conversationID, target: .here)
+        }
+        #expect(world.execs.invocations.isEmpty)
+    }
+
+    @Test("A record that cannot be read refuses before a launch record naming the conversation is used")
+    func damagedRecordIsNotReplacedByTheLaunch() throws {
+        let world = try World()
+        defer { world.teardown() }
+        try world.recordConversation()
+        try world.launches.save(
+            AgentLaunchRecord(
+                handle: "wm-resumer-damaged", workspacePath: world.cwd, socketLabel: "resumer-tests-unused",
+                launchedAt: Date(),
+                identity: .init(conversationID: world.conversationID, requestedModel: nil, requestedEffort: nil)))
+        let url = try #require(world.records.fileURL(conversationID: world.conversationID))
+        try Data("{ not json".utf8).write(to: url)
+
+        #expect(
+            throws: ConversationResumer.Refusal.damagedRecord(conversationID: world.conversationID, path: url.path)
+        ) {
+            try world.resumer(processTable: Self.quietTable).subject(conversationID: world.conversationID)
+        }
     }
 
     @Test("A sighting counts as in the handle by the handle's name, or with no name, by its server and session")
