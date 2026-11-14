@@ -627,6 +627,32 @@ struct CLIConversationResumeTests {
         #expect(resumed.stdout.contains("stub pwd=/private\(second.path)\n"))
     }
 
+    /// The sighting moves where the conversation was last seen to the resume's own session
+    /// before the second decision, which judges a session's claudes by where it was seen
+    /// before; another pane's claude, on another conversation, holds nothing of this one.
+    @Test(
+        "A first resume in a tmux session whose other pane runs a claude on another conversation starts",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the session probe asks it"))
+    func resumeBesideAnotherPanesClaude() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        _ = try await startHeldTile(in: fixture)
+        let conversationID = try recordConversation(in: fixture)
+        let log = fixture.root.appendingPathComponent("pane.log")
+        _ = try fixture.tmux([
+            "split-window", "-d", "-t", "=held-tile:",
+            "\(fixture.binary.path) conversation resume \(conversationID) --here > \(log.path) 2>&1; "
+                + "echo exit=$? >> \(log.path); sleep 5",
+        ])
+        var output = ""
+        try await waitUntil(launches: 2) {
+            output = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+            return output.contains("exit=")
+        }
+        #expect(output.contains("stub argv=--resume \(conversationID)"), "\(output)")
+        #expect(output.contains("exit=0"), "\(output)")
+    }
+
     /// The decision before a resume's sighting and the one after it are one function, so
     /// a note a hook publishes while the resume waits for the record's write lock refuses it
     /// as surely as a note already there.

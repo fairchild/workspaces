@@ -423,7 +423,8 @@ public struct ConversationResumer: Sendable {
     /// what the caller filled in on `subject` is kept, and what was checked on it is checked
     /// again on what was read. The decision before the sighting and the one after it are this
     /// same function: the one after passes `own`, the process that sighting named, which must
-    /// be in the record and holds nothing against itself.
+    /// be in the record and holds nothing against itself, and it judges the session the
+    /// conversation was last seen in by `subject`, from before the sighting.
     private func decide(
         _ subject: ConversationRecord,
         excluding own: ProcessIdentity? = nil,
@@ -446,6 +447,10 @@ public struct ConversationResumer: Sendable {
                     conversationID: id, reason: "its record, read back, does not name this process")
             }
             record.harnessProcesses.entries.removeAll { $0.process == own }
+            // The sighting moved where the conversation was last seen to this terminal; the
+            // place it was seen before is the one a claude there could be running it in.
+            record.lastSeenIn = subject.lastSeenIn
+            record.socketLabel = subject.socketLabel
         }
         try require(record)
         switch await status(of: record, exitWindow: exitWindow) {
