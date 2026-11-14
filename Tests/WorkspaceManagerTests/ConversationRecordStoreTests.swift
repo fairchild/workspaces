@@ -218,7 +218,10 @@ struct ConversationRecordStoreTests {
     /// conversation, so it is never read as no ownership, and a write leaves it as it is.
     @Test(
         "Ownership present but malformed reads as damaged, and a later write keeps it",
-        arguments: ["observedAt", "process", "entries", "chain", "harnessProcesses"]
+        arguments: [
+            "observedAt", "process", "entries", "chain", "harnessProcesses", "emptyChain", "emptyEntries",
+            "emptyUnattributed", "emptyContainer",
+        ]
     )
     func malformedOwnershipIsDamage(field: String) throws {
         try withStore { store in
@@ -234,18 +237,49 @@ struct ConversationRecordStoreTests {
             case "process": entries[0]["process"] = "not-a-process"
             case "entries": processes["entries"] = "invalid"
             case "chain": processes["unattributed"] = [["chain": ["invalid"], "observedAt": entries[0]["observedAt"]!]]
+            case "emptyChain": processes["unattributed"] = [["chain": [], "observedAt": entries[0]["observedAt"]!]]
+            case "emptyEntries": processes["entries"] = []
+            case "emptyUnattributed": processes["unattributed"] = []
             default: break
             }
             if field == "observedAt" || field == "process" { processes["entries"] = entries }
-            object["harnessProcesses"] = field == "harnessProcesses" ? "invalid" : processes
+            switch field {
+            case "harnessProcesses": object["harnessProcesses"] = "invalid"
+            case "emptyContainer": object["harnessProcesses"] = [String: Any]()
+            default: object["harnessProcesses"] = processes
+            }
             try JSONSerialization.data(withJSONObject: object).write(to: url)
             #expect(store.read(conversationID: Self.conversationID) == .damaged(url))
 
-            try store.record(observation(at: 1_800_000_060), ended: { _ in false })
+            try store.record(observation(at: 1_800_000_060), ended: { _ in true })
             #expect(store.read(conversationID: Self.conversationID) == .damaged(url))
             let kept = try self.object(at: url)["harnessProcesses"]
             #expect((kept as AnyObject?)?.isEqual(object["harnessProcesses"]) == true)
         }
+    }
+
+    @Test("The app's identity recorder leaves an empty chain, and the rest of the ownership, as it is")
+    func identityRecorderKeepsAnEmptyChain() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("records-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ConversationRecordStore(directory: directory)
+        try store.record(observation(at: 1_800_000_000))
+        let url = try #require(store.fileURL(conversationID: Self.conversationID))
+        var object = try object(at: url)
+        let damaged: [String: Any] = [
+            "unattributed": [["chain": [String](), "observedAt": "2027-01-15T08:00:00.000Z"]]
+        ]
+        object["harnessProcesses"] = damaged
+        try JSONSerialization.data(withJSONObject: object).write(to: url)
+
+        let identity = try #require(
+            ConversationIdentityRecorder.HookIdentity.decode(
+                from: Data(#"{"session_id":"\#(Self.conversationID)","cwd":"/tmp"}"#.utf8)))
+        await ConversationIdentityRecorder(store: store).observe(identity, hostSessionID: UUID())
+
+        #expect(store.read(conversationID: Self.conversationID) == .damaged(url))
+        let kept = try self.object(at: url)["harnessProcesses"]
+        #expect((kept as AnyObject?)?.isEqual(damaged) == true)
     }
 
     @Test("A write from another host removes none of the record's harness processes")

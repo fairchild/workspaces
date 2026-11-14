@@ -113,9 +113,10 @@ extension ConversationRecordJSON {
         into object: inout [String: Any],
         ended: (ProcessIdentity) -> Bool
     ) {
-        // Ownership in a shape this build cannot read is left exactly as it is: rewriting it
-        // would forget whoever it names.
-        guard var processes = object[harnessProcessesKey].map({ $0 as? [String: Any] }) ?? [:],
+        // Ownership the reader would call damaged is left exactly as it is, and nothing in it is
+        // pruned: rewriting it would forget whoever it names.
+        guard harnessProcesses(from: object[harnessProcessesKey]) != nil,
+            var processes = object[harnessProcessesKey].map({ $0 as? [String: Any] }) ?? [:],
             var entries = processes["entries"].map({ $0 as? [[String: Any]] }) ?? [],
             var unattributed = processes["unattributed"].map({ $0 as? [[String: Any]] }) ?? []
         else { return }

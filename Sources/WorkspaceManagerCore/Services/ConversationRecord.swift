@@ -310,7 +310,7 @@ enum ConversationRecordJSON {
     /// record then reads as damaged rather than as owned by nothing.
     static func harnessProcesses(from value: Any?) -> ConversationRecord.HarnessProcesses? {
         guard let value else { return .init() }
-        guard let object = value as? [String: Any],
+        guard let object = value as? [String: Any], !object.isEmpty,
             let entries = list(
                 object["entries"],
                 { entry -> ConversationRecord.HarnessProcesses.Entry? in
@@ -333,9 +333,10 @@ enum ConversationRecordJSON {
     }
 
     /// Every element of an optional list, or nil when the list or any element is malformed.
+    /// No writer leaves a list empty, so an empty one is malformed too.
     private static func list<T>(_ value: Any?, _ element: ([String: Any]) -> T?) -> [T]? {
         guard let value else { return [] }
-        guard let objects = value as? [[String: Any]] else { return nil }
+        guard let objects = value as? [[String: Any]], !objects.isEmpty else { return nil }
         let elements = objects.compactMap(element)
         return elements.count == objects.count ? elements : nil
     }
