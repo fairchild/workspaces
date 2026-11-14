@@ -24,3 +24,8 @@ installed_clean_shell,installed,2026-09-14T20:30:39-0700,,,26.6.2,25G83,arm64,"M
 installed_clean_shell,installed,2026-09-14T20:30:53-0700,,,26.6.2,25G83,arm64,"Mac16,13",,,142.81,,,,142.81,,,,,deterministic-delivery-v1,terminal_set_title
 installed_clean_shell,installed,2026-09-14T20:31:06-0700,,,26.6.2,25G83,arm64,"Mac16,13",,,128.62,,,,128.62,,,,,deterministic-delivery-v1,terminal_set_title
 installed_clean_shell,installed,2026-09-14T20:31:19-0700,,,26.6.2,25G83,arm64,"Mac16,13",,,96.22,,,,96.22,,,,,deterministic-delivery-v1,terminal_set_title
+installed_clean_shell,installed,2026-11-13T18:57:49-0800,,,27.2,26B123,arm64,"Mac16,13",,,104.42,,,,104.42,,,,,deterministic-delivery-v1,terminal_set_title
+installed_clean_shell,installed,2026-11-13T18:58:03-0800,,,27.2,26B123,arm64,"Mac16,13",,,90.2,,,,90.2,,,,,deterministic-delivery-v1,terminal_set_title
+installed_clean_shell,installed,2026-11-13T18:58:17-0800,,,27.2,26B123,arm64,"Mac16,13",,,88.18,,,,88.18,,,,,deterministic-delivery-v1,terminal_set_title
+installed_clean_shell,installed,2026-11-13T18:58:31-0800,,,27.2,26B123,arm64,"Mac16,13",,,75.44,,,,75.44,,,,,deterministic-delivery-v1,terminal_set_title
+installed_clean_shell,installed,2026-11-13T18:58:46-0800,,,27.2,26B123,arm64,"Mac16,13",,,74.69,,,,74.69,,,,,deterministic-delivery-v1,terminal_set_title
