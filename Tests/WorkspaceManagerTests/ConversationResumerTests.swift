@@ -288,9 +288,9 @@ struct ConversationResumerTests {
     }
 
     /// A sighting stamped later than now, as a skewed clock writes, in a place this resume
-    /// contradicts outranks the one it writes, and the record would go on naming no harness.
-    @Test("A resume whose sighting the record does not show as the holder refuses, and nothing starts")
-    func outrankedSightingRefuses() async throws {
+    /// contradicts outranks the place it writes. The process it records stays named.
+    @Test("A sighting elsewhere stamped later than the resume does not hide the process the resume records")
+    func outrankedSightingKeepsTheProcess() async throws {
         let world = try World()
         defer { world.teardown() }
         try world.recordConversation()
@@ -301,14 +301,12 @@ struct ConversationResumerTests {
                 observedBy: .hook,
                 lastSeenIn: .init(hostSessionID: nil, tmux: .init(serverPID: 1, sessionID: "$1"))))
 
-        do {
-            _ = try await world.resumer(processTable: Self.quietTable, recordedSession: .gone).resume(
-                conversationID: world.conversationID, target: .here)
-            Issue.record("the resume went ahead")
-        } catch ConversationResumer.Refusal.unrecorded(_, let reason) {
-            #expect(reason.contains("names another process"))
-        }
-        #expect(world.execs.invocations.isEmpty)
+        _ = try await world.resumer(processTable: Self.quietTable, recordedSession: .gone).resume(
+            conversationID: world.conversationID, target: .here)
+        #expect(world.execs.invocations.count == 1)
+        let record = try #require(world.records.load(conversationID: world.conversationID))
+        #expect(record.lastSeenIn?.tmux?.serverPID == 1)
+        #expect(record.harnessProcesses.entries.map(\.process.pid) == [getpid()])
     }
 
     @Test("A sighting counts as in the handle by the handle's name, or with no name, by its server and session")

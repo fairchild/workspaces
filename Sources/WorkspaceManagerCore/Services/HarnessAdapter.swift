@@ -144,22 +144,24 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
 
     /// Claude's holders, by three rules, each of which can only add a holder, and each of
     /// which holds until the process exits. A process whose arguments name the conversation
-    /// holds it. When the record names the process it was last run by, that process holds it
-    /// while it lives: a pid with its start time is one process lifetime, and an exec keeps
-    /// both, so whatever wrapper or runtime the harness execs through stays the recorded
-    /// process whatever its arguments say. Neither lets go when the process starts another
-    /// conversation, as `/clear` does: only a hook could say so, and a hook can be late,
-    /// dropped, or fired by something beneath it. When no recorded process holds it, the tmux
-    /// session it was last seen in is asked, and any claude there is counted, since it may be
-    /// this conversation under an id its arguments do not carry. Holders are found first and
-    /// placed once: in that session only when its server answers that they run there, and,
-    /// outside tmux, the recorded process in the tile it was seen in.
+    /// holds it. So does every process the record names as having run it, while it lives: a
+    /// pid with its start time is one process lifetime, and an exec keeps both, so whatever
+    /// wrapper or runtime the harness execs through stays that process whatever its arguments
+    /// say. The record keeps those processes apart from where the conversation was seen, so a
+    /// later sighting elsewhere, or a writer that knows nothing of them, takes none away; and
+    /// none lets go when its process starts another conversation, as `/clear` does, since only
+    /// a hook could say so, and a hook can be late, dropped, or fired by something beneath it.
+    /// When no named process runs, the tmux session the conversation was last seen in is
+    /// asked, and any claude there is counted, since it may be this conversation under an id
+    /// its arguments do not carry. Holders are found first and placed once: in that session
+    /// only when its server answers that they run there, and, outside tmux, a named process
+    /// in the tile it was named in.
     ///
-    /// A conversation whose newest hook could not name its claude, and that nothing else
-    /// holds, is unknown: that claude may still run, and nothing says when it exits.
+    /// A conversation that nothing holds, and whose newest hook could not name its claude, is
+    /// unknown: that claude may still run, and nothing says when it exits.
     public func holders(of record: ConversationRecord, in context: HolderProbeContext) async -> HolderProbe {
         let found = await namedHolders(of: record, in: context)
-        guard found == .free, record.lastSeenIn?.harnessUnnamed == true else { return found }
+        guard found == .free, record.harnessProcesses.newestIsUnnamed else { return found }
         return .unknown(
             "The hook that last saw conversation \(record.conversationID) start could not name the claude it ran "
                 + "under, as happens when the hook command reaches \(ConversationHookObserver.forwarderName) through a "
@@ -170,12 +172,12 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
         let id = record.conversationID
         let table = context.processTable
         let seen = record.lastSeenIn
-        var recorded: ProcessIdentity?
-        if let harness = seen?.harness {
-            switch context.inspector.liveness(harness) {
-            case .running: recorded = harness
-            case .ended: recorded = nil
-            case .unreadable: return .unknown("Could not ask the kernel about process \(harness.pid)")
+        var running: [Int32: ConversationRecord.HarnessProcesses.Entry] = [:]
+        for entry in record.harnessProcesses.entries {
+            switch context.inspector.liveness(entry.process) {
+            case .running: running[entry.process.pid] = entry
+            case .ended: continue
+            case .unreadable: return .unknown("Could not ask the kernel about process \(entry.process.pid)")
             }
         }
         var holders = table.rows
@@ -185,13 +187,17 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
                     pid: $0.pid, foundBy: .arguments, startedAt: context.inspector.identity($0.pid)?.startedAt)
             }
         let counted = Set(holders.map(\.pid))
-        if let recorded, !counted.contains(recorded.pid) {
+        for entry in running.values.sorted(by: { $0.process.pid < $1.process.pid })
+        where !counted.contains(entry.process.pid) {
             holders.append(
-                ConversationHolder(pid: recorded.pid, foundBy: .recordedHarness, startedAt: recorded.startedAt))
+                ConversationHolder(
+                    pid: entry.process.pid, foundBy: .recordedHarness, startedAt: entry.process.startedAt))
         }
 
         guard seen?.tmux != nil else {
-            holders = holders.map { $0.pid == recorded?.pid ? $0.placed(hostSessionID: seen?.hostSessionID) : $0 }
+            holders = holders.map { holder in
+                running[holder.pid].map { holder.placed(hostSessionID: $0.seenIn?.hostSessionID) } ?? holder
+            }
             return holders.isEmpty ? .free : .held(holders, recordedSessionGone: false)
         }
         guard let session = await context.recordedSession(record) else {
@@ -202,7 +208,7 @@ public struct ClaudeHarnessAdapter: HarnessAdapter {
             return holders.isEmpty ? .free : .held(holders, recordedSessionGone: true)
         }
         let inSession = Set(table.descendants(of: panePIDs).map(\.pid))
-        if recorded == nil {
+        if running.isEmpty {
             for row in table.rows
             where inSession.contains(row.pid) && !counted.contains(row.pid)
                 && AgentSessionInspection.isClaude(row.arguments)

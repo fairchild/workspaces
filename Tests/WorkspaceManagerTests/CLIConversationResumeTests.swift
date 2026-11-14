@@ -189,11 +189,13 @@ struct CLIConversationResumeTests {
         return fixture
     }
 
-    /// A conversation recorded on this host, with a transcript where the hook said it is.
+    /// A conversation recorded on this host, with a transcript where the hook said it is, and
+    /// the hook's `harness` kept whether or not it still runs.
     private func recordConversation(
         in fixture: Fixture,
         host: String = ConversationHost.current,
-        lastSeenIn: ConversationRecord.LastSeenIn? = nil
+        lastSeenIn: ConversationRecord.LastSeenIn? = nil,
+        harness: ProcessIdentity? = nil
     ) throws -> String {
         let conversationID = UUID().uuidString.lowercased()
         let transcript = fixture.home.appendingPathComponent(".claude/projects/p/\(conversationID).jsonl")
@@ -208,8 +210,10 @@ struct CLIConversationResumeTests {
                 transcriptPath: transcript.path,
                 socketLabel: lastSeenIn?.tmux == nil ? nil : fixture.socketLabel,
                 observedBy: .hook,
-                lastSeenIn: lastSeenIn
-            )
+                lastSeenIn: lastSeenIn,
+                harnessProcess: harness.map(ConversationRecord.HarnessAnswer.named)
+            ),
+            ended: { _ in false }
         )
         return conversationID
     }
@@ -383,7 +387,8 @@ struct CLIConversationResumeTests {
         arguments: [String] = [],
         hooking conversations: [String],
         hookCommand: String? = nil,
-        nested: [String] = []
+        nested: [String] = [],
+        environment: [String: String] = [:]
     ) async throws -> Process {
         try FileManager.default.createDirectory(at: fixture.transcripts, withIntermediateDirectories: true)
         for id in conversations + nested {
@@ -400,13 +405,14 @@ struct CLIConversationResumeTests {
                 "STUB_HOOK_CLI": fixture.binary.path,
                 "STUB_HOOK_COMMAND": hookCommand ?? "",
                 "STUB_TRANSCRIPTS": fixture.transcripts.path,
-            ],
+            ].merging(environment) { _, new in new },
             output: fixture.root.appendingPathComponent("agent.log")
         )
         let last = try #require(conversations.last)
         try await waitUntil(launches: Double(1 + conversations.count + nested.count)) {
-            fixture.records.load(conversationID: last)?.lastSeenIn.map { $0.harness != nil || $0.harnessUnnamed }
-                == true
+            fixture.records.load(conversationID: last).map {
+                !$0.harnessProcesses.entries.isEmpty || $0.harnessProcesses.newestIsUnnamed
+            } == true
                 && nested.allSatisfy { fixture.records.load(conversationID: $0) != nil }
         }
         return agent
@@ -419,7 +425,8 @@ struct CLIConversationResumeTests {
         let conversationID = UUID().uuidString.lowercased()
         let agent = try await startBareAgent(in: fixture, hooking: [conversationID])
         defer { Self.kill([agent]) }
-        let harness = try #require(fixture.records.load(conversationID: conversationID)?.lastSeenIn?.harness)
+        let harness = try #require(
+            fixture.records.load(conversationID: conversationID)?.harnessProcesses.entries.first?.process)
         #expect(harness.pid == agent.processIdentifier)
 
         let resume = try fixture.run(["conversation", "resume", conversationID, "--here", "--json"])
@@ -464,16 +471,16 @@ struct CLIConversationResumeTests {
             in: fixture, hooking: [conversationID],
             hookCommand: (path == "installed" ? forwarder.installed : forwarder.link).path)
         defer { Self.kill([agent]) }
-        let seen = try #require(fixture.records.load(conversationID: conversationID)?.lastSeenIn)
+        let named = try #require(fixture.records.load(conversationID: conversationID)?.harnessProcesses)
 
         let resume = try fixture.run(["conversation", "resume", conversationID, "--here"])
         #expect(!resume.stdout.contains("stub argv"))
         if path == "installed" {
-            #expect(seen.harness?.pid == agent.processIdentifier)
+            #expect(named.entries.map(\.process.pid) == [agent.processIdentifier])
             #expect(resume.status == 3)
             #expect(resume.stdout.contains("pid \(agent.processIdentifier)"))
         } else {
-            #expect(seen.harness == nil && seen.harnessUnnamed)
+            #expect(named.entries.isEmpty && named.newestIsUnnamed)
             #expect(resume.status == 1)
             #expect(resume.stderr.contains("could not name the claude it ran under"))
             #expect(resume.stderr.contains("a second agent cannot be ruled out"))
@@ -497,7 +504,7 @@ struct CLIConversationResumeTests {
         defer { Self.kill([neverWaits]) }
         var harness: ProcessIdentity?
         try await waitUntil(launches: 2) {
-            harness = fixture.records.load(conversationID: conversationID)?.lastSeenIn?.harness
+            harness = fixture.records.load(conversationID: conversationID)?.harnessProcesses.entries.first?.process
             return try harness.map { try Self.isZombie($0.pid) } ?? false
         }
         let dead = try #require(harness)
@@ -519,6 +526,63 @@ struct CLIConversationResumeTests {
         let stat = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         ps.waitUntilExit()
         return stat.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("Z")
+    }
+
+    /// A SessionStart hook for `conversationID` from `tile`, run by nothing that is claude, as
+    /// a hook delayed past a later one lands.
+    private func deliverHook(_ conversationID: String, from tile: String, in fixture: Fixture) throws {
+        let observe = Process()
+        let input = Pipe()
+        observe.executableURL = fixture.binary
+        observe.arguments = ["conversation", "observe"]
+        observe.currentDirectoryURL = fixture.root
+        observe.environment = fixture.environment.merging(["WORKSPACES_HOST_SESSION_ID": tile]) { _, new in new }
+        observe.standardInput = input
+        observe.standardOutput = FileHandle.nullDevice
+        observe.standardError = FileHandle.nullDevice
+        try observe.run()
+        input.fileHandleForWriting.write(
+            Data(#"{"session_id":"\#(conversationID)","cwd":"\#(fixture.work.path)"}"#.utf8))
+        try input.fileHandleForWriting.close()
+        observe.waitUntilExit()
+    }
+
+    /// The previous build's write: its own sightings, a `lastSeenIn` with nothing this build
+    /// adds, and every top-level key it does not know kept.
+    private func rewriteAsThePreviousBuild(_ conversationID: String, at tile: String, in fixture: Fixture) throws {
+        let url = try #require(fixture.records.fileURL(conversationID: conversationID))
+        var object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let now = Date().formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+        object["sightings"] = [["hostSessionID": tile, "observedAt": now]]
+        object["sightingsAfter"] = ["observedAt": now, "key": "|"]
+        object["lastSeenIn"] = ["hostSessionID": tile]
+        try JSONSerialization.data(withJSONObject: object).write(to: url)
+    }
+
+    /// A hook from another tile that lands late, or the previous build writing where the
+    /// conversation is now, moves its place; neither takes the running agent away.
+    @Test("A claude stays the holder after a delayed hook from another tile and a write by the previous build")
+    func laterSightingsElsewhereKeepTheHolder() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = UUID().uuidString.lowercased()
+        let tileB = UUID().uuidString
+        let agent = try await startBareAgent(
+            in: fixture, hooking: [conversationID], environment: ["WORKSPACES_HOST_SESSION_ID": tileB])
+        defer { Self.kill([agent]) }
+
+        func expectHeld(_ moment: String) throws {
+            let resume = try fixture.run(["conversation", "resume", conversationID, "--here"])
+            #expect(resume.status == 3, "\(moment): \(resume.stdout)\(resume.stderr)")
+            #expect(resume.stdout.contains("pid \(agent.processIdentifier)"), "\(moment)")
+            #expect(!resume.stdout.contains("stub argv"), "\(moment): a second agent started")
+        }
+        try expectHeld("after its own hook")
+        try deliverHook(conversationID, from: UUID().uuidString, in: fixture)
+        #expect(fixture.records.load(conversationID: conversationID)?.lastSeenIn?.hostSessionID != tileB)
+        try expectHeld("after a delayed hook from another tile")
+        try rewriteAsThePreviousBuild(conversationID, at: UUID().uuidString, in: fixture)
+        try expectHeld("after the previous build wrote another tile")
     }
 
     /// `/clear` keeps the process and starts a new conversation, and the hook sees it start.
@@ -557,8 +621,10 @@ struct CLIConversationResumeTests {
         defer { Self.kill([agent]) }
 
         let fromBeneath = try #require(fixture.records.load(conversationID: beneath))
-        #expect(fromBeneath.lastSeenIn?.harness == nil)
-        #expect(fixture.records.load(conversationID: misplaced)?.lastSeenIn?.harness?.pid == agent.processIdentifier)
+        #expect(fromBeneath.harnessProcesses.entries.isEmpty)
+        #expect(
+            fixture.records.load(conversationID: misplaced)?.harnessProcesses.entries.map(\.process.pid)
+                == [agent.processIdentifier])
 
         let resume = try fixture.run(["conversation", "resume", held, "--here"])
         #expect(resume.status == 3)
@@ -584,8 +650,8 @@ struct CLIConversationResumeTests {
         ended.waitUntilExit()
         let conversationID = try recordConversation(
             in: fixture,
-            lastSeenIn: .init(
-                hostSessionID: nil, tmux: try tmuxSession(identity, recordingSocket: true), harness: endedIdentity))
+            lastSeenIn: .init(hostSessionID: nil, tmux: try tmuxSession(identity, recordingSocket: true)),
+            harness: endedIdentity)
 
         let resume = try fixture.run(["conversation", "resume", conversationID, "--here", "--json"])
         #expect(resume.status == 3)

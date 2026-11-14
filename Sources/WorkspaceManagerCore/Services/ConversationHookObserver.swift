@@ -56,13 +56,10 @@ public enum ConversationHookObserver {
         else { return nil }
         let tmux = TmuxEnvironment(environment["TMUX"])
         let hostSessionID = (environment["WORKSPACES_HOST_SESSION_ID"]).flatMap { UUID(uuidString: $0)?.uuidString }
-        let named = harness()
         let place = ConversationRecord.LastSeenIn(
             hostSessionID: hostSessionID,
             tmux: tmux.flatMap(tmuxSession),
-            outsideTmux: tmux == nil,
-            harness: named,
-            harnessUnnamed: named == nil
+            outsideTmux: tmux == nil
         )
         return ConversationObservation(
             conversationID: conversationID,
@@ -72,7 +69,8 @@ public enum ConversationHookObserver {
             socketLabel: tmux?.socketLabel,
             observedAt: now,
             observedBy: .hook,
-            lastSeenIn: place
+            lastSeenIn: place,
+            harnessProcess: harness().map(ConversationRecord.HarnessAnswer.named) ?? .unnamed
         )
     }
 }

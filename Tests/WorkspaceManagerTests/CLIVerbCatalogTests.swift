@@ -211,10 +211,11 @@ struct CLIVerbCatalogTests {
               Any other command runs as written, and neither verb can speak for it.
               'conversation resume <id>' continues any recorded conversation, however
               it was started, unless a holder shows: a claude whose arguments name it,
-              the process its hook last saw run it, or, failing that, a claude in the
-              tmux session it was last seen in. '--here' becomes the agent in this
-              terminal, '--into <handle>' starts it detached. It exits 3 and says
-              where when the conversation is held, and refuses when it cannot look.
+              any process its hook named as running it while that process lives, or,
+              failing those, a claude in the tmux session it was last seen in. '--here'
+              becomes the agent in this terminal, '--into <handle>' starts it detached.
+              It exits 3 and says where when the conversation is held, and refuses when
+              it cannot look.
 
             Launch behavior:
               - no args: open the WorkSpaces app

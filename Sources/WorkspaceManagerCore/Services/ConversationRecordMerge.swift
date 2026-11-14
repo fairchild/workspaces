@@ -16,6 +16,8 @@ extension ConversationRecordJSON {
     static let sightingsKey = "sightings"
     /// The newest sighting that contradicted them. Anything not newer than it is history.
     static let sightingsAfterKey = "sightingsAfter"
+    /// The processes named as running the conversation, kept apart from the sightings.
+    static let harnessProcessesKey = "harnessProcesses"
 
     /// Applies `observation` to the file's object.
     ///
@@ -35,11 +37,19 @@ extension ConversationRecordJSON {
     ///   contradicts it moves the conversation only if it is newer than every sighting of the
     ///   current place. `lastSeenIn` is that run read as one place, with each tmux attribute
     ///   from the newest sighting that had it.
+    /// - A process named as running the conversation joins `harnessProcesses` and stays, with
+    ///   the newest time and place it was named, until `ended` says it has exited. Which
+    ///   answer about the harness is newest, a process or a hook that could not name one, is
+    ///   kept as the two newest times.
     ///
     /// Keys this build does not know survive at the top level, under `launch`, and in each
     /// kept sighting. `lastSeenIn` is rewritten from the sightings on every merge, so a build
     /// that records a new location fact adds it to the sightings.
-    static func merge(_ observation: ConversationObservation, into existing: [String: Any]?) -> [String: Any] {
+    static func merge(
+        _ observation: ConversationObservation,
+        into existing: [String: Any]?,
+        ended: (ProcessIdentity) -> Bool = { _ in false }
+    ) -> [String: Any] {
         var object = existing ?? [:]
         // Read before any field or time below moves: a record from before sightings is seeded
         // from its own `observedAt`, not this observation's.
@@ -86,7 +96,54 @@ extension ConversationRecordJSON {
             location.insert(sighting)
         }
         location.write(into: &object)
+        mergeHarness(observation.harnessProcess, seenIn: observation.lastSeenIn, at: at, into: &object, ended: ended)
         return object
+    }
+
+    private static func mergeHarness(
+        _ answer: ConversationRecord.HarnessAnswer?,
+        seenIn: ConversationRecord.LastSeenIn?,
+        at: Date,
+        into object: inout [String: Any],
+        ended: (ProcessIdentity) -> Bool
+    ) {
+        var processes = object[harnessProcessesKey] as? [String: Any] ?? [:]
+        var entries = processes["entries"] as? [[String: Any]] ?? []
+        func later(_ stamp: Any?) -> String {
+            string([date(stamp), at].compactMap { $0 }.max() ?? at)
+        }
+        switch answer {
+        case .named(let process)?:
+            var entry: [String: Any] = ["process": process.recorded, "observedAt": string(at)]
+            entry["seenIn"] = seenIn.map(object(from:))
+            if let index = entries.firstIndex(where: { $0["process"] as? String == process.recorded }) {
+                if (at, canonical(entry)) > (
+                    date(entries[index]["observedAt"]) ?? .distantPast, canonical(entries[index])
+                ) {
+                    entries[index] = entry
+                }
+            } else {
+                entries.append(entry)
+            }
+            processes["namedAt"] = later(processes["namedAt"])
+        case .unnamed?:
+            processes["unnamedAt"] = later(processes["unnamedAt"])
+        case nil:
+            break
+        }
+        entries.removeAll { entry in
+            (entry["process"] as? String).flatMap(ProcessIdentity.init(recorded:)).map(ended) ?? false
+        }
+        entries.sort { ($0["process"] as? String ?? "") < ($1["process"] as? String ?? "") }
+        processes["entries"] = entries.isEmpty ? nil : entries
+        object[harnessProcessesKey] = processes.isEmpty ? nil : processes
+    }
+
+    /// One spelling of an object, so a tie on time goes the same way whatever order the
+    /// observations came in.
+    private static func canonical(_ object: [String: Any]) -> String {
+        (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))
+            .map { String(decoding: $0, as: UTF8.self) } ?? ""
     }
 
     /// A record written before fields carried their own times: each present field counts as
@@ -161,10 +218,6 @@ struct Sighting {
         } else {
             self.tmux = .unknown
         }
-        if let harness = seen.harness.map(\.recorded) ?? (seen.harnessUnnamed ? Self.unnamedHarness : nil) {
-            object[Self.harnessAttribute] = harness
-            object["\(Self.harnessAttribute)ObservedAt"] = object["observedAt"]
-        }
         guard holder != nil || self.tmux != .unknown else { return nil }
         self.at = at
         self.object = object
@@ -172,13 +225,6 @@ struct Sighting {
 
     /// Attributes of the tmux session, each with the time it was observed.
     static let tmuxAttributes = ["createdAt", "name", "socketPath", "serverStartedAt"]
-    /// The harness process, kept beside the place rather than inside its tmux session: a
-    /// conversation outside tmux has one too.
-    static let harnessAttribute = "harness"
-    /// The harness a hook ran under and could not name. It is the attribute's value rather
-    /// than a mark of its own, so the newest hook's answer, a process or none it could name,
-    /// is the one the record keeps.
-    static let unnamedHarness = "unnamed"
 
     init?(object: [String: Any]) {
         guard let at = ConversationRecordJSON.date(object["observedAt"]) else { return nil }
@@ -206,7 +252,6 @@ struct Sighting {
             at = other.at
             object["observedAt"] = other.object["observedAt"]
         }
-        Self.takeNewer(Self.harnessAttribute, from: other.object, into: &object)
         guard var session = object["tmux"] as? [String: Any], let theirs = other.object["tmux"] as? [String: Any]
         else { return }
         for attribute in Self.tmuxAttributes {
@@ -219,7 +264,6 @@ struct Sighting {
     /// one keeps that one's time, but its attributes keep their own; once the cut passes
     /// them they are history like any other observation that old, whatever order it came in.
     mutating func forget(atOrBefore cut: (Date, String)) {
-        Self.forget([Self.harnessAttribute], in: &object, atOrBefore: cut, key: key)
         guard var session = object["tmux"] as? [String: Any] else { return }
         Self.forget(Self.tmuxAttributes, in: &session, atOrBefore: cut, key: key)
         object["tmux"] = session
@@ -319,11 +363,6 @@ struct LocationHistory {
     private func place() -> [String: Any] {
         var place: [String: Any] = [:]
         if let holder = sightings.lazy.compactMap(\.holder).first { place["hostSessionID"] = holder }
-        var harness: [String: Any] = [:]
-        for sighting in sightings {
-            Sighting.takeNewer(Sighting.harnessAttribute, from: sighting.object, into: &harness)
-        }
-        place[Sighting.harnessAttribute] = harness[Sighting.harnessAttribute]
         if let session = sightings.first(where: { if case .session = $0.tmux { true } else { false } }) {
             var merged: [String: Any] = [:]
             for sighting in sightings where sighting.tmux == session.tmux {

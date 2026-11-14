@@ -72,30 +72,59 @@ public struct ConversationRecord: Equatable, Sendable {
     /// only some of it: the app knows the tile but not its tmux session, `ws launch` knows the
     /// tmux session but no tile. `outsideTmux` is an observed fact, a hook that ran with no
     /// `$TMUX`, which a missing `tmux` alone does not say.
-    ///
-    /// `harness` is the process that ran the conversation when it was seen there.
-    /// `harnessUnnamed` says a hook saw it
-    /// there and could not name the claude it ran under, which a sighting with no harness at
-    /// all, from a writer that never looks, does not say.
     public struct LastSeenIn: Equatable, Sendable {
         public var hostSessionID: String?
         public var tmux: TmuxSession?
         public var outsideTmux: Bool
-        public var harness: ProcessIdentity?
-        public var harnessUnnamed: Bool
 
-        public init(
-            hostSessionID: String?,
-            tmux: TmuxSession? = nil,
-            outsideTmux: Bool = false,
-            harness: ProcessIdentity? = nil,
-            harnessUnnamed: Bool = false
-        ) {
+        public init(hostSessionID: String?, tmux: TmuxSession? = nil, outsideTmux: Bool = false) {
             self.hostSessionID = hostSessionID
             self.tmux = tmux
             self.outsideTmux = tmux == nil && outsideTmux
-            self.harness = harness
-            self.harnessUnnamed = harness == nil && harnessUnnamed
+        }
+    }
+
+    /// What a hook or a resume said about the process running the conversation: that one,
+    /// or, from a hook, that it ran and could not name the claude it ran under.
+    public enum HarnessAnswer: Equatable, Sendable {
+        case named(ProcessIdentity)
+        case unnamed
+    }
+
+    /// Every process a hook or a resume named as running the conversation, apart from where
+    /// it was seen: a place a later sighting contradicts becomes history, while a process that
+    /// ran the conversation holds it until it exits, whatever was seen since. Writers only add
+    /// to it, and an entry leaves only once its process has exited.
+    public struct HarnessProcesses: Equatable, Sendable {
+        public struct Entry: Equatable, Sendable {
+            public var process: ProcessIdentity
+            public var observedAt: Date
+            /// Where it was running the conversation when it was named.
+            public var seenIn: LastSeenIn?
+
+            public init(process: ProcessIdentity, observedAt: Date, seenIn: LastSeenIn? = nil) {
+                self.process = process
+                self.observedAt = observedAt
+                self.seenIn = seenIn
+            }
+        }
+
+        public var entries: [Entry]
+        /// The newest answer that named a process, kept after that process's entry has left.
+        public var namedAt: Date?
+        /// The newest hook that ran and could not name its claude.
+        public var unnamedAt: Date?
+
+        public init(entries: [Entry] = [], namedAt: Date? = nil, unnamedAt: Date? = nil) {
+            self.entries = entries
+            self.namedAt = namedAt
+            self.unnamedAt = unnamedAt
+        }
+
+        /// Whether the newest answer is a hook that could not name the claude it ran under.
+        public var newestIsUnnamed: Bool {
+            guard let unnamedAt else { return false }
+            return namedAt.map { unnamedAt > $0 } ?? true
         }
     }
 
@@ -115,6 +144,7 @@ public struct ConversationRecord: Equatable, Sendable {
     public var launch: Launch?
     public var lastSeenIn: LastSeenIn?
     public var endedByUserAt: Date?
+    public var harnessProcesses = HarnessProcesses()
 
     /// Claude names conversations with lowercase UUIDs. One spelling per conversation keeps
     /// one file per conversation.
@@ -140,6 +170,7 @@ public struct ConversationObservation: Sendable {
     public var observedBy: ConversationObserver
     public var launch: ConversationRecord.Launch?
     public var lastSeenIn: ConversationRecord.LastSeenIn?
+    public var harnessProcess: ConversationRecord.HarnessAnswer?
 
     public init(
         harness: String = ConversationRecord.claudeHarness,
@@ -154,7 +185,8 @@ public struct ConversationObservation: Sendable {
         observedAt: Date = Date(),
         observedBy: ConversationObserver,
         launch: ConversationRecord.Launch? = nil,
-        lastSeenIn: ConversationRecord.LastSeenIn? = nil
+        lastSeenIn: ConversationRecord.LastSeenIn? = nil,
+        harnessProcess: ConversationRecord.HarnessAnswer? = nil
     ) {
         self.harness = harness
         self.conversationID = conversationID
@@ -169,6 +201,7 @@ public struct ConversationObservation: Sendable {
         self.observedBy = observedBy
         self.launch = launch
         self.lastSeenIn = lastSeenIn
+        self.harnessProcess = harnessProcess
     }
 }
 
@@ -202,12 +235,7 @@ enum ConversationRecordJSON {
     private static let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
     private static let whole = Date.ISO8601FormatStyle()
 
-    /// The record a file holds, with `lastSeenIn` read from its sightings by this build's
-    /// rules. A build that predates a location fact rewrites `lastSeenIn` without it while
-    /// keeping it in each sighting, so the stored `lastSeenIn` is only what the last writer knew.
     static func record(from object: [String: Any]) -> ConversationRecord? {
-        var object = object
-        LocationHistory(object: object).write(into: &object)
         guard let rawID = object["conversationID"] as? String,
             let conversationID = ConversationRecord.normalizedID(rawID),
             let harness = object["harness"] as? String,
@@ -230,7 +258,8 @@ enum ConversationRecordJSON {
             observedBy: ConversationObserver(rawValue: object["observedBy"] as? String ?? ""),
             launch: (object["launch"] as? [String: Any]).flatMap(launch(from:)),
             lastSeenIn: (object["lastSeenIn"] as? [String: Any]).map(lastSeenIn(from:)),
-            endedByUserAt: date(object["endedByUserAt"])
+            endedByUserAt: date(object["endedByUserAt"]),
+            harnessProcesses: harnessProcesses(from: object[harnessProcessesKey] as? [String: Any] ?? [:])
         )
     }
 
@@ -248,14 +277,40 @@ enum ConversationRecordJSON {
                 serverStartedAtMicroseconds: (tmux["serverStartedAt"] as? NSNumber)?.int64Value
             )
         }
-        let harness = object[Sighting.harnessAttribute] as? String
         return .init(
             hostSessionID: object["hostSessionID"] as? String,
             tmux: tmux,
-            outsideTmux: object["outsideTmux"] as? Bool == true,
-            harness: harness.flatMap(ProcessIdentity.init(recorded:)),
-            harnessUnnamed: harness == Sighting.unnamedHarness
+            outsideTmux: object["outsideTmux"] as? Bool == true
         )
+    }
+
+    static func object(from seen: ConversationRecord.LastSeenIn) -> [String: Any] {
+        var object: [String: Any] = [:]
+        object["hostSessionID"] = seen.hostSessionID
+        if let tmux = seen.tmux {
+            var session: [String: Any] = ["serverPID": tmux.serverPID, "sessionID": tmux.sessionID]
+            session["createdAt"] = tmux.createdAt.map(string)
+            session["name"] = tmux.name
+            session["socketPath"] = tmux.socketPath
+            session["serverStartedAt"] = tmux.serverStartedAtMicroseconds
+            object["tmux"] = session
+        } else if seen.outsideTmux {
+            object["outsideTmux"] = true
+        }
+        return object
+    }
+
+    static func harnessProcesses(from object: [String: Any]) -> ConversationRecord.HarnessProcesses {
+        let entries = (object["entries"] as? [[String: Any]] ?? []).compactMap {
+            entry -> ConversationRecord.HarnessProcesses.Entry? in
+            guard let process = (entry["process"] as? String).flatMap(ProcessIdentity.init(recorded:)),
+                let observedAt = date(entry["observedAt"])
+            else { return nil }
+            return .init(
+                process: process, observedAt: observedAt,
+                seenIn: (entry["seenIn"] as? [String: Any]).map(lastSeenIn(from:)))
+        }
+        return .init(entries: entries, namedAt: date(object["namedAt"]), unnamedAt: date(object["unnamedAt"]))
     }
 }
 
@@ -336,10 +391,15 @@ public struct ConversationRecordStore: Sendable {
     /// A record that exists but cannot be read is left alone and the write throws. One that
     /// reads but is not a JSON object is moved aside to `<id>.json.corrupt-<epoch>-<random>`,
     /// where no reader looks and a person still can, and the write starts a fresh record.
+    ///
+    /// A harness process leaves the record once `ended` says it has exited, so the record
+    /// keeps only processes that might still hold the conversation. One the kernel cannot
+    /// be asked about stays.
     @discardableResult
     public func record(
         _ observation: ConversationObservation,
-        lockBudget: Duration = .milliseconds(100)
+        lockBudget: Duration = .milliseconds(100),
+        ended: (ProcessIdentity) -> Bool = { ProcessInspector.live.liveness($0) == .ended }
     ) throws -> WriteOutcome {
         guard let conversationID = ConversationRecord.normalizedID(observation.conversationID),
             let url = fileURL(conversationID: conversationID)
@@ -356,7 +416,7 @@ public struct ConversationRecordStore: Sendable {
         defer { close(descriptor) }
         guard Self.lock(descriptor, within: lockBudget) else { return .lockBusy }
 
-        let merged = ConversationRecordJSON.merge(observation, into: try Self.existingObject(at: url))
+        let merged = ConversationRecordJSON.merge(observation, into: try Self.existingObject(at: url), ended: ended)
         let data = try JSONSerialization.data(withJSONObject: merged, options: [.prettyPrinted, .sortedKeys])
         let temporary = directory.appendingPathComponent(".\(conversationID).\(getpid()).\(UUID().uuidString).tmp")
         try Self.writePrivately(data, to: temporary)

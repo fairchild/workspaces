@@ -474,21 +474,25 @@ public struct ConversationResumer: Sendable {
             lastSeenIn: .init(
                 hostSessionID: environment["WORKSPACES_HOST_SESSION_ID"].flatMap { UUID(uuidString: $0)?.uuidString },
                 tmux: tmux.flatMap(describeTmux),
-                outsideTmux: tmux == nil,
-                harness: harness
-            )
+                outsideTmux: tmux == nil
+            ),
+            harnessProcess: .named(harness)
         )
         let outcome: ConversationRecordStore.WriteOutcome
         do {
-            outcome = try records.record(observation, lockBudget: .seconds(2))
+            outcome = try records.record(
+                observation, lockBudget: .seconds(2), ended: { inspector.liveness($0) == .ended })
         } catch {
             throw Refusal.unrecorded(conversationID: id, reason: error.localizedDescription)
         }
         guard outcome == .written else {
             throw Refusal.unrecorded(conversationID: id, reason: "its record stayed locked for two seconds")
         }
-        guard records.load(conversationID: id)?.lastSeenIn?.harness == harness else {
-            throw Refusal.unrecorded(conversationID: id, reason: "its record, read back, names another process")
+        guard
+            records.load(conversationID: id)?.harnessProcesses.entries.contains(where: { $0.process == harness })
+                == true
+        else {
+            throw Refusal.unrecorded(conversationID: id, reason: "its record, read back, does not name this process")
         }
     }
 
@@ -501,7 +505,6 @@ public struct ConversationResumer: Sendable {
         live: Bool
     ) async throws -> [ConversationHolder]? {
         let command = guardedCommand(conversationID: record.conversationID)
-        let startedAt = Date()
         do {
             if live {
                 let paneCommand = await control.paneCommand(handle: handle)
@@ -524,7 +527,7 @@ public struct ConversationResumer: Sendable {
         } catch let error as TmuxSessionControl.ControlError {
             throw Refusal.tmux(error.localizedDescription)
         }
-        if await waitForHandOff(of: record.conversationID, in: handle, since: startedAt) { return nil }
+        if await waitForHandOff(of: record.conversationID, in: handle) { return nil }
         if case .held(let holders, _) = await probe.probe(records.load(conversationID: record.conversationID) ?? record)
         {
             return holders
@@ -533,16 +536,17 @@ public struct ConversationResumer: Sendable {
     }
 
     /// Until the `--here` run under `handle` has recorded itself and exec'd into the harness.
-    /// `false` if it did not within ten seconds: it failed, refused, or has not run yet.
-    private func waitForHandOff(of conversationID: String, in handle: String, since startedAt: Date) async -> Bool {
+    /// `false` if it did not within ten seconds: it failed, refused, or has not run yet. Any
+    /// running harness the record names counts: the probe under the lock found none before
+    /// the command was sent, and the hand-off claim keeps a second sender out since.
+    private func waitForHandOff(of conversationID: String, in handle: String) async -> Bool {
         var handleSession: ConversationRecord.TmuxSession?
         var askedHandle = false
         for _ in 0..<100 {
-            if let seen = records.load(conversationID: conversationID)?.lastSeenIn,
-                let harness = seen.harness, harness.startedAt >= startedAt,
-                let tmux = seen.tmux, inspector.isRunning(harness), let arguments = inspector.arguments(harness.pid),
-                !Self.isResumeVerb(arguments)
-            {
+            for entry in records.load(conversationID: conversationID)?.harnessProcesses.entries ?? [] {
+                guard let tmux = entry.seenIn?.tmux, inspector.isRunning(entry.process),
+                    let arguments = inspector.arguments(entry.process.pid), !Self.isResumeVerb(arguments)
+                else { continue }
                 if tmux.name == nil, !askedHandle {
                     handleSession = await control.sessionIdentity(handle: handle)
                     askedHandle = true

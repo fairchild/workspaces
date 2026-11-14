@@ -116,52 +116,75 @@ struct ConversationRecordStoreTests {
         return place
     }
 
-    @Test(
-        "A record whose lastSeenIn the previous build rewrote still names its harness and socket, from its sightings"
-    )
-    func previousBuildProjectionIsReadFromSightings() throws {
-        let harness = ProcessIdentity(pid: 4321, startedAtMicroseconds: 1_800_000_000_123_456)
-        let tmux = ConversationRecord.TmuxSession(
-            serverPID: 77, sessionID: "$3", createdAt: Date(timeIntervalSince1970: 1_799_999_000), name: "wm-a",
-            socketPath: "/tmp/tmux-501/workspaces", serverStartedAtMicroseconds: 1_799_998_000_000_000)
+    private static var thisProcess: ProcessIdentity {
+        get throws { try #require(ProcessInspector.live.identity(getpid())) }
+    }
+
+    /// The previous build keeps keys it does not know at the top level, rewrites the
+    /// sightings by its own rules, and writes `lastSeenIn` without anything this build adds.
+    @Test("A sighting elsewhere, written by this build or the previous one, takes no harness process away")
+    func laterSightingElsewhereKeepsTheHarness() throws {
+        let harness = try Self.thisProcess
         try withStore { store in
+            var named = observation(at: 1_800_000_000, lastSeenIn: .init(hostSessionID: "tile-b", outsideTmux: true))
+            named.harnessProcess = .named(harness)
+            try store.record(named)
             try store.record(
-                observation(
-                    at: 1_800_000_000,
-                    lastSeenIn: .init(
-                        hostSessionID: Self.tile.uuidString, tmux: tmux, harness: harness)))
+                observation(at: 1_800_000_060, lastSeenIn: .init(hostSessionID: "tile-a", outsideTmux: true)))
             let url = try #require(store.fileURL(conversationID: Self.conversationID))
             var written = try object(at: url)
             written["lastSeenIn"] = Self.previousBuildPlace(written)
+            written["sightings"] = [["hostSessionID": "tile-c", "observedAt": "2027-01-15T08:00:00.000Z"]]
             try JSONSerialization.data(withJSONObject: written).write(to: url)
-            #expect((try object(at: url)["lastSeenIn"] as? [String: Any])?["harness"] == nil)
 
-            let seen = try #require(store.load(conversationID: Self.conversationID)?.lastSeenIn)
-            #expect(seen.harness == harness)
-            #expect(seen.tmux == tmux)
-            #expect(store.all().first?.lastSeenIn?.harness == harness)
+            let record = try #require(store.load(conversationID: Self.conversationID))
+            #expect(record.harnessProcesses.entries.map(\.process) == [harness])
+            #expect(record.harnessProcesses.entries.first?.seenIn?.hostSessionID == "tile-b")
         }
     }
 
-    /// A hook that could not name its claude is an answer, not a silence: the newest hook's
-    /// answer, a process or none it could name, is the one the record keeps.
-    @Test("The newest hook's answer about its claude wins, whether it named one or could not")
-    func newestHookAnswerAboutTheHarnessWins() throws {
-        let harness = ProcessIdentity(pid: 4321, startedAtMicroseconds: 1_800_000_000_123_456)
-        let named = ConversationRecord.LastSeenIn(hostSessionID: nil, outsideTmux: true, harness: harness)
-        let unnamed = ConversationRecord.LastSeenIn(hostSessionID: nil, outsideTmux: true, harnessUnnamed: true)
+    /// A hook that could not name its claude is an answer, not a silence. Which answer is
+    /// newest is kept apart from the processes named, which stay until they exit.
+    @Test("A hook that could not name its claude is the newest answer until a process is named again, and removes none")
+    func unnamedAnswerKeepsNamedProcesses() throws {
+        let harness = try Self.thisProcess
         try withStore { store in
-            try store.record(observation(at: 1_800_000_000, lastSeenIn: named))
-            try store.record(observation(at: 1_800_000_060, lastSeenIn: unnamed))
-            let afterUnnamed = try #require(store.load(conversationID: Self.conversationID)?.lastSeenIn)
-            #expect(afterUnnamed.harness == nil && afterUnnamed.harnessUnnamed)
+            var named = observation(at: 1_800_000_000, lastSeenIn: .init(hostSessionID: nil, outsideTmux: true))
+            named.harnessProcess = .named(harness)
+            var unnamed = observation(at: 1_800_000_060, lastSeenIn: .init(hostSessionID: nil, outsideTmux: true))
+            unnamed.harnessProcess = .unnamed
+            try store.record(named)
+            try store.record(unnamed)
+            let afterUnnamed = try #require(store.load(conversationID: Self.conversationID)?.harnessProcesses)
+            #expect(afterUnnamed.newestIsUnnamed)
+            #expect(afterUnnamed.entries.map(\.process) == [harness])
 
-            try store.record(observation(at: 1_800_000_120, lastSeenIn: named))
-            let afterNamed = try #require(store.load(conversationID: Self.conversationID)?.lastSeenIn)
-            #expect(afterNamed.harness == harness && !afterNamed.harnessUnnamed)
+            named.observedAt = Date(timeIntervalSince1970: 1_800_000_120)
+            try store.record(named)
+            #expect(store.load(conversationID: Self.conversationID)?.harnessProcesses.newestIsUnnamed == false)
+        }
+    }
 
-            try store.record(observation(at: 1_800_000_180, lastSeenIn: .init(hostSessionID: nil, outsideTmux: true)))
-            #expect(store.load(conversationID: Self.conversationID)?.lastSeenIn?.harness == harness)
+    @Test("A harness process leaves the record once it has exited, and only then")
+    func exitedHarnessProcessesLeave() throws {
+        let running = try Self.thisProcess
+        let exited = ProcessIdentity(pid: running.pid, startedAtMicroseconds: running.startedAtMicroseconds - 1)
+        try withStore { store in
+            for (offset, process) in [running, exited].enumerated() {
+                var named = observation(at: 1_800_000_000 + Double(offset))
+                named.harnessProcess = .named(process)
+                try store.record(named, ended: { _ in false })
+            }
+            #expect(
+                Set(
+                    try #require(store.load(conversationID: Self.conversationID)).harnessProcesses.entries.map(
+                        \.process))
+                    == [running, exited])
+
+            try store.record(observation(at: 1_800_000_060))
+            let record = try #require(store.load(conversationID: Self.conversationID))
+            #expect(record.harnessProcesses.entries.map(\.process) == [running])
+            #expect(record.harnessProcesses.namedAt == Date(timeIntervalSince1970: 1_800_000_001))
         }
     }
 

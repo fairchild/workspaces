@@ -16,15 +16,23 @@ import Testing
 struct ConversationHolderProbeTests {
     private static let id = "fa08c461-2979-41db-85fb-b5c90c0d2d8b"
 
+    /// A record last seen at `lastSeenIn`, whose hook named `harness` there, then, when
+    /// `unnamed`, ran again and could not name its claude.
     private static func record(
         lastSeenIn: ConversationRecord.LastSeenIn? = nil,
+        harness: ProcessIdentity? = nil,
+        unnamed: Bool = false,
         socketLabel: String? = nil
     ) -> ConversationRecord {
-        ConversationRecord(
+        let named = Date(timeIntervalSince1970: 100)
+        return ConversationRecord(
             schema: 1, harness: "claude", conversationID: id, host: "h", cwd: "/", configHome: nil,
             transcriptPath: nil, workspacePath: nil, workspaceCreatedAt: nil, socketLabel: socketLabel,
             createdAt: Date(), observedAt: Date(), observedBy: .hook, launch: nil, lastSeenIn: lastSeenIn,
-            endedByUserAt: nil)
+            endedByUserAt: nil,
+            harnessProcesses: .init(
+                entries: harness.map { [.init(process: $0, observedAt: named, seenIn: lastSeenIn)] } ?? [],
+                namedAt: harness.map { _ in named }, unnamedAt: unnamed ? Date(timeIntervalSince1970: 200) : nil))
     }
 
     /// Processes that exist with the given start times and arguments, and nothing else.
@@ -123,7 +131,7 @@ struct ConversationHolderProbeTests {
         let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
         let tile = UUID().uuidString
         let record = Self.record(
-            lastSeenIn: .init(hostSessionID: tile, outsideTmux: true, harness: harness))
+            lastSeenIn: .init(hostSessionID: tile, outsideTmux: true), harness: harness)
         let table = try Self.table("60 1 /usr/local/bin/claude")
         let alive = Self.inspector([60: (1_000, ["/usr/local/bin/claude"])])
 
@@ -145,7 +153,7 @@ struct ConversationHolderProbeTests {
     func recordedHarnessReleases(change: String) async throws {
         let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
         let record = Self.record(
-            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true, harness: harness))
+            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true), harness: harness)
         let processes: [Int32: (Int64, [String])] =
             switch change {
             case "ended": [:]
@@ -165,7 +173,7 @@ struct ConversationHolderProbeTests {
     func recordedHarnessIgnoresArguments() async throws {
         let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
         let record = Self.record(
-            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true, harness: harness))
+            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true), harness: harness)
         let arguments = ["/bin/sh", "/opt/bin/node", "--no-warnings", "/opt/lib/wrapper.js"]
         let probe = await ClaudeHarnessAdapter().holders(
             of: record,
@@ -179,6 +187,36 @@ struct ConversationHolderProbeTests {
                     recordedSessionGone: false))
     }
 
+    /// A delayed hook from another tile, or a writer that knows nothing of harness processes,
+    /// moves where the conversation was last seen; it takes no process away.
+    @Test("Every running process the record names holds it, wherever the conversation was seen since")
+    func everyNamedProcessHolds() async throws {
+        let older = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
+        let ended = ProcessIdentity(pid: 61, startedAtMicroseconds: 1_000)
+        var record = Self.record(lastSeenIn: .init(hostSessionID: "tile-b", outsideTmux: true))
+        record.harnessProcesses = .init(
+            entries: [
+                .init(
+                    process: older, observedAt: Date(timeIntervalSince1970: 100),
+                    seenIn: .init(hostSessionID: "tile-a", outsideTmux: true)),
+                .init(
+                    process: ended, observedAt: Date(timeIntervalSince1970: 200),
+                    seenIn: .init(hostSessionID: "tile-b", outsideTmux: true)),
+            ],
+            namedAt: Date(timeIntervalSince1970: 200), unnamedAt: Date(timeIntervalSince1970: 300))
+
+        let probe = await ClaudeHarnessAdapter().holders(
+            of: record,
+            in: Self.context(
+                try Self.table("60 1 /usr/local/bin/claude"),
+                inspector: Self.inspector([60: (1_000, ["/usr/local/bin/claude"])])))
+        #expect(
+            probe
+                == .held(
+                    [.init(pid: 60, foundBy: .recordedHarness, startedAt: older.startedAt, hostSessionID: "tile-a")],
+                    recordedSessionGone: false))
+    }
+
     private static let paneTree = """
           100   1 -zsh
           101 100 /usr/local/bin/claude
@@ -187,8 +225,8 @@ struct ConversationHolderProbeTests {
     private static func sessionRecord(harness: ProcessIdentity?) -> ConversationRecord {
         record(
             lastSeenIn: .init(
-                hostSessionID: "tile", tmux: .init(serverPID: 4242, sessionID: "$7", name: "recorded-name"),
-                harness: harness))
+                hostSessionID: "tile", tmux: .init(serverPID: 4242, sessionID: "$7", name: "recorded-name")),
+            harness: harness)
     }
 
     @Test(
@@ -392,7 +430,7 @@ struct ConversationHolderProbeTests {
     )
     func unnamedHarnessIsUnknown(sighting: String) async throws {
         let record = Self.record(
-            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true, harnessUnnamed: sighting != "never-asked"))
+            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true), unnamed: sighting != "never-asked")
         let listing = sighting == "unnamed-held" ? "70 1 claude --resume \(Self.id)" : "1 0 /sbin/launchd"
         let probe = await ClaudeHarnessAdapter().holders(of: record, in: Self.context(try Self.table(listing)))
         switch sighting {
@@ -413,7 +451,7 @@ struct ConversationHolderProbeTests {
     func unreadableHarnessIsUnknown() async throws {
         let harness = ProcessIdentity(pid: 60, startedAtMicroseconds: 1_000)
         let record = Self.record(
-            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true, harness: harness))
+            lastSeenIn: .init(hostSessionID: nil, outsideTmux: true), harness: harness)
         let probe = await ClaudeHarnessAdapter().holders(
             of: record,
             in: Self.context(
