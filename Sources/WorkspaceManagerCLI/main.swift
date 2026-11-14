@@ -84,9 +84,7 @@ private final class CLIApp {
         case "automation":
             return try runAutomation(arguments: tail)
         case "conversation":
-            throw CLIError(
-                "Usage: workspaces conversation observe (a Claude SessionStart hook; reads the payload on stdin)"
-            )
+            return try await runConversation(arguments: tail)
         default:
             throw CLIError("Unknown command '\(command)'. Run 'workspaces help'.")
         }
@@ -458,14 +456,16 @@ private final class CLIApp {
         defer { lock?.release() }
         if let continuing {
             lock = try await claimConversation(continuing)
-            guard let listing = await AgentSessionInspection.processListing() else {
-                throw CLIError("Could not read the process table, so a second agent cannot be ruled out.")
-            }
-            guard AgentSessionInspection.conversationHolders(continuing, processListing: listing).isEmpty else {
+            switch await holderProbe(control: control).probe(conversationID: continuing) {
+            case .free:
+                break
+            case .held:
                 throw CLIError(
                     "Conversation \(continuing) is already running, and a second agent would be "
                         + "a second writer on its transcript."
                 )
+            case .unknown(let detail):
+                throw CLIError(HolderProbe.refusal(detail))
             }
         }
         let earlierConversation = launchRecords.load(socketLabel: control.socketLabel, handle: handle)?
@@ -476,7 +476,7 @@ private final class CLIApp {
             throw CLIError(error.localizedDescription)
         }
         if let continuing {
-            await waitForHolder(of: continuing)
+            await waitForHolder(of: continuing, control: control)
         }
 
         do {
@@ -632,9 +632,14 @@ private final class CLIApp {
         let pane = sessionLive ? try? await control.read(handle: handle, lines: 1) : nil
         let blocker = pane.flatMap(AgentSessionInspection.blocker(inPane:))
 
-        var holders: [Int]?
-        if let identity, let listing = await AgentSessionInspection.processListing() {
-            holders = AgentSessionInspection.conversationHolders(identity.conversationID, processListing: listing)
+        var holders: [ConversationHolder]?
+        var holdersUnknown: String?
+        if let identity {
+            switch await holderProbe(control: control).probe(conversationID: identity.conversationID) {
+            case .free: holders = []
+            case .held(let found, _): holders = found
+            case .unknown(let detail): holdersUnknown = detail
+            }
         }
         let lastTurn = record.flatMap { record in
             record.identity.flatMap {
@@ -649,7 +654,8 @@ private final class CLIApp {
             blocker: blocker,
             inputReady: pane.map(AgentSessionInspection.inputReady(inPane:)) ?? false,
             lastTurn: lastTurn,
-            agentStartedAt: holders?.max().map { Date().addingTimeInterval(-TimeInterval($0)) }
+            agentStartedAt: holders?.compactMap(\.startedAt).min(),
+            holdersUnknown: holdersUnknown
         )
         return WorkspaceCheckResult(
             handle: handle,
@@ -711,16 +717,27 @@ private final class CLIApp {
             )
         }
 
-        let conversationID = identity.conversationID
-        let lock = try await claimConversation(conversationID)
-        defer { lock.release() }
+        // The conversation's record when it has one, for what the hook saw; this launch's own
+        // request fills in what the record lacks.
+        let launched = ConversationRecord(
+            launch: record, host: ConversationHost.current, harness: ConversationRecord.claudeHarness)
+        guard !launched.conversationID.isEmpty else {
+            throw CLIError("The recorded conversation id is malformed: \(identity.conversationID)")
+        }
+        var subject = conversationRecords.load(conversationID: identity.conversationID) ?? launched
+        subject.launch = subject.launch ?? launched.launch
+        let outcome: ConversationResumer.Outcome
+        do {
+            outcome = try await conversationResumer(control: control).resume(subject, target: .into(handle: handle))
+        } catch let refusal as ConversationResumer.Refusal {
+            throw CLIError(refusal.localizedDescription)
+        }
 
-        let sessionLive = await control.isLive(handle: handle)
-        let holders = try await conversationHolders(conversationID, sessionLive: sessionLive)
-        if holders > 0 {
-            guard sessionLive else {
+        switch outcome {
+        case .held(_, let targetLive):
+            guard targetLive == true else {
                 throw CLIError(
-                    "Conversation \(conversationID) is held by a process outside any session on this "
+                    "Conversation \(subject.conversationID) is held by a process outside any session on this "
                         + "socket, and a second agent would be a second writer on its transcript."
                 )
             }
@@ -728,109 +745,128 @@ private final class CLIApp {
                 WorkspaceResumeResult(
                     handle: handle,
                     socketLabel: control.socketLabel,
-                    conversationID: conversationID,
+                    conversationID: subject.conversationID,
                     resumed: false,
                     command: nil
                 ),
                 json: json
             )
-        }
-
-        guard let transcript = claudeTranscript(conversationID: conversationID, workspacePath: record.workspacePath)
-        else {
-            throw CLIError(
-                "No transcript exists for conversation \(conversationID): it never took a turn, "
-                    + "so there is nothing to continue. 'workspaces ws launch' starts a new one."
-            )
-        }
-        guard let command = AgentLaunchCommand.claudeResume(identity: identity, transcript: transcript) else {
-            throw CLIError("The recorded conversation id is malformed: \(conversationID)")
-        }
-
-        do {
-            if sessionLive {
-                let paneCommand = await control.paneCommand(handle: handle)
-                guard let paneCommand, TmuxSessionControl.isIdleShell(paneCommand: paneCommand) else {
-                    throw CLIError(
-                        "'\(handle)' is running \(paneCommand ?? "something tmux would not name"), "
-                            + "not a shell, so the resume command cannot be typed into it."
-                    )
-                }
-                guard await control.attachedClients(handle: handle) == 0 else {
-                    throw CLIError(
-                        "'\(handle)' is open in a terminal, and its prompt may hold someone's work, so "
-                            + "nothing was typed. To resume it there, press Return on the prefilled "
-                            + "command, or run: \(command)"
-                    )
-                }
-                try await control.adoptSessionEnvironment(handle: handle)
-                try await control.clearInputLine(handle: handle)
-                let report = try await control.send(
-                    handle: handle, text: control.prefixingSessionEnvironment(command), submit: true)
-                if report.verification == .paneMissingText {
-                    writeStderr("warning: the pane did not show the resume command; 'ws check' will say if it ran.")
-                }
-            } else {
-                try await control.launch(handle: handle, directory: directory, command: command)
+        case .resumed(let command):
+            var resumed = record
+            resumed.resumedAt = Date()
+            do {
+                try launchRecords.save(resumed)
+            } catch {
+                writeStderr(
+                    "warning: the conversation resumed, but its record was not updated: "
+                        + "\(error.localizedDescription). A tile in the app may need a click to rejoin it."
+                )
             }
-        } catch let error as TmuxSessionControl.ControlError {
-            throw CLIError(error.localizedDescription)
+            return try reportResume(
+                WorkspaceResumeResult(
+                    handle: handle,
+                    socketLabel: control.socketLabel,
+                    conversationID: subject.conversationID,
+                    resumed: true,
+                    command: command
+                ),
+                json: json
+            )
         }
-        guard await waitForHolder(of: conversationID) else {
+    }
+
+    /// `workspaces conversation resume <id> (--here | --into <handle>) [--json]` — continues a
+    /// recorded conversation unless something holds it. `--here` becomes the agent in this
+    /// terminal; `--into` starts it under a detached handle. Exits 3 when the conversation is
+    /// already held, and says where.
+    private func runConversation(arguments: [String]) async throws -> Int32 {
+        let usage = "workspaces conversation resume <id> (--here | --into <handle>) [--json]"
+        guard arguments.first == "resume" else {
             throw CLIError(
-                "The resume command ran under '\(handle)', but nothing took up conversation "
-                    + "\(conversationID). To see why: workspaces ws read \(handle)"
+                "Usage: \(usage)\n       workspaces conversation observe "
+                    + "(a Claude SessionStart hook; reads the payload on stdin)"
             )
         }
 
-        var resumed = record
-        resumed.resumedAt = Date()
+        var conversationID: String?
+        var target: ConversationResumer.Target?
+        var json = false
+        var index = 1
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--here":
+                guard target == nil else { throw CLIError("Usage: \(usage)") }
+                target = .here
+            case "--into":
+                index += 1
+                guard target == nil, index < arguments.count else { throw CLIError("Usage: \(usage)") }
+                target = .into(handle: arguments[index])
+            case "--json":
+                json = true
+            default:
+                guard conversationID == nil else { throw CLIError("Usage: \(usage)") }
+                conversationID = arguments[index]
+            }
+            index += 1
+        }
+        guard let conversationID, let target else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        let control = tmuxControl()
+        let outcome: ConversationResumer.Outcome
         do {
-            try launchRecords.save(resumed)
-        } catch {
-            writeStderr(
-                "warning: the conversation resumed, but its record was not updated: "
-                    + "\(error.localizedDescription). A tile in the app may need a click to rejoin it."
-            )
+            outcome = try await conversationResumer(control: control).resume(
+                conversationID: conversationID, target: target)
+        } catch let refusal as ConversationResumer.Refusal {
+            throw CLIError(refusal.localizedDescription)
         }
 
-        return try reportResume(
-            WorkspaceResumeResult(
-                handle: handle,
-                socketLabel: control.socketLabel,
-                conversationID: conversationID,
-                resumed: true,
-                command: command
-            ),
-            json: json
+        let id = ConversationRecord.normalizedID(conversationID) ?? conversationID
+        let handle: String? =
+            if case .into(let handle) = target { handle } else { nil }
+        let result: ConversationResumeResult
+        switch outcome {
+        case .resumed(let command):
+            result = ConversationResumeResult(conversationID: id, handle: handle, resumed: true, command: command)
+        case .held(let holders, _):
+            result = ConversationResumeResult(conversationID: id, handle: handle, resumed: false, holders: holders)
+        }
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+        } else if result.resumed {
+            print("Resumed conversation \(id) in \(handle ?? "this terminal")")
+        } else {
+            print("Conversation \(id) is already held, so nothing was started:")
+            for holder in result.holders {
+                print("  \(holder.placeDescription)")
+            }
+        }
+        return result.resumed ? 0 : Self.conversationHeldExitCode
+    }
+
+    /// `conversation resume`'s answer when something already holds the conversation.
+    private static let conversationHeldExitCode: Int32 = 3
+
+    private func conversationResumer(control: TmuxSessionControl) -> ConversationResumer {
+        ConversationResumer(
+            records: conversationRecords,
+            launches: launchRecords,
+            control: control,
+            warn: { writeStderr($0) }
         )
     }
 
-    /// How many processes hold the conversation. When its session is gone, a holder is
-    /// usually an agent on its way out: one outlives a killed tmux server by a few seconds
-    /// while it shuts down, and a resume in that window would be refused for nothing.
-    private func conversationHolders(_ conversationID: String, sessionLive: Bool) async throws -> Int {
-        let deadline = Date().addingTimeInterval(sessionLive ? 0 : Self.resumeHolderExitWindow)
-        while true {
-            guard let listing = await AgentSessionInspection.processListing() else {
-                throw CLIError("Could not read the process table, so a second agent cannot be ruled out.")
-            }
-            let holders = AgentSessionInspection.conversationHolders(conversationID, processListing: listing).count
-            if holders == 0 || Date() >= deadline {
-                return holders
-            }
-            try await Task.sleep(for: .milliseconds(500))
-        }
+    private func holderProbe(control: TmuxSessionControl) -> ConversationHolderProbe {
+        ConversationHolderProbe(records: conversationRecords, fallbackSocketLabel: control.socketLabel)
     }
 
-    private static let resumeHolderExitWindow: TimeInterval = 15
-
     /// Claims a conversation for the span of a launch or resume, so two of them cannot both
-    /// find it free.
+    /// find it free. The claim is the one `conversation resume` takes.
     private func claimConversation(_ conversationID: String) async throws -> AgentConversationLock {
         do {
-            return try await launchRecords.lockConversation(conversationID)
-        } catch AgentLaunchRecordStore.LockError.held {
+            return try await conversationRecords.claim(conversationID)
+        } catch ConversationRecordStore.ClaimError.held {
             throw CLIError("Another launch or resume of conversation \(conversationID) is still running.")
         } catch {
             throw CLIError("Could not claim conversation \(conversationID): \(error.localizedDescription)")
@@ -841,13 +877,10 @@ private final class CLIApp {
     /// the claim: anyone waiting on it then finds a holder rather than a conversation that
     /// still looks free. `false` if none appeared, which is a start that failed.
     @discardableResult
-    private func waitForHolder(of conversationID: String) async -> Bool {
+    private func waitForHolder(of conversationID: String, control: TmuxSessionControl) async -> Bool {
+        let probe = holderProbe(control: control)
         for _ in 0..<100 {
-            if let listing = await AgentSessionInspection.processListing(),
-                !AgentSessionInspection.conversationHolders(conversationID, processListing: listing).isEmpty
-            {
-                return true
-            }
+            if case .held = await probe.probe(conversationID: conversationID) { return true }
             try? await Task.sleep(for: .milliseconds(100))
         }
         return false

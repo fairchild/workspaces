@@ -46,6 +46,35 @@ struct ConversationRecordStoreTests {
         try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
     }
 
+    @Test("One claim on a conversation at a time, whatever case the id is spelled in, free again once released")
+    func claimExcludes() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("conversation-claims-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ConversationRecordStore(directory: directory)
+        let id = Self.conversationID
+
+        let first = try await store.claim(id)
+        await #expect(throws: ConversationRecordStore.ClaimError.held) {
+            try await store.claim(id.uppercased(), timeout: .milliseconds(200))
+        }
+        // Another conversation is another claim.
+        try await store.claim("fa08c461-2979-41db-85fb-b5c90c0d2d8c").release()
+        first.release()
+        try await store.claim(id, timeout: .seconds(5)).release()
+    }
+
+    @Test("A claim is only ever taken on something shaped like a conversation id")
+    func claimRefusesAnotherName() async {
+        let store = ConversationRecordStore(
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("conversation-claims-\(UUID().uuidString)")
+        )
+        await #expect(throws: ConversationRecordStore.ClaimError.invalidConversationID) {
+            try await store.claim("../../escape")
+        }
+    }
+
     @Test("A record with unknown fields keeps them through a rewrite, in kept sightings too")
     func unknownFieldsSurviveARewrite() throws {
         try withStore { store in
@@ -70,6 +99,257 @@ struct ConversationRecordStoreTests {
             #expect((rewritten["fromANewerBuild"] as? [String: Any])?["kept"] as? Bool == true)
             #expect((rewritten["sightings"] as? [[String: Any]])?.first?["paneIndex"] as? Int == 2)
             #expect(store.load(conversationID: Self.conversationID)?.transcriptPath == "/tmp/t.jsonl")
+        }
+    }
+
+    /// What the previous build (S4, acf18978) writes as `lastSeenIn`: its projection of the
+    /// sightings, which knows the holder, the tmux session's id, server, creation time and
+    /// name, and `outsideTmux`, and nothing this build adds.
+    private static func previousBuildPlace(_ written: [String: Any]) -> [String: Any] {
+        let seen = written["lastSeenIn"] as? [String: Any] ?? [:]
+        var place: [String: Any] = [:]
+        place["hostSessionID"] = seen["hostSessionID"]
+        place["outsideTmux"] = seen["outsideTmux"]
+        if let tmux = seen["tmux"] as? [String: Any] {
+            place["tmux"] = tmux.filter { ["serverPID", "sessionID", "createdAt", "name"].contains($0.key) }
+        }
+        return place
+    }
+
+    private static var thisProcess: ProcessIdentity {
+        get throws { try #require(ProcessInspector.live.identity(getpid())) }
+    }
+
+    /// The previous build keeps keys it does not know at the top level, rewrites the
+    /// sightings by its own rules, and writes `lastSeenIn` without anything this build adds.
+    @Test("A sighting elsewhere, written by this build or the previous one, takes no harness process away")
+    func laterSightingElsewhereKeepsTheHarness() throws {
+        let harness = try Self.thisProcess
+        try withStore { store in
+            var named = observation(at: 1_800_000_000, lastSeenIn: .init(hostSessionID: "tile-b", outsideTmux: true))
+            named.harnessProcess = .named(harness)
+            try store.record(named)
+            try store.record(
+                observation(at: 1_800_000_060, lastSeenIn: .init(hostSessionID: "tile-a", outsideTmux: true)))
+            let url = try #require(store.fileURL(conversationID: Self.conversationID))
+            var written = try object(at: url)
+            written["lastSeenIn"] = Self.previousBuildPlace(written)
+            written["sightings"] = [["hostSessionID": "tile-c", "observedAt": "2027-01-15T08:00:00.000Z"]]
+            try JSONSerialization.data(withJSONObject: written).write(to: url)
+
+            let record = try #require(store.load(conversationID: Self.conversationID))
+            #expect(record.harnessProcesses.entries.map(\.process) == [harness])
+            #expect(record.harnessProcesses.entries.first?.seenIn?.hostSessionID == "tile-b")
+        }
+    }
+
+    /// A hook that found no claude above it records the processes it ran under, apart from
+    /// the processes named; neither removes the other, and a chain leaves only once every
+    /// process in it has exited.
+    @Test("An unattributed chain and a named process stay side by side, and a chain leaves only when all of it has")
+    func unattributedChainKeepsNamedProcesses() throws {
+        let harness = try Self.thisProcess
+        let gone = ProcessIdentity(pid: harness.pid, startedAtMicroseconds: harness.startedAtMicroseconds - 1)
+        try withStore { store in
+            var unnamed = observation(at: 1_800_000_000, lastSeenIn: .init(hostSessionID: nil, outsideTmux: true))
+            unnamed.harnessProcess = .unnamed(chain: [gone, harness])
+            var named = observation(at: 1_800_000_060, lastSeenIn: .init(hostSessionID: nil, outsideTmux: true))
+            named.harnessProcess = .named(harness)
+            try store.record(unnamed, ended: { _ in false })
+            try store.record(named, ended: { _ in false })
+            let both = try #require(store.load(conversationID: Self.conversationID)?.harnessProcesses)
+            #expect(both.entries.map(\.process) == [harness])
+            #expect(both.unattributed.map(\.chain) == [[gone, harness]])
+
+            try store.record(observation(at: 1_800_000_120), ended: { $0 == gone })
+            #expect(
+                try #require(store.load(conversationID: Self.conversationID)).harnessProcesses.unattributed.map(\.chain)
+                    == [[harness]])
+            try store.record(observation(at: 1_800_000_180), ended: { _ in true })
+            let after = try #require(store.load(conversationID: Self.conversationID)).harnessProcesses
+            #expect(after.unattributed.isEmpty && after.entries.isEmpty)
+        }
+    }
+
+    @Test("Chains from repeated hooks under one shell come down to one entry once their own shells exit")
+    func repeatedChainsCollapse() throws {
+        let shell = try Self.thisProcess
+        let first = ProcessIdentity(pid: 101, startedAtMicroseconds: 1)
+        let second = ProcessIdentity(pid: 102, startedAtMicroseconds: 1)
+        try withStore { store in
+            for (offset, hook) in [first, second].enumerated() {
+                var unnamed = observation(at: 1_800_000_000 + Double(offset))
+                unnamed.harnessProcess = .unnamed(chain: [hook, shell])
+                try store.record(unnamed, ended: { _ in false })
+            }
+            #expect(
+                try #require(store.load(conversationID: Self.conversationID)).harnessProcesses.unattributed.count == 2)
+
+            try store.record(observation(at: 1_800_000_060), ended: { $0 != shell })
+            let collapsed = try #require(store.load(conversationID: Self.conversationID)).harnessProcesses.unattributed
+            #expect(collapsed.map(\.chain) == [[shell]])
+            #expect(collapsed.first?.observedAt == Date(timeIntervalSince1970: 1_800_000_001))
+        }
+    }
+
+    @Test("A harness process leaves the record once it has exited, and only then")
+    func exitedHarnessProcessesLeave() throws {
+        let running = try Self.thisProcess
+        let exited = ProcessIdentity(pid: running.pid, startedAtMicroseconds: running.startedAtMicroseconds - 1)
+        try withStore { store in
+            for (offset, process) in [running, exited].enumerated() {
+                var named = observation(at: 1_800_000_000 + Double(offset))
+                named.harnessProcess = .named(process)
+                try store.record(named, ended: { _ in false })
+            }
+            #expect(
+                Set(
+                    try #require(store.load(conversationID: Self.conversationID)).harnessProcesses.entries.map(
+                        \.process))
+                    == [running, exited])
+
+            try store.record(observation(at: 1_800_000_060))
+            let record = try #require(store.load(conversationID: Self.conversationID))
+            #expect(record.harnessProcesses.entries.map(\.process) == [running])
+        }
+    }
+
+    /// Ownership that is present but malformed may name a process that still runs the
+    /// conversation, so it is never read as no ownership, and a write leaves it as it is.
+    @Test(
+        "Ownership present but malformed reads as damaged, and a later write keeps it",
+        arguments: [
+            "observedAt", "process", "entries", "chain", "harnessProcesses", "emptyChain", "emptyEntries",
+            "emptyUnattributed", "emptyContainer",
+        ]
+    )
+    func malformedOwnershipIsDamage(field: String) throws {
+        try withStore { store in
+            var named = observation(at: 1_800_000_000)
+            named.harnessProcess = .named(try Self.thisProcess)
+            try store.record(named, ended: { _ in false })
+            let url = try #require(store.fileURL(conversationID: Self.conversationID))
+            var object = try object(at: url)
+            var processes = try #require(object["harnessProcesses"] as? [String: Any])
+            var entries = try #require(processes["entries"] as? [[String: Any]])
+            switch field {
+            case "observedAt": entries[0]["observedAt"] = "invalid"
+            case "process": entries[0]["process"] = "not-a-process"
+            case "entries": processes["entries"] = "invalid"
+            case "chain": processes["unattributed"] = [["chain": ["invalid"], "observedAt": entries[0]["observedAt"]!]]
+            case "emptyChain": processes["unattributed"] = [["chain": [], "observedAt": entries[0]["observedAt"]!]]
+            case "emptyEntries": processes["entries"] = []
+            case "emptyUnattributed": processes["unattributed"] = []
+            default: break
+            }
+            if field == "observedAt" || field == "process" { processes["entries"] = entries }
+            switch field {
+            case "harnessProcesses": object["harnessProcesses"] = "invalid"
+            case "emptyContainer": object["harnessProcesses"] = [String: Any]()
+            default: object["harnessProcesses"] = processes
+            }
+            try JSONSerialization.data(withJSONObject: object).write(to: url)
+            #expect(store.read(conversationID: Self.conversationID) == .damaged(url))
+
+            try store.record(observation(at: 1_800_000_060), ended: { _ in true })
+            #expect(store.read(conversationID: Self.conversationID) == .damaged(url))
+            let kept = try self.object(at: url)["harnessProcesses"]
+            #expect((kept as AnyObject?)?.isEqual(object["harnessProcesses"]) == true)
+        }
+    }
+
+    @Test("The app's identity recorder leaves an empty chain, and the rest of the ownership, as it is")
+    func identityRecorderKeepsAnEmptyChain() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("records-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ConversationRecordStore(directory: directory)
+        try store.record(observation(at: 1_800_000_000))
+        let url = try #require(store.fileURL(conversationID: Self.conversationID))
+        var object = try object(at: url)
+        let damaged: [String: Any] = [
+            "unattributed": [["chain": [String](), "observedAt": "2027-01-15T08:00:00.000Z"]]
+        ]
+        object["harnessProcesses"] = damaged
+        try JSONSerialization.data(withJSONObject: object).write(to: url)
+
+        let identity = try #require(
+            ConversationIdentityRecorder.HookIdentity.decode(
+                from: Data(#"{"session_id":"\#(Self.conversationID)","cwd":"/tmp"}"#.utf8)))
+        await ConversationIdentityRecorder(store: store).observe(identity, hostSessionID: UUID())
+
+        #expect(store.read(conversationID: Self.conversationID) == .damaged(url))
+        let kept = try self.object(at: url)["harnessProcesses"]
+        #expect((kept as AnyObject?)?.isEqual(damaged) == true)
+    }
+
+    /// Readers find a note by its name, so it is created under that name, with no other file
+    /// written or renamed on the way, which a volume without an exclusive rename also allows.
+    @Test("A hook's unresolved note is created under a name of its own, alone, and a moved-aside copy reads first")
+    func unresolvedNotes() throws {
+        try withStore { store in
+            let first = observation(at: 1_800_000_000)
+            let incomplete = HookAncestry(claude: nil, passed: [try Self.thisProcess], complete: false)
+            let one = try store.recordUnresolved(first, ancestry: incomplete)
+            let two = try store.recordUnresolved(first, ancestry: incomplete)
+            #expect(one != two)
+            let url = try #require(store.fileURL(conversationID: Self.conversationID))
+            #expect(one.lastPathComponent.hasPrefix(url.lastPathComponent + ".unresolved-1800000000-"))
+            #expect(
+                store.read(conversationID: Self.conversationID) == .unresolved(one.path < two.path ? one : two)
+            )
+            let names = try FileManager.default.contentsOfDirectory(atPath: store.directory.path)
+            #expect(Set(names) == [one.lastPathComponent, two.lastPathComponent], "\(names)")
+            let note = try object(at: one)
+            #expect(note["chain"] as? [String] == [try Self.thisProcess.recorded])
+            #expect(note["complete"] as? Bool == false)
+
+            try store.record(first)
+            let aside = URL(fileURLWithPath: url.path + ".corrupt-1-abcdef12")
+            try Data("[]".utf8).write(to: aside)
+            #expect(store.read(conversationID: Self.conversationID) == .movedAside(aside))
+        }
+    }
+
+    @Test("A write from another host removes none of the record's harness processes")
+    func otherHostRemovesNoHarnessProcess() throws {
+        try withStore { store in
+            var named = observation(at: 1_800_000_000)
+            named.harnessProcess = .named(try Self.thisProcess)
+            try store.record(named, ended: { _ in false })
+
+            var elsewhere = observation(at: 1_800_000_060)
+            elsewhere.host = "other-host"
+            try store.record(elsewhere, ended: { _ in true })
+            #expect(
+                try #require(store.load(conversationID: Self.conversationID)).harnessProcesses.entries.map(\.process)
+                    == [try Self.thisProcess])
+        }
+    }
+
+    @Test("A record that does not parse reads as damaged, not absent, and a writer that must not lose it leaves it")
+    func damagedRecordIsNotAbsent() throws {
+        try withStore { store in
+            #expect(store.read(conversationID: Self.conversationID) == .absent)
+            try store.record(observation(at: 1_800_000_000))
+            let url = try #require(store.fileURL(conversationID: Self.conversationID))
+            guard case .found = store.read(conversationID: Self.conversationID) else {
+                Issue.record("expected the record")
+                return
+            }
+            try Data("{ not json".utf8).write(to: url)
+            #expect(store.read(conversationID: Self.conversationID) == .damaged(url))
+            try Data(#"{"conversationID":"\#(Self.conversationID)"}"#.utf8).write(to: url)
+            #expect(store.read(conversationID: Self.conversationID) == .damaged(url))
+
+            try Data("{ not json".utf8).write(to: url)
+            #expect(throws: ConversationRecordStore.WriteError.unreadableRecord) {
+                try store.record(self.observation(at: 1_800_000_060), movingDamagedAside: false)
+            }
+            #expect(try Data(contentsOf: url) == Data("{ not json".utf8))
+            #expect(
+                try FileManager.default.contentsOfDirectory(atPath: store.directory.path).filter {
+                    $0.contains("corrupt")
+                }.isEmpty)
         }
     }
 

@@ -134,6 +134,35 @@ struct ConversationIndexTests {
         #expect(try await localState.fetchConversationIndex().map(\.conversationID) == [id])
     }
 
+    @Test("The migration leaves ownership it cannot read, an empty chain, as it is")
+    func migrationKeepsAnEmptyChain() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let id = UUID().uuidString.lowercased()
+        try fixture.records.record(
+            ConversationObservation(
+                conversationID: id, cwd: "/tmp/repo", observedAt: Date(timeIntervalSince1970: 1_800_000_000),
+                observedBy: .hook))
+        let url = try #require(fixture.records.fileURL(conversationID: id))
+        var object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let damaged: [String: Any] = [
+            "unattributed": [["chain": [String](), "observedAt": "2027-01-15T08:00:00.000Z"]]
+        ]
+        object["harnessProcesses"] = damaged
+        try JSONSerialization.data(withJSONObject: object).write(to: url)
+        try fixture.launchRecords.save(
+            AgentLaunchRecord(
+                handle: "wm-repo-1", workspacePath: "/tmp/repo", socketLabel: "workspaces",
+                launchedAt: Date(timeIntervalSince1970: 1_800_000_100),
+                identity: AgentLaunchIdentity(conversationID: id, requestedModel: nil, requestedEffort: nil)))
+
+        #expect(try await fixture.indexer(try fixture.localState()).migrateOnce() == .init(written: 1))
+
+        #expect(fixture.records.read(conversationID: id) == .damaged(url))
+        let kept = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        #expect((kept["harnessProcesses"] as AnyObject?)?.isEqual(damaged) == true)
+    }
+
     @Test("The one-time migration writes records from Launch Records and tiles' ids, once")
     func migrationRunsOnce() async throws {
         let fixture = try Fixture()

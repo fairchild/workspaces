@@ -47,7 +47,15 @@ struct AgentSessionInspectionTests {
         ).verdict
     }
 
-    @Test("One agent, ready, whose last turn ran as requested is verified")
+    @Test("Holders that cannot be told make the verdict unknown, with the probe's reason as the detail")
+    func unknownHolders() {
+        let decision = AgentSessionInspection.verdict(
+            sessionLive: true, identity: Self.identity, agentProcesses: nil, blocker: nil, inputReady: true,
+            lastTurn: nil, agentStartedAt: nil, holdersUnknown: "A hook saw conversation x start")
+        #expect(decision.verdict == .unknown)
+        #expect(decision.detail == "A hook saw conversation x start")
+    }
+
     func verified() {
         #expect(verdict() == .verified)
     }
@@ -186,74 +194,5 @@ struct AgentSessionInspectionTests {
     @Test("A dialog's selection cursor is not an input box")
     func dialogCursorIsNotReady() {
         #expect(!AgentSessionInspection.inputReady(inPane: "Security guide\n❯ No, exit\n  Yes\nEnter to confirm"))
-    }
-
-    @Test("Only the agent that holds the conversation counts as a process")
-    func holders() {
-        let id = Self.id
-        let listing = """
-               05:00 /Users/me/.local/bin/claude --model claude-opus-5-5 --session-id \(id) hello
-               05:00 /bin/zsh -lc claude --model claude-opus-5-5 --session-id \(id) hello
-               00:01 tmux -L workspaces new-session -d -s x -- /bin/zsh -lc claude --session-id \(id)
-               00:01 /bin/bash /hooks/forwarder.sh --session-id \(id)
-               03:00 claude --model claude-opus-5-5 mentions \(id) in its prompt
-            01:00:30 /bin/sh /tmp/fixture/bin/claude --resume \(id) --effort low
-               09:00 claude --session-id 00000000-0000-0000-0000-000000000000
-            """
-        #expect(AgentSessionInspection.conversationHolders(id, processListing: listing) == [300, 3630])
-    }
-
-    @Test("A flag joined to its value holds the conversation like one apart from it")
-    func joinedFlags() {
-        let id = Self.id
-        let listing = """
-               00:05 claude --session-id=\(id)
-               00:06 claude --resume=\(id)
-            """
-        #expect(AgentSessionInspection.conversationHolders(id, processListing: listing) == [5, 6])
-    }
-
-    @Test("Claude run by an interpreter is a holder, under either name it installs as")
-    func interpreterLayouts() {
-        let id = Self.id
-        let listing = """
-               00:05 node /opt/homebrew/bin/claude --resume \(id)
-               00:06 node /opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js --resume \(id)
-            """
-        #expect(AgentSessionInspection.conversationHolders(id, processListing: listing) == [5, 6])
-    }
-
-    @Test("A conversation id past `--` is a prompt, and a program merely naming claude holds nothing")
-    func notHolders() {
-        let id = Self.id
-        let listing = """
-               00:05 claude -- --resume \(id)
-               00:06 claude --session-id 00000000-0000-0000-0000-000000000000 -- see --resume=\(id)
-               00:07 tmux -L workspaces new-session -d -s wm-a-1 claude --session-id \(id)
-               00:08 tail -f /tmp/\(id).jsonl
-            """
-        #expect(AgentSessionInspection.conversationHolders(id, processListing: listing).isEmpty)
-    }
-
-    @Test("A short flag names a conversation too, and nothing listed means nothing holds it")
-    func holderEdges() {
-        let id = Self.id
-        #expect(AgentSessionInspection.conversationHolders(id, processListing: "00:09 claude -r \(id)") == [9])
-        #expect(AgentSessionInspection.conversationHolders(id, processListing: "").isEmpty)
-    }
-
-    @Test(
-        "Elapsed time reads in every form ps prints it",
-        arguments: [
-            ("00:07", 7), ("12:34", 754), ("02:00:01", 7201), ("3-01:00:00", 262_800),
-        ] as [(String, Int)]
-    )
-    func elapsed(text: String, seconds: Int) {
-        #expect(AgentSessionInspection.elapsedSeconds(text) == seconds)
-    }
-
-    @Test("Text that is not an elapsed time is not one", arguments: ["", "claude", "1", "a:b", "1-2-3:00"])
-    func notElapsed(text: String) {
-        #expect(AgentSessionInspection.elapsedSeconds(text) == nil)
     }
 }

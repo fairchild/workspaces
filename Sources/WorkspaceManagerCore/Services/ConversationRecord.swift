@@ -18,6 +18,8 @@ public struct ConversationObserver: RawRepresentable, Hashable, Sendable {
     public static let hook = ConversationObserver(rawValue: "hook")
     public static let app = ConversationObserver(rawValue: "app")
     public static let migration = ConversationObserver(rawValue: "migration")
+    /// `conversation resume --here`, just before it hands the terminal to the harness.
+    public static let resume = ConversationObserver(rawValue: "resume")
 }
 
 public struct ConversationRecord: Equatable, Sendable {
@@ -38,17 +40,31 @@ public struct ConversationRecord: Equatable, Sendable {
 
     /// A tmux session as the server that holds it names it. The id alone repeats once a
     /// server restarts, so the server's pid and the session's creation time travel with it.
+    /// The socket path is where that server listens, which its label alone does not say: a
+    /// label resolves under each client's own `TMUX_TMPDIR`. The server's start time tells
+    /// it from a later process that reused its pid.
     public struct TmuxSession: Equatable, Sendable {
         public var serverPID: Int
         public var sessionID: String
         public var createdAt: Date?
         public var name: String?
+        public var socketPath: String?
+        public var serverStartedAtMicroseconds: Int64?
 
-        public init(serverPID: Int, sessionID: String, createdAt: Date? = nil, name: String? = nil) {
+        public init(
+            serverPID: Int,
+            sessionID: String,
+            createdAt: Date? = nil,
+            name: String? = nil,
+            socketPath: String? = nil,
+            serverStartedAtMicroseconds: Int64? = nil
+        ) {
             self.serverPID = serverPID
             self.sessionID = sessionID
             self.createdAt = createdAt
             self.name = name
+            self.socketPath = socketPath
+            self.serverStartedAtMicroseconds = serverStartedAtMicroseconds
         }
     }
 
@@ -68,6 +84,55 @@ public struct ConversationRecord: Equatable, Sendable {
         }
     }
 
+    /// What a hook or a resume said about the process running the conversation: that one,
+    /// with the processes a hook passed on its way up to it, or, from a hook that found no
+    /// claude above it, the processes it ran under.
+    public enum HarnessAnswer: Equatable, Sendable {
+        case named(ProcessIdentity, passing: [ProcessIdentity] = [])
+        case unnamed(chain: [ProcessIdentity])
+    }
+
+    /// Every process a hook or a resume named as running the conversation, apart from where
+    /// it was seen: a place a later sighting contradicts becomes history, while a process that
+    /// ran the conversation holds it until it exits, whatever was seen since. Writers only add
+    /// to it, and an entry leaves only once its processes have exited.
+    public struct HarnessProcesses: Equatable, Sendable {
+        public struct Entry: Equatable, Sendable {
+            public var process: ProcessIdentity
+            public var observedAt: Date
+            /// Where it was running the conversation when it was named.
+            public var seenIn: LastSeenIn?
+
+            public init(process: ProcessIdentity, observedAt: Date, seenIn: LastSeenIn? = nil) {
+                self.process = process
+                self.observedAt = observedAt
+                self.seenIn = seenIn
+            }
+        }
+
+        /// A hook that found no claude above it: any process in its chain may be running the
+        /// conversation, so the entry leaves only once every one of them has exited.
+        public struct Unattributed: Equatable, Sendable {
+            public var chain: [ProcessIdentity]
+            public var observedAt: Date
+            public var seenIn: LastSeenIn?
+
+            public init(chain: [ProcessIdentity], observedAt: Date, seenIn: LastSeenIn? = nil) {
+                self.chain = chain
+                self.observedAt = observedAt
+                self.seenIn = seenIn
+            }
+        }
+
+        public var entries: [Entry]
+        public var unattributed: [Unattributed]
+
+        public init(entries: [Entry] = [], unattributed: [Unattributed] = []) {
+            self.entries = entries
+            self.unattributed = unattributed
+        }
+    }
+
     public var schema: Int
     public var harness: String
     public var conversationID: String
@@ -84,6 +149,7 @@ public struct ConversationRecord: Equatable, Sendable {
     public var launch: Launch?
     public var lastSeenIn: LastSeenIn?
     public var endedByUserAt: Date?
+    public var harnessProcesses = HarnessProcesses()
 
     /// Claude names conversations with lowercase UUIDs. One spelling per conversation keeps
     /// one file per conversation.
@@ -109,6 +175,7 @@ public struct ConversationObservation: Sendable {
     public var observedBy: ConversationObserver
     public var launch: ConversationRecord.Launch?
     public var lastSeenIn: ConversationRecord.LastSeenIn?
+    public var harnessProcess: ConversationRecord.HarnessAnswer?
 
     public init(
         harness: String = ConversationRecord.claudeHarness,
@@ -123,7 +190,8 @@ public struct ConversationObservation: Sendable {
         observedAt: Date = Date(),
         observedBy: ConversationObserver,
         launch: ConversationRecord.Launch? = nil,
-        lastSeenIn: ConversationRecord.LastSeenIn? = nil
+        lastSeenIn: ConversationRecord.LastSeenIn? = nil,
+        harnessProcess: ConversationRecord.HarnessAnswer? = nil
     ) {
         self.harness = harness
         self.conversationID = conversationID
@@ -138,6 +206,7 @@ public struct ConversationObservation: Sendable {
         self.observedBy = observedBy
         self.launch = launch
         self.lastSeenIn = lastSeenIn
+        self.harnessProcess = harnessProcess
     }
 }
 
@@ -176,7 +245,8 @@ enum ConversationRecordJSON {
             let conversationID = ConversationRecord.normalizedID(rawID),
             let harness = object["harness"] as? String,
             let cwd = object["cwd"] as? String,
-            let observedAt = date(object["observedAt"])
+            let observedAt = date(object["observedAt"]),
+            let harnessProcesses = harnessProcesses(from: object[harnessProcessesKey])
         else { return nil }
         return ConversationRecord(
             schema: object["schema"] as? Int ?? ConversationRecord.schemaVersion,
@@ -194,7 +264,8 @@ enum ConversationRecordJSON {
             observedBy: ConversationObserver(rawValue: object["observedBy"] as? String ?? ""),
             launch: (object["launch"] as? [String: Any]).flatMap(launch(from:)),
             lastSeenIn: (object["lastSeenIn"] as? [String: Any]).map(lastSeenIn(from:)),
-            endedByUserAt: date(object["endedByUserAt"])
+            endedByUserAt: date(object["endedByUserAt"]),
+            harnessProcesses: harnessProcesses
         )
     }
 
@@ -207,13 +278,74 @@ enum ConversationRecordJSON {
         let tmux = (object["tmux"] as? [String: Any]).flatMap { tmux -> ConversationRecord.TmuxSession? in
             guard let pid = tmux["serverPID"] as? Int, let id = tmux["sessionID"] as? String else { return nil }
             return .init(
-                serverPID: pid, sessionID: id, createdAt: date(tmux["createdAt"]), name: tmux["name"] as? String)
+                serverPID: pid, sessionID: id, createdAt: date(tmux["createdAt"]), name: tmux["name"] as? String,
+                socketPath: tmux["socketPath"] as? String,
+                serverStartedAtMicroseconds: (tmux["serverStartedAt"] as? NSNumber)?.int64Value
+            )
         }
         return .init(
             hostSessionID: object["hostSessionID"] as? String,
             tmux: tmux,
             outsideTmux: object["outsideTmux"] as? Bool == true
         )
+    }
+
+    static func object(from seen: ConversationRecord.LastSeenIn) -> [String: Any] {
+        var object: [String: Any] = [:]
+        object["hostSessionID"] = seen.hostSessionID
+        if let tmux = seen.tmux {
+            var session: [String: Any] = ["serverPID": tmux.serverPID, "sessionID": tmux.sessionID]
+            session["createdAt"] = tmux.createdAt.map(string)
+            session["name"] = tmux.name
+            session["socketPath"] = tmux.socketPath
+            session["serverStartedAt"] = tmux.serverStartedAtMicroseconds
+            object["tmux"] = session
+        } else if seen.outsideTmux {
+            object["outsideTmux"] = true
+        }
+        return object
+    }
+
+    /// Ownership, read strictly: nil when anything in it is present but malformed, and the
+    /// record then reads as damaged rather than as owned by nothing.
+    static func harnessProcesses(from value: Any?) -> ConversationRecord.HarnessProcesses? {
+        guard let value else { return .init() }
+        guard let object = value as? [String: Any], !object.isEmpty,
+            let entries = list(
+                object["entries"],
+                { entry -> ConversationRecord.HarnessProcesses.Entry? in
+                    guard let process = (entry["process"] as? String).flatMap(ProcessIdentity.init(recorded:)),
+                        let observedAt = date(entry["observedAt"]), let seenIn = place(entry["seenIn"])
+                    else { return nil }
+                    return .init(process: process, observedAt: observedAt, seenIn: seenIn)
+                }),
+            let unattributed = list(
+                object["unattributed"],
+                { entry -> ConversationRecord.HarnessProcesses.Unattributed? in
+                    guard let words = entry["chain"] as? [String], !words.isEmpty,
+                        case let chain = words.compactMap(ProcessIdentity.init(recorded:)), chain.count == words.count,
+                        let observedAt = date(entry["observedAt"]), let seenIn = place(entry["seenIn"])
+                    else { return nil }
+                    return .init(chain: chain, observedAt: observedAt, seenIn: seenIn)
+                })
+        else { return nil }
+        return .init(entries: entries, unattributed: unattributed)
+    }
+
+    /// Every element of an optional list, or nil when the list or any element is malformed.
+    /// No writer leaves a list empty, so an empty one is malformed too.
+    private static func list<T>(_ value: Any?, _ element: ([String: Any]) -> T?) -> [T]? {
+        guard let value else { return [] }
+        guard let objects = value as? [[String: Any]], !objects.isEmpty else { return nil }
+        let elements = objects.compactMap(element)
+        return elements.count == objects.count ? elements : nil
+    }
+
+    /// An entry's place: `.some(nil)` when it has none, nil when it has one that is not an object.
+    private static func place(_ value: Any?) -> ConversationRecord.LastSeenIn?? {
+        guard let value else { return .some(nil) }
+        guard let object = value as? [String: Any] else { return nil }
+        return .some(lastSeenIn(from: object))
     }
 }
 
@@ -265,8 +397,102 @@ public struct ConversationRecordStore: Sendable {
     }
 
     public func load(conversationID: String) -> ConversationRecord? {
-        guard let url = fileURL(conversationID: conversationID) else { return nil }
-        return Self.readObject(at: url).flatMap(ConversationRecordJSON.record(from:))
+        guard case .found(let record) = readRecord(conversationID: conversationID) else { return nil }
+        return record
+    }
+
+    /// What the store holds for a conversation, as one deciding who holds it must read it: a
+    /// record, none, a file it cannot read as one, or an earlier record moved aside as
+    /// damaged. A caller refuses on the last two, since either may name a process that still
+    /// runs the conversation. A moved-aside copy counts by its name, which this build and the
+    /// one before it both give it, so a record a writer started over after the move does not
+    /// hide it.
+    public enum Read: Equatable, Sendable {
+        case found(ConversationRecord)
+        case absent
+        case damaged(URL)
+        case movedAside(URL)
+        /// A hook could not tell what runs the conversation, and left this note beside it.
+        case unresolved(URL)
+        /// The records directory could not be listed, so neither a moved-aside copy nor a
+        /// hook's note can be ruled out.
+        case unlistable(URL)
+    }
+
+    public func read(conversationID: String) -> Read {
+        let record = readRecord(conversationID: conversationID)
+        if case .damaged = record { return record }
+        guard let url = fileURL(conversationID: conversationID) else { return record }
+        let names: [String]
+        do {
+            names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return record
+        } catch {
+            return .unlistable(directory)
+        }
+        func first(_ suffix: String) -> URL? {
+            names.filter { $0.hasPrefix(url.lastPathComponent + suffix) }.sorted().first
+                .map(directory.appendingPathComponent)
+        }
+        if let aside = first(".corrupt-") { return .movedAside(aside) }
+        if let note = first(Self.unresolvedSuffix) { return .unresolved(note) }
+        return record
+    }
+
+    static let unresolvedSuffix = ".unresolved-"
+
+    /// Leaves `<id>.json.unresolved-<epoch>-<random>` beside the record: a hook saw the
+    /// conversation start and could not tell which process runs it. Nothing removes the note
+    /// but a person, since no process it could name is left to say when it is over. Readers
+    /// find a note by its name alone, so it is created in place under a random name, only if
+    /// nothing holds that name yet, the way a record's private file is: whatever stops a note
+    /// stops a record, and no note replaces another.
+    @discardableResult
+    public func recordUnresolved(_ observation: ConversationObservation, ancestry: HookAncestry) throws -> URL {
+        guard let url = fileURL(conversationID: observation.conversationID) else {
+            throw WriteError.invalidConversationID
+        }
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: Self.directoryPermissions])
+        var note: [String: Any] = [
+            "conversationID": observation.conversationID,
+            "observedAt": ConversationRecordJSON.string(observation.observedAt),
+            "chain": ancestry.passed.map(\.recorded),
+            "complete": ancestry.complete,
+        ]
+        note["claude"] = ancestry.claude?.recorded
+        let data = try JSONSerialization.data(withJSONObject: note, options: [.sortedKeys])
+        let stamp = Int(observation.observedAt.timeIntervalSince1970)
+        for _ in 0..<4 {
+            let target = URL(
+                fileURLWithPath:
+                    "\(url.path)\(Self.unresolvedSuffix)\(stamp)-\(UUID().uuidString.prefix(8).lowercased())")
+            do {
+                try Self.writePrivately(data, to: target)
+                return target
+            } catch let error as POSIXError where error.code == .EEXIST {
+                continue
+            }
+        }
+        throw POSIXError(.EEXIST)
+    }
+
+    private func readRecord(conversationID: String) -> Read {
+        guard let url = fileURL(conversationID: conversationID) else { return .absent }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return .absent
+        } catch {
+            return .damaged(url)
+        }
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            let record = ConversationRecordJSON.record(from: object)
+        else { return .damaged(url) }
+        return .found(record)
     }
 
     /// Every readable record. An unreadable one is skipped: nothing can act on a record whose
@@ -294,10 +520,19 @@ public struct ConversationRecordStore: Sendable {
     /// A record that exists but cannot be read is left alone and the write throws. One that
     /// reads but is not a JSON object is moved aside to `<id>.json.corrupt-<epoch>-<random>`,
     /// where no reader looks and a person still can, and the write starts a fresh record.
+    ///
+    /// A writer that decides who holds the conversation passes `movingDamagedAside: false`:
+    /// a record it cannot read may name a process that still runs it, so the write throws.
+    ///
+    /// A harness process leaves the record once `ended` says it has exited, so the record
+    /// keeps only processes that might still hold the conversation. One the kernel cannot
+    /// be asked about stays.
     @discardableResult
     public func record(
         _ observation: ConversationObservation,
-        lockBudget: Duration = .milliseconds(100)
+        lockBudget: Duration = .milliseconds(100),
+        movingDamagedAside: Bool = true,
+        ended: (ProcessIdentity) -> Bool = { ProcessInspector.live.liveness($0) == .ended }
     ) throws -> WriteOutcome {
         guard let conversationID = ConversationRecord.normalizedID(observation.conversationID),
             let url = fileURL(conversationID: conversationID)
@@ -314,7 +549,8 @@ public struct ConversationRecordStore: Sendable {
         defer { close(descriptor) }
         guard Self.lock(descriptor, within: lockBudget) else { return .lockBusy }
 
-        let merged = ConversationRecordJSON.merge(observation, into: try Self.existingObject(at: url))
+        let existing = try Self.existingObject(at: url, movingDamagedAside: movingDamagedAside)
+        let merged = ConversationRecordJSON.merge(observation, into: existing, ended: ended)
         let data = try JSONSerialization.data(withJSONObject: merged, options: [.prettyPrinted, .sortedKeys])
         let temporary = directory.appendingPathComponent(".\(conversationID).\(getpid()).\(UUID().uuidString).tmp")
         try Self.writePrivately(data, to: temporary)
@@ -325,11 +561,60 @@ public struct ConversationRecordStore: Sendable {
         return .written
     }
 
+    public enum ClaimError: Error, Equatable {
+        case invalidConversationID
+        case held
+    }
+
+    /// What a claim is for. `start` decides who holds the conversation. `handOff` is held by
+    /// a resume that started the conversation somewhere else and waits for it to be taken
+    /// up there, which needs `start` free for the process doing the taking.
+    public enum ClaimKind: String, Sendable {
+        case start = "claim"
+        case handOff = "hand-off"
+    }
+
+    /// Waits for the conversation to be free, then claims it. The lock sits beside the record,
+    /// so every launch and resume that names the conversation contends on one file wherever
+    /// its own config directory points: a tile's `XDG_CONFIG_HOME` can differ from the
+    /// caller's, and the records directory is the one they are made to agree on (#1417).
+    public func claim(
+        _ conversationID: String,
+        for kind: ClaimKind = .start,
+        timeout: Duration = .seconds(30)
+    ) async throws -> AgentConversationLock {
+        guard let id = ConversationRecord.normalizedID(conversationID) else { throw ClaimError.invalidConversationID }
+        let locks = directory.appendingPathComponent(".locks", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: locks, withIntermediateDirectories: true, attributes: [.posixPermissions: Self.directoryPermissions])
+        // Close-on-exec: a lock stays held for as long as anything that inherited the
+        // descriptor runs, and a resume can start a tmux server. `resume --here` relies on
+        // it the other way: the exec that starts the harness is what lets the lock go.
+        let descriptor = open(
+            locks.appendingPathComponent("\(id).\(kind.rawValue)").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
+
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            guard errno == EWOULDBLOCK, ContinuousClock.now < deadline else {
+                close(descriptor)
+                throw ClaimError.held
+            }
+            do {
+                try await Task.sleep(for: .milliseconds(100))
+            } catch {
+                close(descriptor)
+                throw error
+            }
+        }
+        return AgentConversationLock(descriptor: descriptor)
+    }
+
     /// Records name workspaces, transcripts and config homes, so the file is 0600 from the
     /// moment it exists rather than after a chmod.
     private static func writePrivately(_ data: Data, to url: URL) throws {
         let descriptor = open(url.path, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0o600)
-        guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
+        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {
             try handle.write(contentsOf: data)
@@ -350,7 +635,7 @@ public struct ConversationRecordStore: Sendable {
     }
 
     /// The record's object for a merge: nil when there is no record yet.
-    private static func existingObject(at url: URL) throws -> [String: Any]? {
+    private static func existingObject(at url: URL, movingDamagedAside: Bool) throws -> [String: Any]? {
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -362,7 +647,7 @@ public struct ConversationRecordStore: Sendable {
         if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             return object
         }
-        guard moveAside(url) else { throw WriteError.unreadableRecord }
+        guard movingDamagedAside, moveAside(url) else { throw WriteError.unreadableRecord }
         return nil
     }
 
