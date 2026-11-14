@@ -83,7 +83,16 @@ public enum HolderProbe: Equatable, Sendable {
     /// `recordedSessionGone` is whether the tmux session the conversation was last seen in is
     /// positively gone, which makes these holders likely to be on their way out.
     case held([ConversationHolder], recordedSessionGone: Bool)
+    /// Why it could not tell, on the first line, then what to do about it, if anything.
     case unknown(String)
+
+    /// The refusal for an `unknown` answer: why, that a second agent cannot be ruled out,
+    /// then what to do.
+    public static func refusal(_ detail: String) -> String {
+        let lines = detail.split(separator: "\n", maxSplits: 1)
+        let reason = "\(lines.first ?? ""), so a second agent cannot be ruled out."
+        return lines.count > 1 ? "\(reason) \(lines[1])" : reason
+    }
 }
 
 /// The tmux session a record says its conversation was last seen in, as its server answers

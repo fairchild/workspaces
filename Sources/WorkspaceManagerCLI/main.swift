@@ -465,7 +465,7 @@ private final class CLIApp {
                         + "a second writer on its transcript."
                 )
             case .unknown(let detail):
-                throw CLIError("\(detail), so a second agent cannot be ruled out.")
+                throw CLIError(HolderProbe.refusal(detail))
             }
         }
         let earlierConversation = launchRecords.load(socketLabel: control.socketLabel, handle: handle)?

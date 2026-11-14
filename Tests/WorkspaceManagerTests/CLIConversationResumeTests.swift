@@ -451,25 +451,30 @@ struct CLIConversationResumeTests {
         try template.replacingOccurrences(of: "@WORKSPACES_CLI@", with: fixture.binary.path)
             .write(to: installed, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: installed.path)
-        let link = hooks.appendingPathComponent("observe-link")
+        let link = hooks.appendingPathComponent("observer.sh")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: installed)
         return (installed, link)
     }
 
     /// Outside tmux, a hook that names its claude is all that guards a bare one. A hook that
-    /// cannot name it says so, and that conversation refuses rather than reading as free.
+    /// cannot name it, run through a link or more shells than a hook runs in, says so, and that
+    /// conversation refuses rather than reading as free.
     @Test(
-        "A hook run through the installed forwarder names its claude; one run through a link says it could not",
-        arguments: ["installed", "link"]
+        "A hook run through the installed forwarder names its claude; one run through a link or a deeper chain says it could not",
+        arguments: ["installed", "link", "deeper"]
     )
     func hookThatCannotNameItsClaudeRefuses(path: String) async throws {
         let fixture = try makeFixture()
         defer { fixture.teardown() }
         let forwarder = try installForwarder(in: fixture)
         let conversationID = UUID().uuidString.lowercased()
-        let agent = try await startBareAgent(
-            in: fixture, hooking: [conversationID],
-            hookCommand: (path == "installed" ? forwarder.installed : forwarder.link).path)
+        let hookCommand =
+            switch path {
+            case "installed": forwarder.installed.path
+            case "link": forwarder.link.path
+            default: "/bin/sh -c '/bin/bash -c \"\(forwarder.installed.path); true\"; true'"
+            }
+        let agent = try await startBareAgent(in: fixture, hooking: [conversationID], hookCommand: hookCommand)
         defer { Self.kill([agent]) }
         let named = try #require(fixture.records.load(conversationID: conversationID)?.harnessProcesses)
 
@@ -483,7 +488,8 @@ struct CLIConversationResumeTests {
             #expect(named.entries.isEmpty && named.newestIsUnnamed)
             #expect(resume.status == 1)
             #expect(resume.stderr.contains("could not name the claude it ran under"))
-            #expect(resume.stderr.contains("a second agent cannot be ruled out"))
+            #expect(resume.stderr.contains("a second agent cannot be ruled out. Point the SessionStart hook"))
+            #expect(resume.stderr.contains("start it once by hand with 'claude --resume \(conversationID)'"))
         }
     }
 

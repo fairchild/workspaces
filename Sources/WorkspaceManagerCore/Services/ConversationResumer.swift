@@ -167,7 +167,7 @@ public struct ConversationResumer: Sendable {
             case .lockFailed(let id, let reason):
                 return "Could not claim conversation \(id): \(reason)"
             case .probeFailed(let detail):
-                return "\(detail), so a second agent cannot be ruled out."
+                return HolderProbe.refusal(detail)
             case .transcriptGone(let id):
                 return "No transcript exists for conversation \(id): it never took a turn, "
                     + "so there is nothing to continue. 'workspaces ws launch' starts a new one."
