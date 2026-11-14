@@ -488,7 +488,9 @@ struct CLIConversationResumeTests {
             #expect(named.entries.isEmpty && named.newestIsUnnamed)
             #expect(resume.status == 1)
             #expect(resume.stderr.contains("could not name the claude it ran under"))
-            #expect(resume.stderr.contains("a second agent cannot be ruled out. Point the SessionStart hook"))
+            #expect(resume.stderr.contains("a second agent cannot be ruled out. If the SessionStart hook reaches"))
+            #expect(
+                resume.stderr.contains("itself first; until then no hook can name a claude. Then, if you are certain"))
             #expect(resume.stderr.contains("start it once by hand with 'claude --resume \(conversationID)'"))
         }
     }
