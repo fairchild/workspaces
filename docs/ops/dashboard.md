@@ -1,6 +1,6 @@
 # Ops Dashboard
 
-Last updated: `2026-11-13T13:33:01.250528Z`
+Last updated: `2026-11-14T13:32:38.924460Z`
 Source: `live`
 
 ## Funnel
@@ -23,22 +23,22 @@ Source: `live`
 | Metric | Value |
 |---|---:|
 | Completed runs | 499 |
-| Failure rate | 5.81% |
-| Rerun rate | 0.20% |
+| Failure rate | 3.01% |
+| Rerun rate | 0.00% |
 
 Top failing workflows:
-- `PR Readiness` — 7 failure(s)
-- `Factory Implement` — 6 failure(s)
-- `CI — Agent Scripts` — 6 failure(s)
 - `CI Fallback` — 4 failure(s)
-- `Web Next Validate` — 3 failure(s)
+- `CI` — 4 failure(s)
+- `Factory Review Executor` — 4 failure(s)
+- `Web Next Validate` — 1 failure(s)
+- `Release` — 1 failure(s)
 
 ## Agent Health
 
 | Agent | Runs | Failures | Rate | Reruns | Rerun Rate |
 |---|---:|---:|---:|---:|---:|
-| Approved Mention Execution | 42 | 0 | 0.00% | 0 | 0.00% |
-| Mention Triage | 58 | 0 | 0.00% | 0 | 0.00% |
+| Approved Mention Execution | 27 | 0 | 0.00% | 0 | 0.00% |
+| Mention Triage | 66 | 0 | 0.00% | 0 | 0.00% |
 
 ## Perf Snapshot
 
@@ -47,13 +47,13 @@ Freshness: n/a days
 
 | Metric | Latest Median (ms) | Target (ms) | Delta vs Previous | Status |
 |---|---:|---:|---:|---|
-| `launch_to_first_prompt` | 96.22 | 1115.00 | -25.2% | pass |
+| `launch_to_first_prompt` | 74.69 | 1115.00 | -1.0% | pass |
 | `repo_hydration` | n/a | 25.00 | n/a | pass |
 
 ## Stale Planned Work
 
-- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (242.9 days idle)
-- #110 — [idea][endorsed] Fix environment status color semantics in New Workspace sheet (234.0 days idle)
+- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (243.9 days idle)
+- #110 — [idea][endorsed] Fix environment status color semantics in New Workspace sheet (235.0 days idle)
 
 ## Current Breaches
 
