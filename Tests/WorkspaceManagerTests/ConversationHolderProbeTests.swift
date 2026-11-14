@@ -736,9 +736,13 @@ struct ConversationHolderProbeTests {
     }
 
     /// Uncertainty is written first or nothing is: a hook whose note cannot be written leaves
-    /// the record as it was, so what the record already says still holds.
-    @Test("A hook whose note cannot be written leaves the record untouched, fails, and the prior holder still holds")
-    func failedNoteWritesNothing() async throws {
+    /// the record as it was, so what the record already says still holds. The note is
+    /// created the way a record's private file is, in the same directory, so the real case
+    /// is a directory that refuses both; the injected one fails the note alone.
+    @Test(
+        "A hook whose note cannot be written leaves the record untouched, fails, and the prior holder still holds",
+        arguments: [true, false])
+    func failedNoteWritesNothing(injected: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("hook-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let payload = directory.appendingPathComponent("payload.json")
@@ -753,19 +757,28 @@ struct ConversationHolderProbeTests {
             ended: { _ in false })
         let url = try #require(store.fileURL(conversationID: Self.id))
         let before = try Data(contentsOf: url)
+        let readOnly: [FileAttributeKey: Any] = [.posixPermissions: 0o500]
+        if !injected { try FileManager.default.setAttributes(readOnly, ofItemAtPath: store.directory.path) }
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: store.directory.path)
+        }
 
         let input = try FileHandle(forReadingFrom: payload)
         defer { try? input.close() }
         var warnings: [String] = []
+        let failing: (ConversationRecordStore, ConversationObservation, HookAncestry) throws -> URL = {
+            _, _, _ in throw POSIXError(.EACCES)
+        }
         let status = ConversationHookObserver.run(
             environment: [ConversationRecordStore.directoryEnvironmentKey: store.directory.path],
             input: input, tmuxSession: { _ in nil },
             ancestry: { _ in HookAncestry(claude: nil, passed: [], complete: false) },
-            recordUnresolved: { _, _, _ in throw POSIXError(.EACCES) },
+            recordUnresolved: injected ? failing : { try $0.recordUnresolved($1, ancestry: $2) },
             warn: { warnings.append($0) })
 
         #expect(status == 1)
         #expect(try Data(contentsOf: url) == before)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: store.directory.path).sorted() == [".locks", url.lastPathComponent])
         #expect(warnings.count == 1)
         #expect(warnings.first?.contains("cannot tell what runs conversation \(Self.id)") == true)
         let probe = ConversationHolderProbe(
