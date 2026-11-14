@@ -119,16 +119,21 @@ extension ConversationRecordJSON {
             var entries = processes["entries"].map({ $0 as? [[String: Any]] }) ?? [],
             var unattributed = processes["unattributed"].map({ $0 as? [[String: Any]] }) ?? []
         else { return }
-        switch answer {
-        case .named(let process)?:
-            var entry: [String: Any] = ["process": process.recorded, "observedAt": string(at)]
-            entry["seenIn"] = seenIn.map(object(from:))
-            upsert(entry, at: at, key: namedKey, into: &entries)
-        case .unnamed(let chain)? where !chain.isEmpty:
+        func addChain(_ chain: [ProcessIdentity]) {
+            guard !chain.isEmpty else { return }
             var entry: [String: Any] = ["chain": chain.map(\.recorded), "observedAt": string(at)]
             entry["seenIn"] = seenIn.map(object(from:))
             upsert(entry, at: at, key: chainKey, into: &unattributed)
-        case .unnamed?, nil:
+        }
+        switch answer {
+        case .named(let process, let passing)?:
+            var entry: [String: Any] = ["process": process.recorded, "observedAt": string(at)]
+            entry["seenIn"] = seenIn.map(object(from:))
+            upsert(entry, at: at, key: namedKey, into: &entries)
+            addChain(passing)
+        case .unnamed(let chain)?:
+            addChain(chain)
+        case nil:
             break
         }
         entries.removeAll { entry in

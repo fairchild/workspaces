@@ -211,7 +211,7 @@ struct CLIConversationResumeTests {
                 socketLabel: lastSeenIn?.tmux == nil ? nil : fixture.socketLabel,
                 observedBy: .hook,
                 lastSeenIn: lastSeenIn,
-                harnessProcess: harness.map(ConversationRecord.HarnessAnswer.named)
+                harnessProcess: harness.map { .named($0) }
             ),
             ended: { _ in false }
         )
@@ -538,6 +538,52 @@ struct CLIConversationResumeTests {
         let afterA = try fixture.run(["conversation", "resume", conversationID, "--here"])
         #expect(afterA.status == 0, "\(afterA.stderr)")
         #expect(afterA.stdout.contains("stub argv=--resume \(conversationID)"))
+    }
+
+    /// A claude starts a runtime the adapter does not recognize, and that runtime runs the
+    /// conversation. The hook names the claude above it, and the processes it passed on the
+    /// way still hold the conversation once that claude has gone.
+    @Test("A runtime between the hook and the claude it names holds the conversation after that claude exits")
+    func passedRuntimeHoldsAfterTheNamedClaude() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = UUID().uuidString.lowercased()
+        try FileManager.default.createDirectory(at: fixture.transcripts, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: fixture.transcripts.appendingPathComponent("\(conversationID).jsonl").path, contents: Data())
+        let runtime = fixture.bin.appendingPathComponent("agent-rt")
+        try FileManager.default.copyItem(at: fixture.stub, to: runtime)
+        let outerDirectory = fixture.root.appendingPathComponent("outer")
+        try FileManager.default.createDirectory(at: outerDirectory, withIntermediateDirectories: true)
+        let outerScript = outerDirectory.appendingPathComponent("claude")
+        try "#!/bin/sh\n\"$STUB_RUNTIME\" &\nwhile [ -e \"$0\" ]; do sleep 1; done\n".write(
+            to: outerScript, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: outerScript.path)
+        let outer = try fixture.start(
+            [], executable: outerScript,
+            extraEnvironment: [
+                "STUB_RUNTIME": runtime.path, "STUB_STAY": "1", "STUB_HOOK_IDS": conversationID,
+                "STUB_HOOK_CLI": fixture.binary.path, "STUB_TRANSCRIPTS": fixture.transcripts.path,
+            ],
+            output: fixture.root.appendingPathComponent("outer.log"))
+        defer { Self.kill([outer]) }
+        var processes = ConversationRecord.HarnessProcesses()
+        try await waitUntil(launches: 2) {
+            processes = fixture.records.load(conversationID: conversationID)?.harnessProcesses ?? .init()
+            return !processes.entries.isEmpty
+        }
+        #expect(processes.entries.map(\.process.pid) == [outer.processIdentifier])
+        let passed = try #require(processes.unattributed.first?.chain.first)
+        defer { if ProcessInspector.live.liveness(passed) == .running { Darwin.kill(passed.pid, SIGKILL) } }
+        #expect(ProcessInspector.live.arguments(passed.pid)?.contains(runtime.path) == true)
+        #expect(try fixture.run(["conversation", "resume", conversationID, "--here"]).status == 3)
+
+        Self.kill([outer])
+        try await waitUntil(launches: 1) { !outer.isRunning }
+        let afterOuter = try fixture.run(["conversation", "resume", conversationID, "--here"])
+        #expect(afterOuter.status == 1, "\(afterOuter.stdout)")
+        #expect(afterOuter.stderr.contains("process \(passed.pid) it ran under still runs"), "\(afterOuter.stderr)")
+        #expect(!afterOuter.stdout.contains("stub argv"), "a second agent started beside the runtime")
     }
 
     /// A harness whose parent never collects it, as an orchestrator that starts the verb and

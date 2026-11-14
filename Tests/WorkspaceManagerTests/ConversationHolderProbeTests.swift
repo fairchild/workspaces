@@ -493,11 +493,11 @@ struct ConversationHolderProbeTests {
             40: (30, ["/bin/bash", "/hooks/conversation-observer.sh"]),
         ]
         #expect(
-            ConversationHookObserver.processesRunningThisHook(from: 40, inspector: Self.tree(processes)).map(\.pid)
+            HookAncestry.above(40, inspector: Self.tree(processes)).passed.map(\.pid)
                 == [40, 30, 20])
         let outside: [Int32: (Int32, [String])] = [20: (1, ["-zsh"]), 30: (20, ["harness-a"])]
         #expect(
-            ConversationHookObserver.processesRunningThisHook(from: 30, inspector: Self.tree(outside)).map(\.pid)
+            HookAncestry.above(30, inspector: Self.tree(outside)).passed.map(\.pid)
                 == [30, 20])
     }
 
@@ -602,7 +602,9 @@ struct ConversationHolderProbeTests {
             pid += 10
         }
         if between.first?.first == "claude" { processes[10] = (1, between[0]) }
-        #expect(ConversationHookObserver.harnessRunningThisHook(from: pid, inspector: Self.tree(processes))?.pid == 10)
+        let ancestry = HookAncestry.above(pid, inspector: Self.tree(processes))
+        #expect(ancestry.claude?.pid == 10)
+        #expect(ancestry.passed.map(\.pid) == Array(stride(from: pid, to: 10, by: -10)))
     }
 
     @Test("The hook looks only so far up, and never past launchd")
@@ -611,13 +613,12 @@ struct ConversationHolderProbeTests {
         for pid in stride(from: Int32(20), through: 100, by: 10) { processes[pid] = (pid - 10, ["/bin/sh", "x"]) }
         let limit = Int32(ConversationHookObserver.ancestorLimit)
         #expect(
-            ConversationHookObserver.harnessRunningThisHook(
-                from: 10 + 10 * (limit - 1), inspector: Self.tree(processes))?.pid == 10)
+            HookAncestry.above(10 + 10 * (limit - 1), inspector: Self.tree(processes)).claude?.pid == 10)
         #expect(
-            ConversationHookObserver.harnessRunningThisHook(from: 10 + 10 * limit, inspector: Self.tree(processes))
+            HookAncestry.above(10 + 10 * limit, inspector: Self.tree(processes)).claude
                 == nil)
         let underLaunchd: [Int32: (Int32, [String])] = [1: (0, ["claude"]), 20: (1, ["/bin/sh", "x"])]
-        #expect(ConversationHookObserver.harnessRunningThisHook(from: 20, inspector: Self.tree(underLaunchd)) == nil)
+        #expect(HookAncestry.above(20, inspector: Self.tree(underLaunchd)).claude == nil)
     }
 
     // MARK: - The adapter's other answers

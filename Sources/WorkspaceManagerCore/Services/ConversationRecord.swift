@@ -85,9 +85,10 @@ public struct ConversationRecord: Equatable, Sendable {
     }
 
     /// What a hook or a resume said about the process running the conversation: that one,
-    /// or, from a hook that found no claude above it, the processes it ran under.
+    /// with the processes a hook passed on its way up to it, or, from a hook that found no
+    /// claude above it, the processes it ran under.
     public enum HarnessAnswer: Equatable, Sendable {
-        case named(ProcessIdentity)
+        case named(ProcessIdentity, passing: [ProcessIdentity] = [])
         case unnamed(chain: [ProcessIdentity])
     }
 

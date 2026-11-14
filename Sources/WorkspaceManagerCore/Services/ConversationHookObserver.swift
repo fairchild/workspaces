@@ -25,8 +25,7 @@ public enum ConversationHookObserver {
         input: FileHandle = .standardInput,
         now: Date = Date(),
         tmuxSession: (TmuxEnvironment) -> ConversationRecord.TmuxSession? = TmuxEnvironment.describe,
-        harness: () -> ProcessIdentity? = { harnessRunningThisHook() },
-        chain: () -> [ProcessIdentity] = { processesRunningThisHook() }
+        ancestry: () -> HookAncestry = { HookAncestry.above() }
     ) -> Int32 {
         guard isInsideWorkSpaces(environment) else { return 0 }
         guard let payload = try? input.readToEnd(),
@@ -35,8 +34,7 @@ public enum ConversationHookObserver {
                 environment: environment,
                 now: now,
                 tmuxSession: tmuxSession,
-                harness: harness,
-                chain: chain
+                ancestry: ancestry
             )
         else { return 0 }
         let store = ConversationRecordStore(
@@ -50,8 +48,7 @@ public enum ConversationHookObserver {
         environment: [String: String],
         now: Date,
         tmuxSession: (TmuxEnvironment) -> ConversationRecord.TmuxSession? = { _ in nil },
-        harness: () -> ProcessIdentity? = { nil },
-        chain: () -> [ProcessIdentity] = { [] }
+        ancestry: () -> HookAncestry = { HookAncestry(claude: nil, passed: []) }
     ) -> ConversationObservation? {
         guard let object = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
             let sessionID = object["session_id"] as? String,
@@ -73,7 +70,7 @@ public enum ConversationHookObserver {
             observedAt: now,
             observedBy: .hook,
             lastSeenIn: place,
-            harnessProcess: harness().map(ConversationRecord.HarnessAnswer.named) ?? .unnamed(chain: chain())
+            harnessProcess: ancestry().answer
         )
     }
 }
@@ -85,48 +82,42 @@ extension ConversationHookObserver {
     /// How far up the hook looks for its claude: past the hook's shell, the forwarder, and
     /// any wrapper, link or shim between them.
     public static let ancestorLimit = 8
+}
 
-    /// The Claude process this hook runs for: the nearest ancestor that is a claude, short of
-    /// launchd. A claude above a program that fired the hook beneath it is named too, and
-    /// then holds that conversation until it exits: a wrong name costs a wait, where no name
-    /// would leave the conversation unattributed.
-    public static func harnessRunningThisHook(
-        from pid: Int32 = getppid(),
-        inspector: ProcessInspector = .live
-    ) -> ProcessIdentity? {
-        var current = pid
-        for _ in 0..<ancestorLimit {
-            guard current > 1 else { return nil }
-            if let words = inspector.arguments(current), AgentSessionInspection.isClaude(words) {
-                return inspector.identity(current)
-            }
-            guard let parent = inspector.parent(current) else { return nil }
-            current = parent
-        }
-        return nil
+/// What a hook finds above it: the nearest claude, as far up as it looks and short of
+/// launchd or a tmux server, and the processes it passed on the way. A claude above a
+/// program that fired the hook beneath it is named too, and holds that conversation until
+/// it exits: a wrong name costs a wait. The passed processes are recorded either way, since
+/// any of them may be what runs the conversation, a harness the adapter does not recognize
+/// among them; the hook's own shell and the forwarder exit with it.
+public struct HookAncestry: Equatable, Sendable {
+    public var claude: ProcessIdentity?
+    public var passed: [ProcessIdentity]
+
+    public init(claude: ProcessIdentity?, passed: [ProcessIdentity]) {
+        self.claude = claude
+        self.passed = passed
     }
 
-    /// The processes this hook runs under, nearest first, as far up as it looks for a claude
-    /// and short of launchd or a tmux server. When none of them is a claude, any of them may
-    /// be what runs the conversation.
-    public static func processesRunningThisHook(
-        from pid: Int32 = getppid(),
-        inspector: ProcessInspector = .live
-    ) -> [ProcessIdentity] {
-        var chain: [ProcessIdentity] = []
+    public var answer: ConversationRecord.HarnessAnswer {
+        claude.map { .named($0, passing: passed) } ?? .unnamed(chain: passed)
+    }
+
+    public static func above(_ pid: Int32 = getppid(), inspector: ProcessInspector = .live) -> HookAncestry {
+        var passed: [ProcessIdentity] = []
         var current = pid
-        for _ in 0..<ancestorLimit {
+        for _ in 0..<ConversationHookObserver.ancestorLimit {
             guard current > 1 else { break }
-            if let program = inspector.arguments(current)?.first,
-                URL(fileURLWithPath: program).lastPathComponent.hasPrefix("tmux")
-            {
-                break
+            let words = inspector.arguments(current)
+            if let words, AgentSessionInspection.isClaude(words) {
+                return HookAncestry(claude: inspector.identity(current), passed: passed)
             }
-            if let identity = inspector.identity(current) { chain.append(identity) }
+            if let program = words?.first, URL(fileURLWithPath: program).lastPathComponent.hasPrefix("tmux") { break }
+            if let identity = inspector.identity(current) { passed.append(identity) }
             guard let parent = inspector.parent(current) else { break }
             current = parent
         }
-        return chain
+        return HookAncestry(claude: nil, passed: passed)
     }
 }
 
