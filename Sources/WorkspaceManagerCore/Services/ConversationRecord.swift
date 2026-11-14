@@ -412,7 +412,10 @@ public struct ConversationRecordStore: Sendable {
         case absent
         case damaged(URL)
         case movedAside(URL)
-        /// The records directory could not be listed, so a moved-aside copy cannot be ruled out.
+        /// A hook could not tell what runs the conversation, and left this note beside it.
+        case unresolved(URL)
+        /// The records directory could not be listed, so neither a moved-aside copy nor a
+        /// hook's note can be ruled out.
         case unlistable(URL)
     }
 
@@ -428,9 +431,52 @@ public struct ConversationRecordStore: Sendable {
         } catch {
             return .unlistable(directory)
         }
-        let prefix = url.lastPathComponent + ".corrupt-"
-        guard let aside = names.filter({ $0.hasPrefix(prefix) }).sorted().first else { return record }
-        return .movedAside(directory.appendingPathComponent(aside))
+        func first(_ suffix: String) -> URL? {
+            names.filter { $0.hasPrefix(url.lastPathComponent + suffix) }.sorted().first
+                .map(directory.appendingPathComponent)
+        }
+        if let aside = first(".corrupt-") { return .movedAside(aside) }
+        if let note = first(Self.unresolvedSuffix) { return .unresolved(note) }
+        return record
+    }
+
+    static let unresolvedSuffix = ".unresolved-"
+
+    /// Leaves `<id>.json.unresolved-<epoch>-<random>` beside the record: a hook saw the
+    /// conversation start and could not tell which process runs it. Nothing removes the note
+    /// but a person, since no process it could name is left to say when it is over. Each
+    /// note gets a name of its own, created only if nothing holds it yet, so no note replaces
+    /// another.
+    @discardableResult
+    public func recordUnresolved(_ observation: ConversationObservation, ancestry: HookAncestry) throws -> URL {
+        guard let url = fileURL(conversationID: observation.conversationID) else {
+            throw WriteError.invalidConversationID
+        }
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: Self.directoryPermissions])
+        var note: [String: Any] = [
+            "conversationID": observation.conversationID,
+            "observedAt": ConversationRecordJSON.string(observation.observedAt),
+            "chain": ancestry.passed.map(\.recorded),
+            "complete": ancestry.complete,
+        ]
+        note["claude"] = ancestry.claude?.recorded
+        let data = try JSONSerialization.data(withJSONObject: note, options: [.sortedKeys])
+        let stamp = Int(observation.observedAt.timeIntervalSince1970)
+        var lastError: Error = CocoaError(.fileWriteFileExists)
+        for _ in 0..<4 {
+            let target = URL(
+                fileURLWithPath:
+                    "\(url.path)\(Self.unresolvedSuffix)\(stamp)-\(UUID().uuidString.prefix(8).lowercased())")
+            do {
+                try data.write(to: target, options: .withoutOverwriting)
+                return target
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError
     }
 
     private func readRecord(conversationID: String) -> Read {

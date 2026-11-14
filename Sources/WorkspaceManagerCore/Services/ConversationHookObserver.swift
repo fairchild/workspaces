@@ -25,21 +25,35 @@ public enum ConversationHookObserver {
         input: FileHandle = .standardInput,
         now: Date = Date(),
         tmuxSession: (TmuxEnvironment) -> ConversationRecord.TmuxSession? = TmuxEnvironment.describe,
-        ancestry: () -> HookAncestry = { HookAncestry.above() }
+        ancestry: ([String: String]) -> HookAncestry = {
+            HookAncestry.above(tmuxServer: TmuxEnvironment($0["TMUX"]).map { Int32($0.serverPID) })
+        },
+        inspector: ProcessInspector = .live
     ) -> Int32 {
         guard isInsideWorkSpaces(environment) else { return 0 }
+        let walked = ancestry(environment)
         guard let payload = try? input.readToEnd(),
             let observation = observation(
                 payload: payload,
                 environment: environment,
                 now: now,
                 tmuxSession: tmuxSession,
-                ancestry: ancestry
+                ancestry: { walked }
             )
         else { return 0 }
         let store = ConversationRecordStore(
             directory: ConversationRecordStore.resolvedDirectory(environment: environment))
+        // A walk that cannot say what runs the conversation, or whose every process has
+        // exited by the time it is written, leaves a note beside the record, before the record
+        // so no reader sees the one without the other; one that dies during the write, after.
+        var noted = false
+        if !walked.complete || !walked.mayStillRun(inspector) {
+            noted = (try? store.recordUnresolved(observation, ancestry: walked)) != nil
+        }
         _ = try? store.record(observation)
+        if !noted, !walked.mayStillRun(inspector) {
+            _ = try? store.recordUnresolved(observation, ancestry: walked)
+        }
         return 0
     }
 
@@ -48,7 +62,7 @@ public enum ConversationHookObserver {
         environment: [String: String],
         now: Date,
         tmuxSession: (TmuxEnvironment) -> ConversationRecord.TmuxSession? = { _ in nil },
-        ancestry: () -> HookAncestry = { HookAncestry(claude: nil, passed: []) }
+        ancestry: () -> HookAncestry = { HookAncestry(claude: nil, passed: [], complete: false) }
     ) -> ConversationObservation? {
         guard let object = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
             let sessionID = object["session_id"] as? String,
@@ -81,47 +95,67 @@ extension ConversationHookObserver {
 
     /// How far up the hook looks for its claude: past the hook's shell, the forwarder, and
     /// any wrapper, link or shim between them.
-    public static let ancestorLimit = 8
+    /// A bound on the walk for safety alone: a walk that reaches it records a note, not a chain.
+    public static let ancestorLimit = 64
 }
 
-/// What a hook finds above it: the nearest claude, as far up as it looks and short of
-/// launchd or a tmux server, and the processes it passed on the way, up to the one leading
+/// What a hook finds above it: the nearest claude, short of launchd and the tmux server its
+/// `TMUX` names, and the processes it passed on the way, up to and including the one leading
 /// the terminal's session; nothing above that leader, `login` or the terminal application,
 /// can be what runs the conversation. A claude above a program that fired the hook beneath
-/// it is named too, and holds that conversation until it exits: a wrong name costs a wait.
-/// The passed processes are recorded either way, since any of them may be what runs the
-/// conversation, a harness the adapter does not recognize among them; the hook's own shell
-/// and the forwarder exit with it.
+/// it is named too, and holds that conversation until it exits. The passed processes are
+/// recorded either way, since any of them may be what runs the conversation, a harness the
+/// adapter does not recognize among them; the hook's own shell and the forwarder exit with it.
+///
+/// The walk is complete when it found a claude, the terminal's session leader or the tmux
+/// server. One that reached launchd with none of them, as a hook whose parent left it does,
+/// ran out of generations, or could not read a process on the way, cannot say what runs the
+/// conversation.
 public struct HookAncestry: Equatable, Sendable {
     public var claude: ProcessIdentity?
     public var passed: [ProcessIdentity]
+    public var complete: Bool
 
-    public init(claude: ProcessIdentity?, passed: [ProcessIdentity]) {
+    public init(claude: ProcessIdentity?, passed: [ProcessIdentity], complete: Bool = true) {
         self.claude = claude
         self.passed = passed
+        self.complete = complete
     }
 
     public var answer: ConversationRecord.HarnessAnswer {
         claude.map { .named($0, passing: passed) } ?? .unnamed(chain: passed)
     }
 
-    public static func above(_ pid: Int32 = getppid(), inspector: ProcessInspector = .live) -> HookAncestry {
+    /// Whether any process the walk would record may still run.
+    public func mayStillRun(_ inspector: ProcessInspector) -> Bool {
+        ([claude].compactMap { $0 } + passed).contains { inspector.liveness($0) != .ended }
+    }
+
+    public static func above(
+        _ pid: Int32 = getppid(), tmuxServer: Int32? = nil, inspector: ProcessInspector = .live
+    ) -> HookAncestry {
         var passed: [ProcessIdentity] = []
-        var passing = true
+        var reachedLeader = false
+        var readAll = true
         var current = pid
         for _ in 0..<ConversationHookObserver.ancestorLimit {
+            if current == tmuxServer { return HookAncestry(claude: nil, passed: passed, complete: readAll) }
             guard current > 1 else { break }
-            let words = inspector.arguments(current)
-            if let words, AgentSessionInspection.isClaude(words) {
-                return HookAncestry(claude: inspector.identity(current), passed: passed)
+            if let words = inspector.arguments(current), AgentSessionInspection.isClaude(words) {
+                let claude = inspector.identity(current)
+                return HookAncestry(claude: claude, passed: passed, complete: claude != nil && readAll)
             }
-            if let program = words?.first, URL(fileURLWithPath: program).lastPathComponent.hasPrefix("tmux") { break }
-            if passing, let identity = inspector.identity(current) { passed.append(identity) }
-            if inspector.leadsTerminalSession(current) { passing = false }
-            guard let parent = inspector.parent(current) else { break }
+            if !reachedLeader {
+                if let identity = inspector.identity(current) { passed.append(identity) } else { readAll = false }
+                reachedLeader = inspector.leadsTerminalSession(current)
+            }
+            guard let parent = inspector.parent(current) else {
+                readAll = false
+                break
+            }
             current = parent
         }
-        return HookAncestry(claude: nil, passed: passed)
+        return HookAncestry(claude: nil, passed: passed, complete: reachedLeader && readAll)
     }
 }
 

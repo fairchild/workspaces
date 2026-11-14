@@ -571,19 +571,45 @@ struct ConversationHolderProbeTests {
         return String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     }
 
-    @Test("The chain a hook records runs from its parent up, short of launchd and the tmux server")
+    @Test("The chain a hook records runs from its parent up, short of launchd and the tmux server its TMUX names")
     func hookChainStopsAtLaunchdAndTmux() {
         let processes: [Int32: (Int32, [String])] = [
-            10: (1, ["tmux", "-L", "workspaces", "new-session"]), 20: (10, ["-zsh"]), 30: (20, ["harness-a"]),
-            40: (30, ["/bin/bash", "/hooks/conversation-observer.sh"]),
+            10: (1, ["/opt/homebrew/bin/tmux", "-L", "workspaces", "new-session"]), 20: (10, ["-zsh"]),
+            30: (20, ["harness-a"]), 40: (30, ["/bin/bash", "/hooks/conversation-observer.sh"]),
         ]
+        let inTmux = HookAncestry.above(40, tmuxServer: 10, inspector: Self.tree(processes))
+        #expect(inTmux.passed.map(\.pid) == [40, 30, 20])
+        #expect(inTmux.complete)
+        var renamed = processes
+        renamed[30] = (20, ["/usr/local/bin/tmux-claude"])
         #expect(
-            HookAncestry.above(40, inspector: Self.tree(processes)).passed.map(\.pid)
-                == [40, 30, 20])
+            HookAncestry.above(40, tmuxServer: 10, inspector: Self.tree(renamed)).passed.map(\.pid) == [40, 30, 20])
         let outside: [Int32: (Int32, [String])] = [20: (1, ["-zsh"]), 30: (20, ["harness-a"])]
-        #expect(
-            HookAncestry.above(30, inspector: Self.tree(outside)).passed.map(\.pid)
-                == [30, 20])
+        let atLaunchd = HookAncestry.above(30, inspector: Self.tree(outside, leaders: [20]))
+        #expect(atLaunchd.passed.map(\.pid) == [30, 20])
+        #expect(atLaunchd.complete)
+    }
+
+    /// Only a claude, the terminal's session leader or the tmux server says where what runs
+    /// the conversation is. A walk that reaches none of them leaves a note, not a chain.
+    @Test("A walk that reaches launchd with no claude or terminal, or cannot read a process, is incomplete")
+    func incompleteWalks() {
+        let detached: [Int32: (Int32, [String])] = [
+            20: (1, ["/bin/sh", "-c", "conversation-observer.sh &"]),
+            30: (20, ["/bin/bash", "/hooks/conversation-observer.sh"]),
+        ]
+        let orphaned = HookAncestry.above(30, inspector: Self.tree(detached))
+        #expect(orphaned.passed.map(\.pid) == [30, 20])
+        #expect(!orphaned.complete)
+        let underLaunchd = HookAncestry.above(1, inspector: Self.tree([:]))
+        #expect(underLaunchd.passed.isEmpty)
+        #expect(!underLaunchd.complete)
+
+        let withTerminal = Self.tree(detached, leaders: [20])
+        #expect(HookAncestry.above(30, inspector: withTerminal).complete)
+        var unreadable = withTerminal
+        unreadable.read = { $0 == 30 ? .unreadable : withTerminal.read($0) }
+        #expect(!HookAncestry.above(30, inspector: unreadable).complete)
     }
 
     @Test("A recorded harness the kernel cannot be asked about is unknown, never free")
@@ -680,12 +706,13 @@ struct ConversationHolderProbeTests {
     // MARK: - The harness a hook names
 
     /// A process tree, each pid with its parent and arguments.
-    private static func tree(_ processes: [Int32: (Int32, [String])]) -> ProcessInspector {
+    private static func tree(_ processes: [Int32: (Int32, [String])], leaders: Set<Int32> = []) -> ProcessInspector {
         ProcessInspector(
             identity: { pid in processes[pid].map { _ in ProcessIdentity(pid: pid, startedAtMicroseconds: Int64(pid)) }
             },
             parent: { processes[$0]?.0 },
-            arguments: { processes[$0]?.1 }
+            arguments: { processes[$0]?.1 },
+            leadsTerminalSession: { leaders.contains($0) }
         )
     }
 
@@ -724,15 +751,21 @@ struct ConversationHolderProbeTests {
         #expect(ancestry.passed.map(\.pid) == [30])
     }
 
+    @Test("The hook names a claude however many wrappers it is beneath, up to a safety bound, never past launchd")
     func hookLooksOnlySoFarUp() {
-        var processes: [Int32: (Int32, [String])] = [10: (1, ["claude"])]
-        for pid in stride(from: Int32(20), through: 100, by: 10) { processes[pid] = (pid - 10, ["/bin/sh", "x"]) }
         let limit = Int32(ConversationHookObserver.ancestorLimit)
-        #expect(
-            HookAncestry.above(10 + 10 * (limit - 1), inspector: Self.tree(processes)).claude?.pid == 10)
-        #expect(
-            HookAncestry.above(10 + 10 * limit, inspector: Self.tree(processes)).claude
-                == nil)
+        var processes: [Int32: (Int32, [String])] = [10: (1, ["claude"])]
+        for pid in stride(from: Int32(20), through: 10 * (limit + 2), by: 10) {
+            processes[pid] = (pid - 10, ["/bin/sh", "x"])
+        }
+        let underTen = HookAncestry.above(110, inspector: Self.tree(processes))
+        #expect(underTen.claude?.pid == 10)
+        #expect(underTen.passed.count == 10)
+        #expect(underTen.complete)
+        #expect(HookAncestry.above(10 + 10 * (limit - 1), inspector: Self.tree(processes)).claude?.pid == 10)
+        let beyond = HookAncestry.above(10 + 10 * limit, inspector: Self.tree(processes))
+        #expect(beyond.claude == nil)
+        #expect(!beyond.complete)
         let underLaunchd: [Int32: (Int32, [String])] = [1: (0, ["claude"]), 20: (1, ["/bin/sh", "x"])]
         #expect(HookAncestry.above(20, inspector: Self.tree(underLaunchd)).claude == nil)
     }

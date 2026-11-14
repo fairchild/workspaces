@@ -146,6 +146,7 @@ public struct ConversationResumer: Sendable {
         case unrecorded(conversationID: String, reason: String)
         case damagedRecord(conversationID: String, path: String)
         case movedAside(conversationID: String, path: String)
+        case unresolvedOwner(conversationID: String, path: String)
         case unlistableRecords(conversationID: String, path: String)
 
         public var errorDescription: String? {
@@ -202,10 +203,15 @@ public struct ConversationResumer: Sendable {
                 return "A damaged record of conversation \(id) was moved aside to \(path), and it may name a process "
                     + "that still runs the conversation, so a second agent cannot be ruled out. Nothing was started. "
                     + "If no claude runs this conversation, delete that file to resume."
+            case .unresolvedOwner(let id, let path):
+                return "A hook saw conversation \(id) start and could not tell which process runs it, so it left "
+                    + "\(path), and a second agent cannot be ruled out. Nothing was started. If no claude runs this "
+                    + "conversation, delete that file to resume."
             case .unlistableRecords(let id, let path):
-                return "The records directory \(path) cannot be listed, so a copy of conversation \(id)'s record "
-                    + "moved aside as damaged, and a process it names, cannot be ruled out. Nothing was started. "
-                    + "Give your user read permission on that directory and resume again."
+                return "The records directory \(path) cannot be listed, so neither a copy of conversation \(id)'s "
+                    + "record moved aside as damaged nor a hook's note that it could not tell what runs it can be "
+                    + "ruled out. Nothing was started. Give your user read permission on that directory and resume "
+                    + "again."
             }
         }
     }
@@ -289,6 +295,7 @@ public struct ConversationResumer: Sendable {
         case .found(let record): return record
         case .damaged(let url): throw Refusal.damagedRecord(conversationID: id, path: url.path)
         case .movedAside(let url): throw Refusal.movedAside(conversationID: id, path: url.path)
+        case .unresolved(let url): throw Refusal.unresolvedOwner(conversationID: id, path: url.path)
         case .unlistable(let url): throw Refusal.unlistableRecords(conversationID: id, path: url.path)
         case .absent: break
         }
@@ -355,6 +362,7 @@ public struct ConversationResumer: Sendable {
         case .absent: record = subject
         case .damaged(let url): throw Refusal.damagedRecord(conversationID: id, path: url.path)
         case .movedAside(let url): throw Refusal.movedAside(conversationID: id, path: url.path)
+        case .unresolved(let url): throw Refusal.unresolvedOwner(conversationID: id, path: url.path)
         case .unlistable(let url): throw Refusal.unlistableRecords(conversationID: id, path: url.path)
         }
         record.launch = record.launch ?? subject.launch

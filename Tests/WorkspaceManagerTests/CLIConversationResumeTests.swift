@@ -460,7 +460,7 @@ struct CLIConversationResumeTests {
     /// names the nearest claude above it however its command reaches the forwarder.
     @Test(
         "A hook names its claude through the installed forwarder, a link to it, a script of its own or a deeper chain",
-        arguments: ["installed", "link", "script", "deeper"]
+        arguments: ["installed", "link", "script", "deeper", "ten-wrappers"]
     )
     func hookNamesItsClaudeHoweverItIsReached(path: String) async throws {
         let fixture = try makeFixture()
@@ -468,13 +468,19 @@ struct CLIConversationResumeTests {
         let forwarder = try installForwarder(in: fixture)
         let script = fixture.bin.appendingPathComponent("my-session-start")
         try "#!/bin/sh\n\(forwarder.link.path)\n".write(to: script, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let wrap = fixture.bin.appendingPathComponent("wrap")
+        try "#!/bin/sh\nn=$1\nshift\nif [ \"$n\" -gt 0 ]; then \"$0\" $((n - 1)) \"$@\"; else \"$@\"; fi\ntrue\n".write(
+            to: wrap, atomically: true, encoding: .utf8)
+        for file in [script, wrap] {
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        }
         let conversationID = UUID().uuidString.lowercased()
         let hookCommand =
             switch path {
             case "installed": forwarder.installed.path
             case "link": forwarder.link.path
             case "script": script.path
+            case "ten-wrappers": "\(wrap.path) 10 \(forwarder.installed.path)"
             default: "/bin/sh -c '/bin/bash -c \"\(forwarder.installed.path); true\"; true'"
             }
         let agent = try await startBareAgent(in: fixture, hooking: [conversationID], hookCommand: hookCommand)
@@ -503,7 +509,7 @@ struct CLIConversationResumeTests {
         let unrecognized = fixture.bin.appendingPathComponent("harness-a")
         try FileManager.default.copyItem(at: fixture.stub, to: unrecognized)
         try detach(
-            [unrecognized.path], in: fixture,
+            [unrecognized.path], in: fixture, terminal: true,
             extraEnvironment: [
                 "STUB_STAY": "1", "STUB_HOOK_IDS": conversationID, "STUB_HOOK_CLI": fixture.binary.path,
                 "STUB_TRANSCRIPTS": fixture.transcripts.path,
@@ -538,6 +544,95 @@ struct CLIConversationResumeTests {
         let afterA = try fixture.run(["conversation", "resume", conversationID, "--here"])
         #expect(afterA.status == 0, "\(afterA.stderr)")
         #expect(afterA.stdout.contains("stub argv=--resume \(conversationID)"))
+    }
+
+    private func unresolvedNotes(_ conversationID: String, in fixture: Fixture) -> [URL] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: fixture.records.directory.path)) ?? []
+        return names.filter { $0.hasPrefix("\(conversationID).json.unresolved-") }.sorted()
+            .map(fixture.records.directory.appendingPathComponent)
+    }
+
+    /// A hook whose parent left it finds launchd where its claude was: it cannot say what runs
+    /// the conversation, so it leaves a note that refuses every resume until a person deletes
+    /// it. Detached at once, it records no process at all; started in the background by its
+    /// hook command, it records only shells that exit with it.
+    @Test(
+        "A hook that cannot say what runs its conversation leaves a note, and every resume refuses until it is deleted",
+        arguments: ["detached-observer", "backgrounded-forwarder"])
+    func unresolvedHookRefusesUntilItsNoteIsDeleted(shape: String) async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let forwarder = try installForwarder(in: fixture)
+        let conversationID = UUID().uuidString.lowercased()
+        try FileManager.default.createDirectory(at: fixture.transcripts, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: fixture.transcripts.appendingPathComponent("\(conversationID).jsonl").path, contents: Data())
+        let hookCommand =
+            shape == "detached-observer"
+            ? "/usr/bin/perl -e 'fork and exit; sleep 1; exec @ARGV' \(fixture.binary.path) conversation observe"
+            : "p=$(cat); (sleep 1; printf %s \"$p\" | \(forwarder.installed.path)) >/dev/null 2>&1 &"
+        let agent = try fixture.start(
+            [], executable: fixture.stub,
+            extraEnvironment: [
+                "STUB_STAY": "1", "STUB_HOOK_IDS": conversationID, "STUB_HOOK_CLI": fixture.binary.path,
+                "STUB_HOOK_COMMAND": hookCommand, "STUB_TRANSCRIPTS": fixture.transcripts.path,
+            ],
+            output: fixture.root.appendingPathComponent("agent.log"))
+        defer { Self.kill([agent]) }
+        try await waitUntil(launches: 2) { !unresolvedNotes(conversationID, in: fixture).isEmpty }
+        let note = try #require(unresolvedNotes(conversationID, in: fixture).first)
+        #expect(fixture.records.load(conversationID: conversationID)?.harnessProcesses.entries.isEmpty == true)
+
+        let refused = try fixture.run(["conversation", "resume", conversationID, "--here"])
+        #expect(refused.status == 1, "\(refused.stdout)")
+        #expect(refused.stderr.contains("could not tell which process runs it, so it left \(note.path)"))
+        #expect(refused.stderr.contains("delete that file to resume"))
+        #expect(!refused.stdout.contains("stub argv"), "a second agent started beside the first")
+        Self.kill([agent])
+        try await waitUntil(launches: 1) { !agent.isRunning }
+        #expect(try fixture.run(["conversation", "resume", conversationID, "--here"]).status == 1)
+
+        try FileManager.default.removeItem(at: note)
+        let resumed = try fixture.run(["conversation", "resume", conversationID, "--here"])
+        #expect(resumed.status == 0, "\(resumed.stderr)")
+        #expect(resumed.stdout.contains("stub argv=--resume \(conversationID)"))
+    }
+
+    /// A native claude installed under a name that starts with `tmux` is neither recognized
+    /// nor mistaken for the tmux server: the hook passes it on the way to its terminal.
+    @Test("A harness whose name starts with tmux is in its hook's chain, and holds the conversation until it exits")
+    func tmuxNamedHarnessHolds() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = UUID().uuidString.lowercased()
+        let harness = fixture.bin.appendingPathComponent("tmux-claude")
+        try FileManager.default.createSymbolicLink(at: harness, withDestinationURL: URL(fileURLWithPath: "/bin/bash"))
+        try FileManager.default.createDirectory(at: fixture.transcripts, withIntermediateDirectories: true)
+        let transcript = fixture.transcripts.appendingPathComponent("\(conversationID).jsonl")
+        FileManager.default.createFile(atPath: transcript.path, contents: Data())
+        let payload =
+            #"{"session_id":"\#(conversationID)","cwd":"\#(fixture.work.path)","transcript_path":"\#(transcript.path)"}"#
+        try detach(
+            [
+                harness.path, "-c",
+                "printf '%s' '\(payload)' | \"$0\" conversation observe; n=0; "
+                    + "while [ -e \"$1\" ] && [ \"$n\" -lt 300 ]; do sleep 1; n=$((n + 1)); done",
+                fixture.binary.path, fixture.root.path,
+            ], in: fixture, terminal: true)
+        var chain: [ProcessIdentity] = []
+        try await waitUntil(launches: 2) {
+            chain =
+                fixture.records.load(conversationID: conversationID)?.harnessProcesses.unattributed.first?.chain ?? []
+            return !chain.isEmpty
+        }
+        let held = try #require(chain.first)
+        defer { if ProcessInspector.live.liveness(held) == .running { Darwin.kill(held.pid, SIGKILL) } }
+        #expect(ProcessInspector.live.arguments(held.pid)?.first == harness.path)
+        #expect(unresolvedNotes(conversationID, in: fixture).isEmpty)
+        let refused = try fixture.run(["conversation", "resume", conversationID, "--here"])
+        #expect(refused.status == 1, "\(refused.stdout)")
+        #expect(refused.stderr.contains("process \(held.pid) it ran under still runs"), "\(refused.stderr)")
+        #expect(!refused.stdout.contains("stub argv"))
     }
 
     /// A claude starts a runtime the adapter does not recognize, and that runtime runs the
@@ -644,22 +739,26 @@ struct CLIConversationResumeTests {
     }
 
     /// Runs `command` with launchd as its parent, so no process of the test run is above it:
-    /// what a hook beneath it records cannot depend on what runs the tests. Returns once the
-    /// detaching process has exited; `command` runs on.
-    private func detach(_ command: [String], in fixture: Fixture, extraEnvironment: [String: String] = [:]) throws {
+    /// what a hook beneath it records cannot depend on what runs the tests. With `terminal`,
+    /// `command` leads a session of its own on a terminal, as a tile's shell does. Returns once
+    /// the detaching process has exited; `command` runs on.
+    private func detach(
+        _ command: [String], in fixture: Fixture, terminal: Bool = false, extraEnvironment: [String: String] = [:]
+    ) throws {
         let detacher = try fixture.start(
             [
                 "-e",
                 "if (my $c = fork) { waitpid($c, 0); exit } exit if fork; "
                     + "select(undef, undef, undef, 0.01) while getppid() != 1; exec @ARGV",
-            ] + command,
+            ] + (terminal ? ["/usr/bin/script", "-q", "/dev/null"] : []) + command,
             executable: URL(fileURLWithPath: "/usr/bin/perl"), extraEnvironment: extraEnvironment,
             output: fixture.root.appendingPathComponent("detached-\(UUID().uuidString.prefix(8)).log"))
         detacher.waitUntilExit()
     }
 
     /// A SessionStart hook for `conversationID` from `tile`, run by nothing that is claude, as
-    /// a hook delayed past a later one lands. The shell it runs under exits once it has.
+    /// a hook delayed past a later one lands, from a shell leading a terminal's session. That
+    /// shell exits once the hook has.
     private func deliverHook(_ conversationID: String, from tile: String, in fixture: Fixture) async throws {
         let payload = fixture.root.appendingPathComponent("hook-\(UUID().uuidString).json")
         let done = payload.appendingPathExtension("done")
@@ -669,7 +768,7 @@ struct CLIConversationResumeTests {
                 "/bin/sh", "-c", "\"$0\" conversation observe < \"$1\"; : > \"$2\"", fixture.binary.path, payload.path,
                 done.path,
             ],
-            in: fixture, extraEnvironment: ["WORKSPACES_HOST_SESSION_ID": tile])
+            in: fixture, terminal: true, extraEnvironment: ["WORKSPACES_HOST_SESSION_ID": tile])
         try await waitUntil(launches: 1) { FileManager.default.fileExists(atPath: done.path) }
         #expect(FileManager.default.fileExists(atPath: done.path), "the hook never finished")
     }
