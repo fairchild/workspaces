@@ -293,17 +293,24 @@ public struct ConversationResumer: Sendable {
     /// it may name a process that still runs the conversation, which a launch record would not.
     public func subject(conversationID: String) throws -> ConversationRecord? {
         guard let id = ConversationRecord.normalizedID(conversationID) else { return nil }
+        if let record = try stored(id) { return record }
+        return launches.all(socketLabel: control.socketLabel)
+            .first { $0.identity.flatMap { ConversationRecord.normalizedID($0.conversationID) } == id }
+            .map { ConversationRecord(launch: $0, host: host, harness: adapter.harness) }
+    }
+
+    /// The stored record as every reader reads it: nil when there is none, and a refusal for a
+    /// record that does not read, a copy moved aside as damaged, a hook's unresolved note, or a
+    /// records directory that cannot be listed to look for those.
+    private func stored(_ id: String) throws -> ConversationRecord? {
         switch records.read(conversationID: id) {
         case .found(let record): return record
+        case .absent: return nil
         case .damaged(let url): throw Refusal.damagedRecord(conversationID: id, path: url.path)
         case .movedAside(let url): throw Refusal.movedAside(conversationID: id, path: url.path)
         case .unresolved(let url): throw Refusal.unresolvedOwner(conversationID: id, path: url.path)
         case .unlistable(let url): throw Refusal.unlistableRecords(conversationID: id, path: url.path)
-        case .absent: break
         }
-        return launches.all(socketLabel: control.socketLabel)
-            .first { $0.identity.flatMap { ConversationRecord.normalizedID($0.conversationID) } == id }
-            .map { ConversationRecord(launch: $0, host: host, harness: adapter.harness) }
     }
 
     /// The record's host, then holders, then the transcript, in that order: a held
@@ -424,22 +431,17 @@ public struct ConversationResumer: Sendable {
     /// again on what was read. The decision before the sighting and the one after it are this
     /// same function: the one after passes `own`, the process that sighting named, which must
     /// be in the record and holds nothing against itself, and it judges the session the
-    /// conversation was last seen in by `subject`, from before the sighting.
+    /// conversation was last seen in by `subject`, from before the sighting. The records
+    /// directory is read again after the probe, so the last thing a `--here` does before its
+    /// exec is that synchronous read: a note or moved-aside copy that lands while the probe
+    /// runs refuses it.
     private func decide(
         _ subject: ConversationRecord,
         excluding own: ProcessIdentity? = nil,
         exitWindow: (_ recordedSessionGone: Bool) -> TimeInterval
     ) async throws -> Decision {
         let id = subject.conversationID
-        var record: ConversationRecord
-        switch records.read(conversationID: id) {
-        case .found(let stored): record = stored
-        case .absent: record = subject
-        case .damaged(let url): throw Refusal.damagedRecord(conversationID: id, path: url.path)
-        case .movedAside(let url): throw Refusal.movedAside(conversationID: id, path: url.path)
-        case .unresolved(let url): throw Refusal.unresolvedOwner(conversationID: id, path: url.path)
-        case .unlistable(let url): throw Refusal.unlistableRecords(conversationID: id, path: url.path)
-        }
+        var record = try stored(id) ?? subject
         record.launch = record.launch ?? subject.launch
         if let own {
             guard record.harnessProcesses.entries.contains(where: { $0.process == own }) else {
@@ -466,6 +468,7 @@ public struct ConversationResumer: Sendable {
         case .unknown(.noRecord):
             throw Refusal.noRecord(id)
         case .saved(let found):
+            _ = try stored(id)
             return .free(record, found)
         }
     }

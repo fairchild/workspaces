@@ -59,7 +59,8 @@ struct ConversationResumerTests {
         func resumer(
             processTable: ProcessTable?,
             recordedSession: RecordedTmuxSession? = nil,
-            inspector: ProcessInspector = .onlySelf
+            inspector: ProcessInspector = .onlySelf,
+            readProcessTable: (@Sendable () async -> ProcessTable?)? = nil
         ) -> ConversationResumer {
             let execs = execs
             return ConversationResumer(
@@ -68,7 +69,7 @@ struct ConversationResumerTests {
                 control: TmuxSessionControl(socketLabel: "resumer-tests-unused", run: { _, _, _ in nil }),
                 environment: ["PATH": "/usr/bin:/bin"],
                 homeDirectory: root.appendingPathComponent("home"),
-                readProcessTable: { processTable },
+                readProcessTable: readProcessTable ?? { processTable },
                 recordedSession: { _ in recordedSession },
                 inspector: inspector,
                 describeTmux: { _ in nil },
@@ -129,6 +130,29 @@ struct ConversationResumerTests {
         #expect(invocation.directory == world.cwd)
         #expect(invocation.environment["CLAUDE_CONFIG_DIR"] == nil)
         #expect(world.records.load(conversationID: world.conversationID)?.observedBy == .resume)
+    }
+
+    @Test("A hook's note published while the decision after the sighting reads the process table refuses, and nothing starts")
+    func noteDuringTheFinalProbeRefuses() async throws {
+        let world = try World()
+        defer { world.teardown() }
+        try world.recordConversation()
+        let records = world.records
+        let id = world.conversationID
+        let note = world.root.appendingPathComponent("conversations/\(id).json.unresolved-1-aaaaaaaa")
+
+        let resumer = world.resumer(processTable: nil) {
+            if records.load(conversationID: id)?.harnessProcesses.entries.isEmpty == false,
+                !FileManager.default.fileExists(atPath: note.path)
+            {
+                FileManager.default.createFile(atPath: note.path, contents: Data("{}".utf8))
+            }
+            return Self.quietTable
+        }
+        await #expect(throws: ConversationResumer.Refusal.unresolvedOwner(conversationID: id, path: note.path)) {
+            try await resumer.resume(conversationID: id, target: .here)
+        }
+        #expect(world.execs.invocations.isEmpty)
     }
 
     @Test("The conversation is still claimed at the moment the harness takes over the terminal")
