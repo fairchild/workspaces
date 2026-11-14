@@ -282,7 +282,9 @@ struct ConversationRecordStoreTests {
         #expect((kept as AnyObject?)?.isEqual(damaged) == true)
     }
 
-    @Test("A hook's unresolved note keeps a name of its own beside the record, and a moved-aside copy reads first")
+    /// Readers find a note by its name, so it is created under that name, with no other file
+    /// written or renamed on the way, which a volume without an exclusive rename also allows.
+    @Test("A hook's unresolved note is created under a name of its own, alone, and a moved-aside copy reads first")
     func unresolvedNotes() throws {
         try withStore { store in
             let first = observation(at: 1_800_000_000)
@@ -295,6 +297,8 @@ struct ConversationRecordStoreTests {
             #expect(
                 store.read(conversationID: Self.conversationID) == .unresolved(one.path < two.path ? one : two)
             )
+            let names = try FileManager.default.contentsOfDirectory(atPath: store.directory.path)
+            #expect(Set(names) == [one.lastPathComponent, two.lastPathComponent], "\(names)")
             let note = try object(at: one)
             #expect(note["chain"] as? [String] == [try Self.thisProcess.recorded])
             #expect(note["complete"] as? Bool == false)

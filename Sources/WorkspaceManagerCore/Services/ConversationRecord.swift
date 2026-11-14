@@ -444,10 +444,10 @@ public struct ConversationRecordStore: Sendable {
 
     /// Leaves `<id>.json.unresolved-<epoch>-<random>` beside the record: a hook saw the
     /// conversation start and could not tell which process runs it. Nothing removes the note
-    /// but a person, since no process it could name is left to say when it is over. It is
-    /// written the way a record is, to a private file in the same directory and then renamed,
-    /// so whatever stops a note stops a record too; the rename refuses a name already taken,
-    /// so no note replaces another.
+    /// but a person, since no process it could name is left to say when it is over. Readers
+    /// find a note by its name alone, so it is created in place under a random name, only if
+    /// nothing holds that name yet, the way a record's private file is: whatever stops a note
+    /// stops a record, and no note replaces another.
     @discardableResult
     public func recordUnresolved(_ observation: ConversationObservation, ancestry: HookAncestry) throws -> URL {
         guard let url = fileURL(conversationID: observation.conversationID) else {
@@ -464,15 +464,17 @@ public struct ConversationRecordStore: Sendable {
         ]
         note["claude"] = ancestry.claude?.recorded
         let data = try JSONSerialization.data(withJSONObject: note, options: [.sortedKeys])
-        let temporary = directory.appendingPathComponent(
-            ".\(url.lastPathComponent).note.\(getpid()).\(UUID().uuidString).tmp")
-        try Self.writePrivately(data, to: temporary)
-        defer { unlink(temporary.path) }
         let stamp = Int(observation.observedAt.timeIntervalSince1970)
         for _ in 0..<4 {
-            let target = "\(url.path)\(Self.unresolvedSuffix)\(stamp)-\(UUID().uuidString.prefix(8).lowercased())"
-            if renamex_np(temporary.path, target, UInt32(RENAME_EXCL)) == 0 { return URL(fileURLWithPath: target) }
-            guard errno == EEXIST else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            let target = URL(
+                fileURLWithPath:
+                    "\(url.path)\(Self.unresolvedSuffix)\(stamp)-\(UUID().uuidString.prefix(8).lowercased())")
+            do {
+                try Self.writePrivately(data, to: target)
+                return target
+            } catch let error as POSIXError where error.code == .EEXIST {
+                continue
+            }
         }
         throw POSIXError(.EEXIST)
     }
@@ -612,7 +614,7 @@ public struct ConversationRecordStore: Sendable {
     /// moment it exists rather than after a chmod.
     private static func writePrivately(_ data: Data, to url: URL) throws {
         let descriptor = open(url.path, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0o600)
-        guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
+        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {
             try handle.write(contentsOf: data)
