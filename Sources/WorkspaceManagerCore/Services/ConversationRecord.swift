@@ -395,20 +395,41 @@ public struct ConversationRecordStore: Sendable {
     }
 
     public func load(conversationID: String) -> ConversationRecord? {
-        guard case .found(let record) = read(conversationID: conversationID) else { return nil }
+        guard case .found(let record) = readRecord(conversationID: conversationID) else { return nil }
         return record
     }
 
-    /// What the store holds for a conversation: a record, none, or a file it cannot read as
-    /// one. A caller deciding who holds the conversation refuses on `damaged`, since the
-    /// record it cannot read may name a process that still runs it.
+    /// What the store holds for a conversation, as one deciding who holds it must read it: a
+    /// record, none, a file it cannot read as one, or an earlier record moved aside as
+    /// damaged. A caller refuses on the last two, since either may name a process that still
+    /// runs the conversation. A moved-aside copy counts by its name, which this build and the
+    /// one before it both give it, so a record a writer started over after the move does not
+    /// hide it.
     public enum Read: Equatable, Sendable {
         case found(ConversationRecord)
         case absent
         case damaged(URL)
+        case movedAside(URL)
     }
 
     public func read(conversationID: String) -> Read {
+        let record = readRecord(conversationID: conversationID)
+        if case .damaged = record { return record }
+        guard let url = fileURL(conversationID: conversationID) else { return record }
+        let names: [String]
+        do {
+            names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return record
+        } catch {
+            return .damaged(directory)
+        }
+        let prefix = url.lastPathComponent + ".corrupt-"
+        guard let aside = names.filter({ $0.hasPrefix(prefix) }).sorted().first else { return record }
+        return .movedAside(directory.appendingPathComponent(aside))
+    }
+
+    private func readRecord(conversationID: String) -> Read {
         guard let url = fileURL(conversationID: conversationID) else { return .absent }
         let data: Data
         do {

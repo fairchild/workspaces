@@ -659,6 +659,59 @@ struct CLIConversationResumeTests {
         try expectHeld("after the previous build wrote another tile")
     }
 
+    /// A writer that moves a damaged record aside starts a fresh one that cannot say who held
+    /// the conversation: the previous build's writers, or this build's followed by a fresh
+    /// owner that has since exited. The moved-aside copy keeps it unknown until a person
+    /// deletes it.
+    @Test(
+        "A record moved aside as damaged refuses, after any writer, until its copy is deleted",
+        arguments: ["previous-build", "replacement-exits"]
+    )
+    func movedAsideRecordRefuses(schedule: String) async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let conversationID = UUID().uuidString.lowercased()
+        let agent = try await startBareAgent(in: fixture, hooking: [conversationID])
+        defer { Self.kill([agent]) }
+        let url = try #require(fixture.records.fileURL(conversationID: conversationID))
+        try Data("[]".utf8).write(to: url)
+        let aside = URL(fileURLWithPath: url.path + ".corrupt-1794625090-162d2aeb")
+        if schedule == "previous-build" {
+            try FileManager.default.moveItem(at: url, to: aside)
+            try fixture.records.record(
+                ConversationObservation(
+                    conversationID: conversationID, cwd: fixture.work.path,
+                    transcriptPath: fixture.transcripts.appendingPathComponent("\(conversationID).jsonl").path,
+                    observedAt: Date(), observedBy: .hook))
+        } else {
+            try fixture.records.record(
+                ConversationObservation(
+                    conversationID: conversationID, cwd: fixture.work.path, observedAt: Date(), observedBy: .app))
+            let replacement = try await startBareAgent(in: fixture, hooking: [conversationID])
+            try await waitUntil(launches: 1) {
+                fixture.records.load(conversationID: conversationID)?.harnessProcesses.entries.map(\.process.pid)
+                    == [replacement.processIdentifier]
+            }
+            Self.kill([replacement])
+            try await waitUntil(launches: 1) { !replacement.isRunning }
+        }
+        let names = try FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path)
+        let movedAside = try #require(names.first { $0.hasPrefix(url.lastPathComponent + ".corrupt-") })
+
+        let resume = try fixture.run(["conversation", "resume", conversationID, "--here"])
+        #expect(resume.status == 1)
+        #expect(resume.stderr.contains("moved aside to \(url.deletingLastPathComponent().path)/\(movedAside)"))
+        #expect(resume.stderr.contains("delete that file to resume"))
+        #expect(!resume.stdout.contains("stub argv"), "a second agent started beside the first")
+
+        Self.kill([agent])
+        try await waitUntil(launches: 1) { !agent.isRunning }
+        try FileManager.default.removeItem(
+            atPath: url.deletingLastPathComponent().appendingPathComponent(movedAside).path)
+        let afterDelete = try fixture.run(["conversation", "resume", conversationID, "--here"])
+        #expect(afterDelete.status == 0, "\(afterDelete.stderr)")
+    }
+
     /// Ownership that does not decode is damage, not the absence of an owner.
     @Test("A record whose owner's entry is malformed refuses while that owner runs")
     func malformedOwnerRefuses() async throws {

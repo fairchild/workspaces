@@ -529,6 +529,24 @@ struct ConversationHolderProbeTests {
 
     // MARK: - The probe entrypoint
 
+    @Test("A conversation named by id with a record moved aside as damaged is unknown, whatever its record says")
+    func movedAsideRecordByIDIsUnknown() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("probe-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ConversationRecordStore(directory: directory)
+        try store.record(ConversationObservation(conversationID: Self.id, cwd: "/", observedBy: .hook))
+        let url = try #require(store.fileURL(conversationID: Self.id))
+        try Data("[]".utf8).write(to: URL(fileURLWithPath: url.path + ".corrupt-1-abcdef12"))
+        let probe = ConversationHolderProbe(
+            records: store, readProcessTable: { try? Self.table("1 0 /sbin/launchd") }, inspector: .none,
+            recordedSession: { _ in nil })
+        guard case .unknown(let detail) = await probe.probe(conversationID: Self.id) else {
+            Issue.record("expected unknown")
+            return
+        }
+        #expect(detail.contains("was moved aside to \(url.path).corrupt-1-abcdef12"))
+    }
+
     @Test("A conversation named by id whose record cannot be read is unknown, not one with no record")
     func damagedRecordByIDIsUnknown() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("probe-\(UUID().uuidString)")

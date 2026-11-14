@@ -145,6 +145,7 @@ public struct ConversationResumer: Sendable {
         case cannotStart(String)
         case unrecorded(conversationID: String, reason: String)
         case damagedRecord(conversationID: String, path: String)
+        case movedAside(conversationID: String, path: String)
 
         public var errorDescription: String? {
             switch self {
@@ -196,6 +197,10 @@ public struct ConversationResumer: Sendable {
                     + "that still runs the conversation, so a second agent cannot be ruled out. Nothing was started "
                     + "and the file was left as it is. Once no agent runs this conversation, move the file aside "
                     + "and resume again."
+            case .movedAside(let id, let path):
+                return "A damaged record of conversation \(id) was moved aside to \(path), and it may name a process "
+                    + "that still runs the conversation, so a second agent cannot be ruled out. Nothing was started. "
+                    + "If no claude runs this conversation, delete that file to resume."
             }
         }
     }
@@ -278,6 +283,7 @@ public struct ConversationResumer: Sendable {
         switch records.read(conversationID: id) {
         case .found(let record): return record
         case .damaged(let url): throw Refusal.damagedRecord(conversationID: id, path: url.path)
+        case .movedAside(let url): throw Refusal.movedAside(conversationID: id, path: url.path)
         case .absent: break
         }
         return launches.all(socketLabel: control.socketLabel)
@@ -342,6 +348,7 @@ public struct ConversationResumer: Sendable {
         case .found(let stored): record = stored
         case .absent: record = subject
         case .damaged(let url): throw Refusal.damagedRecord(conversationID: id, path: url.path)
+        case .movedAside(let url): throw Refusal.movedAside(conversationID: id, path: url.path)
         }
         record.launch = record.launch ?? subject.launch
         try require(record)

@@ -162,6 +162,11 @@ public struct ConversationHolderProbe: Sendable {
         case .absent: stored = nil
         case .damaged(let url):
             return .unknown("The record of conversation \(conversationID) at \(url.path) cannot be read")
+        case .movedAside(let url):
+            return .unknown(
+                "A damaged record of conversation \(conversationID) was moved aside to \(url.path), and it may name "
+                    + "a process that still runs the conversation\nIf no claude runs this conversation, delete that "
+                    + "file to resume.")
         }
         let record =
             stored
