@@ -579,7 +579,10 @@ struct CLIConversationResumeTests {
             ],
             output: fixture.root.appendingPathComponent("agent.log"))
         defer { Self.kill([agent]) }
-        try await waitUntil(launches: 2) { !unresolvedNotes(conversationID, in: fixture).isEmpty }
+        try await waitUntil(launches: 2) {
+            !unresolvedNotes(conversationID, in: fixture).isEmpty
+                && fixture.records.load(conversationID: conversationID) != nil
+        }
         let note = try #require(unresolvedNotes(conversationID, in: fixture).first)
         #expect(fixture.records.load(conversationID: conversationID)?.harnessProcesses.entries.isEmpty == true)
 
