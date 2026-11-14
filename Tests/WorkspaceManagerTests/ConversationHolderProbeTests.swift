@@ -777,7 +777,8 @@ struct ConversationHolderProbeTests {
 
         #expect(status == 1)
         #expect(try Data(contentsOf: url) == before)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: store.directory.path).sorted() == [".locks", url.lastPathComponent])
+        let names = try FileManager.default.contentsOfDirectory(atPath: store.directory.path)
+        #expect(names.sorted() == [".locks", url.lastPathComponent])
         #expect(warnings.count == 1)
         #expect(warnings.first?.contains("cannot tell what runs conversation \(Self.id)") == true)
         let probe = ConversationHolderProbe(

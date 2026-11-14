@@ -132,7 +132,7 @@ struct ConversationResumerTests {
         #expect(world.records.load(conversationID: world.conversationID)?.observedBy == .resume)
     }
 
-    @Test("A hook's note published while the decision after the sighting reads the process table refuses, and nothing starts")
+    @Test("A hook's note published while the decision after the sighting probes refuses, and nothing starts")
     func noteDuringTheFinalProbeRefuses() async throws {
         let world = try World()
         defer { world.teardown() }
