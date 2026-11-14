@@ -29,6 +29,9 @@ public enum AgentSessionVerdict: String, Codable, Sendable, Equatable {
     case notRunning = "not-running"
     /// The session is live, but its command named no conversation to check against.
     case unverifiable
+    /// Who holds the conversation cannot be told, for the reason the detail gives: a hook's
+    /// unresolved note, a damaged record, or a kernel or tmux server that did not answer.
+    case unknown
 }
 
 /// `workspaces ws check --json`. Every observation is optional because "could not look" and
@@ -197,7 +200,8 @@ public enum AgentSessionInspection {
         blocker: String?,
         inputReady: Bool,
         lastTurn: ClaudeTranscriptTurn?,
-        agentStartedAt: Date?
+        agentStartedAt: Date?,
+        holdersUnknown: String? = nil
     ) -> (verdict: AgentSessionVerdict, detail: String) {
         guard sessionLive else {
             return (.notRunning, "No terminal session is running under this handle.")
@@ -208,6 +212,7 @@ public enum AgentSessionInspection {
         guard let identity else {
             return (.unverifiable, "The launch command named no conversation to check against.")
         }
+        if let holdersUnknown { return (.unknown, holdersUnknown) }
         guard let agentProcesses else {
             return (.waiting, "The process table could not be read.")
         }

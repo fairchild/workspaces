@@ -668,6 +668,31 @@ struct CLIDetachedSessionTests {
     }
 
     @Test(
+        "Check reports a conversation with a hook's unresolved note as unknown, naming the note",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
+    )
+    func checkNamesAnUnresolvedNote() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.teardown() }
+        let environment = try installStubClaude(in: fixture)
+        let launch = try launchResult(
+            fixture.run(
+                ["ws", "launch", fixture.workspaceSelector, "--cmd", "claude --effort low", "--json"],
+                extraEnvironment: environment))
+        let conversationID = try #require(launch.conversationID)
+        let records = ConversationRecordStore(directory: fixture.root.appendingPathComponent("conversations"))
+        let note = try records.recordUnresolved(
+            ConversationObservation(conversationID: conversationID, cwd: "/", observedBy: .hook),
+            ancestry: HookAncestry(claude: nil, passed: [], complete: false))
+
+        let check = try fixture.run(["ws", "check", launch.handle, "--json"], extraEnvironment: environment)
+        #expect(check.status == 2)
+        let result = try checkResult(check)
+        #expect(result.verdict == .unknown)
+        #expect(result.detail.contains("so it left \(note.path)"), "\(result.detail)")
+    }
+
+    @Test(
         "After the agent quits, resume continues the same conversation at the same effort",
         .enabled(if: tmuxIsInstalled, "tmux is not installed; the verbs are a thin shell over it")
     )

@@ -633,11 +633,12 @@ private final class CLIApp {
         let blocker = pane.flatMap(AgentSessionInspection.blocker(inPane:))
 
         var holders: [ConversationHolder]?
+        var holdersUnknown: String?
         if let identity {
             switch await holderProbe(control: control).probe(conversationID: identity.conversationID) {
             case .free: holders = []
             case .held(let found, _): holders = found
-            case .unknown: holders = nil
+            case .unknown(let detail): holdersUnknown = detail
             }
         }
         let lastTurn = record.flatMap { record in
@@ -653,7 +654,8 @@ private final class CLIApp {
             blocker: blocker,
             inputReady: pane.map(AgentSessionInspection.inputReady(inPane:)) ?? false,
             lastTurn: lastTurn,
-            agentStartedAt: holders?.compactMap(\.startedAt).min()
+            agentStartedAt: holders?.compactMap(\.startedAt).min(),
+            holdersUnknown: holdersUnknown
         )
         return WorkspaceCheckResult(
             handle: handle,

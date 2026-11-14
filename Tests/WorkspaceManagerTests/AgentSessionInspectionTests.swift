@@ -47,7 +47,15 @@ struct AgentSessionInspectionTests {
         ).verdict
     }
 
-    @Test("One agent, ready, whose last turn ran as requested is verified")
+    @Test("Holders that cannot be told make the verdict unknown, with the probe's reason as the detail")
+    func unknownHolders() {
+        let decision = AgentSessionInspection.verdict(
+            sessionLive: true, identity: Self.identity, agentProcesses: nil, blocker: nil, inputReady: true,
+            lastTurn: nil, agentStartedAt: nil, holdersUnknown: "A hook saw conversation x start")
+        #expect(decision.verdict == .unknown)
+        #expect(decision.detail == "A hook saw conversation x start")
+    }
+
     func verified() {
         #expect(verdict() == .verified)
     }
