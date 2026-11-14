@@ -444,9 +444,10 @@ public struct ConversationRecordStore: Sendable {
 
     /// Leaves `<id>.json.unresolved-<epoch>-<random>` beside the record: a hook saw the
     /// conversation start and could not tell which process runs it. Nothing removes the note
-    /// but a person, since no process it could name is left to say when it is over. Each
-    /// note gets a name of its own, created only if nothing holds it yet, so no note replaces
-    /// another.
+    /// but a person, since no process it could name is left to say when it is over. It is
+    /// written the way a record is, to a private file in the same directory and then renamed,
+    /// so whatever stops a note stops a record too; the rename refuses a name already taken,
+    /// so no note replaces another.
     @discardableResult
     public func recordUnresolved(_ observation: ConversationObservation, ancestry: HookAncestry) throws -> URL {
         guard let url = fileURL(conversationID: observation.conversationID) else {
@@ -463,20 +464,17 @@ public struct ConversationRecordStore: Sendable {
         ]
         note["claude"] = ancestry.claude?.recorded
         let data = try JSONSerialization.data(withJSONObject: note, options: [.sortedKeys])
+        let temporary = directory.appendingPathComponent(
+            ".\(url.lastPathComponent).note.\(getpid()).\(UUID().uuidString).tmp")
+        try Self.writePrivately(data, to: temporary)
+        defer { unlink(temporary.path) }
         let stamp = Int(observation.observedAt.timeIntervalSince1970)
-        var lastError: Error = CocoaError(.fileWriteFileExists)
         for _ in 0..<4 {
-            let target = URL(
-                fileURLWithPath:
-                    "\(url.path)\(Self.unresolvedSuffix)\(stamp)-\(UUID().uuidString.prefix(8).lowercased())")
-            do {
-                try data.write(to: target, options: .withoutOverwriting)
-                return target
-            } catch {
-                lastError = error
-            }
+            let target = "\(url.path)\(Self.unresolvedSuffix)\(stamp)-\(UUID().uuidString.prefix(8).lowercased())"
+            if renamex_np(temporary.path, target, UInt32(RENAME_EXCL)) == 0 { return URL(fileURLWithPath: target) }
+            guard errno == EEXIST else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         }
-        throw lastError
+        throw POSIXError(.EEXIST)
     }
 
     private func readRecord(conversationID: String) -> Read {

@@ -699,6 +699,49 @@ struct ConversationHolderProbeTests {
         #expect(detail.contains("delete that file to resume"))
     }
 
+    /// Uncertainty is written first or nothing is: a hook whose note cannot be written leaves
+    /// the record as it was, so what the record already says still holds.
+    @Test("A hook whose note cannot be written leaves the record untouched, fails, and the prior holder still holds")
+    func failedNoteWritesNothing() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("hook-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let payload = directory.appendingPathComponent("payload.json")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(#"{"session_id":"\#(Self.id)","cwd":"/"}"#.utf8).write(to: payload)
+        let store = ConversationRecordStore(directory: directory.appendingPathComponent("records"))
+        let holder = try #require(ProcessInspector.live.identity(getpid()))
+        try store.record(
+            ConversationObservation(
+                conversationID: Self.id, cwd: "/", observedBy: .hook,
+                lastSeenIn: .init(hostSessionID: nil, outsideTmux: true), harnessProcess: .named(holder)),
+            ended: { _ in false })
+        let url = try #require(store.fileURL(conversationID: Self.id))
+        let before = try Data(contentsOf: url)
+
+        let input = try FileHandle(forReadingFrom: payload)
+        defer { try? input.close() }
+        var warnings: [String] = []
+        let status = ConversationHookObserver.run(
+            environment: [ConversationRecordStore.directoryEnvironmentKey: store.directory.path],
+            input: input, tmuxSession: { _ in nil },
+            ancestry: { _ in HookAncestry(claude: nil, passed: [], complete: false) },
+            recordUnresolved: { _, _, _ in throw POSIXError(.EACCES) },
+            warn: { warnings.append($0) })
+
+        #expect(status == 1)
+        #expect(try Data(contentsOf: url) == before)
+        #expect(warnings.count == 1)
+        #expect(warnings.first?.contains("cannot tell what runs conversation \(Self.id)") == true)
+        let probe = ConversationHolderProbe(
+            records: store, readProcessTable: { await ProcessTable.read() }, inspector: .live,
+            recordedSession: { _ in nil })
+        guard case .held(let holders, _) = await probe.probe(conversationID: Self.id) else {
+            Issue.record("the prior holder no longer holds")
+            return
+        }
+        #expect(holders.map(\.pid) == [holder.pid])
+    }
+
     /// Processes that have all exited by the write cannot hold anything, so a hook that found
     /// only those leaves a note rather than a chain that would read as free.
     @Test("A hook whose every process has exited by the write leaves a note; one whose processes run does not")
