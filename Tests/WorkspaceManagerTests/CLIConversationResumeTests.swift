@@ -224,27 +224,6 @@ struct CLIConversationResumeTests {
         return holders
     }
 
-    /// The paths of the files `pid` holds open, as the kernel reports them.
-    private static func openPaths(_ pid: pid_t) -> [String] {
-        let size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
-        guard size > 0 else { return [] }
-        let stride = MemoryLayout<proc_fdinfo>.stride
-        var descriptors = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(size) / stride)
-        let filled = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &descriptors, size)
-        guard filled > 0 else { return [] }
-        return descriptors.prefix(Int(filled) / stride)
-            .filter { $0.proc_fdtype == UInt32(PROX_FDTYPE_VNODE) }
-            .compactMap { descriptor in
-                var info = vnode_fdinfowithpath()
-                let length = Int32(MemoryLayout<vnode_fdinfowithpath>.size)
-                guard proc_pidfdinfo(pid, descriptor.proc_fd, PROC_PIDFDVNODEPATHINFO, &info, length) == length
-                else { return nil }
-                return withUnsafeBytes(of: info.pvip.vip_path) {
-                    String(cString: $0.bindMemory(to: CChar.self).baseAddress!)
-                }
-            }
-    }
-
     /// SIGKILL, because the test runner ignores SIGTERM and its children inherit that.
     private static func kill(_ processes: [Process]) {
         for process in processes where process.isRunning {
@@ -702,10 +681,10 @@ struct CLIConversationResumeTests {
         // shows it holding that file open it is waiting on the lock this test holds.
         let writeLock = "/.locks/\(conversationID).write"
         try await waitUntil(launches: 1) {
-            Self.openPaths(resume.processIdentifier).contains { $0.hasSuffix(writeLock) } || !resume.isRunning
+            OpenFiles.paths(of: resume.processIdentifier).contains { $0.hasSuffix(writeLock) } || !resume.isRunning
         }
         try #require(
-            Self.openPaths(resume.processIdentifier).contains { $0.hasSuffix(writeLock) },
+            OpenFiles.paths(of: resume.processIdentifier).contains { $0.hasSuffix(writeLock) },
             "the resume never reached the record's write lock")
         let note = try fixture.records.recordUnresolved(
             ConversationObservation(conversationID: conversationID, cwd: fixture.work.path, observedBy: .hook),
