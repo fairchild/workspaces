@@ -118,9 +118,10 @@ extension ConversationHookObserver {
 
 /// What a hook finds above it: the nearest claude, short of launchd and the tmux server its
 /// `TMUX` names, and the processes it passed on the way, up to and including the one leading
-/// the terminal's session; nothing above that leader, `login` or the terminal application,
-/// can be what runs the conversation. A claude above a program that fired the hook beneath
-/// it is named too, and holds that conversation until it exits. The passed processes are
+/// the terminal's session, since what sits above that leader, `login` or the terminal
+/// application, runs no conversation unless it is a claude: the search for a claude goes on
+/// above it, and a claude found there is named. A claude above a program that fired the hook
+/// beneath it is named too, and holds that conversation until it exits. The passed processes are
 /// recorded either way, since any of them may be what runs the conversation, a harness the
 /// adapter does not recognize among them; the hook's own shell and the forwarder exit with it.
 ///
