@@ -505,8 +505,7 @@ struct ConversationHolderProbeTests {
             leadsTerminalSession: { leaders.contains($0) })
         #expect(HookAncestry.above(50, inspector: inspector).passed.map(\.pid) == [50, 40, 30])
 
-        var underAgent = processes
-        underAgent[10] = (1, ["claude"])
+        let underAgent = processes.merging([10: (1, ["claude"])]) { _, new in new }
         let named = HookAncestry.above(
             50,
             inspector: ProcessInspector(
