@@ -1,6 +1,6 @@
 # Ops Dashboard
 
-Last updated: `2026-11-14T13:32:38.924460Z`
+Last updated: `2026-11-15T13:32:28.444576Z`
 Source: `live`
 
 ## Funnel
@@ -23,22 +23,22 @@ Source: `live`
 | Metric | Value |
 |---|---:|
 | Completed runs | 499 |
-| Failure rate | 3.01% |
+| Failure rate | 3.41% |
 | Rerun rate | 0.00% |
 
 Top failing workflows:
 - `CI Fallback` — 4 failure(s)
-- `CI` — 4 failure(s)
 - `Factory Review Executor` — 4 failure(s)
-- `Web Next Validate` — 1 failure(s)
-- `Release` — 1 failure(s)
+- `CI` — 3 failure(s)
+- `Web Next Validate` — 2 failure(s)
+- `Factory Implement` — 2 failure(s)
 
 ## Agent Health
 
 | Agent | Runs | Failures | Rate | Reruns | Rerun Rate |
 |---|---:|---:|---:|---:|---:|
-| Approved Mention Execution | 27 | 0 | 0.00% | 0 | 0.00% |
-| Mention Triage | 66 | 0 | 0.00% | 0 | 0.00% |
+| Approved Mention Execution | 28 | 0 | 0.00% | 0 | 0.00% |
+| Mention Triage | 68 | 0 | 0.00% | 0 | 0.00% |
 
 ## Perf Snapshot
 
@@ -52,8 +52,8 @@ Freshness: n/a days
 
 ## Stale Planned Work
 
-- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (243.9 days idle)
-- #110 — [idea][endorsed] Fix environment status color semantics in New Workspace sheet (235.0 days idle)
+- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (244.9 days idle)
+- #110 — [idea][endorsed] Fix environment status color semantics in New Workspace sheet (236.0 days idle)
 
 ## Current Breaches
 
