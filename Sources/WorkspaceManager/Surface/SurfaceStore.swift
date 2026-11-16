@@ -359,15 +359,15 @@ final class SurfaceStore: ObservableObject {
     private func prefillRecordedConversation(terminal: TerminalSurface, session: HostTerminalSession) async {
         guard tmuxOwnershipLedger?.ownership(forHostSessionID: session.id)?.provenance == .createdByThisLaunch
         else { return }
-        let processListing = await AgentSessionInspection.processListing()
         let socketLabel = TmuxSessionProbe.socketLabel
         let sessionName = session.effectiveTmuxSessionName
-        // Off the main actor: this reads the tail of a transcript.
+        let records = ConversationRecordStore(directory: ConversationRecordsLocation.directory)
+        // Off the main actor: this reads the process table and the tail of a transcript.
         let command = await Task.detached {
-            AgentLaunchRecordStore().resumeCommand(
+            await AgentLaunchRecordStore().resumeCommand(
                 socketLabel: socketLabel,
                 tmuxSessionName: sessionName,
-                processListing: processListing,
+                holders: ConversationHolderProbe(records: records, fallbackSocketLabel: socketLabel),
                 resumability: ClaudeTranscriptResumability()
             )
         }.value

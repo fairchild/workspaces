@@ -29,6 +29,9 @@ public enum AgentSessionVerdict: String, Codable, Sendable, Equatable {
     case notRunning = "not-running"
     /// The session is live, but its command named no conversation to check against.
     case unverifiable
+    /// Who holds the conversation cannot be told, for the reason the detail gives: a hook's
+    /// unresolved note, a damaged record, or a kernel or tmux server that did not answer.
+    case unknown
 }
 
 /// `workspaces ws check --json`. Every observation is optional because "could not look" and
@@ -136,45 +139,58 @@ public enum AgentSessionInspection {
         }
     }
 
-    /// How long each process holding `conversationID` has been running, in seconds, from
-    /// `ps -A -ww -o etime=,command=` output. The id has to follow the flag that names a
-    /// conversation, and `claude` has to be the program, directly or through an interpreter:
-    /// the shell that started it, a tmux client and a hook all carry the same text and hold
-    /// nothing.
-    public static func conversationHolders(_ conversationID: String, processListing: String) -> [Int] {
-        processListing.split(separator: "\n").compactMap { line in
-            guard line.contains(conversationID) else { return nil }
-            let words = line.split(separator: " ").map(String.init)
-            guard let elapsed = words.first.flatMap(elapsedSeconds) else { return nil }
-            let command = Array(words.dropFirst())
-            guard isClaude(command) else { return nil }
-            let flags = AgentLaunchCommand.conversationFlags
-            let options = command.prefix { $0 != "--" }
-            let holds =
-                zip(options, options.dropFirst()).contains { flag, value in
-                    value == conversationID && flags.contains(flag)
-                } || options.contains { word in flags.contains { word == "\($0)=\(conversationID)" } }
-            return holds ? elapsed : nil
-        }
+    /// Whether `command`'s options name `conversationID` with a flag that picks a conversation.
+    static func names(_ conversationID: String, _ command: [String]) -> Bool {
+        let flags = AgentLaunchCommand.conversationFlags
+        let options = command.prefix { $0 != "--" }
+        return zip(options, options.dropFirst()).contains { flag, value in
+            value == conversationID && flags.contains(flag)
+        } || options.contains { word in flags.contains { word == "\($0)=\(conversationID)" } }
     }
 
-    /// `claude`, or an interpreter running it. Only the first two words count: a tmux server
-    /// keeps the argv of the client that started it, which can name `claude` further along.
-    private static func isClaude(_ command: [String]) -> Bool {
-        command.prefix(2).contains { word in
-            URL(fileURLWithPath: word).lastPathComponent == "claude" || word.hasSuffix("/claude-code/cli.js")
+    /// `claude`, or a program running it, reached through `env` or not. A JavaScript runtime's
+    /// script is its first word that is not an option, so `node --no-warnings cli.js` counts;
+    /// any other program counts only when its first argument is claude, as with `sh claude`.
+    /// Nothing further along does: a tmux server keeps the argv of the client that started
+    /// it, which can name `claude` later, and a shell's `-c` string is a command line.
+    static func isClaude(_ command: [String]) -> Bool {
+        var words = command[...]
+        if let first = words.first, programName(first) == "env" {
+            words = words.dropFirst()
+            while let word = words.first, word.hasPrefix("-") || word.contains("=") {
+                words = words.dropFirst(Self.envOptionsWithValue.contains(word) ? 2 : 1)
+            }
         }
+        guard let program = words.first else { return false }
+        if isClaudeEntry(program) { return true }
+        let arguments = words.dropFirst()
+        guard Self.scriptRuntimes.contains(programName(program)) else {
+            return arguments.first.map(isClaudeEntry) ?? false
+        }
+        // Any runtime option may take the next word as its value, so the script is the first
+        // word that neither is an option nor follows one written without `=`.
+        var mayBeValue = false
+        for word in arguments {
+            if isClaudeEntry(word) { return true }
+            if word.hasPrefix("-") {
+                mayBeValue = !word.contains("=")
+                continue
+            }
+            guard mayBeValue else { return false }
+            mayBeValue = false
+        }
+        return false
     }
 
-    /// Parses `ps` elapsed time, `[[dd-]hh:]mm:ss`.
-    static func elapsedSeconds(_ text: String) -> Int? {
-        let dayParts = text.split(separator: "-")
-        guard (1...2).contains(dayParts.count), let clock = dayParts.last else { return nil }
-        let days = dayParts.count == 2 ? Int(dayParts[0]) : 0
-        let fields = clock.split(separator: ":").map { Int($0) }
-        guard let days, (2...3).contains(fields.count), !fields.contains(nil) else { return nil }
-        let clockSeconds = fields.compactMap { $0 }.reduce(0) { $0 * 60 + $1 }
-        return days * 86_400 + clockSeconds
+    private static let scriptRuntimes: Set<String> = ["node", "nodejs", "bun"]
+    private static let envOptionsWithValue: Set<String> = ["-u", "--unset", "-C", "--chdir", "-P", "-S"]
+
+    private static func programName(_ word: String) -> String {
+        URL(fileURLWithPath: word).lastPathComponent
+    }
+
+    private static func isClaudeEntry(_ word: String) -> Bool {
+        programName(word) == "claude" || word.hasSuffix("/claude-code/cli.js")
     }
 
     public static func verdict(
@@ -184,7 +200,8 @@ public enum AgentSessionInspection {
         blocker: String?,
         inputReady: Bool,
         lastTurn: ClaudeTranscriptTurn?,
-        agentStartedAt: Date?
+        agentStartedAt: Date?,
+        holdersUnknown: String? = nil
     ) -> (verdict: AgentSessionVerdict, detail: String) {
         guard sessionLive else {
             return (.notRunning, "No terminal session is running under this handle.")
@@ -195,6 +212,7 @@ public enum AgentSessionInspection {
         guard let identity else {
             return (.unverifiable, "The launch command named no conversation to check against.")
         }
+        if let holdersUnknown { return (.unknown, holdersUnknown) }
         guard let agentProcesses else {
             return (.waiting, "The process table could not be read.")
         }
@@ -236,16 +254,5 @@ public enum AgentSessionInspection {
     static func isOwnTurn(_ turn: ClaudeTranscriptTurn, agentStartedAt: Date?) -> Bool {
         guard let timestamp = turn.timestamp, let agentStartedAt else { return false }
         return timestamp >= agentStartedAt
-    }
-
-    /// `ps` listing every process's elapsed time and full argument list, or `nil` when it
-    /// did not answer.
-    public static func processListing() async -> String? {
-        let result = try? await ProcessRunner.run(
-            executable: "/bin/ps",
-            arguments: ["-A", "-ww", "-o", "etime=", "-o", "command="],
-            timeout: 5
-        )
-        return result?.success == true ? result?.stdout : nil
     }
 }

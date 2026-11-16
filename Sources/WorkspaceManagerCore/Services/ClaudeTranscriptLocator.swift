@@ -122,6 +122,23 @@ public struct ClaudeTranscriptResumability: Sendable {
             .first
     }
 
+    /// The transcript for a session under whichever project directory holds it: a session
+    /// resumed from another directory goes on writing the transcript it began in, and
+    /// `claude --resume` finds it there by id alone. Where several hold one, the one written
+    /// last is the one the conversation went on in.
+    public func existingTranscriptURL(agentSessionID: String) -> URL? {
+        guard !agentSessionID.isEmpty, !agentSessionID.contains("/") else { return nil }
+        let projects = claudeHome.appendingPathComponent("projects", isDirectory: true)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: projects.path)) ?? []
+        func modified(_ url: URL) -> Date {
+            (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+        }
+        return names.sorted()
+            .map { projects.appendingPathComponent($0).appendingPathComponent("\(agentSessionID).jsonl") }
+            .filter { fileExists($0.path) }
+            .max { modified($0) < modified($1) }
+    }
+
     /// The newest transcript id recorded for `cwd` that no earlier surface claimed,
     /// or `nil` when the directory holds none. Newest-first is what makes "the
     /// conversation I was just in" the answer.

@@ -30,11 +30,17 @@ public enum TmuxLiveSocketGuard {
     }
 
     /// Whether a tmux command with `arguments` may run. One that names a live socket from a
-    /// test process fails the process, or, while a test observes refusals through
-    /// `onRefusal`, is reported there and does not run.
+    /// test process, by label or by a socket path whose file is a live label, fails the
+    /// process, or, while a test observes refusals through `onRefusal`, is reported there and
+    /// does not run.
     public static func permits(tmuxArguments arguments: [String]) -> Bool {
-        guard let flag = arguments.firstIndex(of: "-L"), flag + 1 < arguments.count else { return true }
-        return permits(socketLabel: arguments[flag + 1])
+        if let flag = arguments.firstIndex(of: "-L"), flag + 1 < arguments.count {
+            return permits(socketLabel: arguments[flag + 1])
+        }
+        if let flag = arguments.firstIndex(of: "-S"), flag + 1 < arguments.count {
+            return permits(socketLabel: URL(fileURLWithPath: arguments[flag + 1]).lastPathComponent)
+        }
+        return true
     }
 
     /// Fails the process when a test is about to run `launchScript` on a live socket. A

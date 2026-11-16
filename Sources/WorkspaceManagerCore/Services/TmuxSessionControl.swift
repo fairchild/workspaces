@@ -377,10 +377,11 @@ public struct TmuxSessionControl: Sendable {
 
     /// The identity the server gave the session: its own pid, the session's id and creation
     /// time, and the name. Tab-separated, because a name can hold spaces.
+    /// `-u` keeps the tabs: without a UTF-8 locale tmux prints each one as `_`.
     public static func sessionIdentityArguments(socketLabel: String, handle: String) -> [String] {
         [
-            "tmux", "-L", socketLabel, "display-message", "-p", "-t", paneTarget(handle),
-            "#{pid}\t#{session_id}\t#{session_created}\t#{session_name}",
+            "tmux", "-u", "-L", socketLabel, "display-message", "-p", "-t", paneTarget(handle),
+            "#{pid}\t#{session_id}\t#{session_created}\t#{socket_path}\t#{session_name}",
         ]
     }
 
@@ -552,13 +553,16 @@ public struct TmuxSessionControl: Sendable {
             ),
             result.success
         else { return nil }
-        let fields = result.stdout.trimmingCharacters(in: .newlines).split(separator: "\t", maxSplits: 3)
-        guard fields.count == 4, let pid = Int(fields[0]) else { return nil }
+        let fields = result.stdout.trimmingCharacters(in: .newlines)
+            .split(separator: "\t", maxSplits: 4, omittingEmptySubsequences: false)
+        guard fields.count == 5, let pid = Int(fields[0]) else { return nil }
         return ConversationRecord.TmuxSession(
             serverPID: pid,
             sessionID: String(fields[1]),
             createdAt: TimeInterval(fields[2]).map { Date(timeIntervalSince1970: $0) },
-            name: String(fields[3])
+            name: String(fields[4]),
+            socketPath: fields[3].isEmpty ? nil : String(fields[3]),
+            serverStartedAtMicroseconds: ProcessInspector.live.identity(Int32(pid))?.startedAtMicroseconds
         )
     }
 
