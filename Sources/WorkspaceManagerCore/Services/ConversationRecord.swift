@@ -419,7 +419,9 @@ public struct ConversationRecordStore: Sendable {
         case unlistable(URL)
     }
 
-    public func read(conversationID: String) -> Read {
+    /// A note's processes are judged against this machine's kernel, so only a note written on
+    /// `host` adds to the record; one from another machine, or one naming no machine, stands.
+    public func read(conversationID: String, host: String = ConversationHost.current) -> Read {
         let record = readRecord(conversationID: conversationID)
         if case .damaged = record { return record }
         guard let url = fileURL(conversationID: conversationID) else { return record }
@@ -444,7 +446,7 @@ public struct ConversationRecordStore: Sendable {
         // no record, stands until a person deletes it.
         guard case .found(var found) = record else { return .unresolved(firstNote) }
         for note in notes {
-            guard let ownership = Self.ownership(inNote: note, conversationID: conversationID) else {
+            guard let ownership = Self.ownership(inNote: note, conversationID: conversationID, host: host) else {
                 return .unresolved(note)
             }
             found.harnessProcesses.entries += ownership.entries
@@ -455,11 +457,14 @@ public struct ConversationRecordStore: Sendable {
 
     /// The ownership a note records: only a note from a hook whose walk was complete, which
     /// named what runs the conversation and could not write the record, carries one, and it
-    /// must read as strictly as a record's. Nil for every other note.
-    static func ownership(inNote url: URL, conversationID: String) -> ConversationRecord.HarnessProcesses? {
+    /// must read as strictly as a record's and come from `host`. Nil for every other note.
+    static func ownership(
+        inNote url: URL, conversationID: String, host: String
+    ) -> ConversationRecord.HarnessProcesses? {
         guard let data = try? Data(contentsOf: url),
             let note = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
             note["conversationID"] as? String == conversationID,
+            note["host"] as? String == host,
             note["complete"] as? Bool == true,
             let value = note[ConversationRecordJSON.harnessProcessesKey],
             let ownership = ConversationRecordJSON.harnessProcesses(from: value),
@@ -491,6 +496,7 @@ public struct ConversationRecordStore: Sendable {
             attributes: [.posixPermissions: Self.directoryPermissions])
         var note: [String: Any] = [
             "conversationID": observation.conversationID,
+            "host": observation.host,
             "observedAt": ConversationRecordJSON.string(observation.observedAt),
             "chain": ancestry.passed.map(\.recorded),
             "complete": ancestry.complete,

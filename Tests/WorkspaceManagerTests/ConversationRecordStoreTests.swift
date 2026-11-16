@@ -326,8 +326,16 @@ struct ConversationRecordStoreTests {
                 try data.write(to: target)
                 return target
             }
-            let carried = try note(
-                "aaaaaaaa", ["conversationID": id, "complete": true, "harnessProcesses": ["entries": [entry]]])
+            let complete: [String: Any] = [
+                "conversationID": id, "host": ConversationHost.current, "complete": true,
+                "harnessProcesses": ["entries": [entry]],
+            ]
+            func changed(_ key: String, to value: Any?) -> [String: Any] {
+                var object = complete
+                object[key] = value
+                return object
+            }
+            let carried = try note("aaaaaaaa", complete)
             #expect(store.read(conversationID: id) == .unresolved(carried), "beside no record")
 
             try store.record(observation(at: 1_800_000_000))
@@ -338,18 +346,19 @@ struct ConversationRecordStoreTests {
             #expect(
                 record.harnessProcesses.entries.map(\.process) == [ProcessIdentity(pid: 4242, startedAtMicroseconds: 7)]
             )
+            #expect(store.read(conversationID: id, host: "another-mac") == .unresolved(carried), "read elsewhere")
+            try FileManager.default.removeItem(at: carried)
 
             let standing: [(String, Any?)] = [
                 ("bbbbbbbb", nil),
                 ("cccccccc", [String: Any]()),
-                ("dddddddd", ["conversationID": id, "complete": false, "harnessProcesses": ["entries": [entry]]]),
-                ("eeeeeeee", ["conversationID": "other", "complete": true, "harnessProcesses": ["entries": [entry]]]),
-                ("ffffffff", ["conversationID": id, "complete": true, "harnessProcesses": [String: Any]()]),
-                (
-                    "gggggggg",
-                    ["conversationID": id, "complete": true, "harnessProcesses": ["entries": [["process": "x"]]]]
-                ),
-                ("hhhhhhhh", ["conversationID": id, "complete": true]),
+                ("dddddddd", changed("complete", to: false)),
+                ("eeeeeeee", changed("conversationID", to: "other")),
+                ("ffffffff", changed("harnessProcesses", to: [String: Any]())),
+                ("gggggggg", changed("harnessProcesses", to: ["entries": [["process": "x"]]])),
+                ("hhhhhhhh", changed("harnessProcesses", to: nil)),
+                ("iiiiiiii", changed("host", to: "another-mac")),
+                ("jjjjjjjj", changed("host", to: nil)),
             ]
             for (name, object) in standing {
                 let stray = try note(name, object)

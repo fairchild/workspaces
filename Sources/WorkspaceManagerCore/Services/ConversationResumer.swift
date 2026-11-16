@@ -307,7 +307,7 @@ public struct ConversationResumer: Sendable {
     /// record that does not read, a copy moved aside as damaged, a hook's unresolved note, or a
     /// records directory that cannot be listed to look for those.
     private func stored(_ id: String) throws -> ConversationRecord? {
-        switch records.read(conversationID: id) {
+        switch records.read(conversationID: id, host: host) {
         case .found(let record): return record
         case .absent: return nil
         case .damaged(let url): throw Refusal.damagedRecord(conversationID: id, path: url.path)

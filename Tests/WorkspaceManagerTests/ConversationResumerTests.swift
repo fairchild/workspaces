@@ -290,6 +290,39 @@ struct ConversationResumerTests {
         #expect(world.execs.invocations.isEmpty)
     }
 
+    /// A note's processes are pid@start on the machine whose hook wrote it, which only that
+    /// machine's kernel can judge, so a note from another host stands as a record from one
+    /// does: the same note that permits resume here once its claude has ended refuses there.
+    @Test(
+        "A note naming a claude that has ended permits resume when this host wrote it, and refuses when another did",
+        arguments: [true, false])
+    func noteFromAnotherHostRefuses(fromThisHost: Bool) async throws {
+        let world = try World()
+        defer { world.teardown() }
+        try world.recordConversation()
+        let id = world.conversationID
+        let claude = ProcessIdentity(pid: 4242, startedAtMicroseconds: 7)
+        let note = try world.records.recordUnresolved(
+            ConversationObservation(
+                conversationID: id, host: fromThisHost ? ConversationHost.current : "another-mac", cwd: world.cwd,
+                observedBy: .hook, harnessProcess: .named(claude)),
+            ancestry: HookAncestry(claude: claude, passed: [claude], complete: true), carryingOwnership: true)
+        let inspector = ProcessInspector(
+            identity: { $0 == getpid() ? ProcessIdentity(pid: $0, startedAtMicroseconds: 1) : nil },
+            parent: { _ in nil }, arguments: { _ in nil })
+        let resumer = world.resumer(processTable: Self.quietTable, inspector: inspector)
+
+        if fromThisHost {
+            let resumed = try await resumer.resume(conversationID: id, target: .here)
+            #expect(resumed == .resumed(command: "claude --resume \(id)"))
+        } else {
+            await #expect(throws: ConversationResumer.Refusal.unresolvedOwner(conversationID: id, path: note.path)) {
+                _ = try await resumer.resume(conversationID: id, target: .here)
+            }
+            #expect(world.execs.invocations.isEmpty)
+        }
+    }
+
     /// The decision before a resume's sighting and the one after it are one function, so a
     /// note a hook publishes while the resume waits for the record's write lock refuses it as
     /// surely as a note already there. The test sets the budget the resume waits within, far
