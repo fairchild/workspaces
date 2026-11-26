@@ -2,26 +2,36 @@
 //  TerminalMultiplexingMode+Presentation.swift
 //  WorkspaceManager
 //
+//  How Settings presents the global mode: the mode a workspace's first terminal opens in.
+//  Tabs choose their own mode (New Terminal Tab is plain, New Persistent Tab keeps running),
+//  so the setting reads as one yes/no property rather than an app-wide multiplexer choice.
+//
 
 import WorkspaceManagerCore
 
 extension TerminalMultiplexingMode {
-    var title: String {
-        switch self {
-        case .ghosttyManagedSplits:
-            return "Ghostty Splits"
-        case .tmuxPerSession:
-            return "tmux Per Session"
-        }
+    static let firstTerminalSettingLabel = "Keep a workspace's first terminal running after quitting"
+
+    static let persistentHolderMissingNote =
+        "tmux isn't installed, so terminals that would keep running open as plain shells instead."
+
+    init(keepsFirstTerminalRunning: Bool) {
+        self = keepsFirstTerminalRunning ? .persistent : .plain
     }
 
+    var keepsFirstTerminalRunning: Bool { self == .persistent }
+
     var summary: String {
+        let perTab =
+            "Each new tab chooses for itself: New Terminal Tab (Cmd+T) is a plain shell, "
+            + "New Persistent Tab (Cmd+Shift+T) keeps running."
         switch self {
         case .ghosttyManagedSplits:
-            return "Use the app's embedded Ghostty split model (Cmd+D, Cmd+[ / Cmd+])."
+            return "Opening a workspace, Home or a repository starts a plain shell that ends when "
+                + "the app quits. \(perTab)"
         case .tmuxPerSession:
-            return "Open each workspace in a terminal with its own tmux session, so it keeps running when the "
-                + "app quits. New tabs are plain shells; New Persistent Tab opens one that keeps running."
+            return "Opening a workspace, Home or a repository starts a terminal held by tmux, so it "
+                + "keeps running when the app quits and the next launch rejoins it. \(perTab)"
         }
     }
 }

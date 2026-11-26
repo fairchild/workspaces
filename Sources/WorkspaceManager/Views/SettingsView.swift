@@ -260,26 +260,28 @@ struct SettingsView: View {
 
             Section {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Terminal Session Mode")
-                        .font(.headline)
-
-                    Picker(
-                        "Terminal Session Mode",
-                        selection: Binding(
-                            get: { terminalMultiplexingMode },
-                            set: { terminalMultiplexingMode = $0 }
+                    Toggle(
+                        TerminalMultiplexingMode.firstTerminalSettingLabel,
+                        isOn: Binding(
+                            get: { terminalMultiplexingMode.keepsFirstTerminalRunning },
+                            set: { terminalMultiplexingMode = TerminalMultiplexingMode(keepsFirstTerminalRunning: $0) }
                         )
-                    ) {
-                        ForEach(TerminalMultiplexingMode.allCases) { mode in
-                            Text(mode.title)
-                                .tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
+                    )
 
                     Text(terminalMultiplexingMode.summary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    if terminalMultiplexingMode.keepsFirstTerminalRunning,
+                        !GhosttyTerminalConfig.isPersistentHolderAvailable()
+                    {
+                        Label(
+                            TerminalMultiplexingMode.persistentHolderMissingNote,
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
 
                     Divider()
                         .padding(.vertical, 4)

@@ -31,8 +31,9 @@ Shortcuts lists them. Among them:
   protocol). That program no longer receives it.
 
 A tab opened where the scope has no terminal yet (a repository overview) becomes the scope's
-first tile in the mode its command asked for. The Terminal Multiplexing setting decides a first
-tile only when opening the scope creates it.
+first tile in the mode its command asked for. The Settings > Terminal toggle "Keep a
+workspace's first terminal running after quitting" decides a first tile only when opening the
+scope creates it.
 
 Standard macOS app/window menu shortcuts also route to AppKit, not Ghostty, so native behavior
 continues to work while a terminal has focus. Examples: `Cmd+Q` Quit, `Cmd+H` Hide,
@@ -106,6 +107,6 @@ Do not broaden those commands here without updating the API docs and tests.
 
 `./scripts/shortcut-pass-through-smoke.sh` is a separate activation-driving smoke:
 - it requires Accessibility + Automation permissions
-- it requires `Terminal Multiplexing Mode = Ghostty Splits`
-- it exits early when the app is in `tmux` mode because Workspaces is not expected to materialize Ghostty-managed split actions there
+- it requires Settings > Terminal > "Keep a workspace's first terminal running after quitting" off
+- it exits early when that setting is on because Workspaces is not expected to materialize Ghostty-managed split actions there
 - it is not shared-desktop-safe; use Tart/Lume or a separate macOS user/session when you need input-driving automation without foreground focus
