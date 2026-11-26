@@ -148,7 +148,7 @@ Current split parity:
 - Orthogonal or unsupported resize directions remain explicit no-ops with logging.
 
 Current split verification expectation:
-- `shortcut-pass-through-smoke.sh` drives the first terminal the app opens, so it reads the saved Settings > Terminal > "Keep a workspace's first terminal running after quitting" and exits early with guidance when it is on.
+- `shortcut-pass-through-smoke.sh` drives the first terminal the app opens, so it reads the saved Settings > Terminal > "Keep a workspace's first terminal running after quitting" and exits early with guidance when it is on. Off normally means a newly opened first terminal is plain; a launch can still restore a tile in its recorded mode.
 - Split routing checks the tile a shortcut comes from: a persistent (tmux) tile does not materialize Ghostty splits, a plain one does, including a Cmd+T tab opened while the setting is on.
 
 See `docs/development/shortcut-routing.md` for the full routing model.

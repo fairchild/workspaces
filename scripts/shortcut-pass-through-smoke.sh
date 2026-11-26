@@ -33,9 +33,10 @@ Notes:
 - This script activates WorkspaceManager and sends keyboard input.
 - Requires Accessibility + Automation permissions for this terminal.
 - Reads the saved Settings > Terminal > "Keep a workspace's first terminal running after quitting"
-  and exits early when it is on, so the first terminal it drives is a plain one, where Ghostty
-  splits materialize. Split routing checks the tile a shortcut comes from, so with the setting on
-  a Cmd+T tab still splits; the script does not drive that path.
+  and exits early when it is on, so a newly opened first terminal is normally a plain one, where
+  Ghostty splits materialize; a launch can still restore a tile in its recorded mode. Split
+  routing checks the tile a shortcut comes from, so with the setting on a Cmd+T tab still
+  splits; the script does not drive that path.
 USAGE
 }
 

@@ -128,7 +128,7 @@ For repo-side tuning:
 - If Terminal.app is also slow in the same repo, treat that as host or shell overhead before blaming Ghostty.
 - If Terminal.app is fine but Workspaces is slow, inspect the Ghostty surface creation and focus path.
 - If `terminal_first_output` is early but `first_prompt_ready` is still late, the shell responded but prompt readiness is still delayed after the first terminal signal.
-- If the slow terminal is persistent (held by tmux: Settings > Terminal > "Keep a workspace's first terminal running after quitting" on, or a New Persistent Tab), repeat the reproduction in a plain one (the setting off, or a Cmd+T tab) before drawing conclusions.
+- If the slow terminal is persistent (held by tmux: Settings > Terminal > "Keep a workspace's first terminal running after quitting" on, or a New Persistent Tab), repeat the reproduction in a plain one (a Cmd+T tab, or a newly opened terminal with the setting off; a restored tile keeps its recorded mode) before drawing conclusions.
 - If the diagnostic report has empty `recent-logs.txt`, treat that as a diagnostics gap. Older builds may miss useful `[Perf]` lines in exported zips; newer builds broaden the recent-log capture, but a near-empty log is still a sign that you need a direct app-run capture.
 
 Read [references/hypothesis-map.md](references/hypothesis-map.md) when you need the symptom-to-cause lookup table.

@@ -30,14 +30,14 @@ struct TerminalMultiplexingModePresentationTests {
                 == "Keep a workspace's first terminal running after quitting")
         #expect(
             TerminalMultiplexingMode.plain.summary
-                == "The terminal the app opens for Home, a workspace or a repository is a plain shell "
+                == "The terminal the app opens for Home, a local workspace or a repository is a plain shell "
                 + "that ends when the app quits. \(perTab)")
         #expect(
             TerminalMultiplexingMode.persistent.summary
-                == "The terminal the app opens for Home, a workspace or a repository is held by tmux, "
+                == "The terminal the app opens for Home, a local workspace or a repository is held by tmux, "
                 + "so it keeps running when the app quits and a later launch can rejoin it. \(perTab)")
         #expect(
             TerminalMultiplexingMode.persistentHolderMissingNote
-                == "tmux wasn't found, so terminals that would keep running open as plain shells instead.")
+                == "tmux wasn't found, so that terminal opens as a plain shell instead.")
     }
 }
