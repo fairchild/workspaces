@@ -117,6 +117,7 @@ struct AppCommandStateTests {
             canToggleInspector: false,
             canToggleTerminalPanel: false,
             canCreateTerminalTab: true,
+            canCreatePersistentTerminalTab: true,
             canCloseTerminalTab: true,
             canSelectNextTerminalTab: false,
             canSelectPreviousTerminalTab: false,

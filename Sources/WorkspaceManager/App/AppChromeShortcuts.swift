@@ -45,8 +45,9 @@ enum AppChromeShortcut: CaseIterable {
         case .newTerminalTab:
             return AppChromeShortcutDefinition(keyString: "t", modifiers: [.command], defaultRoute: .appChrome)
         case .newPersistentTerminalTab:
-            // Claimed from Ghostty, whose macOS default binds this chord to `undo`, an action
-            // the app does not implement.
+            // Ghostty's macOS default binds this chord to a performable `undo`, which the app
+            // declines, so Ghostty used to encode the chord for the program in the terminal.
+            // Claiming it here means that program no longer receives it.
             return AppChromeShortcutDefinition(
                 keyString: "t",
                 modifiers: [.command, .shift],

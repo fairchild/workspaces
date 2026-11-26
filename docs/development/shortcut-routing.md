@@ -24,9 +24,15 @@ Shortcuts lists them. Among them:
 - `Cmd+N`: new workspace
 - `Cmd+T`: new terminal tab, a plain shell whatever the tile it was opened from runs under
 - `Cmd+Shift+T`: new persistent tab, whose shell runs under a holder that outlives the app
-  (tmux today); a remote tile's persistent tab is an ordinary tab.
-  Ghostty's macOS default binds this chord to `undo`, which the app does not implement, so
-  claiming it takes nothing from the terminal.
+  (tmux today). The command is disabled where the tab could not persist: no holder is
+  installed, or the tile it would open beside is remote.
+  Ghostty's macOS default binds this chord to a performable `undo`, which the app declines, so
+  before the claim Ghostty encoded the chord for the program in the terminal (Kitty keyboard
+  protocol). That program no longer receives it.
+
+A tab opened where the scope has no terminal yet (a repository overview) becomes the scope's
+first tile in the mode its command asked for. The Terminal Multiplexing setting decides a first
+tile only when opening the scope creates it.
 
 Standard macOS app/window menu shortcuts also route to AppKit, not Ghostty, so native behavior
 continues to work while a terminal has focus. Examples: `Cmd+Q` Quit, `Cmd+H` Hide,

@@ -203,6 +203,14 @@ struct GhosttyTerminalConfig {
         }
     }
 
+    /// Whether a persistent tile's launch would find its holder, on the PATH the launch gate
+    /// reads. Without one the launch falls back to a plain shell.
+    static func isPersistentHolderAvailable(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        isExecutableAvailable("tmux", inPath: TmuxSessionProbe.pathPrependingToolPaths(environment["PATH"]))
+    }
+
     private static func isExecutableAvailable(_ executable: String, inPath path: String?) -> Bool {
         guard let path else { return false }
         for directory in path.split(separator: ":") {

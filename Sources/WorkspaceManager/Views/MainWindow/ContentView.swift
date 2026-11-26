@@ -632,16 +632,32 @@ struct ContentView: View {
         )
     }
 
+    /// The tile a new tab would open beside: the visible repo overview's terminal when it has
+    /// one, else the active session.
+    private var terminalTabSourceSession: HostTerminalSession? {
+        if let repo = visibleRepoOverviewForTerminalTab {
+            let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
+            return tileTreeStore.activeSession(inScope: .repoPath(repoDirectory.path))
+        }
+        return tileTreeStore.activeSessionID.flatMap(tileTreeStore.session(withID:))
+    }
+
     private var mainWindowCommandAvailabilitySnapshot: MainWindowCommandAvailability {
-        MainWindowCommandAvailability(
+        let canCreateTerminalTab = terminalSessionController.canCreateTab(
+            hasSessions: tileTreeStore.hasSessions,
+            selectedRepoForLanding: visibleRepoOverviewForTerminalTab,
+            isConnectingWorkspace: viewState.pendingRemoteWorkspace != nil
+                || viewState.connectingWorkspaceID != nil
+        )
+        return MainWindowCommandAvailability(
             canToggleSidebar: true,
             canToggleInspector: true,
             canToggleTerminalPanel: true,
-            canCreateTerminalTab: terminalSessionController.canCreateTab(
-                hasSessions: tileTreeStore.hasSessions,
-                selectedRepoForLanding: visibleRepoOverviewForTerminalTab,
-                isConnectingWorkspace: viewState.pendingRemoteWorkspace != nil
-                    || viewState.connectingWorkspaceID != nil
+            canCreateTerminalTab: canCreateTerminalTab,
+            canCreatePersistentTerminalTab: terminalSessionController.canCreatePersistentTab(
+                canCreateTab: canCreateTerminalTab,
+                sourceIsRemote: terminalTabSourceSession?.isRemote ?? false,
+                isHolderAvailable: GhosttyTerminalConfig.isPersistentHolderAvailable()
             ),
             canCloseTerminalTab: tileTreeStore.hasSessions,
             canSelectNextTerminalTab: tileTreeStore.scopedSessions.count > 1,
@@ -1816,7 +1832,7 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func createTerminalTabFromCurrentContext(terminalMode: TerminalMultiplexingMode? = nil) {
+    private func createTerminalTabFromCurrentContext(terminalMode: TerminalMultiplexingMode = .plain) {
         guard
             let result = terminalSessionController.createTabFromCurrentContext(
                 tileTreeStore: tileTreeStore,

@@ -226,7 +226,7 @@ struct WorkspaceManagerApp: App {
                     AppChromeShortcut.newPersistentTerminalTab.keyEquivalent,
                     modifiers: AppChromeShortcut.newPersistentTerminalTab.eventModifiers
                 )
-                .disabled(!appCommandState.mainWindowAvailability.canCreateTerminalTab)
+                .disabled(!appCommandState.mainWindowAvailability.canCreatePersistentTerminalTab)
 
                 Button("Close Terminal Tab") {
                     appCommandState.perform(.closeTerminalTab)
@@ -902,6 +902,7 @@ struct MainWindowCommandAvailability: Equatable {
     let canToggleInspector: Bool
     let canToggleTerminalPanel: Bool
     let canCreateTerminalTab: Bool
+    let canCreatePersistentTerminalTab: Bool
     let canCloseTerminalTab: Bool
     let canSelectNextTerminalTab: Bool
     let canSelectPreviousTerminalTab: Bool
@@ -922,6 +923,7 @@ struct MainWindowCommandAvailability: Equatable {
         canToggleInspector: false,
         canToggleTerminalPanel: false,
         canCreateTerminalTab: false,
+        canCreatePersistentTerminalTab: false,
         canCloseTerminalTab: false,
         canSelectNextTerminalTab: false,
         canSelectPreviousTerminalTab: false,

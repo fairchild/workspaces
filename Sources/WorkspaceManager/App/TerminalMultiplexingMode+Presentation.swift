@@ -20,8 +20,8 @@ extension TerminalMultiplexingMode {
         case .ghosttyManagedSplits:
             return "Use the app's embedded Ghostty split model (Cmd+D, Cmd+[ / Cmd+])."
         case .tmuxPerSession:
-            return "Start each workspace's first terminal in its own tmux session, so it keeps running when "
-                + "the app quits. New tabs are plain shells; New Persistent Tab opens one that keeps running."
+            return "Open each workspace in a terminal with its own tmux session, so it keeps running when the "
+                + "app quits. New tabs are plain shells; New Persistent Tab opens one that keeps running."
         }
     }
 }
