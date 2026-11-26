@@ -156,7 +156,8 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
     /// to. `nil` means the default directory-derived name.
     public let tmuxSessionNameOverride: String?
     /// tmux or Ghostty splits, fixed when the session is created: the first tile of a scope
-    /// asks the store's resolver, tabs and splits copy their source, a restore takes the mode
+    /// and a new tab ask the store's resolver, a persistent tab is `.persistent` (a remote one
+    /// excepted), a split copies its source, a restore takes the mode
     /// its record carries (tmux when it reattaches a live session), and an adopted tile is
     /// tmux. Nothing changes it afterwards.
     public let terminalMode: TerminalMultiplexingMode
@@ -420,18 +421,21 @@ public struct HostTerminalSessionCoordinator: Sendable {
         return session
     }
 
-    /// A new tab in `source`'s scope, in `source`'s terminal mode. A local tab gets a tmux name
-    /// of its own, as a split pane does: the directory derivation belongs to the scope's
-    /// primary, and a second `new-session -A` on it would show the primary's shell again
-    /// instead of a new one.
+    /// A new tab in `source`'s scope and directory, in the mode the caller chose. A local tab
+    /// gets a tmux name of its own, as a split pane does: the directory derivation belongs to
+    /// the scope's primary, and a second `new-session -A` on it would show the primary's shell
+    /// again instead of a new one.
     @discardableResult
-    public mutating func createTab(from source: HostTerminalSession) -> HostTerminalSession {
+    public mutating func createTab(
+        from source: HostTerminalSession,
+        terminalMode: TerminalMultiplexingMode
+    ) -> HostTerminalSession {
         let id = UUID()
         let session = HostTerminalSession(
             id: id,
             key: source.key,
             directory: source.directoryURL,
-            terminalMode: source.terminalMode,
+            terminalMode: terminalMode,
             customCommand: source.customCommand,
             tmuxSessionNameOverride: source.isRemote
                 ? nil

@@ -401,6 +401,62 @@ struct MainWindowTerminalSessionControllerTests {
         #expect(confirmation.title == "Build")
     }
 
+    @Test("A persistent tab from the current terminal opens beside it under the holder")
+    func persistentTabFromCurrentTerminalOpensBesideIt() throws {
+        let store = TileTreeStore()
+        store.terminalModeForNewSession = { _ in .plain }
+        let existing = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test")
+        ).session
+
+        let result = try #require(createTab(in: store, selectedRepoForLanding: nil, terminalMode: .persistent))
+
+        let tab = try #require(store.session(withID: result.focus.focusSessionID))
+        #expect(store.sessions.map(\.id) == [existing.id, tab.id])
+        #expect(tab.key == existing.key)
+        #expect(tab.terminalMode == .persistent)
+        #expect(tab.tmuxSessionName != nil)
+    }
+
+    /// A repo overview with no terminal yet bootstraps the scope's primary. It is the tab asked
+    /// for only when it was born in the requested mode; otherwise the persistent tab opens beside it.
+    @Test(
+        "A persistent tab from a repo overview without a terminal is persistent whatever the setting",
+        arguments: [TerminalMultiplexingMode.plain, .persistent])
+    func persistentTabFromEmptyRepoOverview(setting: TerminalMultiplexingMode) throws {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let store = TileTreeStore()
+        store.terminalModeForNewSession = { _ in setting }
+
+        let result = try #require(createTab(in: store, selectedRepoForLanding: repo, terminalMode: .persistent))
+
+        let focused = try #require(store.session(withID: result.focus.focusSessionID))
+        let scoped = store.sessions(inScope: .repoPath(repo.localPath))
+        #expect(focused.terminalMode == .persistent)
+        #expect(focused.key == .repoPath(repo.localPath))
+        #expect(scoped.count == (setting == .persistent ? 1 : 2))
+        #expect(scoped.first?.terminalMode == setting)
+    }
+
+    private func createTab(
+        in store: TileTreeStore,
+        selectedRepoForLanding: Repo?,
+        terminalMode: TerminalMultiplexingMode?
+    ) -> MainWindowTerminalSessionController.TabCreationResult? {
+        controller.createTabFromCurrentContext(
+            tileTreeStore: store,
+            defaultHomeDirectory: URL(fileURLWithPath: "/Users/test"),
+            selectedRepoForLanding: selectedRepoForLanding,
+            repos: selectedRepoForLanding.map { [$0] } ?? [],
+            normalizePath: normalizePath,
+            terminalMode: terminalMode,
+            activateHostSession: { key, directory, customCommand in
+                store.activateSession(key: key, directory: directory, customCommand: customCommand).session
+            }
+        )
+    }
+
     private func makeRepoWorkspaceFixture(
         workspacePath: String = "/tmp/alpha/workspaces/feature-a"
     ) -> (repo: Repo, workspace: Workspace) {

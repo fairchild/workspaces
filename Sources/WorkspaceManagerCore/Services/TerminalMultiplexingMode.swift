@@ -17,6 +17,13 @@ public enum TerminalMultiplexingMode: String, CaseIterable, Identifiable, Codabl
     public static let environmentOverrideKey = "WORKSPACES_TERMINAL_MULTIPLEXING_MODE"
     public static let defaultValue: TerminalMultiplexingMode = .ghosttyManagedSplits
 
+    /// The shell runs directly in the Ghostty surface and ends when the app quits.
+    public static let plain: TerminalMultiplexingMode = .ghosttyManagedSplits
+    /// The shell runs under a holder that outlives the app, so a later launch can rejoin it;
+    /// tmux today. New code names the holder-backed mode through this alias, so swapping the
+    /// holder changes the case and its launch path rather than every caller.
+    public static let persistent: TerminalMultiplexingMode = .tmuxPerSession
+
     public var id: String { rawValue }
 
     public static func resolve(

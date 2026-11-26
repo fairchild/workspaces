@@ -122,7 +122,7 @@ In a tmux-backed tile Ghostty sees tmux, not the program in the pane. tmux 3.8 e
 This project depends on the following keyboard behavior:
 
 - `Cmd+B`: toggles the left sidebar visibility.
-- `Cmd+Shift+T`: triggers the app-level new workspace action.
+- `Cmd+T` / `Cmd+Shift+T`: app-level new terminal tab / new persistent tab (`docs/development/shortcut-routing.md`).
 - `Cmd+D`: when a terminal surface is focused, creates a split to the right.
 
 The `Cmd+D` path is runtime-action-driven:

@@ -20,6 +20,7 @@ enum AppChromeShortcut: CaseIterable {
     case toggleTerminalPanel
     case newWorkspace
     case newTerminalTab
+    case newPersistentTerminalTab
     case closeTerminalTab
     case nextTerminalTab
     case previousTerminalTab
@@ -43,6 +44,14 @@ enum AppChromeShortcut: CaseIterable {
             return AppChromeShortcutDefinition(keyString: "n", modifiers: [.command], defaultRoute: .appChrome)
         case .newTerminalTab:
             return AppChromeShortcutDefinition(keyString: "t", modifiers: [.command], defaultRoute: .appChrome)
+        case .newPersistentTerminalTab:
+            // Claimed from Ghostty, whose macOS default binds this chord to `undo`, an action
+            // the app does not implement.
+            return AppChromeShortcutDefinition(
+                keyString: "t",
+                modifiers: [.command, .shift],
+                defaultRoute: .appChrome
+            )
         case .closeTerminalTab:
             return AppChromeShortcutDefinition(keyString: "w", modifiers: [.command], defaultRoute: .appChrome)
         case .nextTerminalTab, .previousTerminalTab:
@@ -112,6 +121,7 @@ enum AppChromeShortcut: CaseIterable {
         case .toggleTerminalPanel: return "Toggle Terminal Panel"
         case .newWorkspace: return "New Workspace"
         case .newTerminalTab: return "New Terminal Tab"
+        case .newPersistentTerminalTab: return "New Persistent Tab"
         case .closeTerminalTab: return "Close Terminal Tab"
         case .nextTerminalTab: return "Next Terminal Tab"
         case .previousTerminalTab: return "Previous Terminal Tab"

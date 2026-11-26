@@ -621,21 +621,77 @@ struct TileTreeStoreTests {
         #expect(row.tmuxSessionName == nil)
     }
 
-    @Test("A new tab and a split take their source's mode, not the current setting")
-    func tabAndSplitCopyTheirSourcesMode() throws {
+    @Test(
+        "A new tab takes the mode a new tile gets, not its source's; a split copies its source",
+        arguments: [
+            (TerminalMultiplexingMode.persistent, TerminalMultiplexingMode.plain),
+            (TerminalMultiplexingMode.plain, TerminalMultiplexingMode.persistent),
+        ])
+    func newTabTakesTheNewTileModeWhileASplitCopiesItsSource(
+        primaryMode: TerminalMultiplexingMode,
+        settingAtTabTime: TerminalMultiplexingMode
+    ) throws {
         let store = TileTreeStore()
-        store.terminalModeForNewSession = { _ in .tmuxPerSession }
+        store.terminalModeForNewSession = { _ in primaryMode }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
 
-        store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
+        store.terminalModeForNewSession = { _ in settingAtTabTime }
         let tab = try #require(store.createTab(from: primary.id))
         let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
 
-        #expect(primary.terminalMode == .tmuxPerSession)
-        #expect(tab.terminalMode == .tmuxPerSession)
-        #expect(split.terminalMode == .tmuxPerSession)
-        #expect(store.session(withID: split.id)?.terminalMode == .tmuxPerSession)
+        #expect(primary.terminalMode == primaryMode)
+        #expect(tab.terminalMode == settingAtTabTime)
+        #expect(tab.key == primary.key)
+        #expect(split.terminalMode == primaryMode)
+        #expect(store.session(withID: split.id)?.terminalMode == primaryMode)
+    }
+
+    /// A persistent tab is its own shell under the holder, not a second view of the primary's:
+    /// it needs a session name of its own even beside a plain primary, since the directory
+    /// derivation is what a persistent primary in that directory would claim.
+    @Test("A persistent tab runs under its own holder session whatever the setting says")
+    func persistentTabRunsUnderItsOwnHolderSession() throws {
+        let store = TileTreeStore()
+        store.terminalModeForNewSession = { _ in .plain }
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+
+        let persistent = try #require(store.createTab(from: primary.id, terminalMode: .persistent))
+        let plain = try #require(store.createTab(from: persistent.id))
+
+        #expect(primary.tmuxSessionName == nil)
+        #expect(persistent.terminalMode == .persistent)
+        #expect(persistent.key == primary.key)
+        #expect(persistent.directoryPath == primary.directoryPath)
+        let holderSession = try #require(persistent.tmuxSessionName)
+        #expect(holderSession != TmuxSessionNaming.defaultName(for: directory))
+        #expect(holderSession == TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: persistent.id))
+        #expect(plain.terminalMode == .plain)
+        #expect(plain.tmuxSessionName == nil)
+        #expect(store.activeSessionID == plain.id)
+    }
+
+    @Test("A remote tile's persistent tab is an ordinary tab")
+    func remoteTilesPersistentTabIsAnOrdinaryTab() throws {
+        let store = TileTreeStore()
+        store.terminalModeForNewSession = { _ in .plain }
+        let remote = store.activateSession(
+            key: .backendSession(providerID: "lume", instanceID: "vm-1"),
+            directory: URL(fileURLWithPath: "/tmp"),
+            customCommand: "ssh vm-1"
+        ).session
+
+        let persistent = try #require(store.createTab(from: remote.id, terminalMode: .persistent))
+        let ordinary = try #require(store.createTab(from: remote.id))
+
+        for tab in [persistent, ordinary] {
+            #expect(tab.terminalMode == .plain)
+            #expect(tab.isRemote)
+            #expect(tab.customCommand == "ssh vm-1")
+            #expect(tab.tmuxSessionName == nil)
+            #expect(tab.tmuxSessionNameOverride == nil)
+        }
     }
 
     /// The restore plan carries each row's recorded mode; a row whose mode is not one this

@@ -199,4 +199,22 @@ struct AppCommandStateTests {
         state.perform(.rescanWorkspaceLeftovers)
         #expect(rescanCount == 1)
     }
+
+    @Test("New Terminal Tab and New Persistent Tab each reach their own window action")
+    func newTabCommandsReachTheirOwnActions() {
+        let state = AppCommandState()
+        var opened: [String] = []
+        state.setMainWindowActions(
+            MainWindowFocusedActions(
+                newTerminalTab: { opened.append("tab") },
+                newPersistentTerminalTab: { opened.append("persistent") }
+            ),
+            availability: .empty
+        )
+
+        state.perform(.newPersistentTerminalTab)
+        state.perform(.newTerminalTab)
+
+        #expect(opened == ["persistent", "tab"])
+    }
 }

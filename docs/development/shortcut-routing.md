@@ -16,10 +16,18 @@ The design goal is **Ghostty-first behavior** with a minimal, explicit app-owned
 
 ## Current Ownership
 
-Current app-owned default shortcuts:
+App-owned default shortcuts are the `AppChromeShortcut` cases whose default route is
+`appChrome` (`Sources/WorkspaceManager/App/AppChromeShortcuts.swift`); Help → Keyboard
+Shortcuts lists them. Among them:
 
 - `Cmd+B`: toggle left sidebar
-- `Cmd+Shift+T`: new workspace sheet/action
+- `Cmd+N`: new workspace
+- `Cmd+T`: new terminal tab, in the mode a new tile in that scope gets (the Terminal
+  Multiplexing setting)
+- `Cmd+Shift+T`: new persistent tab, whose shell runs under a holder that outlives the app
+  (tmux today) whatever the setting says; a remote tile's persistent tab is an ordinary tab.
+  Ghostty's macOS default binds this chord to `undo`, which the app does not implement, so
+  claiming it takes nothing from the terminal.
 
 Standard macOS app/window menu shortcuts also route to AppKit, not Ghostty, so native behavior
 continues to work while a terminal has focus. Examples: `Cmd+Q` Quit, `Cmd+H` Hide,

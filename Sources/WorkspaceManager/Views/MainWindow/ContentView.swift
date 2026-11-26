@@ -613,7 +613,8 @@ struct ContentView: View {
             toggleSidebar: toggleSidebarVisibility,
             toggleInspector: toggleInspectorVisibility,
             toggleTerminalPanel: toggleTerminalPanelVisibility,
-            newTerminalTab: createTerminalTabFromCurrentContext,
+            newTerminalTab: { createTerminalTabFromCurrentContext() },
+            newPersistentTerminalTab: { createTerminalTabFromCurrentContext(terminalMode: .persistent) },
             closeTerminalTab: closeActiveTerminalTab,
             selectNextTerminalTab: { selectAdjacentTerminalTab(offset: 1) },
             selectPreviousTerminalTab: { selectAdjacentTerminalTab(offset: -1) },
@@ -1815,7 +1816,7 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func createTerminalTabFromCurrentContext() {
+    private func createTerminalTabFromCurrentContext(terminalMode: TerminalMultiplexingMode? = nil) {
         guard
             let result = terminalSessionController.createTabFromCurrentContext(
                 tileTreeStore: tileTreeStore,
@@ -1823,6 +1824,7 @@ struct ContentView: View {
                 selectedRepoForLanding: visibleRepoOverviewForTerminalTab,
                 repos: repos,
                 normalizePath: normalizePath,
+                terminalMode: terminalMode,
                 activateHostSession: { key, directory, customCommand in
                     activateHostSession(key: key, directory: directory, customCommand: customCommand)
                 }

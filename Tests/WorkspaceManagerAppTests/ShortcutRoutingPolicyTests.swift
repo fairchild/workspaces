@@ -73,6 +73,21 @@ struct ShortcutRoutingPolicyTests {
         #expect(AppChromeShortcutCatalog.appOwnedDefaults.contains(.commandRunner))
     }
 
+    @Test("New Persistent Tab (Cmd+Shift+T) is app-owned and distinct from New Terminal Tab")
+    func newPersistentTabRoutesToAppChrome() {
+        policy.clearOverrides()
+
+        let chord = AppChromeShortcut.newPersistentTerminalTab.chord
+        #expect(chord == ShortcutChord(key: "t", modifiers: [.command, .shift]))
+        #expect(chord != AppChromeShortcut.newTerminalTab.chord)
+        #expect(policy.route(for: chord) == .appChrome)
+        #expect(policy.route(for: keyEvent(type: .keyDown, key: "T", modifiers: [.command, .shift])) == .appChrome)
+        #expect(AppChromeShortcut.newPersistentTerminalTab.keyboardGlyphs == "⇧⌘T")
+        #expect(AppChromeShortcut.newPersistentTerminalTab.displayName == "New Persistent Tab")
+        let others = AppChromeShortcut.allCases.filter { $0 != .newPersistentTerminalTab }
+        #expect(!others.map(\.chord).contains(chord))
+    }
+
     @Test("Non-reserved shortcuts route to Ghostty by default")
     func nonReservedShortcutsRouteToGhostty() {
         policy.clearOverrides()

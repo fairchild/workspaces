@@ -33,12 +33,15 @@ struct MainWindowTerminalSessionController {
         return activateHostSession(.defaultHome, defaultHomeDirectory, nil)
     }
 
+    /// `terminalMode` is the mode the new tab is asked for (`.persistent` for New Persistent Tab);
+    /// `nil` gives the tab the mode a new tile in its scope gets.
     func createTabFromCurrentContext(
         tileTreeStore: TileTreeStore,
         defaultHomeDirectory: URL,
         selectedRepoForLanding: Repo?,
         repos: [Repo],
         normalizePath: (String) -> String,
+        terminalMode: TerminalMultiplexingMode? = nil,
         activateHostSession: (HostTerminalSessionKey, URL, String?) -> HostTerminalSession
     ) -> TabCreationResult? {
         if let selectedRepoForLanding {
@@ -47,6 +50,7 @@ struct MainWindowTerminalSessionController {
                 tileTreeStore: tileTreeStore,
                 repos: repos,
                 normalizePath: normalizePath,
+                terminalMode: terminalMode,
                 activateHostSession: activateHostSession
             )
         }
@@ -57,7 +61,7 @@ struct MainWindowTerminalSessionController {
             activateHostSession: activateHostSession
         )
 
-        guard let session = tileTreeStore.createTab() else { return nil }
+        guard let session = tileTreeStore.createTab(terminalMode: terminalMode) else { return nil }
         return TabCreationResult(
             focus: focusResult(
                 sessionID: session.id,
@@ -74,6 +78,7 @@ struct MainWindowTerminalSessionController {
         tileTreeStore: TileTreeStore,
         repos: [Repo],
         normalizePath: (String) -> String,
+        terminalMode: TerminalMultiplexingMode?,
         activateHostSession: (HostTerminalSessionKey, URL, String?) -> HostTerminalSession
     ) -> TabCreationResult? {
         let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
@@ -82,14 +87,20 @@ struct MainWindowTerminalSessionController {
 
         if let existingSession = tileTreeStore.activeSession(inScope: scopeKey) {
             guard tileTreeStore.activateExistingSession(sessionID: existingSession.id),
-                let siblingSession = tileTreeStore.createTab(from: existingSession.id)
+                let siblingSession = tileTreeStore.createTab(from: existingSession.id, terminalMode: terminalMode)
             else { return nil }
             session = siblingSession
         } else {
             let existingSessionIDs = Set(tileTreeStore.sessions.map(\.id))
             let activatedSession = activateHostSession(scopeKey, repoDirectory, nil)
-            if existingSessionIDs.contains(activatedSession.id) {
-                guard let siblingSession = tileTreeStore.createTab(from: activatedSession.id) else { return nil }
+            // A fresh primary is the tab asked for only when it was born in the requested mode;
+            // otherwise the requested tab opens beside it.
+            let primaryIsRequestedTab = terminalMode.map { $0 == activatedSession.terminalMode } ?? true
+            if existingSessionIDs.contains(activatedSession.id) || !primaryIsRequestedTab {
+                guard
+                    let siblingSession = tileTreeStore.createTab(
+                        from: activatedSession.id, terminalMode: terminalMode)
+                else { return nil }
                 session = siblingSession
             } else {
                 session = activatedSession
