@@ -145,7 +145,7 @@ fixture_resolve_scenario() {
             ;;
         cmd-t-second-tab)
             # Cmd-T twice: the second press opens a sibling tab beside the repo terminal,
-            # which in tmux mode runs in a tmux session of its own.
+            # a plain shell whatever mode the repo terminal runs in.
             FIXTURE_CMD_T_REPO="workspaces"
             FIXTURE_TRIGGER_CMD_T=2
             ;;
