@@ -285,13 +285,13 @@ struct HostTerminalSessionCoordinatorTests {
             directory: homeURL,
             terminalMode: .ghosttyManagedSplits
         ).session
-        let secondHomeTab = coordinator.createTab(from: home)
+        let secondHomeTab = coordinator.createTab(from: home, terminalMode: .plain)
         let repo = coordinator.activate(
             key: .repoPath(repoURL.path),
             directory: repoURL,
             terminalMode: .ghosttyManagedSplits
         ).session
-        let secondRepoTab = coordinator.createTab(from: repo)
+        let secondRepoTab = coordinator.createTab(from: repo, terminalMode: .plain)
 
         _ = coordinator.activate(key: .defaultHome, directory: homeURL, terminalMode: .ghosttyManagedSplits)
         #expect(coordinator.activeSessionID == secondHomeTab.id)
@@ -317,13 +317,13 @@ struct HostTerminalSessionCoordinatorTests {
             directory: homeURL,
             terminalMode: .ghosttyManagedSplits
         ).session
-        let secondHomeTab = coordinator.createTab(from: home)
+        let secondHomeTab = coordinator.createTab(from: home, terminalMode: .plain)
         let repo = coordinator.activate(
             key: .repoPath(repoURL.path),
             directory: repoURL,
             terminalMode: .ghosttyManagedSplits
         ).session
-        let secondRepoTab = coordinator.createTab(from: repo)
+        let secondRepoTab = coordinator.createTab(from: repo, terminalMode: .plain)
 
         #expect(coordinator.activateAdjacent(to: secondRepoTab.id, offset: 1)?.id == repo.id)
         #expect(coordinator.activateAdjacent(to: repo.id, offset: -1)?.id == secondRepoTab.id)
@@ -345,13 +345,13 @@ struct HostTerminalSessionCoordinatorTests {
             directory: homeURL,
             terminalMode: .ghosttyManagedSplits
         ).session
-        let secondHomeTab = coordinator.createTab(from: home)
+        let secondHomeTab = coordinator.createTab(from: home, terminalMode: .plain)
         let repo = coordinator.activate(
             key: .repoPath(repoURL.path),
             directory: repoURL,
             terminalMode: .ghosttyManagedSplits
         ).session
-        let secondRepoTab = coordinator.createTab(from: repo)
+        let secondRepoTab = coordinator.createTab(from: repo, terminalMode: .plain)
 
         let didMoveRepoTab = coordinator.moveTab(sessionID: secondRepoTab.id, offset: -1)
         #expect(didMoveRepoTab)
@@ -477,7 +477,7 @@ struct HostTerminalSessionCoordinatorTests {
         #expect(coordinator.sessions.count == 2)
     }
 
-    @Test("cmd+t in tmux mode gives the new tab its own tmux session")
+    @Test("A persistent tab takes the mode asked for and its own tmux session, whatever its source's mode")
     func newTabGetsItsOwnTmuxSession() {
         var coordinator = HostTerminalSessionCoordinator()
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
@@ -487,9 +487,10 @@ struct HostTerminalSessionCoordinatorTests {
             terminalMode: .ghosttyManagedSplits
         )
 
-        let first = coordinator.createTab(from: primary)
-        let second = coordinator.createTab(from: primary)
+        let first = coordinator.createTab(from: primary, terminalMode: .persistent)
+        let second = coordinator.createTab(from: primary, terminalMode: .persistent)
 
+        #expect([first, second].allSatisfy { $0.terminalMode == .persistent && $0.tmuxSessionName != nil })
         let names = [primary, first, second].map(\.effectiveTmuxSessionName)
         #expect(Set(names).count == 3)
         #expect(TmuxSessionNaming.isPaneScopedName(first.effectiveTmuxSessionName, for: directory))
@@ -508,6 +509,6 @@ struct HostTerminalSessionCoordinatorTests {
             customCommand: "ssh box"
         )
 
-        #expect(coordinator.createTab(from: remote).tmuxSessionNameOverride == nil)
+        #expect(coordinator.createTab(from: remote, terminalMode: .plain).tmuxSessionNameOverride == nil)
     }
 }

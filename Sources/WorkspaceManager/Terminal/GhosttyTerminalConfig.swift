@@ -203,6 +203,26 @@ struct GhosttyTerminalConfig {
         }
     }
 
+    /// Whether a persistent tile's launch would find its holder, on the PATH the launch gate
+    /// reads. Without one the launch falls back to a plain shell. The command menu asks on
+    /// every view update, so the PATH walk is repeated at most once per `holderProbeLifetime`;
+    /// a holder installed while the app runs is seen within that time.
+    @MainActor
+    static func isPersistentHolderAvailable(now: Date = Date()) -> Bool {
+        if let lastHolderProbe, now.timeIntervalSince(lastHolderProbe.readAt) < holderProbeLifetime {
+            return lastHolderProbe.isAvailable
+        }
+        let isAvailable = isExecutableAvailable(
+            "tmux",
+            inPath: TmuxSessionProbe.pathPrependingToolPaths(ProcessInfo.processInfo.environment["PATH"])
+        )
+        lastHolderProbe = (isAvailable, now)
+        return isAvailable
+    }
+
+    private static let holderProbeLifetime: TimeInterval = 10
+    @MainActor private static var lastHolderProbe: (isAvailable: Bool, readAt: Date)?
+
     private static func isExecutableAvailable(_ executable: String, inPath path: String?) -> Bool {
         guard let path else { return false }
         for directory in path.split(separator: ":") {

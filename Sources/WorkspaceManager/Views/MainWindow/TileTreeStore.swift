@@ -93,10 +93,12 @@ final class TileTreeStore: ObservableObject {
     /// wiring asks it before killing anything (#1267).
     let tmuxOwnershipLedger = TmuxSessionOwnershipLedger()
 
-    /// The terminal mode a new primary session in `key`'s scope is born with, asked with the
-    /// normalized key the session will carry. Read only at birth: tabs and splits copy their
-    /// source, restores take their record, and every later decision reads the session's own
-    /// `terminalMode`. Production resolves the global setting; tests inject a fixed mode.
+    /// The terminal mode a scope's first tile is born with when opening the scope creates it,
+    /// asked with the normalized key the session will carry. Read only at birth: a tab is plain
+    /// unless it is asked to be persistent, including one that becomes its scope's first tile;
+    /// splits copy their source, restores take their record, and every later decision reads the
+    /// session's own `terminalMode`. Production resolves the global setting; tests inject a
+    /// fixed mode.
     var terminalModeForNewSession: (HostTerminalSessionKey) -> TerminalMultiplexingMode = { _ in
         TerminalMultiplexingMode.resolve()
     }
@@ -296,17 +298,20 @@ final class TileTreeStore: ObservableObject {
         return scopedSessions.first
     }
 
+    /// Activates the scope's session, creating its first tile when it has none. `terminalMode`
+    /// is the mode a tab command asked that first tile for; `nil` leaves it to the resolver.
     @discardableResult
     func activateSession(
         key: HostTerminalSessionKey,
         directory: URL,
+        terminalMode: TerminalMultiplexingMode? = nil,
         customCommand: String? = nil,
         initialCommand: String? = nil
     ) -> HostTerminalSessionActivationResult {
         let result = coordinator.activate(
             key: key,
             directory: directory,
-            terminalMode: terminalModeForNewSession(key.normalized()),
+            terminalMode: terminalMode ?? terminalModeForNewSession(key.normalized()),
             customCommand: customCommand,
             initialCommand: initialCommand
         )
@@ -444,8 +449,15 @@ final class TileTreeStore: ObservableObject {
         }
     }
 
+    /// A new tab beside the source tile's primary (else the active session): a plain shell
+    /// unless `terminalMode` asks for a persistent one. Neither the source's mode nor the
+    /// setting reaches it. A remote tab is always plain: its command runs directly, never
+    /// under a holder.
     @discardableResult
-    func createTab(from sourceSessionID: UUID? = nil) -> HostTerminalSession? {
+    func createTab(
+        from sourceSessionID: UUID? = nil,
+        terminalMode: TerminalMultiplexingMode = .plain
+    ) -> HostTerminalSession? {
         let sourceSession: HostTerminalSession?
         if let sourceSessionID,
             let primarySessionID = primarySessionID(containing: sourceSessionID)
@@ -458,7 +470,10 @@ final class TileTreeStore: ObservableObject {
         }
 
         guard let sourceSession else { return nil }
-        let session = coordinator.createTab(from: sourceSession)
+        let session = coordinator.createTab(
+            from: sourceSession,
+            terminalMode: sourceSession.isRemote ? .plain : terminalMode
+        )
         publishSnapshot()
         return session
     }

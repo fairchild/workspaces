@@ -23,6 +23,13 @@ struct MainWindowTerminalSessionController {
         !isConnectingWorkspace && (hasSessions || selectedRepoForLanding != nil)
     }
 
+    /// New Persistent Tab is offered only where the tab would outlive the app: a holder is
+    /// installed, and the tab's source is not a remote tile, whose tabs run their command
+    /// directly.
+    func canCreatePersistentTab(canCreateTab: Bool, sourceIsRemote: Bool, isHolderAvailable: Bool) -> Bool {
+        canCreateTab && isHolderAvailable && !sourceIsRemote
+    }
+
     @discardableResult
     func ensureInitialHostSession(
         tileTreeStore: TileTreeStore,
@@ -33,12 +40,16 @@ struct MainWindowTerminalSessionController {
         return activateHostSession(.defaultHome, defaultHomeDirectory, nil)
     }
 
+    /// `terminalMode` is the mode the new tab is asked for: `.persistent` for New Persistent Tab,
+    /// `.plain` otherwise. Where the scope has no terminal yet the tab becomes its first tile,
+    /// in that same mode.
     func createTabFromCurrentContext(
         tileTreeStore: TileTreeStore,
         defaultHomeDirectory: URL,
         selectedRepoForLanding: Repo?,
         repos: [Repo],
         normalizePath: (String) -> String,
+        terminalMode: TerminalMultiplexingMode = .plain,
         activateHostSession: (HostTerminalSessionKey, URL, String?) -> HostTerminalSession
     ) -> TabCreationResult? {
         if let selectedRepoForLanding {
@@ -47,7 +58,7 @@ struct MainWindowTerminalSessionController {
                 tileTreeStore: tileTreeStore,
                 repos: repos,
                 normalizePath: normalizePath,
-                activateHostSession: activateHostSession
+                terminalMode: terminalMode
             )
         }
 
@@ -57,7 +68,7 @@ struct MainWindowTerminalSessionController {
             activateHostSession: activateHostSession
         )
 
-        guard let session = tileTreeStore.createTab() else { return nil }
+        guard let session = tileTreeStore.createTab(terminalMode: terminalMode) else { return nil }
         return TabCreationResult(
             focus: focusResult(
                 sessionID: session.id,
@@ -74,7 +85,7 @@ struct MainWindowTerminalSessionController {
         tileTreeStore: TileTreeStore,
         repos: [Repo],
         normalizePath: (String) -> String,
-        activateHostSession: (HostTerminalSessionKey, URL, String?) -> HostTerminalSession
+        terminalMode: TerminalMultiplexingMode
     ) -> TabCreationResult? {
         let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
         let scopeKey = HostTerminalSessionKey.repoPath(repoDirectory.path)
@@ -82,17 +93,23 @@ struct MainWindowTerminalSessionController {
 
         if let existingSession = tileTreeStore.activeSession(inScope: scopeKey) {
             guard tileTreeStore.activateExistingSession(sessionID: existingSession.id),
-                let siblingSession = tileTreeStore.createTab(from: existingSession.id)
+                let siblingSession = tileTreeStore.createTab(from: existingSession.id, terminalMode: terminalMode)
             else { return nil }
             session = siblingSession
         } else {
-            let existingSessionIDs = Set(tileTreeStore.sessions.map(\.id))
-            let activatedSession = activateHostSession(scopeKey, repoDirectory, nil)
-            if existingSessionIDs.contains(activatedSession.id) {
-                guard let siblingSession = tileTreeStore.createTab(from: activatedSession.id) else { return nil }
-                session = siblingSession
+            // The scope has no terminal, so the tab is its first tile, born in the mode the
+            // command asked for: one keystroke, one tab. Activation that lands on a session
+            // another scope already holds for this directory opens the tab beside it.
+            let activation = tileTreeStore.activateSession(
+                key: scopeKey, directory: repoDirectory, terminalMode: terminalMode)
+            if activation.created {
+                session = activation.session
             } else {
-                session = activatedSession
+                guard
+                    let siblingSession = tileTreeStore.createTab(
+                        from: activation.session.id, terminalMode: terminalMode)
+                else { return nil }
+                session = siblingSession
             }
         }
 

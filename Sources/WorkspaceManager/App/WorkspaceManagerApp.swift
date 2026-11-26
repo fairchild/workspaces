@@ -219,6 +219,15 @@ struct WorkspaceManagerApp: App {
                 )
                 .disabled(!appCommandState.mainWindowAvailability.canCreateTerminalTab)
 
+                Button("New Persistent Tab") {
+                    appCommandState.perform(.newPersistentTerminalTab)
+                }
+                .keyboardShortcut(
+                    AppChromeShortcut.newPersistentTerminalTab.keyEquivalent,
+                    modifiers: AppChromeShortcut.newPersistentTerminalTab.eventModifiers
+                )
+                .disabled(!appCommandState.mainWindowAvailability.canCreatePersistentTerminalTab)
+
                 Button("Close Terminal Tab") {
                     appCommandState.perform(.closeTerminalTab)
                 }
@@ -869,6 +878,7 @@ struct MainWindowFocusedActions {
     var toggleInspector: Action? = nil
     var toggleTerminalPanel: Action? = nil
     var newTerminalTab: Action? = nil
+    var newPersistentTerminalTab: Action? = nil
     var closeTerminalTab: Action? = nil
     var selectNextTerminalTab: Action? = nil
     var selectPreviousTerminalTab: Action? = nil
@@ -892,6 +902,7 @@ struct MainWindowCommandAvailability: Equatable {
     let canToggleInspector: Bool
     let canToggleTerminalPanel: Bool
     let canCreateTerminalTab: Bool
+    let canCreatePersistentTerminalTab: Bool
     let canCloseTerminalTab: Bool
     let canSelectNextTerminalTab: Bool
     let canSelectPreviousTerminalTab: Bool
@@ -912,6 +923,7 @@ struct MainWindowCommandAvailability: Equatable {
         canToggleInspector: false,
         canToggleTerminalPanel: false,
         canCreateTerminalTab: false,
+        canCreatePersistentTerminalTab: false,
         canCloseTerminalTab: false,
         canSelectNextTerminalTab: false,
         canSelectPreviousTerminalTab: false,
@@ -934,6 +946,7 @@ enum MainWindowCommand {
     case toggleInspector
     case toggleTerminalPanel
     case newTerminalTab
+    case newPersistentTerminalTab
     case closeTerminalTab
     case selectNextTerminalTab
     case selectPreviousTerminalTab
@@ -1036,6 +1049,8 @@ final class AppCommandState: ObservableObject {
             mainWindowActions.toggleTerminalPanel?()
         case .newTerminalTab:
             mainWindowActions.newTerminalTab?()
+        case .newPersistentTerminalTab:
+            mainWindowActions.newPersistentTerminalTab?()
         case .closeTerminalTab:
             mainWindowActions.closeTerminalTab?()
         case .selectNextTerminalTab:
