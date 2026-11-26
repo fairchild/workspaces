@@ -227,6 +227,7 @@ struct WorkspaceManagerApp: App {
                     modifiers: AppChromeShortcut.newPersistentTerminalTab.eventModifiers
                 )
                 .disabled(!appCommandState.mainWindowAvailability.canCreateTerminalTab)
+
                 Button("Close Terminal Tab") {
                     appCommandState.perform(.closeTerminalTab)
                 }

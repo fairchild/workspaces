@@ -22,10 +22,9 @@ Shortcuts lists them. Among them:
 
 - `Cmd+B`: toggle left sidebar
 - `Cmd+N`: new workspace
-- `Cmd+T`: new terminal tab, in the mode a new tile in that scope gets (the Terminal
-  Multiplexing setting)
+- `Cmd+T`: new terminal tab, a plain shell whatever the tile it was opened from runs under
 - `Cmd+Shift+T`: new persistent tab, whose shell runs under a holder that outlives the app
-  (tmux today) whatever the setting says; a remote tile's persistent tab is an ordinary tab.
+  (tmux today); a remote tile's persistent tab is an ordinary tab.
   Ghostty's macOS default binds this chord to `undo`, which the app does not implement, so
   claiming it takes nothing from the terminal.
 

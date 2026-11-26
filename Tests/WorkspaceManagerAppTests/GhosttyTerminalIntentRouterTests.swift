@@ -66,11 +66,10 @@ struct GhosttyTerminalIntentRouterTests {
         #expect(tmuxStore.splitSession(for: tmuxPrimary) == nil)
     }
 
-    @Test("a new_tab intent from a persistent tile opens a tab in the new-tile mode")
-    func newTabIntentTakesTheNewTileMode() throws {
+    @Test("a new_tab intent from a persistent tile opens a plain tab")
+    func newTabIntentOpensAPlainTab() throws {
         let store = makeStore(.persistent)
         let primary = try #require(store.activeSessionID)
-        store.terminalModeForNewSession = { _ in .plain }
 
         let effects = router.route(.tab(.newTab), sourceSessionID: primary, tileTreeStore: store)
 

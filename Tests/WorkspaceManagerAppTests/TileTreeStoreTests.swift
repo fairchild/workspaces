@@ -142,7 +142,7 @@ struct TileTreeStoreTests {
         store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
-        let tab = try #require(store.createTab(from: primary.id))
+        let tab = try #require(store.createTab(from: primary.id, terminalMode: .persistent))
         let tabSessionName = try #require(tab.tmuxSessionNameOverride)
         try stub.publish(sessionName: tabSessionName)
 
@@ -188,9 +188,9 @@ struct TileTreeStoreTests {
         store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
-        let tab = try #require(store.createTab(from: primary.id))
+        let tab = try #require(store.createTab(from: primary.id, terminalMode: .persistent))
         let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
-        let closedByUser = try #require(store.createTab(from: primary.id))
+        let closedByUser = try #require(store.createTab(from: primary.id, terminalMode: .persistent))
         let requests = OutcomeLog()
         store.terminateOwnedTmuxSession = { hostSessionID, _ in
             await requests.append(.killed(sessionID: hostSessionID.uuidString, name: ""))
@@ -214,9 +214,9 @@ struct TileTreeStoreTests {
         store.terminalModeForNewSession = { _ in .tmuxPerSession }
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
-        let requested = try #require(store.createTab(from: primary.id))
-        let cancelled = try #require(store.createTab(from: primary.id))
-        let closedByUser = try #require(store.createTab(from: primary.id))
+        let requested = try #require(store.createTab(from: primary.id, terminalMode: .persistent))
+        let cancelled = try #require(store.createTab(from: primary.id, terminalMode: .persistent))
+        let closedByUser = try #require(store.createTab(from: primary.id, terminalMode: .persistent))
         let requests = OutcomeLog()
         store.terminateOwnedTmuxSession = { hostSessionID, _ in
             await requests.append(.killed(sessionID: hostSessionID.uuidString, name: ""))
@@ -243,8 +243,8 @@ struct TileTreeStoreTests {
         let controller = MainWindowTerminalSessionController()
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
-        let tab = try #require(store.createTab(from: primary.id))
-        let unrecordedTab = try #require(store.createTab(from: primary.id))
+        let tab = try #require(store.createTab(from: primary.id, terminalMode: .persistent))
+        let unrecordedTab = try #require(store.createTab(from: primary.id, terminalMode: .persistent))
         store.tmuxOwnershipLedger.record(
             hostSessionID: tab.id,
             identity: TmuxLiveSession(
@@ -554,7 +554,7 @@ struct TileTreeStoreTests {
         store.continuityRecorder = TerminalContinuityRecorder(sink: fixture.store)
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
-        let tab = try #require(store.createTab(from: primary.id))
+        let tab = try #require(store.createTab(from: primary.id, terminalMode: .persistent))
 
         store.terminalModeForNewSession = { _ in .ghosttyManagedSplits }
         #expect(store.activateExistingSession(sessionID: primary.id))
@@ -622,12 +622,13 @@ struct TileTreeStoreTests {
     }
 
     @Test(
-        "A new tab takes the mode a new tile gets, not its source's; a split copies its source",
+        "A new tab is plain whatever its source's mode or the setting; a split copies its source",
         arguments: [
             (TerminalMultiplexingMode.persistent, TerminalMultiplexingMode.plain),
+            (TerminalMultiplexingMode.persistent, TerminalMultiplexingMode.persistent),
             (TerminalMultiplexingMode.plain, TerminalMultiplexingMode.persistent),
         ])
-    func newTabTakesTheNewTileModeWhileASplitCopiesItsSource(
+    func newTabIsPlainWhileASplitCopiesItsSource(
         primaryMode: TerminalMultiplexingMode,
         settingAtTabTime: TerminalMultiplexingMode
     ) throws {
@@ -641,7 +642,8 @@ struct TileTreeStoreTests {
         let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
 
         #expect(primary.terminalMode == primaryMode)
-        #expect(tab.terminalMode == settingAtTabTime)
+        #expect(tab.terminalMode == .plain)
+        #expect(tab.tmuxSessionName == nil)
         #expect(tab.key == primary.key)
         #expect(split.terminalMode == primaryMode)
         #expect(store.session(withID: split.id)?.terminalMode == primaryMode)

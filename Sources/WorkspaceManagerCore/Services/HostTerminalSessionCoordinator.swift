@@ -156,8 +156,8 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
     /// to. `nil` means the default directory-derived name.
     public let tmuxSessionNameOverride: String?
     /// tmux or Ghostty splits, fixed when the session is created: the first tile of a scope
-    /// and a new tab ask the store's resolver, a persistent tab is `.persistent` (a remote one
-    /// excepted), a split copies its source, a restore takes the mode
+    /// asks the store's resolver, a tab is `.plain` unless it was asked to be `.persistent`
+    /// (a remote one is always plain), a split copies its source, a restore takes the mode
     /// its record carries (tmux when it reattaches a live session), and an adopted tile is
     /// tmux. Nothing changes it afterwards.
     public let terminalMode: TerminalMultiplexingMode

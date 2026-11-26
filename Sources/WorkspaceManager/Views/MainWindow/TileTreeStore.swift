@@ -93,11 +93,11 @@ final class TileTreeStore: ObservableObject {
     /// wiring asks it before killing anything (#1267).
     let tmuxOwnershipLedger = TmuxSessionOwnershipLedger()
 
-    /// The terminal mode a new primary session or new tab in `key`'s scope is born with, asked
-    /// with the normalized key the session will carry. Read only at birth: a persistent tab
-    /// names its mode, splits copy their source, restores take their record, and every later
-    /// decision reads the session's own `terminalMode`. Production resolves the global setting;
-    /// tests inject a fixed mode.
+    /// The terminal mode a new primary session in `key`'s scope is born with, asked with the
+    /// normalized key the session will carry. Read only at birth: a tab is plain unless it is
+    /// asked to be persistent, splits copy their source, restores take their record, and every
+    /// later decision reads the session's own `terminalMode`. Production resolves the global
+    /// setting; tests inject a fixed mode.
     var terminalModeForNewSession: (HostTerminalSessionKey) -> TerminalMultiplexingMode = { _ in
         TerminalMultiplexingMode.resolve()
     }
@@ -445,13 +445,14 @@ final class TileTreeStore: ObservableObject {
         }
     }
 
-    /// A new tab beside the source tile's primary (else the active session). `terminalMode` is
-    /// the mode asked for; `nil` asks for the one a new tile in that scope gets. A remote tab
-    /// always takes the new-tile mode: its command runs directly, never under a holder.
+    /// A new tab beside the source tile's primary (else the active session): a plain shell
+    /// unless `terminalMode` asks for a persistent one. Neither the source's mode nor the
+    /// setting reaches it. A remote tab is always plain: its command runs directly, never
+    /// under a holder.
     @discardableResult
     func createTab(
         from sourceSessionID: UUID? = nil,
-        terminalMode: TerminalMultiplexingMode? = nil
+        terminalMode: TerminalMultiplexingMode = .plain
     ) -> HostTerminalSession? {
         let sourceSession: HostTerminalSession?
         if let sourceSessionID,
@@ -465,10 +466,9 @@ final class TileTreeStore: ObservableObject {
         }
 
         guard let sourceSession else { return nil }
-        let newTileMode = terminalModeForNewSession(sourceSession.key)
         let session = coordinator.createTab(
             from: sourceSession,
-            terminalMode: sourceSession.isRemote ? newTileMode : terminalMode ?? newTileMode
+            terminalMode: sourceSession.isRemote ? .plain : terminalMode
         )
         publishSnapshot()
         return session

@@ -34,7 +34,8 @@ struct MainWindowTerminalSessionController {
     }
 
     /// `terminalMode` is the mode the new tab is asked for (`.persistent` for New Persistent Tab);
-    /// `nil` gives the tab the mode a new tile in its scope gets.
+    /// `nil` is an ordinary tab, which is plain. Where the scope has no terminal yet, an ordinary
+    /// tab is the scope's first tile, born as any first tile is.
     func createTabFromCurrentContext(
         tileTreeStore: TileTreeStore,
         defaultHomeDirectory: URL,
@@ -61,7 +62,7 @@ struct MainWindowTerminalSessionController {
             activateHostSession: activateHostSession
         )
 
-        guard let session = tileTreeStore.createTab(terminalMode: terminalMode) else { return nil }
+        guard let session = tileTreeStore.createTab(terminalMode: terminalMode ?? .plain) else { return nil }
         return TabCreationResult(
             focus: focusResult(
                 sessionID: session.id,
@@ -87,7 +88,8 @@ struct MainWindowTerminalSessionController {
 
         if let existingSession = tileTreeStore.activeSession(inScope: scopeKey) {
             guard tileTreeStore.activateExistingSession(sessionID: existingSession.id),
-                let siblingSession = tileTreeStore.createTab(from: existingSession.id, terminalMode: terminalMode)
+                let siblingSession = tileTreeStore.createTab(
+                    from: existingSession.id, terminalMode: terminalMode ?? .plain)
             else { return nil }
             session = siblingSession
         } else {
@@ -99,7 +101,7 @@ struct MainWindowTerminalSessionController {
             if existingSessionIDs.contains(activatedSession.id) || !primaryIsRequestedTab {
                 guard
                     let siblingSession = tileTreeStore.createTab(
-                        from: activatedSession.id, terminalMode: terminalMode)
+                        from: activatedSession.id, terminalMode: terminalMode ?? .plain)
                 else { return nil }
                 session = siblingSession
             } else {

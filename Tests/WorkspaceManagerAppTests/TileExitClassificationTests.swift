@@ -75,10 +75,11 @@ struct TileExitClassificationTests {
     }
 
     /// Two tmux tiles in one scope, both launched through tmux.
+    /// Two tiles in one scope, the tab in its primary's mode, both noted as launched through tmux.
     private func openTwoTmuxTiles(_ store: TileTreeStore) throws -> (HostTerminalSession, HostTerminalSession) {
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
-        let tab = try #require(store.createTab(from: primary.id))
+        let tab = try #require(store.createTab(from: primary.id, terminalMode: primary.terminalMode))
         for session in [primary, tab] {
             store.surfaceStore.noteLaunch(sessionID: session.id, throughTmux: true)
         }
@@ -333,7 +334,7 @@ struct TileExitClassificationTests {
     private func openSplitTab(_ store: TileTreeStore) throws -> SplitTab {
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
-        let otherTab = try #require(store.createTab(from: primary.id))
+        let otherTab = try #require(store.createTab(from: primary.id, terminalMode: primary.terminalMode))
         _ = store.activateExistingSession(sessionID: primary.id)
         let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
         for session in [primary, split, otherTab] {
@@ -1797,7 +1798,7 @@ extension TileExitClassificationTests {
         let harness = makeHarness(answer: .serverGone)
         let store = harness.store
         let race = try teardownRace(store)
-        let blocked = try #require(store.createTab(from: race.first.id))
+        let blocked = try #require(store.createTab(from: race.first.id, terminalMode: race.first.terminalMode))
         var closed: [UUID] = []
         store.closeSurfaceForRetirement = { sessionID in
             closed.append(sessionID)
