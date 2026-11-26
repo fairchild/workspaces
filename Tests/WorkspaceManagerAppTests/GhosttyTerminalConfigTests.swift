@@ -1019,4 +1019,28 @@ struct GhosttyTerminalConfigTests {
         #expect(observed.command == resume.command)
         #expect(observed.command?.contains(initialCommand) == false)
     }
+
+    @Test("The holder probe reuses its answer for its lifetime, then probes again")
+    @MainActor
+    func cachedProbeReusesAnswerWithinLifetime() {
+        var probes = 0
+        var answer = true
+        let probe = GhosttyTerminalConfig.CachedProbe(lifetime: 10) {
+            probes += 1
+            return answer
+        }
+        let start = Date(timeIntervalSinceReferenceDate: 1_000_000)
+
+        #expect(probe.isAvailable(now: start))
+        answer = false
+        #expect(probe.isAvailable(now: start.addingTimeInterval(9.9)))
+        #expect(probes == 1)
+
+        #expect(!probe.isAvailable(now: start.addingTimeInterval(10)))
+        #expect(probes == 2)
+
+        answer = true
+        #expect(probe.isAvailable(now: start))
+        #expect(probes == 3)
+    }
 }
