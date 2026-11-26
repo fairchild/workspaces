@@ -66,7 +66,7 @@ Common suspects:
 - repo-aware prompt logic
 - shell integration emitting an early title or PWD update before the prompt is actually usable
 
-### Slow only when `tmux Per Session` is enabled
+### Slow only in persistent (tmux-held) terminals
 
 Interpretation:
 

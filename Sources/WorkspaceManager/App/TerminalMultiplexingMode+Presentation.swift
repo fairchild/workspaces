@@ -13,7 +13,7 @@ extension TerminalMultiplexingMode {
     static let firstTerminalSettingLabel = "Keep a workspace's first terminal running after quitting"
 
     static let persistentHolderMissingNote =
-        "tmux isn't installed, so terminals that would keep running open as plain shells instead."
+        "tmux wasn't found, so terminals that would keep running open as plain shells instead."
 
     init(keepsFirstTerminalRunning: Bool) {
         self = keepsFirstTerminalRunning ? .persistent : .plain
@@ -27,11 +27,11 @@ extension TerminalMultiplexingMode {
             + "New Persistent Tab (Cmd+Shift+T) keeps running."
         switch self {
         case .ghosttyManagedSplits:
-            return "Opening a workspace, Home or a repository starts a plain shell that ends when "
-                + "the app quits. \(perTab)"
+            return "The terminal the app opens for Home, a workspace or a repository is a plain shell "
+                + "that ends when the app quits. \(perTab)"
         case .tmuxPerSession:
-            return "Opening a workspace, Home or a repository starts a terminal held by tmux, so it "
-                + "keeps running when the app quits and the next launch rejoins it. \(perTab)"
+            return "The terminal the app opens for Home, a workspace or a repository is held by tmux, "
+                + "so it keeps running when the app quits and a later launch can rejoin it. \(perTab)"
         }
     }
 }

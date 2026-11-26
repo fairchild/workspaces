@@ -8,7 +8,7 @@
 run_drill() {
     : >"$ROWS_PATH"
     build_products_once
-    record_static_row all mixed_window "terminal mode is process-wide (TerminalMultiplexingMode.resolve), so one window cannot hold tmux and Ghostty-split tiles together"
+    record_static_row all mixed_window "a window can hold persistent and plain tiles together (Cmd+Shift+T, Cmd+T), but no automation verb opens a tab, so the drill cannot build one"
     local pass
     for pass in $(passes_to_run); do
         run_drill_pass "$pass"

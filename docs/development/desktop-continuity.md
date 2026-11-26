@@ -96,7 +96,7 @@ A successor is an unended after-relaunch `terminal_sessions` row that the os_log
 
 Holders come from the stub agent's ledger, not from the process table at large. Each `start` event records the stub's pid, and a pid counts only while its process start time falls within 120 seconds before that event. `processes-before.txt` and `processes-after.txt` hold one JSON line per counted holder: pid, start time, the ledger's `source` and the conversation id, and no argv. `reattach` means a holder from before the kill is still alive with its original start time. A new ledger start with `source: "resume"` for the conversation is a resume (`resume_via: new_resume_process`). `resume_via` also says whether a prefill landed in a restored session or in the tile's reused host session. The reused host session is how a `ws launch` record's prefill arrives with the restore flag off.
 
-The `cmd_t_tab` row (one per pass) and the global `mixed_window` row are `not_drivable`, because no automation verb opens a tab and the terminal mode is process-wide.
+The `cmd_t_tab` row (one per pass) and the global `mixed_window` row are `not_drivable`, because no automation verb opens a tab; a window mixing persistent and plain tiles is built with Cmd+Shift+T and Cmd+T.
 
 ## Verification
 

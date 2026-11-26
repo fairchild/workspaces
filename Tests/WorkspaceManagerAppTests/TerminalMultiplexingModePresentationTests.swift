@@ -20,11 +20,24 @@ struct TerminalMultiplexingModePresentationTests {
         #expect(!TerminalMultiplexingMode.defaultValue.keepsFirstTerminalRunning)
     }
 
-    @Test("Each mode's summary names both per-tab commands")
-    func summaryNamesPerTabChoice() {
-        for mode in TerminalMultiplexingMode.allCases {
-            #expect(mode.summary.contains("New Terminal Tab (Cmd+T)"))
-            #expect(mode.summary.contains("New Persistent Tab (Cmd+Shift+T)"))
-        }
+    @Test("The setting's copy claims only what the app does")
+    func copyClaimsOnlyWhatTheAppDoes() {
+        let perTab =
+            "Each new tab chooses for itself: New Terminal Tab (Cmd+T) is a plain shell, "
+            + "New Persistent Tab (Cmd+Shift+T) keeps running."
+        #expect(
+            TerminalMultiplexingMode.firstTerminalSettingLabel
+                == "Keep a workspace's first terminal running after quitting")
+        #expect(
+            TerminalMultiplexingMode.plain.summary
+                == "The terminal the app opens for Home, a workspace or a repository is a plain shell "
+                + "that ends when the app quits. \(perTab)")
+        #expect(
+            TerminalMultiplexingMode.persistent.summary
+                == "The terminal the app opens for Home, a workspace or a repository is held by tmux, "
+                + "so it keeps running when the app quits and a later launch can rejoin it. \(perTab)")
+        #expect(
+            TerminalMultiplexingMode.persistentHolderMissingNote
+                == "tmux wasn't found, so terminals that would keep running open as plain shells instead.")
     }
 }
