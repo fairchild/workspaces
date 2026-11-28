@@ -32,7 +32,11 @@ Options:
 Notes:
 - This script activates WorkspaceManager and sends keyboard input.
 - Requires Accessibility + Automation permissions for this terminal.
-- Requires Terminal Multiplexing Mode = Ghostty Splits; tmux mode is intentionally unsupported here.
+- Reads the saved Settings > Terminal > "Keep a workspace's first terminal running after quitting"
+  and exits early when it is on, so a newly opened first terminal is normally a plain one, where
+  Ghostty splits materialize; a launch can still restore a tile in its recorded mode. Split
+  routing checks the tile a shortcut comes from, so with the setting on a Cmd+T tab still
+  splits; the script does not drive that path.
 USAGE
 }
 
@@ -81,7 +85,7 @@ require_ghostty_managed_mode() {
     fi
 
     if [[ "$mode" != "$GHOSTTY_MANAGED_MODE" ]]; then
-        fail "shortcut smoke requires Ghostty Splits mode; current terminalMultiplexingMode is '$mode'. Switch the app setting before running this script."
+        fail "shortcut smoke requires a plain first terminal; current terminalMultiplexingMode is '$mode'. Turn off Settings > Terminal > \"Keep a workspace's first terminal running after quitting\" before running this script."
     fi
 }
 

@@ -148,8 +148,8 @@ Current split parity:
 - Orthogonal or unsupported resize directions remain explicit no-ops with logging.
 
 Current split verification expectation:
-- `shortcut-pass-through-smoke.sh` is valid only when `Terminal Multiplexing Mode = Ghostty Splits`.
-- If the app is in `tmux` mode, Ghostty split actions are intentionally not expected to materialize in Workspaces UI, and the script exits early with guidance.
+- `shortcut-pass-through-smoke.sh` drives the first terminal the app opens, so it reads the saved Settings > Terminal > "Keep a workspace's first terminal running after quitting" and exits early with guidance when it is on. Off normally means a newly opened first terminal is plain; a launch can still restore a tile in its recorded mode.
+- Split routing checks the tile a shortcut comes from: a persistent (tmux) tile does not materialize Ghostty splits, a plain one does, including a Cmd+T tab opened while the setting is on.
 
 See `docs/development/shortcut-routing.md` for the full routing model.
 
@@ -471,7 +471,7 @@ Use this exact loop in future sessions to avoid stale-build confusion:
    - `Cmd+B` collapse/restore sidebar
    - `Cmd+D` create split pane
    - optional: trigger configured resize/equalize bindings and confirm divider movement / 50:50 reset
-   - `./scripts/shortcut-pass-through-smoke.sh` is intentionally not shared-desktop-safe and requires `Ghostty Splits` mode
+   - `./scripts/shortcut-pass-through-smoke.sh` is intentionally not shared-desktop-safe and requires that setting off
    - Optional scripted smoke: `mise run verify-shortcuts`
 8. Verify split runtime path in logs:
    - App logging is `os.Logger` (subsystem `com.cloudcompute.workspaces`), not `NSLog` — it does **not** appear in `.dev-data/logs/launch-dev-*.log`, which only captures the process's redirected stdout/stderr. Start streaming *before* triggering the shortcut in step 7:

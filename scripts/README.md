@@ -285,7 +285,7 @@ For keyboard/split/sidebar changes, always verify with the debug launcher:
 Activation-driving shortcut smoke:
 - `./scripts/shortcut-pass-through-smoke.sh`
 - Requires Accessibility + Automation permissions.
-- Requires `Terminal Multiplexing Mode = Ghostty Splits`; the script exits early in `tmux` mode.
+- Requires Settings > Terminal > "Keep a workspace's first terminal running after quitting" off; the script exits early when it is on.
 - Intentionally not shared-desktop-safe. Use it only when foreground input is acceptable, or move to Tart/Lume / a separate user session.
 
 Root `mise` equivalents for this loop:

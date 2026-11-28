@@ -21,7 +21,7 @@ A resumable terminal context attached to Home, a repository, or a workspace.
 _Avoid_: Shell, pane, console
 
 **Persistent Terminal**:
-A **Terminal Session** whose shell runs under a holder that outlives the app, so quitting leaves it running for the next launch to rejoin. tmux is the holder today (`TerminalMultiplexingMode.persistent`); new code names the property, not the holder. Cmd+Shift+T opens one as a tab whatever the Terminal Multiplexing setting says.
+A **Terminal Session** whose shell runs under a holder that outlives the app, so quitting leaves it running for the next launch to rejoin. tmux is the holder today (`TerminalMultiplexingMode.persistent`); new code names the property, not the holder. Cmd+Shift+T opens one as a tab whatever the "Keep a workspace's first terminal running after quitting" setting says; that setting decides only the mode of the terminal that opening a workspace, Home or a repository creates first.
 _Avoid_: tmux tab (outside the tmux launch path)
 
 **Terminal Scope**:

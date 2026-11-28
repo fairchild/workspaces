@@ -102,6 +102,9 @@ struct MainWindowTerminalSessionController {
             // another scope already holds for this directory opens the tab beside it.
             let activation = tileTreeStore.activateSession(
                 key: scopeKey, directory: repoDirectory, terminalMode: terminalMode)
+            log.info(
+                "[HostSession] \(activation.created ? "Created" : "Reusing", privacy: .public) session \(activation.session.id.uuidString, privacy: .public) key=\(scopeKey.debugDescription, privacy: .public) path=\(activation.session.directoryPath, privacy: .public) mode=\(activation.session.terminalMode.rawValue, privacy: .public) (total sessions=\(tileTreeStore.sessions.count, privacy: .public))"
+            )
             if activation.created {
                 session = activation.session
             } else {
